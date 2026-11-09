@@ -26,6 +26,171 @@ plt.rcParams.update(
 )
 
 
+def estimate_fluid_properties(
+    tvd: np.ndarray | float,
+    temp_grad: float = 30.0,
+    surf_temp: float = 25.0,
+    pres_grad: float = 10.2,
+    surf_pres: float = 0.1013,
+    gas_gravity: float = 0.65,
+    oil_api: float = 35.0,
+    gor: float = 100.0,
+    salinity_ppm: float = 30000.0,
+    temp_curve: np.ndarray | None = None,
+    pres_curve: np.ndarray | None = None,
+) -> dict[str, np.ndarray]:
+    """Estimate in-situ brine, oil, and gas properties along a depth profile.
+
+    Pressure and temperature curves take precedence over their respective
+    synthesized profiles. Temperature is in degrees Celsius, pressure in MPa,
+    depth in meters, and salinity in ppm by weight.
+    """
+    numeric_parameters = {
+        "temp_grad": temp_grad,
+        "surf_temp": surf_temp,
+        "pres_grad": pres_grad,
+        "surf_pres": surf_pres,
+        "gas_gravity": gas_gravity,
+        "oil_api": oil_api,
+        "gor": gor,
+        "salinity_ppm": salinity_ppm,
+    }
+    if not all(np.isfinite(value) for value in numeric_parameters.values()):
+        raise ValueError("Fluid model parameters must be finite.")
+    if gas_gravity <= 0:
+        raise ValueError("gas_gravity must be positive.")
+    if oil_api <= -131.5:
+        raise ValueError("oil_api must be greater than -131.5.")
+    if gor < 0:
+        raise ValueError("gor must be non-negative.")
+    if not 0 <= salinity_ppm <= 1_000_000:
+        raise ValueError("salinity_ppm must be between 0 and 1,000,000.")
+
+    depth = np.asarray(tvd, dtype=float)
+    if depth.ndim > 1:
+        raise ValueError("tvd must be a scalar or one-dimensional array.")
+
+    def resolve_curve(
+        curve: np.ndarray | None, profile: np.ndarray, name: str
+    ) -> np.ndarray:
+        if curve is None:
+            return profile
+        values = np.asarray(curve, dtype=float)
+        if values.ndim > 1:
+            raise ValueError(f"{name} must be a scalar or one-dimensional array.")
+        try:
+            expanded = np.broadcast_to(values, depth.shape)
+        except ValueError as exc:
+            raise ValueError(f"{name} must match the shape of tvd.") from exc
+        return np.where(np.isfinite(expanded), expanded, profile)
+
+    temp_c = resolve_curve(
+        temp_curve, surf_temp + temp_grad * depth / 1000.0, "temp_curve"
+    )
+    pressure_mpa = resolve_curve(
+        pres_curve, surf_pres + pres_grad * depth / 1000.0, "pres_curve"
+    )
+    finite_pressure = np.isfinite(pressure_mpa)
+    if np.any(pressure_mpa[finite_pressure] < 0):
+        raise ValueError("Pressure must be non-negative.")
+    finite_temperature = np.isfinite(temp_c)
+    if np.any(temp_c[finite_temperature] + 273.15 <= 0):
+        raise ValueError("Temperature must be above absolute zero.")
+
+    salinity = salinity_ppm / 1_000_000.0
+    rho_w0 = 1.0 + 1e-6 * (
+        -80.0 * temp_c
+        - 3.3 * temp_c**2
+        + 0.00175 * temp_c**3
+        + 489.0 * pressure_mpa
+        - 2.0 * temp_c * pressure_mpa
+        + 0.016 * temp_c**2 * pressure_mpa
+        - 1.3e-5 * temp_c**3 * pressure_mpa
+        - 0.333 * pressure_mpa**2
+        - 0.002 * temp_c * pressure_mpa**2
+    )
+    rho_w = rho_w0 + salinity * (
+        0.668
+        + 0.44 * salinity
+        + 1e-6
+        * (
+            300.0 * pressure_mpa
+            - 2400.0 * pressure_mpa * salinity
+            + temp_c
+            * (
+                80.0
+                + 3.0 * temp_c
+                - 3300.0 * salinity
+                - 13.0 * pressure_mpa
+                + 47.0 * pressure_mpa * salinity
+            )
+        )
+    )
+    hi_w = rho_w * (1.0 - salinity)
+
+    p_pc = 4.892 - 0.4048 * gas_gravity
+    t_pc = 94.72 + 170.75 * gas_gravity
+    p_pr = pressure_mpa / p_pc
+    t_pr = np.maximum((temp_c + 273.15) / t_pc, 1.05)
+    a = 0.03 + 0.00527 * (3.5 - t_pr) ** 3
+    b = 0.642 * t_pr - 0.007 * t_pr**4 - 0.52
+    c = 0.109 * (3.85 - t_pr) ** 2
+    d = np.exp(
+        -(0.45 + 8.0 * (0.56 - 1.0 / t_pr) ** 2) * p_pr**1.2 / t_pr
+    )
+    z_factor = np.maximum(a * p_pr + b + c * d, 0.30)
+    rho_g = 28.8 * gas_gravity * pressure_mpa / (
+        z_factor * 8.31446 * (temp_c + 273.15)
+    )
+    rho_g_app = 1.335 * rho_g - 0.188
+    w_h_g = (4.0 - gas_gravity) / (15.0 + 3.0 * gas_gravity)
+    methane_hydrogen_factor = 9.0 * (4.0 - 0.554) / (15.0 + 3.0 * 0.554)
+    # Normalize the stated stoichiometric relation to its methane HI/rho benchmark.
+    hi_g = 9.0 * rho_g * w_h_g * (2.25 / methane_hydrogen_factor)
+
+    rho_o0 = 141.5 / (oil_api + 131.5)
+    rs_max = 2.03 * gas_gravity * (
+        pressure_mpa * np.exp(4.12 / rho_o0 - 0.0091 * temp_c)
+    ) ** 1.205
+    rs_eff = np.minimum(gor, rs_max)
+    bo_base = (
+        2.495 * rs_eff * np.sqrt(gas_gravity / rho_o0) + temp_c + 17.8
+    )
+    if np.any(np.isfinite(bo_base) & (bo_base <= 0)):
+        raise ValueError(
+            "Oil temperature and GOR produce an invalid formation volume factor."
+        )
+    bo = 0.972 + 0.00038 * bo_base**1.175
+    rho_o_g = (rho_o0 + 0.0012 * gas_gravity * rs_eff) / bo
+    rho_o_p = (
+        rho_o_g
+        + (0.00277 * pressure_mpa - 1.71e-7 * pressure_mpa**3)
+        * (rho_o_g - 1.15) ** 2
+        + 3.49e-4 * pressure_mpa
+    )
+    if gor == 0:
+        rho_o = rho_o_p / (0.972 + 3.81e-4 * (temp_c + 17.78) ** 1.175)
+    else:
+        rho_o = rho_o_p
+    rho_o_app = 1.190 * rho_o - 0.188
+    w_h_o = 0.15 + 0.20 * (0.9 - rho_o) ** 2
+    hi_o = np.clip(9.0 * rho_o * w_h_o, 0.0, 1.05)
+
+    return {
+        "TEMP_FL": np.asarray(temp_c),
+        "PRES_FL": np.asarray(pressure_mpa),
+        "RHO_W": np.asarray(rho_w),
+        "RHO_O": np.asarray(rho_o),
+        "RHO_G": np.asarray(rho_g),
+        "RHO_O_APP": np.asarray(rho_o_app),
+        "RHO_G_APP": np.asarray(rho_g_app),
+        "HI_W": np.asarray(hi_w),
+        "HI_O": np.asarray(hi_o),
+        "HI_G": np.asarray(hi_g),
+        "Z_FACTOR": np.asarray(z_factor),
+    }
+
+
 def fit_pressure_gradient(tvdss, formation_pressure):
     """Fit pressure gradient from formation pressure and true vertical depth subsea.
 

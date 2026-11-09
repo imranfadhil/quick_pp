@@ -310,6 +310,18 @@ export function describeApiEndpoint(method: string, rawUrl: string): EndpointSta
 			done: 'Multi-well rock typing updated'
 		};
 	}
+	if (path.endsWith('/batch_evaluation/preview')) {
+		return {
+			active: 'Previewing multi-well evaluations...',
+			done: 'Multi-well evaluation preview complete'
+		};
+	}
+	if (path.endsWith('/batch_evaluation/apply')) {
+		return {
+			active: 'Applying reviewed well/zone evaluations...',
+			done: 'Multi-well evaluation apply complete'
+		};
+	}
 	if (path.endsWith('/rock_typing/models') && m === 'GET') {
 		return {
 			active: 'Loading saved Rock Type classifiers...',

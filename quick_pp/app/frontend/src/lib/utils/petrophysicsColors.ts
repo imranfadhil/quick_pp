@@ -43,6 +43,10 @@ export const PETRO_COLORS = {
 	chloStroke: '#14532D',
 	glaucFill: '#047857',
 	glaucStroke: '#064E3B',
+	muscFill: '#C4B5FD',
+	muscStroke: '#7C3AED',
+	biotFill: '#92400E',
+	biotStroke: '#78350F',
 	kfeldFill: '#F472B6',
 	kfeldStroke: '#BE185D',
 	albiFill: '#E0E7FF',
@@ -78,7 +82,7 @@ export const PETRO_COLORS = {
 	core: '#0F172A',
 	perm: '#0284C7',
 	phie: '#2563EB',
-	phit: '#0F172A',
+	phit: '#2563EB',
 	phitSand: '#047857',
 	pota: '#EC4899',
 	thor: '#06B6D4',
@@ -286,6 +290,26 @@ export const LITHOLOGY_TRACK_SPECS: LithologyTrackSpec[] = [
 		rhobEndpoint: 2.85
 	},
 	{
+		mnemonic: 'VMUSC',
+		mineralName: 'MUSCOVITE',
+		shortLabel: 'Muscovite',
+		fillRgba: 'rgba(196, 181, 253, 0.62)',
+		fillHex: PETRO_COLORS.muscFill,
+		strokeHex: PETRO_COLORS.muscStroke,
+		nphiEndpoint: 0.02,
+		rhobEndpoint: 2.83
+	},
+	{
+		mnemonic: 'VBIOT',
+		mineralName: 'BIOTITE',
+		shortLabel: 'Biotite',
+		fillRgba: 'rgba(146, 64, 14, 0.62)',
+		fillHex: PETRO_COLORS.biotFill,
+		strokeHex: PETRO_COLORS.biotStroke,
+		nphiEndpoint: 0.04,
+		rhobEndpoint: 3.09
+	},
+	{
 		mnemonic: 'VKFELD',
 		mineralName: 'KFELD',
 		shortLabel: 'K-Feldspar',
@@ -364,6 +388,8 @@ export const MINERAL_TO_CURVE_MNEMONIC: Record<string, string> = {
 	SMECTITE: 'VSMEC',
 	CHLORITE: 'VCHLO',
 	GLAUCONITE: 'VGLAUC',
+	MUSCOVITE: 'VMUSC',
+	BIOTITE: 'VBIOT',
 	KFELD: 'VKFELD',
 	ALBITE: 'VALBI',
 	SIDERITE: 'VSIDE',
@@ -389,6 +415,8 @@ export const ALL_LITHOLOGY_CURVES = [
 	'VSMEC',
 	'VCHLO',
 	'VGLAUC',
+	'VMUSC',
+	'VBIOT',
 	'VKFELD',
 	'VALBI',
 	'VSIDE',
@@ -493,6 +521,42 @@ export const STANDARD_CURVE_META: Record<string, CurveMeta> = {
 		max: 2.95,
 		color: PETRO_COLORS.rhob
 	},
+	TEMP_FL: { mnemonic: 'TEMP_FL', label: 'Fluid Temperature', unit: '°C', min: 0, max: 250, color: '#DC2626' },
+	PRES_FL: { mnemonic: 'PRES_FL', label: 'Fluid Pressure', unit: 'MPa', min: 0, max: 200, color: '#2563EB' },
+	RHO_W: { mnemonic: 'RHO_W', label: 'Brine Density', unit: 'g/cc', min: 0.8, max: 1.3, color: '#3B82F6' },
+	RHO_O: { mnemonic: 'RHO_O', label: 'Live Oil Density', unit: 'g/cc', min: 0.4, max: 1.1, color: '#10B981' },
+	RHO_G: { mnemonic: 'RHO_G', label: 'In-Situ Gas Density', unit: 'g/cc', min: 0.0, max: 1.2, color: '#EF4444' },
+	RHO_O_APP: { mnemonic: 'RHO_O_APP', label: 'Apparent Oil Density', unit: 'g/cc', min: 0.0, max: 1.2, color: '#059669' },
+	RHO_G_APP: { mnemonic: 'RHO_G_APP', label: 'Apparent Gas Density', unit: 'g/cc', min: 0.0, max: 1.2, color: '#F97316' },
+	RHO_H: {
+		mnemonic: 'RHO_H',
+		label: 'In-Situ Hydrocarbon Density',
+		unit: 'g/cc',
+		min: 0.0,
+		max: 1.2,
+		color: '#f97316'
+	},
+	RHO_H_APP: { mnemonic: 'RHO_H_APP', label: 'Apparent HC Density', unit: 'g/cc', min: 0.0, max: 1.2, color: '#EA580C' },
+	HI_W: { mnemonic: 'HI_W', label: 'Brine Hydrogen Index', unit: 'v/v', min: 0.0, max: 1.2, color: '#2563EB' },
+	HI_O: { mnemonic: 'HI_O', label: 'Oil Hydrogen Index', unit: 'v/v', min: 0.0, max: 1.05, color: '#059669' },
+	HI_G: { mnemonic: 'HI_G', label: 'Gas Hydrogen Index', unit: 'v/v', min: 0.0, max: 1.0, color: '#DC2626' },
+	HI_H: {
+		mnemonic: 'HI_H',
+		label: 'In-Situ Hydrocarbon Hydrogen Index',
+		unit: 'v/v',
+		min: 0.0,
+		max: 1.0,
+		color: '#06b6d4'
+	},
+	SHC_INV: {
+		mnemonic: 'SHC_INV',
+		label: 'Invaded-Zone HC Saturation',
+		unit: 'v/v',
+		min: 0.0,
+		max: 1.0,
+		color: '#7C3AED'
+	},
+	Z_FACTOR: { mnemonic: 'Z_FACTOR', label: 'Gas Compressibility Factor', unit: '—', min: 0.3, max: 3.0, color: '#7C3AED' },
 	DTC: { mnemonic: 'DTC', label: 'Compressional Sonic', unit: 'us/ft', min: 40, max: 140, color: PETRO_COLORS.dt, reversed: true },
 	PEF: { mnemonic: 'PEF', label: 'Photoelectric Factor', unit: 'b/e', min: 0, max: 10, color: PETRO_COLORS.pef },
 	VSAND: { mnemonic: 'VSAND', label: 'Quartz/Sand Volume', unit: 'v/v', min: 0, max: 1, color: PETRO_COLORS.sandStroke },
@@ -577,4 +641,3 @@ export function getRockTypeFillRgba(
 	}
 	return hex;
 }
-

@@ -178,7 +178,8 @@
 			const rtRes = projectData.rockTypingResult;
 			if (rtRes) {
 				const useCutoffOnly =
-					!projectData.drtClassifierPropagated || projectData.drtPropagationMode === 'cutoff_only';
+					!projectData.drtClassifierPropagated ||
+					projectData.drtPropagationMode === 'cutoff_only';
 				const rtLookup = new Map<string, number>();
 				if (Array.isArray(rtRes.well_names)) {
 					for (let i = 0; i < rtRes.well_names.length; i++) {
@@ -215,7 +216,9 @@
 				}
 				if (rtLookup.size > 0) {
 					for (let i = 0; i < wnArr.length; i++) {
-						const hit = rtLookup.get(`${wnArr[i]}__${Math.round(Number(dArr[i]) * 100)}`);
+						const hit = rtLookup.get(
+							`${wnArr[i]}__${Math.round(Number(dArr[i]) * 100)}`
+						);
 						if (hit !== undefined) {
 							rfArr[i] = hit;
 						}
@@ -225,7 +228,10 @@
 							continue;
 						}
 						const p = logPhitArr[i];
-						const f = r !== null && r !== undefined && r >= 1 ? fitsMap[String(r)] : undefined;
+						const f =
+							r !== null && r !== undefined && r >= 1
+								? fitsMap[String(r)]
+								: undefined;
 						if (
 							(ptArr[i] === null || ptArr[i] === undefined) &&
 							f &&
@@ -294,10 +300,12 @@
 			badge={projectData.permTransformDataSource === 'core'
 				? 'Core: CPERM = a · CPORE^b'
 				: 'Log: PERM = a · PHIT^b'}
-			defaultOpen={true}
+			defaultOpen={false}
 		>
 			<div class="space-y-1.5">
-				<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
+				<div
+					class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5"
+				>
 					<div class="mb-1 flex items-center justify-between text-[9.5px]">
 						<span class="font-semibold text-[var(--text-primary)]">
 							Regression Input Data Source (Φ &amp; K):
@@ -326,12 +334,15 @@
 						>
 							<div class="flex w-full items-center justify-between gap-1 text-[10px]">
 								<span>Core Data</span>
-								<span class="mono-num rounded-xs bg-amber-100/80 px-1 py-0.2 text-[8.5px] font-semibold text-amber-800">
+								<span
+									class="mono-num py-0.2 rounded-xs bg-amber-100/80 px-1 text-[8.5px] font-semibold text-amber-800"
+								>
 									CPORE &amp; CPERM
 								</span>
 							</div>
 							<span class="mono-num mt-0.5 text-[8.5px] opacity-80">
-								{projectData.wellsWithCorePhiK.length}/{projectData.activeWells.length} wells · {projectData.totalCorePlugCount} RCA plugs
+								{projectData.wellsWithCorePhiK.length}/{projectData.activeWells
+									.length} wells · {projectData.totalCorePlugCount} RCA plugs
 							</span>
 						</button>
 						<button
@@ -344,28 +355,44 @@
 						>
 							<div class="flex w-full items-center justify-between gap-1 text-[10px]">
 								<span>Calculated Logs</span>
-								<span class="mono-num rounded-xs bg-indigo-100/80 px-1 py-0.2 text-[8.5px] font-semibold text-indigo-800">
+								<span
+									class="mono-num py-0.2 rounded-xs bg-indigo-100/80 px-1 text-[8.5px] font-semibold text-indigo-800"
+								>
 									PHIT &amp; PERM
 								</span>
 							</div>
 							<span class="mono-num mt-0.5 text-[8.5px] opacity-80">
-								{projectData.wellsWithLogPhiK.length}/{projectData.activeWells.length} wells with PHIT &amp; PERM
+								{projectData.wellsWithLogPhiK.length}/{projectData.activeWells
+									.length} wells with PHIT &amp; PERM
 							</span>
 						</button>
 					</div>
 					<div class="mt-1 text-[9px] leading-snug text-[var(--text-secondary)]">
 						{#if projectData.permTransformDataSource === 'core'}
-							Fits <span class="mono-num font-semibold">CPERM = a · CPORE^b</span> per <span class="mono-num font-semibold">ROCK_FLAG</span> using
-							<strong class="mono-num text-[var(--text-primary)]">Core Plugs (CPORE &amp; CPERM)</strong>, then applies the fitted equations to continuous <span class="mono-num font-semibold">PHIT</span> to generate <span class="mono-num font-semibold">PERM_TRANS</span>.
+							Fits <span class="mono-num font-semibold">CPERM = a · CPORE^b</span> per
+							<span class="mono-num font-semibold">ROCK_FLAG</span>
+							using
+							<strong class="mono-num text-[var(--text-primary)]"
+								>Core Plugs (CPORE &amp; CPERM)</strong
+							>, then applies the fitted equations to continuous
+							<span class="mono-num font-semibold">PHIT</span>
+							to generate <span class="mono-num font-semibold">PERM_TRANS</span>.
 						{:else}
-							Fits <span class="mono-num font-semibold">PERM = a · PHIT^b</span> per <span class="mono-num font-semibold">ROCK_FLAG</span> using
-							<strong class="mono-num text-[var(--text-primary)]">Calculated Logs (PHIT &amp; PERM)</strong>, then applies the fitted equations to continuous <span class="mono-num font-semibold">PHIT</span> to generate <span class="mono-num font-semibold">PERM_TRANS</span>.
+							Fits <span class="mono-num font-semibold">PERM = a · PHIT^b</span> per
+							<span class="mono-num font-semibold">ROCK_FLAG</span>
+							using
+							<strong class="mono-num text-[var(--text-primary)]"
+								>Calculated Logs (PHIT &amp; PERM)</strong
+							>, then applies the fitted equations to continuous
+							<span class="mono-num font-semibold">PHIT</span>
+							to generate <span class="mono-num font-semibold">PERM_TRANS</span>.
 						{/if}
 					</div>
 				</div>
 
 				<p class="text-[10.5px] text-[var(--text-secondary)]">
-					Edit <code>a</code> or <code>b</code> below to adjust the regression lines on the crossplot and update <code>PERM_TRANS</code> in real time.
+					Edit <code>a</code> or <code>b</code> below to adjust the regression lines on
+					the crossplot and update <code>PERM_TRANS</code> in real time.
 				</p>
 			</div>
 		</ParameterSection>
@@ -373,10 +400,19 @@
 		{#if projectData.permTransformResult}
 			<ParameterSection
 				title="Fitted Equations by Rock Type"
-				badge="{(projectData.permTransformResult.data_source ?? projectData.permTransformDataSource) === 'log' ? 'Log: PHIT & PERM' : 'Core: CPORE & CPERM'} · {projectData.permTransformManualEdits ? 'Custom Edited' : 'Auto-Fitted'}"
+				badge="{(projectData.permTransformResult.data_source ??
+					projectData.permTransformDataSource) === 'log'
+					? 'Log: PHIT & PERM'
+					: 'Core: CPORE & CPERM'} · {projectData.permTransformManualEdits
+					? 'Custom Edited'
+					: 'Auto-Fitted'}"
 			>
-				<div class="mb-1.5 flex items-center justify-between text-[10px] text-[var(--text-muted)]">
-					<span>Edit <strong>Coeff a</strong> or <strong>Exp b</strong> to update crossplot lines</span>
+				<div
+					class="mb-1.5 flex items-center justify-between text-[10px] text-[var(--text-muted)]"
+				>
+					<span
+						>Edit <strong>Coeff a</strong> or <strong>Exp b</strong> to update crossplot lines</span
+					>
 					{#if projectData.permTransformManualEdits}
 						<button
 							type="button"
@@ -415,7 +451,11 @@
 											step="100"
 											value={Number(fit.a.toFixed(1))}
 											oninput={(e) =>
-												handleFitParamInput(rf, 'a', (e.currentTarget as HTMLInputElement).value)}
+												handleFitParamInput(
+													rf,
+													'a',
+													(e.currentTarget as HTMLInputElement).value
+												)}
 											class="mono-num h-5.5 w-23 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-right text-[11px] font-medium focus:border-[var(--accent-primary)] focus:outline-none"
 										/>
 									</td>
@@ -425,11 +465,17 @@
 											step="0.05"
 											value={Number(fit.b.toFixed(3))}
 											oninput={(e) =>
-												handleFitParamInput(rf, 'b', (e.currentTarget as HTMLInputElement).value)}
+												handleFitParamInput(
+													rf,
+													'b',
+													(e.currentTarget as HTMLInputElement).value
+												)}
 											class="mono-num h-5.5 w-16 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-right text-[11px] font-medium focus:border-[var(--accent-primary)] focus:outline-none"
 										/>
 									</td>
-									<td class="mono-num px-1.5 text-right font-semibold text-[var(--status-ok)]">
+									<td
+										class="mono-num px-1.5 text-right font-semibold text-[var(--status-ok)]"
+									>
 										{fmtNum(fit.r2, 3)}
 									</td>
 									<td class="mono-num px-1.5 text-right">{fit.count ?? '-'}</td>
@@ -442,7 +488,9 @@
 		{/if}
 
 		{#if projectData.error}
-			<div class="m-2 rounded-sm border border-red-200 bg-red-50 p-2 text-xs text-[var(--status-error)]">
+			<div
+				class="m-2 rounded-sm border border-red-200 bg-red-50 p-2 text-xs text-[var(--status-error)]"
+			>
 				{projectData.error}
 			</div>
 		{/if}
@@ -482,11 +530,9 @@
 		{/if}
 		<button
 			type="button"
-			disabled={
-				projectData.isComputingMultiWell ||
+			disabled={projectData.isComputingMultiWell ||
 				projectData.isSavingMultiWell ||
-				!projectData.hasPendingMultiWell('perm-transform')
-			}
+				!projectData.hasPendingMultiWell('perm-transform')}
 			onclick={savePermTransform}
 			title={projectData.hasPendingMultiWell('perm-transform')
 				? 'Save computed PERM_TRANS curves across all project wells'

@@ -314,7 +314,7 @@ class RunQaqcArgs(BaseModel):
     )
     run_env_correction: bool = Field(
         False,
-        description="Apply borehole environmental corrections (GR_CORR, NPHI_CORR, RHOB_CORR)",
+        description="Apply borehole environmental corrections (GR_ENV_CORR, NPHI_ENV_CORR, RHOB_ENV_CORR, RT_ENV_CORR)",
     )
     rho_hc: float = Field(
         0.8, description="Hydrocarbon density (g/cc) for HC correction"
@@ -344,10 +344,6 @@ class RunMultiMineralArgs(BaseModel):
     minerals: List[str] = Field(
         default_factory=lambda: ["QUARTZ", "CALCITE", "DOLOMITE", "SHALE"],
         description="Minerals to solve for when model='multi_mineral'",
-    )
-    porosity_method: str = Field(
-        "neutron_density",
-        description="Porosity method: 'density', 'neutron_density', or 'sonic'",
     )
     use_hc_corrected: bool = Field(
         True, description="Use NPHI_HC and RHOB_HC if available"
@@ -806,7 +802,7 @@ def tool_run_well_qaqc(
         corr_df = apply_environmental_corrections(df)
         env_cols = [
             c
-            for c in ("GR_CORR", "NPHI_CORR", "RHOB_CORR", "RT_CORR")
+            for c in ("GR_ENV_CORR", "NPHI_ENV_CORR", "RHOB_ENV_CORR", "RT_ENV_CORR")
             if c in corr_df.columns
         ]
         for c in env_cols:
@@ -850,7 +846,6 @@ def tool_run_multi_mineral(
     well_name: str,
     model: str = "multi_mineral",
     minerals: Optional[List[str]] = None,
-    porosity_method: str = "neutron_density",
     use_hc_corrected: bool = True,
     min_depth: Optional[float] = None,
     max_depth: Optional[float] = None,
@@ -862,7 +857,6 @@ def tool_run_multi_mineral(
     lith_req = WorkspaceLithologyRequest(
         model=model,
         minerals=mineral_list,
-        porosity_method=porosity_method,
         use_hc_corrected=use_hc_corrected,
         min_depth=min_depth,
         max_depth=max_depth,
@@ -933,7 +927,6 @@ def tool_run_multi_mineral(
         "minerals": mineral_list
         if model == "multi_mineral"
         else ["VSAND", "VSILT", "VCLAY"],
-        "porosity_method": porosity_method,
         "saved": save,
         "saved_rows": lith_res.get("saved_rows", 0),
         "solver_diagnostics": diagnostics,

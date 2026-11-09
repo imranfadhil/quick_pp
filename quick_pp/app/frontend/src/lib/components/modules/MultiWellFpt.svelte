@@ -81,7 +81,10 @@
 
 	let counts = $derived.by(() => {
 		const allPts = res?.points ?? [];
-		const pts = fpt.activeZone !== 'ALL' ? allPts.filter((p) => (p.zone || 'Unzoned').trim() === fpt.activeZone) : allPts;
+		const pts =
+			fpt.activeZone !== 'ALL'
+				? allPts.filter((p) => (p.zone || 'Unzoned').trim() === fpt.activeZone)
+				: allPts;
 		const by: Record<'GAS' | 'OIL' | 'WATER' | 'UNASSIGNED' | 'QC', number> = {
 			GAS: 0,
 			OIL: 0,
@@ -97,7 +100,10 @@
 			...by,
 			total: pts.length,
 			wells: new Set(pts.map((p) => p.well_name)).size,
-			missing: fpt.activeZone !== 'ALL' ? pts.filter((p) => p.tvdss === null).length : (res?.n_missing_tvdss ?? 0)
+			missing:
+				fpt.activeZone !== 'ALL'
+					? pts.filter((p) => p.tvdss === null).length
+					: (res?.n_missing_tvdss ?? 0)
 		};
 	});
 
@@ -131,47 +137,75 @@
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
 	<div class="flex-1 overflow-y-auto">
 		<!-- Scope summary -->
-		<div class="border-b border-[var(--border-hairline)] bg-[var(--bg-app)] px-2.5 py-2 text-[10.5px]">
+		<div
+			class="border-b border-[var(--border-hairline)] bg-[var(--bg-app)] px-2.5 py-2 text-[10.5px]"
+		>
 			<div class="mb-1 flex items-center justify-between">
-				<span class="font-semibold text-[var(--text-primary)]">Formation Pressure &amp; Contacts</span>
-				<span class="mono-num rounded-xs bg-sky-100 px-1 text-[9px] font-bold text-sky-800">STANDALONE</span>
+				<span class="font-semibold text-[var(--text-primary)]"
+					>Formation Pressure &amp; Contacts</span
+				>
+				<span class="mono-num rounded-xs bg-sky-100 px-1 text-[9px] font-bold text-sky-800"
+					>STANDALONE</span
+				>
 			</div>
 			<div class="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[var(--text-secondary)]">
 				<span>Wells in scope</span>
 				<span class="mono-num text-right font-semibold text-[var(--text-primary)]">
-					{fpt.scopeWells()?.length ?? projectData.wells.length}/{projectData.wells.length}
-					<span class="font-normal text-[var(--text-muted)]">({counts.wells} w/ FPT)</span>
+					{fpt.scopeWells()?.length ?? projectData.wells.length}/{projectData.wells
+						.length}
+					<span class="font-normal text-[var(--text-muted)]">({counts.wells} w/ FPT)</span
+					>
 				</span>
 				<span>Zone filter</span>
 				<label class="flex items-center justify-end gap-1">
 					<input type="checkbox" bind:checked={fpt.useZoneFilter} class="h-3 w-3" />
 					<span class="truncate text-right" title={zoneSelectionLabel()}>
-						{fpt.useZoneFilter && workbench.selectedZones.length ? zoneSelectionLabel() : 'All zones'}
+						{fpt.useZoneFilter && workbench.selectedZones.length
+							? zoneSelectionLabel()
+							: 'All zones'}
 					</span>
 				</label>
 				<span>Points</span>
 				<span class="mono-num text-right">
 					{#each FPT_PHASES as ph (ph)}
-						<span class="ml-1" style="color: {FPT_FLUID_COLORS[ph]}" title="{PHASE_LABEL[ph]} (valid)">
+						<span
+							class="ml-1"
+							style="color: {FPT_FLUID_COLORS[ph]}"
+							title="{PHASE_LABEL[ph]} (valid)"
+						>
 							●{counts[ph]}
 						</span>
 					{/each}
-					<span class="ml-1 text-slate-500" title="Unassigned (valid)">○{counts.UNASSIGNED}</span>
-					<span class="ml-1 text-slate-400" title="Excluded / QC-flagged">⊘{counts.QC}</span>
+					<span class="ml-1 text-slate-500" title="Unassigned (valid)"
+						>○{counts.UNASSIGNED}</span
+					>
+					<span class="ml-1 text-slate-400" title="Excluded / QC-flagged"
+						>⊘{counts.QC}</span
+					>
 				</span>
 			</div>
 			{#if counts.missing > 0}
-				<div class="mt-1 rounded-xs border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[9.5px] text-amber-800">
-					{counts.missing} point(s) lack TVDSS (no TVD/TVDSS curve, survey or TVDSS override) — ignored.
+				<div
+					class="mt-1 rounded-xs border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[9.5px] text-amber-800"
+				>
+					{counts.missing} point(s) lack TVDSS (no TVD/TVDSS curve, survey or TVDSS override)
+					— ignored.
 				</div>
 			{/if}
 
 			<!-- Zone / Compartment Selector -->
 			{#if availableZones.length > 1}
-				<div class="mt-1.5 flex flex-col gap-1 border-t border-[var(--border-hairline)] pt-1.5">
+				<div
+					class="mt-1.5 flex flex-col gap-1 border-t border-[var(--border-hairline)] pt-1.5"
+				>
 					<div class="flex items-center justify-between text-[10px]">
-						<span class="font-semibold text-[var(--text-primary)]">Fitting Zone / Compartment:</span>
-						<label class="flex items-center gap-1 text-[9.5px] text-[var(--text-muted)] cursor-pointer" title="Fit gradients and contacts independently per zone">
+						<span class="font-semibold text-[var(--text-primary)]"
+							>Fitting Zone / Compartment:</span
+						>
+						<label
+							class="flex cursor-pointer items-center gap-1 text-[9.5px] text-[var(--text-muted)]"
+							title="Fit gradients and contacts independently per zone"
+						>
 							<input type="checkbox" bind:checked={fpt.groupZones} class="h-3 w-3" />
 							<span>Group by zone</span>
 						</label>
@@ -180,7 +214,10 @@
 						<button
 							type="button"
 							onclick={() => (fpt.activeZone = 'ALL')}
-							class="rounded-xs px-1.5 py-0.5 text-[9.5px] font-semibold transition-colors {fpt.activeZone === 'ALL' ? 'bg-[var(--accent-primary)] text-white' : 'bg-slate-100 text-[var(--text-secondary)] hover:bg-slate-200'}"
+							class="rounded-xs px-1.5 py-0.5 text-[9.5px] font-semibold transition-colors {fpt.activeZone ===
+							'ALL'
+								? 'bg-[var(--accent-primary)] text-white'
+								: 'bg-slate-100 text-[var(--text-secondary)] hover:bg-slate-200'}"
 						>
 							All Zones ({res?.points?.length ?? 0})
 						</button>
@@ -188,7 +225,10 @@
 							<button
 								type="button"
 								onclick={() => (fpt.activeZone = z)}
-								class="rounded-xs px-1.5 py-0.5 text-[9.5px] font-medium transition-colors {fpt.activeZone === z ? 'bg-[var(--accent-primary)] text-white font-semibold' : 'bg-slate-100 text-[var(--text-secondary)] hover:bg-slate-200'}"
+								class="rounded-xs px-1.5 py-0.5 text-[9.5px] font-medium transition-colors {fpt.activeZone ===
+								z
+									? 'bg-[var(--accent-primary)] font-semibold text-white'
+									: 'bg-slate-100 text-[var(--text-secondary)] hover:bg-slate-200'}"
 							>
 								{z} ({zoneCounts[z] ?? 0})
 							</button>
@@ -198,15 +238,23 @@
 			{/if}
 
 			<p class="mt-1 text-[9.5px] leading-snug text-[var(--text-muted)]">
-				TVDSS is resolved per well from a TVDSS/TVD curve or directional survey (same reference as SHF). Points are grouped and fitted independently per reservoir zone.
+				TVDSS is resolved per well from a TVDSS/TVD curve or directional survey (same
+				reference as SHF). Points are grouped and fitted independently per reservoir zone.
 			</p>
 		</div>
 
-		<ParameterSection title="Units & Regression" badge="{fpt.gradientUnit} · {fpt.method.toUpperCase()}" defaultOpen={true}>
+		<ParameterSection
+			title="Units & Regression"
+			badge="{fpt.gradientUnit} · {fpt.method.toUpperCase()}"
+			defaultOpen={false}
+		>
 			<div class="grid grid-cols-2 gap-1.5 text-[10.5px]">
 				<label class="flex flex-col gap-0.5">
 					<span class="text-[var(--text-muted)]">Pressure unit</span>
-					<select bind:value={fpt.pressureUnit} class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1 text-[11px]">
+					<select
+						bind:value={fpt.pressureUnit}
+						class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1 text-[11px]"
+					>
 						<option value="psi">psi</option>
 						<option value="bar">bar</option>
 						<option value="kPa">kPa</option>
@@ -214,14 +262,20 @@
 				</label>
 				<label class="flex flex-col gap-0.5">
 					<span class="text-[var(--text-muted)]">Depth unit (TVDSS)</span>
-					<select bind:value={fpt.depthUnit} class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1 text-[11px]">
+					<select
+						bind:value={fpt.depthUnit}
+						class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1 text-[11px]"
+					>
 						<option value="m">m</option>
 						<option value="ft">ft</option>
 					</select>
 				</label>
 				<label class="flex flex-col gap-0.5">
 					<span class="text-[var(--text-muted)]">Regression</span>
-					<select bind:value={fpt.method} class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1 text-[11px]">
+					<select
+						bind:value={fpt.method}
+						class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1 text-[11px]"
+					>
 						<option value="ols">OLS</option>
 						<option value="huber">Huber (robust)</option>
 						<option value="ransac">RANSAC (robust)</option>
@@ -244,12 +298,16 @@
 		<ParameterSection
 			title="Point QC & Phase Assignment"
 			badge={fpt.pendingCount ? `${fpt.pendingCount} unsaved` : 'Saved'}
-			defaultOpen={true}
+			defaultOpen={false}
 		>
 			<!-- Reservoir Fluid System Selector -->
-			<div class="mb-2 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10.5px]">
+			<div
+				class="mb-2 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10.5px]"
+			>
 				<div class="flex items-center justify-between">
-					<span class="font-semibold text-[var(--text-primary)]">Reservoir Fluid System</span>
+					<span class="font-semibold text-[var(--text-primary)]"
+						>Reservoir Fluid System</span
+					>
 					<span class="mono-num text-[9px] text-[var(--text-muted)]">
 						{fpt.allowedFluids.map((f) => PHASE_LABEL[f]).join(' + ')}
 					</span>
@@ -259,7 +317,10 @@
 					<button
 						type="button"
 						onclick={() => fpt.setFluidSystem('OIL_WATER')}
-						class="h-5 rounded-xs border px-1 text-[9.5px] font-semibold transition-colors {fpt.fluidSystem === 'OIL_WATER' ? 'border-emerald-400 bg-emerald-50 text-emerald-800' : 'border-[var(--border-hairline)] bg-white text-[var(--text-secondary)] hover:bg-slate-50'}"
+						class="h-5 rounded-xs border px-1 text-[9.5px] font-semibold transition-colors {fpt.fluidSystem ===
+						'OIL_WATER'
+							? 'border-emerald-400 bg-emerald-50 text-emerald-800'
+							: 'border-[var(--border-hairline)] bg-white text-[var(--text-secondary)] hover:bg-slate-50'}"
 						title="Oil leg over aquifer (no free gas cap)"
 					>
 						Oil + Water
@@ -267,7 +328,10 @@
 					<button
 						type="button"
 						onclick={() => fpt.setFluidSystem('GAS_WATER')}
-						class="h-5 rounded-xs border px-1 text-[9.5px] font-semibold transition-colors {fpt.fluidSystem === 'GAS_WATER' ? 'border-rose-400 bg-rose-50 text-rose-800' : 'border-[var(--border-hairline)] bg-white text-[var(--text-secondary)] hover:bg-slate-50'}"
+						class="h-5 rounded-xs border px-1 text-[9.5px] font-semibold transition-colors {fpt.fluidSystem ===
+						'GAS_WATER'
+							? 'border-rose-400 bg-rose-50 text-rose-800'
+							: 'border-[var(--border-hairline)] bg-white text-[var(--text-secondary)] hover:bg-slate-50'}"
 						title="Gas reservoir over aquifer (no oil leg)"
 					>
 						Gas + Water
@@ -275,27 +339,42 @@
 					<button
 						type="button"
 						onclick={() => fpt.setFluidSystem('GAS_OIL_WATER')}
-						class="h-5 rounded-xs border px-1 text-[9.5px] font-semibold transition-colors {fpt.fluidSystem === 'GAS_OIL_WATER' ? 'border-sky-400 bg-sky-50 text-sky-800' : 'border-[var(--border-hairline)] bg-white text-[var(--text-secondary)] hover:bg-slate-50'}"
+						class="h-5 rounded-xs border px-1 text-[9.5px] font-semibold transition-colors {fpt.fluidSystem ===
+						'GAS_OIL_WATER'
+							? 'border-sky-400 bg-sky-50 text-sky-800'
+							: 'border-[var(--border-hairline)] bg-white text-[var(--text-secondary)] hover:bg-slate-50'}"
 						title="Full 3-phase system (gas cap + oil leg + aquifer)"
 					>
 						Gas + Oil + Wtr
 					</button>
 				</div>
 				<!-- Active fluid checkboxes -->
-				<div class="mt-1.5 flex items-center justify-between border-t border-[var(--border-hairline)] pt-1 text-[10px]">
+				<div
+					class="mt-1.5 flex items-center justify-between border-t border-[var(--border-hairline)] pt-1 text-[10px]"
+				>
 					<span class="text-[var(--text-muted)]">Active fluids:</span>
 					<div class="flex items-center gap-2">
 						{#each FPT_PHASES as ph (ph)}
 							{@const active = fpt.isFluidAllowed(ph)}
-							<label class="flex items-center gap-1 cursor-pointer" title="Enable or disable {PHASE_LABEL[ph]} in the reservoir">
+							<label
+								class="flex cursor-pointer items-center gap-1"
+								title="Enable or disable {PHASE_LABEL[ph]} in the reservoir"
+							>
 								<input
 									type="checkbox"
 									checked={active}
 									onchange={() => fpt.toggleAllowedFluid(ph)}
 									class="h-3 w-3 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)] focus:ring-0"
 								/>
-								<span class="flex items-center gap-0.5 font-medium {active ? 'text-[var(--text-primary)]' : 'text-slate-400 line-through'}">
-									<span class="inline-block h-1.5 w-1.5 rounded-full" style="background-color: {FPT_FLUID_COLORS[ph]}"></span>
+								<span
+									class="flex items-center gap-0.5 font-medium {active
+										? 'text-[var(--text-primary)]'
+										: 'text-slate-400 line-through'}"
+								>
+									<span
+										class="inline-block h-1.5 w-1.5 rounded-full"
+										style="background-color: {FPT_FLUID_COLORS[ph]}"
+									></span>
 									{PHASE_LABEL[ph]}
 								</span>
 							</label>
@@ -305,20 +384,29 @@
 			</div>
 
 			<p class="text-[10px] leading-snug text-[var(--text-secondary)]">
-				Lasso or click points on the plot to assign <strong>Gas / Oil / Water</strong> or flag
-				<strong>Supercharged / Tight / Excluded</strong>. Edits re-fit live and are saved to each well's
-				pressure tests with <em>Save Assignments</em>.
+				Lasso or click points on the plot to assign <strong>Gas / Oil / Water</strong> or
+				flag
+				<strong>Supercharged / Tight / Excluded</strong>. Edits re-fit live and are saved to
+				each well's pressure tests with <em>Save Assignments</em>.
 			</p>
-			<div class="mt-1 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10.5px]">
-				<div class="mb-1 font-semibold text-[var(--text-primary)]">Auto-classify (suggestions)</div>
+			<div
+				class="mt-1 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10.5px]"
+			>
+				<div class="mb-1 font-semibold text-[var(--text-primary)]">
+					Auto-classify (suggestions)
+				</div>
 				<label class="flex items-center justify-between gap-1">
-					<span class="text-[var(--text-muted)]">Flag TIGHT if mobility &lt; (mD/cP)</span>
+					<span class="text-[var(--text-muted)]">Flag TIGHT if mobility &lt; (mD/cP)</span
+					>
 					<input
 						type="number"
 						step="0.1"
 						min="0"
 						value={fpt.autoMinMobility ?? ''}
-						oninput={(e) => (fpt.autoMinMobility = numOrNull((e.currentTarget as HTMLInputElement).value))}
+						oninput={(e) =>
+							(fpt.autoMinMobility = numOrNull(
+								(e.currentTarget as HTMLInputElement).value
+							))}
 						class="mono-num h-5.5 w-16 rounded-xs border border-[var(--border-hairline)] bg-white px-1 text-right text-[11px]"
 					/>
 				</label>
@@ -328,7 +416,11 @@
 				</label>
 				<label class="mt-0.5 flex items-center gap-1.5">
 					<input type="checkbox" bind:checked={fpt.autoAssignFluids} class="h-3 w-3" />
-					<span>Suggest phase for unassigned points (constrained to {fpt.allowedFluids.map((f) => PHASE_LABEL[f]).join(' / ')})</span>
+					<span
+						>Suggest phase for unassigned points (constrained to {fpt.allowedFluids
+							.map((f) => PHASE_LABEL[f])
+							.join(' / ')})</span
+					>
 				</label>
 				<button
 					type="button"
@@ -363,18 +455,32 @@
 
 		<ParameterSection
 			title="Fluid Gradients"
-			badge={fpt.activeZone !== 'ALL' ? fpt.activeZone : (res?.by_zone && Object.keys(res.by_zone).length > 1 ? `${Object.keys(res.by_zone).length} zones` : (res ? `${Object.keys(res.gradients).length} phase(s)` : '—'))}
-			defaultOpen={true}
+			badge={fpt.activeZone !== 'ALL'
+				? fpt.activeZone
+				: res?.by_zone && Object.keys(res.by_zone).length > 1
+					? `${Object.keys(res.by_zone).length} zones`
+					: res
+						? `${Object.keys(res.gradients).length} phase(s)`
+						: '—'}
+			defaultOpen={false}
 		>
 			{#if fpt.activeZone === 'ALL' && res?.by_zone && Object.keys(res.by_zone).length > 1}
 				<!-- Multi-zone summary list -->
 				<div class="space-y-2">
 					{#each Object.entries(res.by_zone) as [zName, zRes] (zName)}
-						<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10.5px]">
-							<div class="flex items-center justify-between border-b border-[var(--border-hairline)] pb-1 mb-1">
-								<span class="font-semibold text-[var(--text-primary)]">Zone: {zName}</span>
+						<div
+							class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10.5px]"
+						>
+							<div
+								class="mb-1 flex items-center justify-between border-b border-[var(--border-hairline)] pb-1"
+							>
+								<span class="font-semibold text-[var(--text-primary)]"
+									>Zone: {zName}</span
+								>
 								<div class="flex items-center gap-1.5">
-									<span class="mono-num text-[9.5px] text-[var(--text-muted)]">{zRes.n_points} pts</span>
+									<span class="mono-num text-[9.5px] text-[var(--text-muted)]"
+										>{zRes.n_points} pts</span
+									>
 									<button
 										type="button"
 										onclick={() => (fpt.activeZone = zName)}
@@ -385,15 +491,33 @@
 								</div>
 							</div>
 							{#if Object.keys(zRes.gradients).length === 0}
-								<div class="text-[9.5px] text-[var(--text-muted)]">No fitted gradients in this zone</div>
+								<div class="text-[9.5px] text-[var(--text-muted)]">
+									No fitted gradients in this zone
+								</div>
 							{:else}
 								<div class="space-y-1">
 									{#each FPT_PHASES as ph (ph)}
 										{@const g = zRes.gradients[ph]}
 										{#if g}
-											<div class="flex items-center justify-between mono-num text-[10px] pl-1.5 border-l-2" style="border-color: {FPT_FLUID_COLORS[ph]}">
-												<span><strong style="color: {FPT_FLUID_COLORS[ph]}">{PHASE_LABEL[ph]}</strong> dP/dz {fmtNum(g.gradient, 4)} <span class="text-[var(--text-muted)]">{g.gradient_unit}</span></span>
-												<span>ρ <strong>{fmtNum(g.density_gcc, 3)}</strong> g/cc {g.r_squared !== null ? `· R² ${fmtNum(g.r_squared, 3)}` : ''}</span>
+											<div
+												class="mono-num flex items-center justify-between border-l-2 pl-1.5 text-[10px]"
+												style="border-color: {FPT_FLUID_COLORS[ph]}"
+											>
+												<span
+													><strong style="color: {FPT_FLUID_COLORS[ph]}"
+														>{PHASE_LABEL[ph]}</strong
+													>
+													dP/dz {fmtNum(g.gradient, 4)}
+													<span class="text-[var(--text-muted)]"
+														>{g.gradient_unit}</span
+													></span
+												>
+												<span
+													>ρ <strong>{fmtNum(g.density_gcc, 3)}</strong>
+													g/cc {g.r_squared !== null
+														? `· R² ${fmtNum(g.r_squared, 3)}`
+														: ''}</span
+												>
 											</div>
 										{/if}
 									{/each}
@@ -404,7 +528,9 @@
 				</div>
 			{:else}
 				{#if fpt.activeZone !== 'ALL'}
-					<div class="mb-1.5 flex items-center justify-between rounded-xs bg-sky-50 px-2 py-1 text-[10px] text-sky-900 border border-sky-200">
+					<div
+						class="mb-1.5 flex items-center justify-between rounded-xs border border-sky-200 bg-sky-50 px-2 py-1 text-[10px] text-sky-900"
+					>
 						<span>Zone: <strong>{fpt.activeZone}</strong></span>
 						<button
 							type="button"
@@ -415,16 +541,26 @@
 						</button>
 					</div>
 				{/if}
-				{@const activeGrads = fpt.activeZone !== 'ALL' ? (res?.by_zone?.[fpt.activeZone]?.gradients ?? res?.gradients) : res?.gradients}
+				{@const activeGrads =
+					fpt.activeZone !== 'ALL'
+						? (res?.by_zone?.[fpt.activeZone]?.gradients ?? res?.gradients)
+						: res?.gradients}
 				<div class="space-y-1.5">
 					{#each FPT_PHASES as ph (ph)}
 						{@const allowed = fpt.isFluidAllowed(ph)}
 						{@const g = activeGrads?.[ph]}
 						{@const ov = currentOverrides[ph]}
 						{@const hint = densityHint(ph, g?.density_gcc)}
-						<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10.5px] {allowed ? '' : 'opacity-50'}" style="border-left: 3px solid {allowed ? FPT_FLUID_COLORS[ph] : '#CBD5E1'}">
+						<div
+							class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10.5px] {allowed
+								? ''
+								: 'opacity-50'}"
+							style="border-left: 3px solid {allowed
+								? FPT_FLUID_COLORS[ph]
+								: '#CBD5E1'}"
+						>
 							<div class="flex items-center justify-between">
-								<label class="flex items-center gap-1.5 cursor-pointer">
+								<label class="flex cursor-pointer items-center gap-1.5">
 									<input
 										type="checkbox"
 										checked={allowed}
@@ -432,59 +568,110 @@
 										class="h-3 w-3 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)] focus:ring-0"
 										title="Toggle {PHASE_LABEL[ph]} presence in reservoir"
 									/>
-									<span class="font-semibold {allowed ? '' : 'line-through text-slate-400'}" style="color: {allowed ? FPT_FLUID_COLORS[ph] : undefined}">{PHASE_LABEL[ph]}</span>
+									<span
+										class="font-semibold {allowed
+											? ''
+											: 'text-slate-400 line-through'}"
+										style="color: {allowed ? FPT_FLUID_COLORS[ph] : undefined}"
+										>{PHASE_LABEL[ph]}</span
+									>
 								</label>
 								{#if g}
 									<span class="mono-num text-[9.5px] text-[var(--text-muted)]">
-										{g.method} · n={g.n_points}{g.r_squared !== null ? ` · R² ${fmtNum(g.r_squared, 4)}` : ''}
+										{g.method} · n={g.n_points}{g.r_squared !== null
+											? ` · R² ${fmtNum(g.r_squared, 4)}`
+											: ''}
 									</span>
 								{:else}
-									<span class="text-[9.5px] text-[var(--text-muted)]">no fit</span>
+									<span class="text-[9.5px] text-[var(--text-muted)]">no fit</span
+									>
 								{/if}
 							</div>
 							{#if g}
 								<div class="mono-num mt-0.5 grid grid-cols-2 gap-x-2 text-[10.5px]">
-									<span>dP/dz <strong>{fmtNum(g.gradient, 4)}</strong> <span class="text-[var(--text-muted)]">{g.gradient_unit}</span></span>
-									<span class="text-right">ρ <strong>{fmtNum(g.density_gcc, 3)}</strong> g/cc</span>
-									<span class="text-[9.5px] text-[var(--text-muted)]">± {fmtNum(g.std_err_gradient, 5)}</span>
-									<span class="text-right text-[9.5px] text-[var(--text-muted)]">P₀ {fmtNum(g.intercept, 1)}</span>
+									<span
+										>dP/dz <strong>{fmtNum(g.gradient, 4)}</strong>
+										<span class="text-[var(--text-muted)]"
+											>{g.gradient_unit}</span
+										></span
+									>
+									<span class="text-right"
+										>ρ <strong>{fmtNum(g.density_gcc, 3)}</strong> g/cc</span
+									>
+									<span class="text-[9.5px] text-[var(--text-muted)]"
+										>± {fmtNum(g.std_err_gradient, 5)}</span
+									>
+									<span class="text-right text-[9.5px] text-[var(--text-muted)]"
+										>P₀ {fmtNum(g.intercept, 1)}</span
+									>
 								</div>
 								{#if hint}
-									<div class="mt-0.5 text-[9.5px] text-amber-700">⚠ density {hint}</div>
+									<div class="mt-0.5 text-[9.5px] text-amber-700">
+										⚠ density {hint}
+									</div>
 								{/if}
 							{/if}
 							<label class="mt-1 flex items-center gap-1.5 text-[10px]">
 								<input
 									type="checkbox"
 									checked={ov.enabled}
-									onchange={(e) => setOverride(ph, { enabled: (e.currentTarget as HTMLInputElement).checked })}
+									onchange={(e) =>
+										setOverride(ph, {
+											enabled: (e.currentTarget as HTMLInputElement).checked
+										})}
 									class="h-3 w-3"
 								/>
-								<span>Manual gradient override {fpt.activeZone !== 'ALL' ? `(${fpt.activeZone})` : ''}</span>
+								<span
+									>Manual gradient override {fpt.activeZone !== 'ALL'
+										? `(${fpt.activeZone})`
+										: ''}</span
+								>
 							</label>
 							{#if ov.enabled}
-								<div class="mt-1 space-y-1 border-t border-dashed border-[var(--border-hairline)] pt-1">
-									<div class="grid grid-cols-2 gap-1 rounded-xs bg-[var(--bg-subtle)] p-0.5 text-[9.5px]">
+								<div
+									class="mt-1 space-y-1 border-t border-dashed border-[var(--border-hairline)] pt-1"
+								>
+									<div
+										class="grid grid-cols-2 gap-1 rounded-xs bg-[var(--bg-subtle)] p-0.5 text-[9.5px]"
+									>
 										{#each [['fixed', 'Fixed slope'], ['anchor', 'Anchor line']] as [k, lbl] (k)}
 											<button
 												type="button"
-												onclick={() => setOverride(ph, { mode: k as 'fixed' | 'anchor' })}
-												class="h-5 rounded-xs {ov.mode === k ? 'bg-white font-semibold text-[var(--accent-primary)] shadow-2xs' : 'text-[var(--text-secondary)]'}"
-												title={k === 'fixed' ? 'Fix the slope; intercept fitted to the phase points (works with 1 point)' : 'Regional line through an anchor point (no points needed)'}
+												onclick={() =>
+													setOverride(ph, {
+														mode: k as 'fixed' | 'anchor'
+													})}
+												class="h-5 rounded-xs {ov.mode === k
+													? 'bg-white font-semibold text-[var(--accent-primary)] shadow-2xs'
+													: 'text-[var(--text-secondary)]'}"
+												title={k === 'fixed'
+													? 'Fix the slope; intercept fitted to the phase points (works with 1 point)'
+													: 'Regional line through an anchor point (no points needed)'}
 											>
 												{lbl}
 											</button>
 										{/each}
 									</div>
-									<label class="flex items-center justify-between gap-1 text-[10px]">
+									<label
+										class="flex items-center justify-between gap-1 text-[10px]"
+									>
 										<span class="text-[var(--text-muted)]">Density (g/cc)</span>
 										<span class="flex items-center gap-1">
-											<span class="mono-num text-[9px] text-[var(--text-muted)]">= {eqGradient(ov.density)}</span>
+											<span
+												class="mono-num text-[9px] text-[var(--text-muted)]"
+												>= {eqGradient(ov.density)}</span
+											>
 											<input
 												type="number"
 												step="0.01"
 												value={ov.density ?? ''}
-												oninput={(e) => setOverride(ph, { density: numOrNull((e.currentTarget as HTMLInputElement).value) })}
+												oninput={(e) =>
+													setOverride(ph, {
+														density: numOrNull(
+															(e.currentTarget as HTMLInputElement)
+																.value
+														)
+													})}
 												class="mono-num h-5.5 w-16 rounded-xs border border-[var(--border-hairline)] bg-white px-1 text-right text-[11px]"
 											/>
 										</span>
@@ -492,22 +679,40 @@
 									{#if ov.mode === 'anchor'}
 										<div class="grid grid-cols-2 gap-1 text-[10px]">
 											<label class="flex flex-col">
-												<span class="text-[var(--text-muted)]">Anchor TVDSS ({fpt.depthUnit})</span>
+												<span class="text-[var(--text-muted)]"
+													>Anchor TVDSS ({fpt.depthUnit})</span
+												>
 												<input
 													type="number"
 													step="0.1"
 													value={ov.anchorTvdss ?? ''}
-													oninput={(e) => setOverride(ph, { anchorTvdss: numOrNull((e.currentTarget as HTMLInputElement).value) })}
+													oninput={(e) =>
+														setOverride(ph, {
+															anchorTvdss: numOrNull(
+																(
+																	e.currentTarget as HTMLInputElement
+																).value
+															)
+														})}
 													class="mono-num h-5.5 rounded-xs border border-[var(--border-hairline)] bg-white px-1 text-right text-[11px]"
 												/>
 											</label>
 											<label class="flex flex-col">
-												<span class="text-[var(--text-muted)]">Anchor P ({fpt.pressureUnit})</span>
+												<span class="text-[var(--text-muted)]"
+													>Anchor P ({fpt.pressureUnit})</span
+												>
 												<input
 													type="number"
 													step="0.1"
 													value={ov.anchorPressure ?? ''}
-													oninput={(e) => setOverride(ph, { anchorPressure: numOrNull((e.currentTarget as HTMLInputElement).value) })}
+													oninput={(e) =>
+														setOverride(ph, {
+															anchorPressure: numOrNull(
+																(
+																	e.currentTarget as HTMLInputElement
+																).value
+															)
+														})}
 													class="mono-num h-5.5 rounded-xs border border-[var(--border-hairline)] bg-white px-1 text-right text-[11px]"
 												/>
 											</label>
@@ -517,7 +722,11 @@
 							{/if}
 						</div>
 					{/each}
-					<button type="button" onclick={() => fpt.resetOverrides()} class="text-[10px] font-medium text-blue-600 hover:underline">
+					<button
+						type="button"
+						onclick={() => fpt.resetOverrides()}
+						class="text-[10px] font-medium text-blue-600 hover:underline"
+					>
 						Reset overrides {fpt.activeZone !== 'ALL' ? `for ${fpt.activeZone}` : ''}
 					</button>
 				</div>
@@ -526,18 +735,41 @@
 
 		<ParameterSection
 			title="Fluid Contacts (P10 / P50 / P90)"
-			badge={fpt.activeZone !== 'ALL' ? fpt.activeZone : (res ? (Object.keys(res.contacts).join(' · ') || 'none') : '—')}
-			defaultOpen={true}
+			badge={fpt.activeZone !== 'ALL'
+				? fpt.activeZone
+				: res
+					? Object.keys(res.contacts).join(' · ') || 'none'
+					: '—'}
+			defaultOpen={false}
 		>
-			{@const activeContacts = fpt.activeZone !== 'ALL' ? (res?.by_zone?.[fpt.activeZone]?.contacts ?? res?.contacts) : null}
-			{@const allZoneContacts = fpt.activeZone === 'ALL' && res?.by_zone ? Object.entries(res.by_zone).flatMap(([zn, zr]) => Object.values(zr.contacts || {}).map((c) => ({ zone: zn, contact: c }))) : []}
-			{@const showList = fpt.activeZone !== 'ALL' ? Object.values(activeContacts || {}).map((c) => ({ zone: fpt.activeZone, contact: c })) : allZoneContacts}
+			{@const activeContacts =
+				fpt.activeZone !== 'ALL'
+					? (res?.by_zone?.[fpt.activeZone]?.contacts ?? res?.contacts)
+					: null}
+			{@const allZoneContacts =
+				fpt.activeZone === 'ALL' && res?.by_zone
+					? Object.entries(res.by_zone).flatMap(([zn, zr]) =>
+							Object.values(zr.contacts || {}).map((c) => ({ zone: zn, contact: c }))
+						)
+					: []}
+			{@const showList =
+				fpt.activeZone !== 'ALL'
+					? Object.values(activeContacts || {}).map((c) => ({
+							zone: fpt.activeZone,
+							contact: c
+						}))
+					: allZoneContacts}
 
 			{@const goc = activeContacts?.GOC}
 			{@const owc = activeContacts?.OWC}
 			{#if goc && owc && goc.tvdss_p50 > owc.tvdss_p50}
-				<div class="mb-1.5 rounded-xs border border-rose-300 bg-rose-50 p-1.5 text-[9.5px] text-rose-800">
-					<strong>⚠ Physical Inversion Detected:</strong> GOC ({fmtNum(goc.tvdss_p50, 1)} {res?.units?.depth}) is deeper than OWC ({fmtNum(owc.tvdss_p50, 1)} {res?.units?.depth}). In an unsegmented reservoir, Gas cap must lie above the Oil leg. Select <em>Oil + Water</em> if there is no gas cap.
+				<div
+					class="mb-1.5 rounded-xs border border-rose-300 bg-rose-50 p-1.5 text-[9.5px] text-rose-800"
+				>
+					<strong>⚠ Physical Inversion Detected:</strong> GOC ({fmtNum(goc.tvdss_p50, 1)}
+					{res?.units?.depth}) is deeper than OWC ({fmtNum(owc.tvdss_p50, 1)}
+					{res?.units?.depth}). In an unsegmented reservoir, Gas cap must lie above the
+					Oil leg. Select <em>Oil + Water</em> if there is no gas cap.
 				</div>
 			{/if}
 			{#if showList.length > 0}
@@ -545,33 +777,63 @@
 					{#each showList as item (item.zone + '::' + item.contact?.contact_type)}
 						{@const c = item.contact}
 						{#if c}
-							<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10.5px]" style="border-left: 3px solid {FPT_FLUID_COLORS[c.lower_fluid]}">
+							<div
+								class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10.5px]"
+								style="border-left: 3px solid {FPT_FLUID_COLORS[c.lower_fluid]}"
+							>
 								<div class="flex items-center justify-between">
 									<span class="font-semibold text-[var(--text-primary)]">
-										{#if fpt.activeZone === 'ALL'}<span class="mr-1 text-slate-500 font-bold">[{item.zone}]</span>{/if}
+										{#if fpt.activeZone === 'ALL'}<span
+												class="mr-1 font-bold text-slate-500"
+												>[{item.zone}]</span
+											>{/if}
 										{c.label}
 									</span>
 									<span class="mono-num text-[9.5px] text-[var(--text-muted)]">
-										{PHASE_LABEL[c.upper_fluid]} ρ {fmtNum(c.upper_density_gcc, 2)} / {PHASE_LABEL[c.lower_fluid]} ρ {fmtNum(c.lower_density_gcc, 2)}
+										{PHASE_LABEL[c.upper_fluid]} ρ {fmtNum(
+											c.upper_density_gcc,
+											2
+										)} / {PHASE_LABEL[c.lower_fluid]} ρ {fmtNum(
+											c.lower_density_gcc,
+											2
+										)}
 									</span>
 								</div>
 								<div class="mono-num mt-0.5 grid grid-cols-3 gap-1 text-center">
 									<div class="rounded-xs bg-white px-1 py-0.5">
-										<div class="text-[8.5px] text-[var(--text-muted)]">P10 (shallow)</div>
+										<div class="text-[8.5px] text-[var(--text-muted)]">
+											P10 (shallow)
+										</div>
 										<div>{fmtNum(c.tvdss_p10, 1)}</div>
 									</div>
-									<div class="rounded-xs border border-[var(--accent-primary)] bg-blue-50 px-1 py-0.5">
+									<div
+										class="rounded-xs border border-[var(--accent-primary)] bg-blue-50 px-1 py-0.5"
+									>
 										<div class="text-[8.5px] text-[var(--text-muted)]">P50</div>
-										<div class="font-bold text-[var(--accent-primary)]">{fmtNum(c.tvdss_p50, 1)}</div>
+										<div class="font-bold text-[var(--accent-primary)]">
+											{fmtNum(c.tvdss_p50, 1)}
+										</div>
 									</div>
 									<div class="rounded-xs bg-white px-1 py-0.5">
-										<div class="text-[8.5px] text-[var(--text-muted)]">P90 (deep)</div>
+										<div class="text-[8.5px] text-[var(--text-muted)]">
+											P90 (deep)
+										</div>
 										<div>{fmtNum(c.tvdss_p90, 1)}</div>
 									</div>
 								</div>
-								<div class="mono-num mt-0.5 flex justify-between text-[9.5px] text-[var(--text-muted)]">
-									<span>{res?.units?.depth ?? 'm'} TVDSS · σ {fmtNum(c.std_tvdss, 2)}</span>
-									<span>@ {fmtNum(c.pressure_at_contact, 1)} {res?.units?.pressure ?? 'psi'}</span>
+								<div
+									class="mono-num mt-0.5 flex justify-between text-[9.5px] text-[var(--text-muted)]"
+								>
+									<span
+										>{res?.units?.depth ?? 'm'} TVDSS · σ {fmtNum(
+											c.std_tvdss,
+											2
+										)}</span
+									>
+									<span
+										>@ {fmtNum(c.pressure_at_contact, 1)}
+										{res?.units?.pressure ?? 'psi'}</span
+									>
 								</div>
 								{#each c.warnings as w (w)}
 									<div class="mt-0.5 text-[9.5px] text-amber-700">⚠ {w}</div>
@@ -579,20 +841,33 @@
 								{#if c.contact_type === 'OWC' || c.contact_type === 'GWC'}
 									<button
 										type="button"
-										onclick={() => fpt.applyFwlToShf(c.contact_type as 'OWC' | 'GWC', item.zone !== 'ALL' ? item.zone : undefined)}
+										onclick={() =>
+											fpt.applyFwlToShf(
+												c.contact_type as 'OWC' | 'GWC',
+												item.zone !== 'ALL' ? item.zone : undefined
+											)}
 										class="mt-1 h-5.5 w-full rounded-xs border border-emerald-300 bg-emerald-50 text-[10px] font-semibold text-emerald-800 hover:bg-emerald-100"
 										title="Set the multi-well SHF free water level to this contact (P50, m TVDSS)"
 									>
-										Apply as FWL to SHF ({item.zone !== 'ALL' ? `Zone: ${item.zone} · ` : ''}{fmtNum(c.tvdss_p50_m, 1)} m TVDSS)
+										Apply as FWL to SHF ({item.zone !== 'ALL'
+											? `Zone: ${item.zone} · `
+											: ''}{fmtNum(c.tvdss_p50_m, 1)} m TVDSS)
 									</button>
 								{/if}
 							</div>
 						{/if}
 					{/each}
-					<div class="rounded-xs border border-[var(--border-hairline)] p-1.5 text-[10px]">
+					<div
+						class="rounded-xs border border-[var(--border-hairline)] p-1.5 text-[10px]"
+					>
 						<div class="flex items-center justify-between gap-1">
-							<span class="text-[var(--text-muted)]">Write P50 contacts into well fluid contacts as</span>
-							<select bind:value={owcName} class="h-5 rounded-xs border border-[var(--border-hairline)] bg-white px-1 text-[10px]">
+							<span class="text-[var(--text-muted)]"
+								>Write P50 contacts into well fluid contacts as</span
+							>
+							<select
+								bind:value={owcName}
+								class="h-5 rounded-xs border border-[var(--border-hairline)] bg-white px-1 text-[10px]"
+							>
 								<option value="FWL">FWL</option>
 								<option value="OWC">OWC</option>
 							</select>
@@ -604,13 +879,26 @@
 								onclick={() => (confirmWrite = true)}
 								class="mt-1 h-5.5 w-full rounded-xs border border-[var(--border-hairline)] bg-white text-[10px] font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:opacity-50"
 							>
-								Write Contacts to Wells ({fpt.scopeWells()?.length ?? projectData.wells.length})…
+								Write Contacts to Wells ({fpt.scopeWells()?.length ??
+									projectData.wells.length})…
 							</button>
 						{:else}
 							<div class="mt-1 flex items-center gap-1">
-								<span class="flex-1 text-[9.5px] text-amber-800">Overwrites same-named contacts (TVDSS→MD per well).</span>
-								<button type="button" onclick={() => (confirmWrite = false)} class="h-5 rounded-xs border border-[var(--border-hairline)] px-1.5 text-[10px]">Cancel</button>
-								<button type="button" onclick={() => writeContacts()} class="h-5 rounded-xs bg-[var(--accent-primary)] px-1.5 text-[10px] font-semibold text-white">Confirm</button>
+								<span class="flex-1 text-[9.5px] text-amber-800"
+									>Overwrites same-named contacts (TVDSS→MD per well).</span
+								>
+								<button
+									type="button"
+									onclick={() => (confirmWrite = false)}
+									class="h-5 rounded-xs border border-[var(--border-hairline)] px-1.5 text-[10px]"
+									>Cancel</button
+								>
+								<button
+									type="button"
+									onclick={() => writeContacts()}
+									class="h-5 rounded-xs bg-[var(--accent-primary)] px-1.5 text-[10px] font-semibold text-white"
+									>Confirm</button
+								>
 							</div>
 						{/if}
 					</div>
@@ -620,30 +908,41 @@
 				</div>
 			{:else}
 				<p class="text-[10px] text-[var(--text-muted)]">
-					Contacts need at least two phases with fitted (or overridden) gradients, e.g. Oil + Water
-					(OWC / FWL) or Gas + Oil (GOC). For a hydrocarbon-only well, enable a Water
+					Contacts need at least two phases with fitted (or overridden) gradients, e.g.
+					Oil + Water (OWC / FWL) or Gas + Oil (GOC). For a hydrocarbon-only well, enable
+					a Water
 					<em>Anchor line</em> override with a regional aquifer point.
 				</p>
 			{/if}
 		</ParameterSection>
 
-		<ParameterSection title="Reference Gradients & Regimes" badge={res ? `ρ ${fmtNum(fpt.hydrostaticDensity, 2)} g/cc` : '—'}>
+		<ParameterSection
+			title="Reference Gradients & Regimes"
+			badge={res ? `ρ ${fmtNum(fpt.hydrostaticDensity, 2)} g/cc` : '—'}
+		>
 			<div class="space-y-2 text-[10.5px]">
 				<!-- Hydrostatic Baseline Settings -->
-				<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
+				<div
+					class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5"
+				>
 					<div class="flex items-center justify-between">
-						<label class="flex items-center gap-1.5 font-semibold text-[var(--text-primary)] cursor-pointer">
+						<label
+							class="flex cursor-pointer items-center gap-1.5 font-semibold text-[var(--text-primary)]"
+						>
 							<input
 								type="checkbox"
 								bind:checked={fpt.showHydrostaticLine}
 								class="h-3 w-3 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)] focus:ring-0"
 							/>
-						<span>Normal Hydrostatic Baseline</span>
+							<span>Normal Hydrostatic Baseline</span>
 						</label>
-						<span class="mono-num text-[9px] text-[var(--text-muted)]">= {eqGradient(fpt.hydrostaticDensity)}</span>
+						<span class="mono-num text-[9px] text-[var(--text-muted)]"
+							>= {eqGradient(fpt.hydrostaticDensity)}</span
+						>
 					</div>
 					<p class="mt-0.5 text-[9.5px] text-[var(--text-muted)]">
-						Extrapolated from surface (P = 0 @ TVDSS = 0) to benchmark normal, over-, or under-pressure regimes.
+						Extrapolated from surface (P = 0 @ TVDSS = 0) to benchmark normal, over-, or
+						under-pressure regimes.
 					</p>
 					<label class="mt-1 flex items-center justify-between gap-1 text-[10px]">
 						<span class="text-[var(--text-muted)]">Hydrostatic density (g/cc)</span>
@@ -655,7 +954,9 @@
 								max="1.5"
 								value={fpt.hydrostaticDensity}
 								oninput={(e) => {
-									const n = numOrNull((e.currentTarget as HTMLInputElement).value);
+									const n = numOrNull(
+										(e.currentTarget as HTMLInputElement).value
+									);
 									if (n !== null) fpt.hydrostaticDensity = n;
 								}}
 								class="mono-num h-5.5 w-16 rounded-xs border border-[var(--border-hairline)] bg-white px-1 text-right text-[11px]"
@@ -663,7 +964,7 @@
 							<div class="flex items-center gap-0.5">
 								<button
 									type="button"
-									onclick={() => (fpt.hydrostaticDensity = 1.00)}
+									onclick={() => (fpt.hydrostaticDensity = 1.0)}
 									class="rounded-xs border border-[var(--border-hairline)] bg-white px-1 py-0.5 text-[9px] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
 									title="Freshwater (1.00 g/cc, 0.433 psi/ft)"
 								>
@@ -683,22 +984,33 @@
 				</div>
 
 				<!-- Excess Pressure Reference -->
-				<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
-					<div class="font-semibold text-[var(--text-primary)]">Excess Pressure Reference</div>
+				<div
+					class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5"
+				>
+					<div class="font-semibold text-[var(--text-primary)]">
+						Excess Pressure Reference
+					</div>
 					<label class="mt-1 flex items-center justify-between gap-1 text-[10px]">
-						<span class="text-[var(--text-muted)]">Reference density (blank = water fit / 1.0)</span>
+						<span class="text-[var(--text-muted)]"
+							>Reference density (blank = water fit / 1.0)</span
+						>
 						<input
 							type="number"
 							step="0.01"
 							value={fpt.refDensity ?? ''}
-							oninput={(e) => (fpt.refDensity = numOrNull((e.currentTarget as HTMLInputElement).value))}
+							oninput={(e) =>
+								(fpt.refDensity = numOrNull(
+									(e.currentTarget as HTMLInputElement).value
+								))}
 							class="mono-num h-5.5 w-16 rounded-xs border border-[var(--border-hairline)] bg-white px-1 text-right text-[11px]"
 						/>
 					</label>
 					{#if res}
 						<p class="mono-num mt-1 text-[9.5px] text-[var(--text-muted)]">
-							Datum {fmtNum(res.reference.datum_tvdss, 1)} {res.units.depth} @ {fmtNum(res.reference.datum_pressure, 1)}
-							{res.units.pressure} · {fmtNum(res.reference.gradient, 4)} {res.units.gradient}
+							Datum {fmtNum(res.reference.datum_tvdss, 1)}
+							{res.units.depth} @ {fmtNum(res.reference.datum_pressure, 1)}
+							{res.units.pressure} · {fmtNum(res.reference.gradient, 4)}
+							{res.units.gradient}
 						</p>
 					{/if}
 				</div>
@@ -706,14 +1018,18 @@
 		</ParameterSection>
 
 		{#if res?.warnings?.length}
-			<div class="m-2 space-y-0.5 rounded-sm border border-amber-200 bg-amber-50 p-1.5 text-[10px] text-amber-800">
+			<div
+				class="m-2 space-y-0.5 rounded-sm border border-amber-200 bg-amber-50 p-1.5 text-[10px] text-amber-800"
+			>
 				{#each res.warnings as w, i (i)}
 					<div>⚠ {w}</div>
 				{/each}
 			</div>
 		{/if}
 		{#if fpt.error}
-			<div class="m-2 rounded-sm border border-red-200 bg-red-50 p-2 text-xs text-[var(--status-error)]">
+			<div
+				class="m-2 rounded-sm border border-red-200 bg-red-50 p-2 text-xs text-[var(--status-error)]"
+			>
 				{fpt.error}
 			</div>
 		{/if}
@@ -722,7 +1038,9 @@
 		{/if}
 	</div>
 
-	<div class="flex h-9 shrink-0 items-center gap-1.5 border-t border-[var(--border-hairline)] bg-[var(--bg-app)] px-2.5">
+	<div
+		class="flex h-9 shrink-0 items-center gap-1.5 border-t border-[var(--border-hairline)] bg-[var(--bg-app)] px-2.5"
+	>
 		<button
 			type="button"
 			disabled={fpt.isLoading || !workbench.projectId}

@@ -60,7 +60,7 @@ export const SINGLE_WELL_REGIONAL_DEFAULTS: Record<ParamModuleKey, Record<string
 		useTsInPerm: false
 	},
 	saturation: {
-		method: 'waxman_smits',
+		method: 'archie',
 		rwMode: 'salinity_temp',
 		measSystem: 'metric',
 		a: 1.0,
@@ -68,6 +68,9 @@ export const SINGLE_WELL_REGIONAL_DEFAULTS: Record<ParamModuleKey, Record<string
 		n: 2.0,
 		rwVal: 0.05,
 		waterSalinity: 30000,
+		rsh: 2.0,
+		swb: 0.2,
+		rwb: 0.1,
 		fwl: 0,
 		useTsInSaturation: false
 	},
@@ -310,12 +313,19 @@ function legacyWellEntry(
 	}
 	if (module === 'saturation' && cfg.sw_model_key) {
 		const params = strip({
-			method: ['waxman_smits', 'archie'].includes(cfg.sw_model_key) ? cfg.sw_model_key : undefined,
+			method: ['waxman_smits', 'archie', 'simandoux', 'indonesian', 'dual_water'].includes(
+				cfg.sw_model_key
+			)
+				? cfg.sw_model_key
+				: undefined,
 			a: num(cfg.sw_a),
 			m: num(cfg.sw_m),
 			n: num(cfg.sw_n),
 			waterSalinity: num(cfg.water_salinity),
-			rwPickett: num(cfg.rw_val)
+			rwPickett: num(cfg.rw_val),
+			rsh: num(cfg.sw_rsh),
+			swb: num(cfg.sw_swb),
+			rwb: num(cfg.sw_rwb)
 		});
 		return { params, selection: wellSel, label: 'Whole well (legacy)', saved_at: '' };
 	}
@@ -507,4 +517,3 @@ class ModuleParamsState {
 }
 
 export const moduleParams = new ModuleParamsState();
-

@@ -6,7 +6,6 @@ import numpy as np
 
 from quick_pp import logger
 from quick_pp.rock_type import estimate_vsh_gr
-from quick_pp.saturation import estimate_rt_water_trend
 
 
 def extrapolate_rhob(rhob, tvd, a, b):
@@ -133,6 +132,143 @@ def estimate_overburden_pressure(rhob, tvd, rhob_water=1.0, water_depth=0, g=9.8
     return pressure
 
 
+def _integrate_overburden_mpa(rhob, tvd_m):
+    density = np.asarray(rhob, dtype=float)
+    depth = np.asarray(tvd_m, dtype=float)
+    if density.shape != depth.shape or density.ndim != 1:
+        raise ValueError("rhob and tvd must be one-dimensional arrays with matching shapes.")
+
+    valid = np.isfinite(depth) & np.isfinite(density) & (depth >= 0) & (density > 0)
+    if not np.any(valid):
+        raise ValueError("At least one finite, non-negative TVD and positive RHOB sample is required.")
+
+    valid_depth = depth[valid]
+    valid_density = density[valid]
+    unique_depth, inverse = np.unique(valid_depth, return_inverse=True)
+    density_sum = np.bincount(inverse, weights=valid_density)
+    density_count = np.bincount(inverse)
+    unique_density = density_sum / density_count
+
+    integration_depth = unique_depth
+    integration_density = unique_density
+    if unique_depth[0] > 0:
+        integration_depth = np.insert(integration_depth, 0, 0.0)
+        integration_density = np.insert(integration_density, 0, unique_density[0])
+    max_depth = np.nanmax(depth[np.isfinite(depth) & (depth >= 0)])
+    if max_depth > integration_depth[-1]:
+        integration_depth = np.append(integration_depth, max_depth)
+        integration_density = np.append(integration_density, unique_density[-1])
+
+    cumulative_density_depth = np.concatenate(
+        (
+            [0.0],
+            np.cumsum(
+                np.diff(integration_depth)
+                * (integration_density[:-1] + integration_density[1:])
+                / 2.0
+            ),
+        )
+    )
+    integrated = np.interp(
+        np.maximum(depth, 0.0), integration_depth, cumulative_density_depth
+    )
+    pressure = np.full(depth.shape, np.nan, dtype=float)
+    valid_depth_rows = np.isfinite(depth) & (depth >= 0)
+    pressure[valid_depth_rows] = 0.00980665 * integrated[valid_depth_rows]
+    return pressure
+
+
+def estimate_log_stress_profile(
+    md,
+    tvd,
+    rhob,
+    pore_pressure_gradient=0.433,
+    biot_coefficient=1.0,
+    poisson_ratio=0.25,
+    dtc=None,
+    dts=None,
+    depth_unit="ft",
+):
+    """Estimate equivalent effective confining stress from well logs.
+
+    Vertical stress is integrated from RHOB, pore pressure is estimated from a
+    constant gradient, and horizontal effective stress follows a uniaxial-strain
+    approximation using static or DTC/DTS-derived Poisson's ratio.
+
+    Args:
+        md (array-like): Measured-depth coordinates aligned with the log arrays.
+        tvd (array-like): Positive-down true vertical depth aligned with the logs.
+        rhob (array-like): Bulk density [g/cm³].
+        pore_pressure_gradient (float): Formation pore-pressure gradient [psi/ft]
+            when `depth_unit` is 'ft', otherwise [psi/m].
+        biot_coefficient (float): Biot coefficient, from 0 to 1.
+        poisson_ratio (float): Fallback Poisson's ratio when sonic values are absent or invalid.
+        dtc (array-like, optional): Compressional sonic slowness, in any consistent unit.
+        dts (array-like, optional): Shear sonic slowness in the same unit as `dtc`.
+        depth_unit (str): 'ft' or 'm'.
+
+    Returns:
+        dict[str, np.ndarray]: MD, vertical stress, pore pressure, dynamic Poisson's
+            ratio, and equivalent effective confining stress, all stresses in psi.
+    """
+    md_arr = np.asarray(md, dtype=float)
+    tvd_arr = np.asarray(tvd, dtype=float)
+    rhob_arr = np.asarray(rhob, dtype=float)
+    if md_arr.ndim != 1 or tvd_arr.shape != md_arr.shape or rhob_arr.shape != md_arr.shape:
+        raise ValueError("md, tvd, and rhob must be one-dimensional arrays with matching shapes.")
+    if depth_unit not in {"ft", "m"}:
+        raise ValueError("depth_unit must be 'ft' or 'm'.")
+    if not np.isfinite(pore_pressure_gradient) or pore_pressure_gradient < 0:
+        raise ValueError("pore_pressure_gradient must be finite and non-negative.")
+    if not np.isfinite(biot_coefficient) or not 0 <= biot_coefficient <= 1:
+        raise ValueError("biot_coefficient must be between 0 and 1.")
+    if not np.isfinite(poisson_ratio) or not 0 <= poisson_ratio < 0.5:
+        raise ValueError("poisson_ratio must be in [0, 0.5).")
+    if (dtc is None) != (dts is None):
+        raise ValueError("dtc and dts must be provided together.")
+
+    tvd_m = tvd_arr * 0.3048 if depth_unit == "ft" else tvd_arr
+    overburden_mpa = _integrate_overburden_mpa(rhob_arr, tvd_m)
+    vertical_psi = overburden_mpa * 145.0377377
+    pore_pressure_psi = pore_pressure_gradient * tvd_arr
+    pore_pressure_psi[~np.isfinite(tvd_arr) | (tvd_arr < 0)] = np.nan
+
+    nu = np.full(md_arr.shape, poisson_ratio, dtype=float)
+    if dtc is not None and dts is not None:
+        dtc_arr = np.asarray(dtc, dtype=float)
+        dts_arr = np.asarray(dts, dtype=float)
+        if dtc_arr.shape != md_arr.shape or dts_arr.shape != md_arr.shape:
+            raise ValueError("dtc and dts must match the shape of md.")
+        valid_sonic = (
+            np.isfinite(dtc_arr)
+            & np.isfinite(dts_arr)
+            & (dtc_arr > 0)
+            & (dts_arr > 0)
+        )
+        vp_vs = np.zeros(md_arr.shape, dtype=float)
+        vp_vs[valid_sonic] = dts_arr[valid_sonic] / dtc_arr[valid_sonic]
+        valid_sonic &= vp_vs > 1.0
+        nu_dynamic = np.zeros(md_arr.shape, dtype=float)
+        nu_dynamic[valid_sonic] = 0.5 * (
+            (vp_vs[valid_sonic] ** 2 - 2.0) / (vp_vs[valid_sonic] ** 2 - 1.0)
+        )
+        valid_sonic &= (nu_dynamic >= 0.0) & (nu_dynamic < 0.5)
+        nu[valid_sonic] = nu_dynamic[valid_sonic]
+
+    effective_vertical_psi = vertical_psi - biot_coefficient * pore_pressure_psi
+    effective_horizontal_psi = nu / (1.0 - nu) * effective_vertical_psi
+    equivalent_confining_psi = (
+        effective_vertical_psi + 2.0 * effective_horizontal_psi
+    ) / 3.0
+    return {
+        "md": md_arr,
+        "sv_psi": vertical_psi,
+        "pp_psi": pore_pressure_psi,
+        "nu": nu,
+        "ncs_equivalent_psi": equivalent_confining_psi,
+    }
+
+
 def estimate_normal_compaction_trend_dt(dtc, vshale, depth, vsh_threshold=0.6):
     """Estimate normal compaction trend from sonic transit time accounting shale intervals only.
 
@@ -231,15 +367,16 @@ def estimate_pore_pressure_res(s, p_hyd, res, res_shale=None, x=1.2):
         s (np.ndarray or float): Overburden stress [MPa].
         p_hyd (np.ndarray or float): Hydrostatic pressure [MPa].
         res (np.ndarray or float): Formation resistivity [ohm.m].
-        res_shale (np.ndarray or float, optional): Normal compaction trend for resistivity [ohm.m]. Defaults to None.
+        res_shale (np.ndarray or float): Normal compaction trend for resistivity [ohm.m].
         x (float, optional): Exponent for the empirical relation. Defaults to 1.2.
 
     Returns:
         np.ndarray or float: Estimated pore pressure [MPa].
     """
     if res_shale is None:
-        logger.debug("Shale resistivity not provided, estimating from water trend")
-        res_shale = estimate_rt_water_trend(res)
+        raise ValueError(
+            "res_shale is required; provide a calibrated normal compaction resistivity trend."
+        )
 
     logger.debug(f"Estimating pore pressure from resistivity with exponent x={x}")
     pp = s - (s - p_hyd) * (res_shale / res) ** x

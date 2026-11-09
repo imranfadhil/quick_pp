@@ -359,11 +359,17 @@ def test_environmental_and_invasion_corrections():
         }
     )
     corr_df = apply_environmental_corrections(df, mud_weight=11.5, inplace=False)
-    for col in ("GR_CORR", "NPHI_CORR", "RHOB_CORR", "RT_CORR", "INVASION_FLAG"):
+    for col in (
+        "GR_ENV_CORR",
+        "NPHI_ENV_CORR",
+        "RHOB_ENV_CORR",
+        "RT_ENV_CORR",
+        "INVASION_FLAG",
+    ):
         assert col in corr_df.columns
-    assert corr_df.loc[1, "GR_CORR"] > corr_df.loc[1, "GR"]
-    assert corr_df.loc[1, "RHOB_CORR"] > corr_df.loc[1, "RHOB"]
-    assert corr_df.loc[0, "RT_CORR"] > corr_df.loc[0, "RT"]
+    assert corr_df.loc[1, "GR_ENV_CORR"] > corr_df.loc[1, "GR"]
+    assert corr_df.loc[1, "RHOB_ENV_CORR"] > corr_df.loc[1, "RHOB"]
+    assert corr_df.loc[0, "RT_ENV_CORR"] > corr_df.loc[0, "RT"]
     assert corr_df.loc[0, "INVASION_FLAG"] == 1
     assert corr_df.loc[1, "INVASION_FLAG"] == 2
 
@@ -432,4 +438,3 @@ def test_badhole_flagging_multi_criteria_and_coal_protection():
     assert summary["drho_flagged"] == 1
     assert summary["rhob_nphi_flagged"] == 1
     assert summary["rugosity_flagged"] >= 1
-

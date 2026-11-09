@@ -94,19 +94,20 @@ class SandSiltClay:
             C = self.dry_clay_point = (dryclay_NPHI, C[1])
             logger.debug(f"Updated dry clay point to: ({dryclay_NPHI:.3f}, {C[1]:.3f})")
 
-        # Redefine drysilt point by finding intersection between silt line and rock line
-        A = self.dry_sand_point
-        if not all(B) or B[0] is None:
+        # Redefine the dry silt point at its configured RHOB value.
+        if B[0] is None:
             rad = math.radians(float(self.silt_line_angle))
             p_silt = (D[0] + math.cos(rad), D[1] + math.sin(rad))
-            silt_x, silt_y = line_intersection((A, C), (D, p_silt))
-            if np.isfinite(silt_x) and np.isfinite(silt_y):
-                B = self.dry_silt_point = (float(silt_x), float(silt_y))
-            else:
-                drysilt_NPHI = 1 - 1.68 * (
-                    math.tan(float(self.silt_line_angle - 90) * math.pi / 180)
+            target_rhob = B[1] if B[1] is not None else 2.68
+            silt_x, silt_y = line_intersection(
+                (D, p_silt), ((0.0, target_rhob), (1.0, target_rhob))
+            )
+            if not np.isfinite(silt_x) or not np.isfinite(silt_y):
+                raise ValueError(
+                    "Cannot calculate dry silt point: silt line does not intersect "
+                    f"RHOB={target_rhob:.3f} g/cc"
                 )
-                B = self.dry_silt_point = (drysilt_NPHI, B[1] if B[1] is not None else 2.68)
+            B = self.dry_silt_point = (float(silt_x), float(target_rhob))
             logger.debug(f"Updated dry silt point to: ({B[0]:.3f}, {B[1]:.3f})")
 
         # Calculate lithology fraction
@@ -142,7 +143,13 @@ class SandSiltClay:
         D = self.fluid_point
 
         rock_len = length_a_b(A, C)
-        res_len = length_a_b(A, B)
+        reservoir_intersection = line_intersection((A, C), (D, B))
+        if not all(np.isfinite(coord) for coord in reservoir_intersection):
+            raise ValueError(
+                "Cannot calculate reservoir length: fluid-silt line does not "
+                "intersect the sand-clay line"
+            )
+        res_len = length_a_b(A, reservoir_intersection)
         res_ratio = res_len / rock_len
 
         var_pt = line_intersection((A, C), (D, (nphi_arr, rhob_arr)))

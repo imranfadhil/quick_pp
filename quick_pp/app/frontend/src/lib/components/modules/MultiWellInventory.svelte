@@ -195,7 +195,7 @@
 				relpermPoints += rpPts;
 				scalWells++;
 			}
-			const tops = w.formation_top_count ?? w.formation_tops_count ?? (w.zones?.length ?? 0);
+			const tops = w.formation_top_count ?? w.formation_tops_count ?? w.zones?.length ?? 0;
 			if (tops > 0) {
 				topsTotal += tops;
 				topsWells++;
@@ -205,7 +205,7 @@
 				contactsTotal += contacts;
 				contactsWells++;
 			}
-			const perfs = w.perforation_count ?? (w.perforations?.length ?? 0);
+			const perfs = w.perforation_count ?? w.perforations?.length ?? 0;
 			if (perfs > 0) {
 				perfsTotal += perfs;
 				perfsWells++;
@@ -251,7 +251,10 @@
 		);
 	}
 
-	function getWellTopDepth(w: (typeof projectData.wells)[number], zoneName: string): number | null {
+	function getWellTopDepth(
+		w: (typeof projectData.wells)[number],
+		zoneName: string
+	): number | null {
 		return getWellTopEntry(w, zoneName)?.depth ?? null;
 	}
 
@@ -376,7 +379,8 @@
 	});
 
 	let totalEvaluatedFormationsCount = $derived(
-		projectData.allZones.filter((z) => (zoneCoverageSummary[z]?.anyComputedWells ?? 0) > 0).length
+		projectData.allZones.filter((z) => (zoneCoverageSummary[z]?.anyComputedWells ?? 0) > 0)
+			.length
 	);
 
 	let filteredStratZones = $derived(
@@ -404,20 +408,23 @@
 
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
 	<div class="flex-1 overflow-y-auto">
-		<ParameterSection
-			title="Field Overview"
-			badge={`${projectData.wells.length} Wells`}
-		>
-			<div class="mb-2 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-2 text-xs">
+		<ParameterSection title="Field Overview" badge={`${projectData.wells.length} Wells`}>
+			<div
+				class="mb-2 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-2 text-xs"
+			>
 				{#if !isEditingProject}
 					<div class="flex items-start justify-between gap-2">
 						<div class="min-w-0">
-							<div class="text-[10px] uppercase text-[var(--text-muted)]">Active Project</div>
+							<div class="text-[10px] text-[var(--text-muted)] uppercase">
+								Active Project
+							</div>
 							<div class="truncate font-semibold text-[var(--text-primary)]">
 								{projectData.summary?.name || 'No Project Selected'}
 							</div>
 							{#if projectData.summary?.description}
-								<div class="mt-0.5 truncate text-[10px] text-[var(--text-secondary)]">
+								<div
+									class="mt-0.5 truncate text-[10px] text-[var(--text-secondary)]"
+								>
 									{projectData.summary.description}
 								</div>
 							{/if}
@@ -500,13 +507,17 @@
 			</div>
 
 			<div class="grid grid-cols-2 gap-1.5 text-xs">
-				<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
+				<div
+					class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5"
+				>
 					<div class="text-[10px] text-[var(--text-muted)]">Field Min Depth</div>
 					<div class="mono-num font-semibold text-[var(--text-primary)]">
 						{fmtDepth(projectData.summary?.min_depth)}
 					</div>
 				</div>
-				<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
+				<div
+					class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5"
+				>
 					<div class="text-[10px] text-[var(--text-muted)]">Field Max Depth</div>
 					<div class="mono-num font-semibold text-[var(--text-primary)]">
 						{fmtDepth(projectData.summary?.max_depth)}
@@ -516,63 +527,105 @@
 
 			<!-- Field-Wide Core (RCA & SCAL) and Ancillary KPI Summary -->
 			<div class="mt-1.5 grid grid-cols-3 gap-1 text-[10.5px]">
-				<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-1.5 py-1">
+				<div
+					class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-1.5 py-1"
+				>
 					<div class="text-[9.5px] text-[var(--text-muted)]">RCA Core Plugs</div>
-					<div class="mono-num font-bold {ancillaryTotals.rcaSamples > 0 ? 'text-amber-700' : 'text-[var(--text-muted)]'}">
+					<div
+						class="mono-num font-bold {ancillaryTotals.rcaSamples > 0
+							? 'text-amber-700'
+							: 'text-[var(--text-muted)]'}"
+					>
 						{ancillaryTotals.rcaSamples}
 						<span class="text-[9px] font-normal text-[var(--text-secondary)]">
 							({ancillaryTotals.rcaWells}/{ancillaryTotals.totalWells}w)
 						</span>
 					</div>
 				</div>
-				<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-1.5 py-1">
+				<div
+					class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-1.5 py-1"
+				>
 					<div class="text-[9.5px] text-[var(--text-muted)]">SCAL Pc Pairs</div>
-					<div class="mono-num font-bold {ancillaryTotals.scalPoints > 0 ? 'text-indigo-700' : 'text-[var(--text-muted)]'}">
+					<div
+						class="mono-num font-bold {ancillaryTotals.scalPoints > 0
+							? 'text-indigo-700'
+							: 'text-[var(--text-muted)]'}"
+					>
 						{ancillaryTotals.scalPoints}
 						<span class="text-[9px] font-normal text-[var(--text-secondary)]">
 							({ancillaryTotals.scalWells}/{ancillaryTotals.totalWells}w)
 						</span>
 					</div>
 				</div>
-				<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-1.5 py-1">
+				<div
+					class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-1.5 py-1"
+				>
 					<div class="text-[9.5px] text-[var(--text-muted)]">Formation Tops</div>
-					<div class="mono-num font-bold {ancillaryTotals.topsTotal > 0 ? 'text-emerald-700' : 'text-[var(--text-muted)]'}">
+					<div
+						class="mono-num font-bold {ancillaryTotals.topsTotal > 0
+							? 'text-emerald-700'
+							: 'text-[var(--text-muted)]'}"
+					>
 						{ancillaryTotals.topsTotal}
 						<span class="text-[9px] font-normal text-[var(--text-secondary)]">
 							({projectData.allZones.length}z)
 						</span>
 					</div>
 				</div>
-				<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-1.5 py-1">
+				<div
+					class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-1.5 py-1"
+				>
 					<div class="text-[9.5px] text-[var(--text-muted)]">Fluid Contacts</div>
-					<div class="mono-num font-semibold {ancillaryTotals.contactsTotal > 0 ? 'text-sky-700' : 'text-[var(--text-muted)]'}">
+					<div
+						class="mono-num font-semibold {ancillaryTotals.contactsTotal > 0
+							? 'text-sky-700'
+							: 'text-[var(--text-muted)]'}"
+					>
 						{ancillaryTotals.contactsTotal}
 						<span class="text-[9px] font-normal text-[var(--text-secondary)]">
 							({ancillaryTotals.contactsWells}/{ancillaryTotals.totalWells}w)
 						</span>
 					</div>
 				</div>
-				<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-1.5 py-1">
+				<div
+					class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-1.5 py-1"
+				>
 					<div class="text-[9.5px] text-[var(--text-muted)]">Perforations</div>
-					<div class="mono-num font-semibold {ancillaryTotals.perfsTotal > 0 ? 'text-orange-700' : 'text-[var(--text-muted)]'}">
+					<div
+						class="mono-num font-semibold {ancillaryTotals.perfsTotal > 0
+							? 'text-orange-700'
+							: 'text-[var(--text-muted)]'}"
+					>
 						{ancillaryTotals.perfsTotal}
 						<span class="text-[9px] font-normal text-[var(--text-secondary)]">
 							({ancillaryTotals.perfsWells}/{ancillaryTotals.totalWells}w)
 						</span>
 					</div>
 				</div>
-				<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-1.5 py-1">
+				<div
+					class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-1.5 py-1"
+				>
 					<div class="text-[9.5px] text-[var(--text-muted)]">Pressure Tests</div>
-					<div class="mono-num font-semibold {ancillaryTotals.pressureTotal > 0 ? 'text-teal-700' : 'text-[var(--text-muted)]'}">
+					<div
+						class="mono-num font-semibold {ancillaryTotals.pressureTotal > 0
+							? 'text-teal-700'
+							: 'text-[var(--text-muted)]'}"
+					>
 						{ancillaryTotals.pressureTotal}
 						<span class="text-[9px] font-normal text-[var(--text-secondary)]">
 							({ancillaryTotals.pressureWells}/{ancillaryTotals.totalWells}w)
 						</span>
 					</div>
 				</div>
-				<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-1.5 py-1">
+				<div
+					class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-1.5 py-1"
+				>
 					<div class="text-[9.5px] text-[var(--text-muted)]">Well Surveys</div>
-					<div class="mono-num font-semibold {ancillaryTotals.surveyTotal > 0 ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]'}">
+					<div
+						class="mono-num font-semibold {ancillaryTotals.surveyTotal > 0
+							? 'text-[var(--text-primary)]'
+							: 'text-[var(--text-muted)]'}"
+					>
 						{ancillaryTotals.surveyTotal}
 						<span class="text-[9px] font-normal text-[var(--text-secondary)]">
 							({ancillaryTotals.surveyWells}/{ancillaryTotals.totalWells}w)
@@ -591,12 +644,16 @@
 				</button>
 				<button
 					type="button"
-					disabled={!workbench.projectId || projectData.wells.length === 0 || isExportingHandover}
+					disabled={!workbench.projectId ||
+						projectData.wells.length === 0 ||
+						isExportingHandover}
 					onclick={handleExportHandover}
 					title="Export Handover Package (.zip) with LAS 2.0, Tops, Surveys, Core RCA, SCAL, Excel Workbook & Loader Scripts"
 					class="h-7 w-full rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2.5 text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:opacity-45"
 				>
-					{isExportingHandover ? 'Building Handover (.zip)...' : '⬇ Export Handover Package (.zip)'}
+					{isExportingHandover
+						? 'Building Handover (.zip)...'
+						: '⬇ Export Handover Package (.zip)'}
 				</button>
 			</div>
 		</ParameterSection>
@@ -653,7 +710,7 @@
 							</th>
 							{#each KEY_CURVES as kc}
 								<th
-									class="px-1 text-center font-semibold text-[9px]"
+									class="px-1 text-center text-[9px] font-semibold"
 									title={CURVE_HEADER_TITLES[kc] ?? kc}
 								>
 									{kc}
@@ -664,15 +721,22 @@
 					<tbody class="divide-y divide-[var(--border-hairline)]">
 						{#if projectData.wells.length === 0}
 							<tr>
-								<td colspan={KEY_CURVES.length + 2} class="p-3 text-center text-xs text-[var(--text-muted)]">
+								<td
+									colspan={KEY_CURVES.length + 2}
+									class="p-3 text-center text-xs text-[var(--text-muted)]"
+								>
 									No wells in project. Click Batch Import above.
 								</td>
 							</tr>
 						{:else}
 							{#each projectData.wells as w (w.well_id)}
 								{@const activeZone = projectData.inventorySelectedZone}
-								{@const zonePenetrated = activeZone ? hasWellZone(w, activeZone) : true}
-								{@const zoneTopD = activeZone ? getWellTopDepth(w, activeZone) : null}
+								{@const zonePenetrated = activeZone
+									? hasWellZone(w, activeZone)
+									: true}
+								{@const zoneTopD = activeZone
+									? getWellTopDepth(w, activeZone)
+									: null}
 								<tr
 									onclick={() => openWellInSingleMode(w.name)}
 									title="Click to inspect well in Single-Well mode"
@@ -681,7 +745,9 @@
 										? 'bg-blue-50/70'
 										: ''} {!zonePenetrated ? 'opacity-45' : ''}"
 								>
-									<td class="mono-num px-1.5 font-semibold text-[var(--accent-primary)]">
+									<td
+										class="mono-num px-1.5 font-semibold text-[var(--accent-primary)]"
+									>
 										{#if editingWellName === w.name}
 											<!-- svelte-ignore a11y_click_events_have_key_events -->
 											<!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -693,8 +759,10 @@
 													type="text"
 													bind:value={wellNameDraft}
 													onkeydown={(e) => {
-														if (e.key === 'Enter') saveWellRename(w.name);
-														if (e.key === 'Escape') editingWellName = null;
+														if (e.key === 'Enter')
+															saveWellRename(w.name);
+														if (e.key === 'Escape')
+															editingWellName = null;
 													}}
 													class="mono-num h-5 w-24 rounded-xs border border-[var(--accent-primary)] bg-white px-1 text-[11px] font-semibold text-[var(--text-primary)]"
 												/>
@@ -716,7 +784,9 @@
 												</button>
 											</div>
 										{:else}
-											<div class="group flex items-center justify-between gap-1">
+											<div
+												class="group flex items-center justify-between gap-1"
+											>
 												<span class="truncate">{w.name}</span>
 												<!-- svelte-ignore a11y_click_events_have_key_events -->
 												<!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -728,7 +798,8 @@
 														<button
 															type="button"
 															title="Confirm Delete Well"
-															onclick={() => executeDeleteWell(w.name)}
+															onclick={() =>
+																executeDeleteWell(w.name)}
 															class="h-4 rounded-xs bg-red-600 px-1 text-[9px] font-bold text-white hover:bg-red-700"
 														>
 															Del?
@@ -736,7 +807,8 @@
 														<button
 															type="button"
 															title="Cancel"
-															onclick={() => (confirmDeleteWellName = null)}
+															onclick={() =>
+																(confirmDeleteWellName = null)}
 															class="h-4 rounded-xs border border-[var(--border-hairline)] bg-white px-1 text-[9px] text-[var(--text-secondary)]"
 														>
 															×
@@ -753,7 +825,8 @@
 														<button
 															type="button"
 															title="Delete Well {w.name}"
-															onclick={() => (confirmDeleteWellName = w.name)}
+															onclick={() =>
+																(confirmDeleteWellName = w.name)}
 															class="flex h-4 w-4 items-center justify-center rounded-xs text-[10px] text-[var(--text-muted)] hover:bg-red-100 hover:text-red-700"
 														>
 															×
@@ -763,7 +836,9 @@
 											</div>
 										{/if}
 									</td>
-									<td class="mono-num px-1 text-right text-[var(--text-secondary)]">
+									<td
+										class="mono-num px-1 text-right text-[var(--text-secondary)]"
+									>
 										{#if activeZone}
 											{#if zoneTopD !== null}
 												{zoneTopD.toFixed(1)}
@@ -777,9 +852,14 @@
 										{/if}
 									</td>
 									{#each KEY_CURVES as kc}
-										{@const has = projectData.wellHasCurveInZone(w, kc, activeZone)}
+										{@const has = projectData.wellHasCurveInZone(
+											w,
+											kc,
+											activeZone
+										)}
 										{@const isTvdFromSurvey =
-											(kc === 'TVD' || kc === 'TVDSS') && (w.survey_count ?? 0) >= 2}
+											(kc === 'TVD' || kc === 'TVDSS') &&
+											(w.survey_count ?? 0) >= 2}
 										<td
 											class="px-1 text-center"
 											title={!zonePenetrated
@@ -797,7 +877,9 @@
 														: `${w.name}${activeZone ? ` [${activeZone}]` : ''}: ${kc} ${has ? 'available' : 'missing'}`}
 										>
 											{#if !zonePenetrated}
-												<span class="text-[9px] text-[var(--text-muted)]">—</span>
+												<span class="text-[9px] text-[var(--text-muted)]"
+													>—</span
+												>
 											{:else}
 												<span
 													class="inline-block h-2 w-2 rounded-full {has
@@ -824,18 +906,39 @@
 					<thead class="bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
 						<tr class="h-6 border-b border-[var(--border-hairline)]">
 							<th class="px-1.5 font-semibold">Well</th>
-							<th class="px-1 text-right font-semibold" title="Routine Core Analysis (CPORE / CPERM plugs)">RCA</th>
-							<th class="px-1 text-right font-semibold" title="SCAL Capillary Pressure (Pc-Sw pairs & plugs)">SCAL Pc</th>
-							<th class="px-1 text-right font-semibold" title="Picked Formation Tops / Stratigraphic Zones">Tops</th>
-							<th class="px-1 text-center font-semibold" title="Fluid Contacts (OWC / GOC / FWL)">Contacts</th>
-							<th class="px-1 text-right font-semibold" title="MDT / RFT Formation Pressure Tests">Press</th>
-							<th class="px-1 text-right font-semibold" title="Directional Survey Stations (MD / Inc / Azim)">Survey</th>
+							<th
+								class="px-1 text-right font-semibold"
+								title="Routine Core Analysis (CPORE / CPERM plugs)">RCA</th
+							>
+							<th
+								class="px-1 text-right font-semibold"
+								title="SCAL Capillary Pressure (Pc-Sw pairs & plugs)">SCAL Pc</th
+							>
+							<th
+								class="px-1 text-right font-semibold"
+								title="Picked Formation Tops / Stratigraphic Zones">Tops</th
+							>
+							<th
+								class="px-1 text-center font-semibold"
+								title="Fluid Contacts (OWC / GOC / FWL)">Contacts</th
+							>
+							<th
+								class="px-1 text-right font-semibold"
+								title="MDT / RFT Formation Pressure Tests">Press</th
+							>
+							<th
+								class="px-1 text-right font-semibold"
+								title="Directional Survey Stations (MD / Inc / Azim)">Survey</th
+							>
 						</tr>
 					</thead>
 					<tbody class="divide-y divide-[var(--border-hairline)]">
 						{#if projectData.wells.length === 0}
 							<tr>
-								<td colspan="7" class="p-3 text-center text-xs text-[var(--text-muted)]">
+								<td
+									colspan="7"
+									class="p-3 text-center text-xs text-[var(--text-muted)]"
+								>
 									No wells in project.
 								</td>
 							</tr>
@@ -844,33 +947,52 @@
 								{@const rca = w.core_sample_count ?? w.core_samples_count ?? 0}
 								{@const scalPts = w.scal_pc_count ?? 0}
 								{@const scalPlugs = w.scal_sample_count ?? 0}
-								{@const tops = w.formation_top_count ?? w.formation_tops_count ?? (w.zones?.length ?? 0)}
-								{@const contacts = w.fluid_contact_count ?? w.fluid_contacts_count ?? 0}
+								{@const tops =
+									w.formation_top_count ??
+									w.formation_tops_count ??
+									w.zones?.length ??
+									0}
+								{@const contacts =
+									w.fluid_contact_count ?? w.fluid_contacts_count ?? 0}
 								{@const contactsList = w.fluid_contacts ?? []}
-								{@const press = w.pressure_test_count ?? w.pressure_tests_count ?? 0}
+								{@const press =
+									w.pressure_test_count ?? w.pressure_tests_count ?? 0}
 								{@const surv = w.survey_count ?? 0}
-								{@const topsTooltip = (w.formation_tops ?? []).length > 0
-									? (w.formation_tops ?? []).map((t) => `${t.name}: ${t.depth ?? '—'}m`).join(' | ')
-									: (w.zones ?? []).join(', ') || 'No formation tops'}
-								{@const contactsTooltip = contactsList.length > 0
-									? contactsList.map((c) => `${c.type} @ ${c.depth ?? '—'}m`).join(' | ')
-									: 'No fluid contacts'}
+								{@const topsTooltip =
+									(w.formation_tops ?? []).length > 0
+										? (w.formation_tops ?? [])
+												.map((t) => `${t.name}: ${t.depth ?? '—'}m`)
+												.join(' | ')
+										: (w.zones ?? []).join(', ') || 'No formation tops'}
+								{@const contactsTooltip =
+									contactsList.length > 0
+										? contactsList
+												.map((c) => `${c.type} @ ${c.depth ?? '—'}m`)
+												.join(' | ')
+										: 'No fluid contacts'}
 								<tr
 									onclick={() => openWellInSingleMode(w.name, 'ancillary')}
 									title={`Click to open ${w.name} in Single-Well Ancillary editor`}
-									class="h-6 cursor-pointer hover:bg-[var(--bg-subtle)] {workbench.wellId === w.name
+									class="h-6 cursor-pointer hover:bg-[var(--bg-subtle)] {workbench.wellId ===
+									w.name
 										? 'bg-blue-50/70'
 										: ''}"
 								>
-									<td class="mono-num truncate px-1.5 font-semibold text-[var(--accent-primary)]">
+									<td
+										class="mono-num truncate px-1.5 font-semibold text-[var(--accent-primary)]"
+									>
 										{w.name}
 									</td>
 									<td
 										class="mono-num px-1 text-right"
-										title={rca > 0 ? `${rca} RCA core samples (${w.core_availability_pct ?? 0}% log coverage)` : 'No RCA core plugs'}
+										title={rca > 0
+											? `${rca} RCA core samples (${w.core_availability_pct ?? 0}% log coverage)`
+											: 'No RCA core plugs'}
 									>
 										{#if rca > 0}
-											<span class="rounded-xs bg-amber-50 px-1 py-0.5 font-semibold text-amber-800">
+											<span
+												class="rounded-xs bg-amber-50 px-1 py-0.5 font-semibold text-amber-800"
+											>
 												{rca}
 											</span>
 										{:else}
@@ -879,11 +1001,19 @@
 									</td>
 									<td
 										class="mono-num px-1 text-right"
-										title={scalPts > 0 ? `${scalPts} Pc-Sw pairs across ${scalPlugs} core plug(s)` : 'No SCAL Pc data'}
+										title={scalPts > 0
+											? `${scalPts} Pc-Sw pairs across ${scalPlugs} core plug(s)`
+											: 'No SCAL Pc data'}
 									>
 										{#if scalPts > 0}
-											<span class="rounded-xs bg-indigo-50 px-1 py-0.5 font-semibold text-indigo-800">
-												{scalPts}{#if scalPlugs > 0}<span class="text-[9px] font-normal text-indigo-600"> ({scalPlugs}p)</span>{/if}
+											<span
+												class="rounded-xs bg-indigo-50 px-1 py-0.5 font-semibold text-indigo-800"
+											>
+												{scalPts}{#if scalPlugs > 0}<span
+														class="text-[9px] font-normal text-indigo-600"
+													>
+														({scalPlugs}p)</span
+													>{/if}
 											</span>
 										{:else}
 											<span class="text-[var(--text-muted)]">—</span>
@@ -891,7 +1021,9 @@
 									</td>
 									<td class="mono-num px-1 text-right" title={topsTooltip}>
 										{#if tops > 0}
-											<span class="rounded-xs bg-emerald-50 px-1 py-0.5 font-semibold text-emerald-800">
+											<span
+												class="rounded-xs bg-emerald-50 px-1 py-0.5 font-semibold text-emerald-800"
+											>
 												{tops}
 											</span>
 										{:else}
@@ -900,11 +1032,15 @@
 									</td>
 									<td class="mono-num px-1 text-center" title={contactsTooltip}>
 										{#if contactsList.length > 0}
-											<span class="rounded-xs bg-sky-50 px-1 py-0.5 text-[9.5px] font-semibold text-sky-800">
+											<span
+												class="rounded-xs bg-sky-50 px-1 py-0.5 text-[9.5px] font-semibold text-sky-800"
+											>
 												{contactsList.map((c) => c.type).join(',')}
 											</span>
 										{:else if contacts > 0}
-											<span class="rounded-xs bg-sky-50 px-1 py-0.5 font-semibold text-sky-800">
+											<span
+												class="rounded-xs bg-sky-50 px-1 py-0.5 font-semibold text-sky-800"
+											>
 												{contacts}
 											</span>
 										{:else}
@@ -920,7 +1056,9 @@
 									</td>
 									<td class="mono-num px-1 text-right">
 										{#if surv > 0}
-											<span class="font-medium text-[var(--text-secondary)]">{surv}</span>
+											<span class="font-medium text-[var(--text-secondary)]"
+												>{surv}</span
+											>
 										{:else}
 											<span class="text-[var(--text-muted)]">—</span>
 										{/if}
@@ -937,7 +1075,7 @@
 			<ParameterSection
 				title="Formation Tops & Computed Curve Matrix"
 				badge={`${totalEvaluatedFormationsCount}/${projectData.allZones.length} Eval · ${projectData.allZones.length} Zones`}
-				defaultOpen={true}
+				defaultOpen={false}
 			>
 				<!-- Filter & Computed Curve Inspector Bar -->
 				<div
@@ -946,11 +1084,7 @@
 					<div class="flex flex-wrap items-center justify-between gap-1">
 						<div class="flex items-center gap-1">
 							<span class="font-semibold text-[var(--text-secondary)]">Show:</span>
-							{#each [
-								['all', `All (${projectData.allZones.length})`],
-								['evaluated', `Evaluated (${totalEvaluatedFormationsCount})`],
-								['missing', 'Missing / Partial']
-							] as [fKey, fLbl]}
+							{#each [['all', `All (${projectData.allZones.length})`], ['evaluated', `Evaluated (${totalEvaluatedFormationsCount})`], ['missing', 'Missing / Partial']] as [fKey, fLbl]}
 								<button
 									type="button"
 									onclick={() => (stratMatrixFilter = fKey as StratMatrixFilter)}
@@ -963,32 +1097,27 @@
 								</button>
 							{/each}
 						</div>
-						<div class="flex items-center gap-1.5 text-[8.5px] text-[var(--text-muted)]">
+						<div
+							class="flex items-center gap-1.5 text-[8.5px] text-[var(--text-muted)]"
+						>
 							<span class="flex items-center gap-0.5">
-								<span class="inline-block h-2 w-2 rounded-full bg-emerald-500"></span>Computed
+								<span class="inline-block h-2 w-2 rounded-full bg-emerald-500"
+								></span>Computed
 							</span>
 							<span class="flex items-center gap-0.5">
-								<span class="inline-block h-2 w-2 rounded-full bg-amber-500"></span>Partial
+								<span class="inline-block h-2 w-2 rounded-full bg-amber-500"
+								></span>Partial
 							</span>
 							<span class="flex items-center gap-0.5">
-								<span class="inline-block h-2 w-2 rounded-full bg-slate-300"></span>Raw Only
+								<span class="inline-block h-2 w-2 rounded-full bg-slate-300"
+								></span>Raw Only
 							</span>
 						</div>
 					</div>
 
 					<div class="flex flex-wrap items-center gap-1 pt-0.5">
 						<span class="font-semibold text-[var(--text-secondary)]">Inspect:</span>
-						{#each [
-							['all_computed', 'All Computed'],
-							['core_petro', 'Core Petro'],
-							['VCLAY', 'VCLAY'],
-							['PHIT', 'PHIT'],
-							['PERM', 'PERM'],
-							['SWT', 'SWT'],
-							['ROCK_FLAG', 'ROCK_FLAG'],
-							['PERM_TRANS', 'PERM_TRANS'],
-							['SHF', 'SHF']
-						] as [cKey, cLbl]}
+						{#each [['all_computed', 'All Computed'], ['core_petro', 'Core Petro'], ['VCLAY', 'VCLAY'], ['PHIT', 'PHIT'], ['PERM', 'PERM'], ['SWT', 'SWT'], ['ROCK_FLAG', 'ROCK_FLAG'], ['PERM_TRANS', 'PERM_TRANS'], ['SHF', 'SHF']] as [cKey, cLbl]}
 							<button
 								type="button"
 								onclick={() => (stratCurveMode = cKey as StratCurveMode)}
@@ -1007,17 +1136,23 @@
 					<table class="w-full border-collapse text-left text-[10.5px]">
 						<thead class="bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
 							<tr class="h-6 border-b border-[var(--border-hairline)]">
-								<th class="px-1.5 font-semibold" title="Click a formation row to filter the Well & Curve Matrix above">
+								<th
+									class="px-1.5 font-semibold"
+									title="Click a formation row to filter the Well & Curve Matrix above"
+								>
 									Zone / Top
 								</th>
 								<th
-									class="px-1 text-center font-semibold text-[9px]"
+									class="px-1 text-center text-[9px] font-semibold"
 									title="Wells with computed curves / Wells penetrating this formation"
 								>
 									Eval
 								</th>
 								{#each projectData.wells as w (w.well_id)}
-									<th class="mono-num px-1 text-right font-semibold text-[9.5px]" title={w.name}>
+									<th
+										class="mono-num px-1 text-right text-[9.5px] font-semibold"
+										title={w.name}
+									>
 										{w.name}
 									</th>
 								{/each}
@@ -1036,7 +1171,8 @@
 							{:else}
 								{#each filteredStratZones as zone (zone)}
 									{@const zSum = zoneCoverageSummary[zone]}
-									{@const isSelectedZone = projectData.inventorySelectedZone === zone}
+									{@const isSelectedZone =
+										projectData.inventorySelectedZone === zone}
 									<tr
 										onclick={() => toggleInventoryZoneFilter(zone)}
 										title={`Click to filter Well & Curve Matrix by '${zone}'`}
@@ -1054,7 +1190,9 @@
 										</td>
 										<td class="mono-num px-1 text-center">
 											{#if !zSum || zSum.penetratedWells === 0}
-												<span class="text-[9px] text-[var(--text-muted)]">0w</span>
+												<span class="text-[9px] text-[var(--text-muted)]"
+													>0w</span
+												>
 											{:else if zSum.completeWells === zSum.penetratedWells}
 												<span
 													class="rounded-xs bg-emerald-50 px-1 py-0.5 text-[9px] font-semibold text-emerald-800"
@@ -1079,14 +1217,21 @@
 											{/if}
 										</td>
 										{#each projectData.wells as w (w.well_id)}
-											{@const st = evaluateWellZoneStatus(w, zone, stratCurveMode)}
+											{@const st = evaluateWellZoneStatus(
+												w,
+												zone,
+												stratCurveMode
+											)}
 											{@const missingComp = COMPUTED_CURVES.filter(
 												(c) => !st.computedCurves.includes(c)
 											)}
 											{@const cellTooltip = !st.penetrated
 												? `${w.name} — ${zone}: Not penetrated`
 												: `${w.name} — ${zone} (${st.topDepth !== null ? st.topDepth.toFixed(1) : '?'}–${st.baseDepth !== null ? st.baseDepth.toFixed(1) : 'TD'} m)\nComputed (${st.computedCurves.length}/7): ${st.computedCurves.length > 0 ? st.computedCurves.join(', ') : 'None'}\nMissing: ${missingComp.length > 0 ? missingComp.join(', ') : 'None'}\nRaw Logs: ${st.rawCurves.join(', ') || 'None'}`}
-											<td class="mono-num px-1 text-right" title={cellTooltip}>
+											<td
+												class="mono-num px-1 text-right"
+												title={cellTooltip}
+											>
 												{#if !st.penetrated}
 													<span class="text-[var(--text-muted)]">—</span>
 												{:else}
@@ -1107,7 +1252,9 @@
 																	: 'bg-slate-300'}"
 														></span>
 														<span>
-															{st.topDepth !== null ? st.topDepth.toFixed(1) : '✓'}
+															{st.topDepth !== null
+																? st.topDepth.toFixed(1)
+																: '✓'}
 														</span>
 													</span>
 												{/if}
@@ -1123,7 +1270,9 @@
 		{/if}
 
 		{#if projectData.error}
-			<div class="m-2 rounded-sm border border-red-200 bg-red-50 p-2 text-xs text-[var(--status-error)]">
+			<div
+				class="m-2 rounded-sm border border-red-200 bg-red-50 p-2 text-xs text-[var(--status-error)]"
+			>
 				{projectData.error}
 			</div>
 		{/if}
@@ -1146,5 +1295,3 @@
 		</button>
 	</div>
 </div>
-
-

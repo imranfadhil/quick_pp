@@ -27,7 +27,7 @@ This repository contains the core `quick_pp` scientific Python package, the Fast
 - **Multi-Well QA/QC, Stratigraphic Normalization & Stick Plots** (`quick_pp.qaqc`, `MultiWellQaqc.svelte`, `StickPlotCanvas.svelte`):
   Zone-by-zone multi-well quantile and histogram log normalization (`stratigraphic_normalization` / `normalize_by_zone`), borehole environmental and invasion corrections (`apply_environmental_corrections`), neutron-density hydrocarbon corrections, automated washout/bad-hole flagging (`badhole_flagging`), multi-well distribution & conditioning workflows, and interactive multi-well structural/stratigraphic Stick Plot cross-sections flattened on datum or formation tops.
 - **High-Throughput Multi-Format Log & Ancillary Import Engine** (`quick_pp.las_handler`, `BulkImporterModal.svelte`, `BulkAncillaryImporter.svelte`):
-  Fast two-stage hybrid LAS 2.0/3.0, DLIS (`dlisio`), CSV, and Parquet log importer with automated mnemonic alias mapping, unit standardization, multi-run splicing & depth regularization (preserving raw missing gaps without artificial interpolation by default), and bulk ancillary data ingestion (Formation Tops, Fluid Contacts, Deviation Surveys with minimum-curvature TVD calculation, MDT/RFT Pressure Tests, Core RCA plugs, and SCAL Capillary Pressure & Relative Permeability tables).
+  Fast two-stage hybrid LAS 2.0/3.0, DLIS and LIS79 (`dlisio`), CSV, and Parquet log importer with automated mnemonic alias mapping, unit standardization, multi-run splicing & depth regularization (preserving raw missing gaps without artificial interpolation by default), and bulk ancillary data ingestion (Formation Tops, Fluid Contacts, Deviation Surveys with minimum-curvature TVD calculation, MDT/RFT Pressure Tests, Core RCA plugs, and SCAL Capillary Pressure & Relative Permeability tables).
 - **Automated FDP & Single-Well Report Generation** (`quick_pp/app/backend/services/report.py`, `quick_pp.plotter.report_plots`, `InspectorReport.svelte`, `ReportPreviewCanvas.svelte`):
   10-section Field Development Plan (`FDP_FULL`) and Single-Well CPI (`SINGLE_WELL_CPI`) report generator with publication-grade headless Matplotlib figures, grounded AI narrative synthesis and section enhancement (`executive`, `technical`, `concise`, `audit`), interactive Markdown section editing, and print-ready HTML / multi-page A4 PDF export.
 - **Petrophysical Handover Package Builder** (`quick_pp.handover`, `build_handover_archive_bytes`):
@@ -331,6 +331,6 @@ If you use `quick_pp` in your academic research, coursework, publications, or te
   publisher    = {GitHub},
   journal      = {GitHub repository},
   howpublished = {\url{https://github.com/imranfadhil/quick_pp}},
-  version      = {0.3.4}
+  version      = {0.3.5}
 }
 ```

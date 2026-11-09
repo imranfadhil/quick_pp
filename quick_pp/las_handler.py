@@ -1,10 +1,11 @@
-"""LAS 2.0/3.0 and DLIS Well Log Parsing, Inspection, Normalization, and Export Engine.
+"""LAS 2.0/3.0, DLIS, and LIS Well Log Parsing, Inspection, Normalization, and Export Engine.
 
 This module provides high-performance readers and writers for industry-standard well log
 formats (LAS 2.0, LAS 3.0, and binary DLIS RP66), including:
 - Fast two-stage hybrid LAS parsing (`fast_read_las`, `read_las_file_fast`)
 - LAS 3.0 stream normalization (`normalize_las3_to_las2_stream`)
 - DLIS logical file and frame inspection and extraction (`inspect_dlis`, `read_dlis_frame`)
+- LIS logical file and log-set inspection and extraction (`inspect_lis`, `read_lis_frame`)
 - Well header metadata & datum elevation extraction (`extract_las_metadata`, `extract_well_df_elevation`)
 - Curve mnemonic alias resolution, unit standardization, and multi-run splicing (`standardize_curve_units`, `splice_and_regularize_runs`)
 - LAS 2.0 export with embedded `~Well` header and `~Parameter` CPI settings (`build_las_object`, `export_to_las_string`, `export_to_las`)
@@ -1382,6 +1383,12 @@ def extract_las_metadata(
     mud_density, _ = _find_float(
         ["MW", "FD", "DFD", "MDEN", "MUD_WEIGHT", "MUD_DENSITY", "MUDW", "MUDD"]
     )
+    mud_filtrate_salinity, _ = _find_float(
+        ["MF_SALINITY", "MUD_FILTRATE_SALINITY", "MFSAL", "MFSS", "MFS"]
+    )
+    mud_filtrate_density, _ = _find_float(
+        ["MF_DENSITY", "MUD_FILTRATE_DENSITY", "MFDEN", "MF_RHO", "MFRHO"]
+    )
 
     lat_aliases = ["LATI", "LAT", "LATITUDE", "SURF_LAT", "SLAT", "Y_LAT"]
     lon_aliases = [
@@ -1520,6 +1527,8 @@ def extract_las_metadata(
         rmc=rmc,
         mud_density=mud_density,
         mud_weight=mud_density,
+        mud_filtrate_salinity=mud_filtrate_salinity,
+        mud_filtrate_density=mud_filtrate_density,
         raw_well_header=_sanitize_json_value(
             {
                 k: v.get("value")
@@ -2296,7 +2305,7 @@ def standardize_curve_units(
         if target_u == "m":
             if raw_u in ("FT", "F", "FEET", "FOOT"):
                 factor = 0.3048
-            elif raw_u in ("0.1 IN", "0.1IN", "0.1 IN."):
+            elif raw_u in ("0.1 IN", "0.1IN", "0.1 IN.", ".1IN", ".1 IN"):
                 factor = 0.00254
             elif raw_u in ("IN", "IN.", "INCH", "INCHES"):
                 factor = 0.0254
@@ -2305,7 +2314,7 @@ def standardize_curve_units(
         elif target_u == "ft":
             if raw_u in ("M", "METER", "METERS", "METRE"):
                 factor = 1.0 / 0.3048
-            elif raw_u in ("0.1 IN", "0.1IN"):
+            elif raw_u in ("0.1 IN", "0.1IN", ".1IN", ".1 IN"):
                 factor = 1.0 / 120.0
 
         if abs(factor - 1.0) > 1e-9:
@@ -2847,6 +2856,407 @@ def inspect_dlis(
     }
 
 
+def inspect_lis(
+    file_path: Union[str, Path], filename: Optional[str] = None
+) -> Dict[str, Any]:
+    """Inspect LIS79 headers and index samples to identify populated log sets."""
+    from dlisio import lis
+
+    from quick_pp.app.backend.schemas.well_metadata import (
+        CurveInspectionItem,
+        DlisFrameInfo,
+        WellHeaderMetadata,
+    )
+
+    p = Path(file_path)
+    fallback_name = Path(filename).stem if filename else p.stem
+    raw_header: Dict[str, str] = {}
+    metadata_values: Dict[str, Any] = {"well_name": fallback_name, "uwi": fallback_name}
+    frames: List[DlisFrameInfo] = []
+    curves: List[CurveInspectionItem] = []
+    frame_sample_counts: List[int] = []
+    seen_curves: set[str] = set()
+
+    info_record_methods = (
+        "job_identification",
+        "tool_string_info",
+        "wellsite_data",
+    )
+    metadata_aliases = {
+        "WN": "well_name",
+        "WELL": "well_name",
+        "WELL_NAME": "well_name",
+        "WID": "uwi",
+        "WELL_ID": "uwi",
+        "UWI": "uwi",
+        "API": "api",
+        "FN": "field",
+        "FLD": "field",
+        "FIELD": "field",
+        "CN": "company",
+        "COMP": "company",
+        "COMPANY": "company",
+        "SRVC": "service_company",
+    }
+
+    def text_value(value: Any) -> str:
+        if isinstance(value, np.generic):
+            value = value.item()
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace").strip()
+        return str(value).strip()
+
+    logical_files, index_warnings = _load_lis_file(lis, p)
+    with logical_files:
+        for lf_idx, logical_file in enumerate(logical_files):
+            for method_name in info_record_methods:
+                record_method = getattr(logical_file, method_name, None)
+                if not callable(record_method):
+                    continue
+                for record in record_method():
+                    if not record.isstructured():
+                        continue
+                    table = record.table(simple=True)
+                    field_names = {str(name).strip().upper(): name for name in table.dtype.names or ()}
+                    if "MNEM" not in field_names or "VALU" not in field_names:
+                        continue
+                    for row in table:
+                        mnemonic = text_value(row[field_names["MNEM"]]).upper()
+                        value = text_value(row[field_names["VALU"]])
+                        if not mnemonic or not value:
+                            continue
+                        raw_header[mnemonic] = value
+                        target = metadata_aliases.get(mnemonic)
+                        if target and (
+                            target not in metadata_values
+                            or metadata_values[target] == fallback_name
+                        ):
+                            metadata_values[target] = value
+
+            for dfsr_idx, dfsr in enumerate(logical_file.data_format_specs()):
+                frame_name = f"LIS-LF{lf_idx}-DFSR{dfsr_idx}"
+                index_mnemonic = str(dfsr.index_mnem).strip()
+                index_unit = str(dfsr.index_units or "").strip()
+                scalar_channels: List[str] = []
+                step = _parse_float_safe(getattr(dfsr, "spacing", None))
+                unit_upper = index_unit.upper()
+                is_depth_index = Config.resolve_mnemonic_alias(index_mnemonic) == "DEPTH"
+                depth_scale = (
+                    0.00254 if unit_upper in (".1IN", ".1 IN", "0.1IN", "0.1 IN")
+                    else 0.3048 if unit_upper in ("FT", "F", "FEET", "FOOT")
+                    else 0.0254 if unit_upper in ("IN", "IN.", "INCH", "INCHES")
+                    else 1.0
+                )
+                sample_rates = sorted(dfsr.sample_rates()) or [None]
+                overview = lis.curves(
+                    logical_file, dfsr, sample_rate=sample_rates[0]
+                )
+                index_field = next(
+                    (
+                        field for field in overview.dtype.names or ()
+                        if field.strip().upper() == index_mnemonic.upper()
+                    ),
+                    None,
+                )
+                index_values = (
+                    pd.to_numeric(
+                        pd.Series(overview[index_field]), errors="coerce"
+                    ).to_numpy(dtype=np.float64)
+                    if index_field is not None
+                    else np.empty(0, dtype=np.float64)
+                )
+                index_values = index_values[np.isfinite(index_values)]
+                absent_value = getattr(dfsr, "absent_value", None)
+                if absent_value is not None:
+                    index_values = index_values[
+                        ~np.isclose(index_values, float(absent_value), atol=1e-3)
+                    ]
+                sample_count = len(index_values)
+                frame_sample_counts.append(sample_count)
+                if sample_count:
+                    start_depth = float(np.min(index_values))
+                    stop_depth = float(np.max(index_values))
+                    if step is None and sample_count > 1:
+                        positive_steps = np.abs(np.diff(index_values))
+                        positive_steps = positive_steps[positive_steps > 1e-8]
+                        if len(positive_steps):
+                            step = float(np.median(positive_steps))
+                else:
+                    start_depth = stop_depth = None
+
+                for channel in dfsr.specs:
+                    raw_mnemonic = str(
+                        getattr(channel, "mnem", getattr(channel, "mnemonic", ""))
+                    ).strip()
+                    raw_unit = str(channel.units or "").strip()
+                    scalar_channels.append(raw_mnemonic)
+                    if raw_mnemonic in seen_curves:
+                        continue
+                    seen_curves.add(raw_mnemonic)
+                    target_mnemonic = Config.resolve_mnemonic_alias(raw_mnemonic)
+                    target_unit = raw_unit
+                    auto_conversion = None
+                    unit_upper = raw_unit.upper()
+                    if target_mnemonic == "DEPTH" and unit_upper in (
+                        ".1IN", ".1 IN", "0.1IN", "0.1 IN", "FT", "F", "FEET", "FOOT"
+                    ):
+                        target_unit = "m"
+                        auto_conversion = f"{raw_unit} -> m"
+                    elif target_mnemonic in ("NPHI", "PHIT", "PHIE") and unit_upper in (
+                        "%", "PU", "P.U.", "PERCENT", "PCT"
+                    ):
+                        target_unit = "v/v"
+                        auto_conversion = f"{raw_unit} -> v/v"
+                    elif target_mnemonic == "RHOB" and unit_upper in ("KG/M3", "KGM3"):
+                        target_unit = "g/cc"
+                        auto_conversion = f"{raw_unit} -> g/cc"
+                    curves.append(
+                        CurveInspectionItem(
+                            raw_mnemonic=raw_mnemonic,
+                            target_mnemonic=target_mnemonic,
+                            raw_unit=raw_unit,
+                            target_unit=target_unit,
+                            description=str(getattr(channel, "long_name", "") or "").strip(),
+                            auto_conversion=auto_conversion,
+                        )
+                    )
+
+                frames.append(
+                    DlisFrameInfo(
+                        logical_file_index=lf_idx,
+                        frame_name=frame_name,
+                        index_type="BOREHOLE-DEPTH" if is_depth_index else index_mnemonic,
+                        index_channel=index_mnemonic,
+                        start_depth=(
+                            round(start_depth * depth_scale, 4)
+                            if start_depth is not None and is_depth_index
+                            else start_depth
+                        ),
+                        stop_depth=(
+                            round(stop_depth * depth_scale, 4)
+                            if stop_depth is not None and is_depth_index
+                            else stop_depth
+                        ),
+                        step=round(step * depth_scale, 4) if step is not None else None,
+                        depth_unit="m" if depth_scale != 1.0 else index_unit or "m",
+                        scalar_channels=scalar_channels,
+                        selected=False,
+                    )
+                )
+
+    if not frames:
+        if index_warnings:
+            issue_summary = "; ".join(
+                re.sub(r"\s+", " ", warning).strip().split(" Where:")[0].replace("Problem:", "").strip()
+                for warning in index_warnings
+            )
+            raise ValueError(
+                "The LIS79 file has no readable log sets after a critical indexing "
+                f"issue ({issue_summary}). No curves could be recovered."
+            )
+        raise ValueError(
+            "The LIS79 file contains no readable log sets. Its index is incomplete, "
+            "and no curves could be recovered. The file may use an unsupported layout "
+            "or contain an error before its log data."
+        )
+
+    if frames:
+        best_idx = max(
+            range(len(frames)),
+            key=lambda index: (
+                frame_sample_counts[index] > 0,
+                "DEPTH" in frames[index].index_type.upper(),
+                frame_sample_counts[index],
+            ),
+        )
+        selected_frame = frames[best_idx]
+        selected_frame.selected = True
+        metadata_values["step"] = selected_frame.step
+        metadata_values["start_depth"] = selected_frame.start_depth
+        metadata_values["stop_depth"] = selected_frame.stop_depth
+
+    metadata_values["raw_well_header"] = raw_header
+    qaqc_warnings = []
+    if index_warnings:
+        issue_summary = "; ".join(
+            re.sub(r"\s+", " ", warning).strip().split(" Where:")[0].replace("Problem:", "").strip()
+            for warning in index_warnings
+        )
+        qaqc_warnings.append(
+            "LIS79 indexing stopped early after a critical file issue "
+            f"({issue_summary}). Recovered {len(frames)} log set(s), but additional "
+            "data may not have been indexed. Check the imported depth range and curves "
+            "before using the results."
+        )
+    return {
+        "metadata": WellHeaderMetadata(**metadata_values),
+        "frames": frames,
+        "curves": curves,
+        "qaqc_warnings": qaqc_warnings,
+    }
+
+
+def _load_lis_file(lis_module: Any, file_path: Path):
+    from dlisio.common import ErrorHandler
+
+    warnings: List[str] = []
+
+    try:
+        logical_files = lis_module.load(
+            str(file_path), error_handler=ErrorHandler(critical=warnings.append)
+        )
+    except RuntimeError as exc:
+        message = str(exc)
+        if "physical record truncated" in message.lower():
+            match = re.search(r"physical tell\s+(\d+)", message, flags=re.IGNORECASE)
+            offset = f" at byte {match.group(1)}" if match else ""
+            raise ValueError(
+                f"The LIS79 file is truncated{offset}. Request a complete re-export "
+                "of the file; the remaining log data cannot be read."
+            ) from exc
+        raise ValueError(f"Could not index the LIS79 file: {message}") from exc
+
+    unsupported_warnings = [
+        warning
+        for warning in warnings
+        if not any(
+            known_issue in warning.lower()
+            for known_issue in (
+                "physical record truncated",
+                "predecessor/successor inconsistency",
+            )
+        )
+    ]
+    if unsupported_warnings:
+        logical_files.close()
+        raise ValueError(
+            "Could not safely recover the LIS79 file after a critical indexing issue: "
+            + "; ".join(unsupported_warnings)
+        )
+    return logical_files, warnings
+
+
+def read_lis_frame(
+    file_path: Union[str, Path],
+    frame_name: Optional[str] = None,
+    target_depth_uom: str = "m",
+    custom_mnemonic_map: Optional[Dict[str, str]] = None,
+    unit_overrides: Optional[Dict[str, str]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    filename: Optional[str] = None,
+) -> Tuple[pd.DataFrame, Dict[str, Any], Dict[str, str]]:
+    """Read one LIS79 log set, combining its channels across their sample rates."""
+    from dlisio import lis
+
+    p = Path(file_path)
+    if frame_name:
+        match = re.fullmatch(r"LIS-LF(\d+)-DFSR(\d+)", frame_name)
+        if not match:
+            raise ValueError(f"Invalid LIS log-set identifier: {frame_name}")
+        logical_file_idx, dfsr_idx = (int(value) for value in match.groups())
+    else:
+        logical_file_idx, dfsr_idx = 0, 0
+
+    logical_files, _ = _load_lis_file(lis, p)
+    with logical_files:
+        if logical_file_idx >= len(logical_files):
+            raise ValueError(f"LIS logical file index {logical_file_idx} is out of range")
+        logical_file = logical_files[logical_file_idx]
+        dfsrs = list(logical_file.data_format_specs())
+        if dfsr_idx >= len(dfsrs):
+            raise ValueError(f"LIS log-set index {dfsr_idx} is out of range")
+        dfsr = dfsrs[dfsr_idx]
+        index_mnemonic = str(dfsr.index_mnem).strip()
+        sample_rates = sorted(dfsr.sample_rates()) or [None]
+        merged_df: Optional[pd.DataFrame] = None
+        curve_units: Dict[str, str] = {}
+
+        for channel in dfsr.specs:
+            mnemonic = str(
+                getattr(channel, "mnem", getattr(channel, "mnemonic", ""))
+            ).strip()
+            curve_units[mnemonic] = str(channel.units or "").strip()
+        curve_units[index_mnemonic] = str(dfsr.index_units or "").strip()
+        curve_units.update(
+            {
+                str(key).strip().upper(): str(value or "").strip()
+                for key, value in (unit_overrides or {}).items()
+            }
+        )
+
+        absent_value = getattr(dfsr, "absent_value", None)
+        for sample_rate in sample_rates:
+            raw_curves = lis.curves(logical_file, dfsr, sample_rate=sample_rate)
+            current_df = pd.DataFrame.from_records(raw_curves)
+            current_df.columns = [str(column).strip() for column in current_df.columns]
+            current_df = current_df.loc[:, ~current_df.columns.duplicated()]
+            index_col = next(
+                (
+                    column for column in current_df.columns
+                    if column.upper() == index_mnemonic.upper()
+                ),
+                None,
+            )
+            if index_col is None:
+                raise ValueError(
+                    f"LIS log set {frame_name or dfsr_idx} does not contain index channel "
+                    f"{index_mnemonic!r}"
+                )
+            current_df = current_df.rename(columns={index_col: index_mnemonic})
+            if absent_value is not None:
+                current_df = current_df.replace(absent_value, np.nan)
+            current_df = current_df.replace(list(SENTINEL_NULLS), np.nan)
+            current_df = current_df.drop_duplicates(subset=[index_mnemonic], keep="last")
+
+            if merged_df is None:
+                merged_df = current_df
+                continue
+            duplicate_curves = [
+                column for column in current_df.columns
+                if column != index_mnemonic and column in merged_df.columns
+            ]
+            if duplicate_curves:
+                current_df = current_df.drop(columns=duplicate_curves)
+            merged_df = merged_df.merge(
+                current_df, on=index_mnemonic, how="outer", sort=False
+            )
+
+    if merged_df is None or merged_df.empty:
+        raise ValueError(f"No log data found in {filename or p.name}")
+
+    merged_df = merged_df.sort_values(index_mnemonic, kind="stable").reset_index(drop=True)
+    df, std_units, _ = standardize_curve_units(
+        merged_df,
+        curve_units=curve_units,
+        target_depth_uom=target_depth_uom,
+        custom_mnemonic_map=custom_mnemonic_map,
+    )
+    if "DEPTH" not in df.columns:
+        raise ValueError(
+            f"LIS log set {frame_name or dfsr_idx} has no depth index; map its index curve to DEPTH"
+        )
+
+    fallback_name = Path(filename).stem if filename else p.stem
+    if metadata is None:
+        metadata = inspect_lis(p, filename=filename)["metadata"].model_dump()
+    else:
+        metadata = dict(metadata)
+    if "WELL_NAME" not in df.columns:
+        df.insert(0, "WELL_NAME", metadata.get("well_name") or fallback_name)
+    if metadata.get("uwi") and "UWI" not in df.columns:
+        df.insert(0, "UWI", metadata["uwi"])
+    valid_depth = pd.to_numeric(df["DEPTH"], errors="coerce").dropna()
+    if not valid_depth.empty:
+        metadata["start_depth"] = float(valid_depth.min())
+        metadata["stop_depth"] = float(valid_depth.max())
+        if len(valid_depth) > 1:
+            diffs = np.diff(np.sort(valid_depth.to_numpy(dtype=np.float64)))
+            positive_diffs = diffs[diffs > 1e-8]
+            if len(positive_diffs):
+                metadata["step"] = float(np.median(positive_diffs))
+    return df, metadata, std_units
+
+
 def read_dlis_frame(
     file_path: Union[str, Path, bytes],
     logical_file_idx: int = 0,
@@ -2948,4 +3358,3 @@ def read_dlis_frame(
             pass
 
     return df, meta_dict, std_units
-

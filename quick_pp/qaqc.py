@@ -143,7 +143,9 @@ def badhole_flagging(
         return s_clean.where(s < m, med)
 
     bit_sizes = {6.0: 6.0, 8.5: 8.5, 12.25: 12.25, 17.5: 17.5}
-    default_bs = float(bitsize_default) if bitsize_default and bitsize_default > 0 else 8.5
+    default_bs = (
+        float(bitsize_default) if bitsize_default and bitsize_default > 0 else 8.5
+    )
 
     if "BS" not in df.columns:
         df["BS"] = np.nan
@@ -191,7 +193,11 @@ def badhole_flagging(
                         signal_data.ffill().bfill().to_numpy(dtype=float)
                     )
                     n_bkps = min(len(peaks), max(0, (len(signal_data) // jump) - 1))
-                    my_bkps = algo.predict(n_bkps=n_bkps) if n_bkps > 0 else [len(signal_data)]
+                    my_bkps = (
+                        algo.predict(n_bkps=n_bkps)
+                        if n_bkps > 0
+                        else [len(signal_data)]
+                    )
 
                     indices = [0] + my_bkps
                     bins = list(zip(indices[:-1], indices[1:], strict=True))
@@ -207,15 +213,23 @@ def badhole_flagging(
                             if len(valid_seg) > 0
                             else fallback_q05
                         )
-                        bit_ = bit_sizes[min(bit_sizes.keys(), key=lambda k: abs(k - val))]
+                        bit_ = bit_sizes[
+                            min(bit_sizes.keys(), key=lambda k: abs(k - val))
+                        ]
                         estimated_bits.append(bit_)
 
                     if len(estimated_bits) >= 2:
-                        bits_diff_1 = np.array(estimated_bits[1:] + [estimated_bits[-1]])
-                        bits_diff_neg1 = np.array([estimated_bits[0]] + estimated_bits[:-1])
+                        bits_diff_1 = np.array(
+                            estimated_bits[1:] + [estimated_bits[-1]]
+                        )
+                        bits_diff_neg1 = np.array(
+                            [estimated_bits[0]] + estimated_bits[:-1]
+                        )
                         estimated_bits_arr = np.array(estimated_bits, dtype=float)
                         estimated_bits_arr = np.where(
-                            bits_diff_1 == bits_diff_neg1, bits_diff_1, estimated_bits_arr
+                            bits_diff_1 == bits_diff_neg1,
+                            bits_diff_1,
+                            estimated_bits_arr,
                         )
                     else:
                         estimated_bits_arr = np.array(estimated_bits, dtype=float)
@@ -228,18 +242,24 @@ def badhole_flagging(
                     well_data["ESTIMATED_BITSIZE"] = est_bs_arr
                     estimated_ok = True
                 except Exception as e:
-                    logger.debug(f"[badhole_flagging] Change-point fallback on well {well}: {e}")
+                    logger.debug(
+                        f"[badhole_flagging] Change-point fallback on well {well}: {e}"
+                    )
 
             if not estimated_ok and not clean_signal.empty:
                 # Fallback for short intervals or when ruptures breakpoints are not applicable:
                 # snap 5th percentile of caliper to nearest standard bit size
                 p05 = float(np.nanpercentile(clean_signal, 5))
-                nearest_bs = bit_sizes[min(bit_sizes.keys(), key=lambda k: abs(k - p05))]
+                nearest_bs = bit_sizes[
+                    min(bit_sizes.keys(), key=lambda k: abs(k - p05))
+                ]
                 well_data["ESTIMATED_BITSIZE"] = float(nearest_bs)
 
         processed_wells.append(well_data)
 
-    return_df = pd.concat(processed_wells, ignore_index=True) if processed_wells else df.copy()
+    return_df = (
+        pd.concat(processed_wells, ignore_index=True) if processed_wells else df.copy()
+    )
 
     if auto_bitsize:
         bitsize_arr = np.where(
@@ -276,12 +296,16 @@ def badhole_flagging(
     if exclude_coal:
         if "COAL_FLAG" in return_df.columns:
             coal_mask |= (
-                pd.to_numeric(return_df["COAL_FLAG"], errors="coerce").fillna(0.0).to_numpy()
+                pd.to_numeric(return_df["COAL_FLAG"], errors="coerce")
+                .fillna(0.0)
+                .to_numpy()
                 >= 0.5
             )
         if "VCOAL" in return_df.columns:
             coal_mask |= (
-                pd.to_numeric(return_df["VCOAL"], errors="coerce").fillna(0.0).to_numpy()
+                pd.to_numeric(return_df["VCOAL"], errors="coerce")
+                .fillna(0.0)
+                .to_numpy()
                 >= 0.5
             )
         if (
@@ -305,7 +329,9 @@ def badhole_flagging(
         )
         if drho_col is not None:
             drho_num = pd.to_numeric(return_df[drho_col], errors="coerce").to_numpy()
-            drho_flag = np.isfinite(drho_num) & (np.abs(drho_num) > float(drho_threshold))
+            drho_flag = np.isfinite(drho_num) & (
+                np.abs(drho_num) > float(drho_threshold)
+            )
 
     # 3. Bulk Density / Neutron Pad Standoff Bounds criterion
     if use_rhob_nphi:
@@ -354,7 +380,9 @@ def badhole_flagging(
         "total_rows": int(n_rows),
         "total_samples": int(n_rows),
         "flagged_count": int(np.sum(combined_flag)),
-        "flagged_pct": round(float(np.mean(combined_flag) * 100.0), 2) if n_rows > 0 else 0.0,
+        "flagged_pct": round(float(np.mean(combined_flag) * 100.0), 2)
+        if n_rows > 0
+        else 0.0,
         "cali_count": int(np.sum(cali_flag)),
         "cali_flagged": int(np.sum(cali_flag)),
         "drho_count": int(np.sum(drho_flag)),
@@ -376,7 +404,7 @@ def neu_den_xplot_hc_correction(
     water_point: tuple = (1.0, 1.0),
     corr_angle: float = 50,
     buffer: float = 0.0,
-    target_mode: str = "bulk",
+    target_mode: str = "solid",
     flag_mode: str = "strict",
     vsh_tol: float = 0.05,
     nphi_max: float = 0.45,
@@ -401,17 +429,21 @@ def neu_den_xplot_hc_correction(
           ``buffer / |A - C|``. ``buffer`` (crossplot distance along A-C) only
           widens this flagging region; it does not move the correction target.
         * ``flag_mode="vsh_gr"``: additionally flags points inside the triangle
-          whose crossplot clay volume is below ``vsh_gr - vsh_tol``. This
+          whose crossplot clay estimate in ``target_mode`` is below
+          ``vsh_gr - vsh_tol``. This
           captures shaly gas sands, but may produce false positives where the
           gamma ray overestimates shale (e.g. radioactive/feldspathic sands).
 
     Target:
-        * ``target_mode="bulk"`` (default): ``vsh_gr`` is treated as bulk clay
+        * ``target_mode="solid"`` (default): ``vsh_gr`` is treated as clay fraction
+          of the solids, i.e. the target is the line from D through
+          ``C + (1 - vsh_gr)(A - C)``.
+        * ``target_mode="bulk"``: ``vsh_gr`` is treated as bulk clay
           volume; the target is the iso-Vcl line through ``A + vsh_gr (C - A)``
           parallel to D-A. Consistent with :func:`den_correction`.
-        * ``target_mode="solid"``: ``vsh_gr`` is treated as clay fraction of the
-          solids, i.e. the target is the line from D through
-          ``C + (1 - vsh_gr)(A - C)`` (legacy convention).
+
+    The solid target is a binary sand-clay projection, not the piecewise
+    sand-silt-clay (SSC) shale estimate.
 
     Corrected points never move backwards along the ray (flagged points already
     on the shaly side of the target are left unchanged) and never cross the
@@ -431,7 +463,7 @@ def neu_den_xplot_hc_correction(
             :func:`neu_den_xplot_hc_correction_angle`. Defaults to 50.
         buffer (float, optional): Flagging tolerance as crossplot distance along A-C. Only widens
             the strict flagging region. Defaults to 0.0.
-        target_mode (str, optional): 'bulk' or 'solid'. Defaults to 'bulk'.
+        target_mode (str, optional): 'bulk' or 'solid'. Defaults to 'solid'.
         flag_mode (str, optional): 'strict' or 'vsh_gr'. Defaults to 'strict'.
         vsh_tol (float, optional): Tolerance for ``flag_mode='vsh_gr'``. Defaults to 0.05.
         nphi_max (float, optional): Points with NPHI >= nphi_max are never corrected. Defaults to 0.45.
@@ -487,10 +519,22 @@ def neu_den_xplot_hc_correction(
         flag = flag & valid
 
         # 2. Correction ray direction, expressed in the (phi, vcl) frame
-        rad = np.radians(float(corr_angle))
-        ux, uy = float(np.cos(rad)), float(np.sin(rad))
-        dphi, dvcl = nd_triangle_coords(A[0] + ux, A[1] + uy, A, C, D)
-        dphi, dvcl = float(dphi), float(dvcl)
+        angle = np.asarray(corr_angle, dtype=float)
+        if angle.ndim == 0:
+            rad = np.radians(float(angle))
+            ux, uy = float(np.cos(rad)), float(np.sin(rad))
+            dphi, dvcl = nd_triangle_coords(A[0] + ux, A[1] + uy, A, C, D)
+            dphi, dvcl = float(dphi), float(dvcl)
+        else:
+            try:
+                angle = np.broadcast_to(angle, nphi.shape)
+            except ValueError as exc:
+                raise ValueError(
+                    "corr_angle must be scalar or match the shape of nphi."
+                ) from exc
+            rad = np.radians(angle)
+            ux, uy = np.cos(rad), np.sin(rad)
+            dphi, dvcl = nd_triangle_coords(A[0] + ux, A[1] + uy, A, C, D)
 
         # 3. Exact ray length to reach the target iso-Vshale line
         if target_mode == "bulk":
@@ -500,10 +544,12 @@ def neu_den_xplot_hc_correction(
             denom = dvcl + target_vsh * dphi
             numer = target_vsh * (1.0 - phi0) - vcl0
         s = np.where(np.abs(denom) > 1e-12, numer / denom, np.nan)
-
         # Do not cross the zero-porosity (A-C) line
-        if dphi < 0:
-            s = np.minimum(s, -phi0 / dphi)
+        if np.ndim(dphi) == 0:
+            if dphi < 0:
+                s = np.minimum(s, -phi0 / dphi)
+        else:
+            s = np.where(dphi < 0, np.minimum(s, -phi0 / dphi), s)
 
         move = flag & np.isfinite(s) & (s > 0)
         nphi_corrected = np.where(move, nphi + s * ux, nphi)
@@ -532,12 +578,131 @@ def neu_den_xplot_hc_correction_angle(rho_water=1.0, rho_hc=0.3, HI_hc=None):
             (liquids). Defaults to None.
 
     Returns:
-        float: The hydrocarbon correction angle in degrees (90 for HI_hc = 1, > 90 for HI_hc > 1).
+        float or np.ndarray: The hydrocarbon correction angle in degrees (90 for
+            HI_hc = 1, > 90 for HI_hc > 1).
     """
     if HI_hc is None:
-        HI_hc = min(2.2 * float(rho_hc), 1.0)
-    return float(
-        np.degrees(np.arctan2(float(rho_water) - float(rho_hc), 1.0 - float(HI_hc)))
+        HI_hc = np.minimum(2.2 * np.asarray(rho_hc, dtype=float), 1.0)
+    return np.degrees(
+        np.arctan2(
+            np.asarray(rho_water, dtype=float) - np.asarray(rho_hc, dtype=float),
+            1.0 - np.asarray(HI_hc, dtype=float),
+        )
+    )
+
+
+def invaded_zone_hc_correction(
+    nphi,
+    rhob,
+    vsh_gr,
+    rho_hc,
+    rho_mf,
+    salinity_ppm,
+    dry_sand_point,
+    dry_clay_point,
+    hc_flag,
+    lithology_coeff=1.0,
+    target_mode="solid",
+):
+    """Correct NPHI/RHOB using the standard invaded-zone saturation iteration.
+
+    The invaded-zone hydrocarbon saturation is searched from 0 to 1 in 0.01
+    increments. For each candidate, the mud-filtrate and hydrocarbon mixing
+    terms plus neutron excavation effect are calculated; the candidate whose
+    corrected density-neutron shale volume is closest to the GR target is used.
+
+    Density porosity is estimated from the dry-sand density endpoint and
+    mud-filtrate density; the corrected VSH_DN is evaluated in the matrix /
+    clay / mud-filtrate crossplot triangle. ``target_mode="solid"`` (default)
+    compares the clay fraction of solids; ``"bulk"`` compares bulk clay volume.
+    """
+    target_mode = str(target_mode).strip().lower()
+    if target_mode not in ("bulk", "solid"):
+        raise ValueError("target_mode must be 'bulk' or 'solid'")
+
+    nphi = np.asarray(nphi, dtype=float)
+    rhob = np.asarray(rhob, dtype=float)
+    rho_hc = np.broadcast_to(np.asarray(rho_hc, dtype=float), nphi.shape)
+    vsh_gr = np.broadcast_to(np.asarray(vsh_gr, dtype=float), nphi.shape)
+    hc_flag = np.broadcast_to(np.asarray(hc_flag, dtype=bool), nphi.shape)
+    if nphi.ndim != 1 or rhob.shape != nphi.shape:
+        raise ValueError("nphi and rhob must be matching one-dimensional arrays.")
+    if not np.isfinite(rho_mf) or rho_mf <= 0:
+        raise ValueError("Mud-filtrate density must be finite and positive.")
+    if not np.isfinite(salinity_ppm) or not 0 <= salinity_ppm <= 1_000_000:
+        raise ValueError("Mud-filtrate salinity must be between 0 and 1,000,000 ppm.")
+    if not np.isfinite(lithology_coeff) or lithology_coeff < 0:
+        raise ValueError("lithology_coeff must be finite and non-negative.")
+    if np.any(rho_hc[np.isfinite(rho_hc)] < 0):
+        raise ValueError("Hydrocarbon density must be non-negative.")
+    hc_flag = hc_flag & np.isfinite(rho_hc) & np.isfinite(nphi) & np.isfinite(rhob)
+
+    salinity = float(salinity_ppm) / 1_000_000.0
+    hw = float(rho_mf) * (1.0 - salinity)
+    if hw <= 0:
+        raise ValueError("Mud-filtrate hydrogen index must be positive.")
+    light_hc = rho_hc <= 0.25
+    hh = np.where(light_hc, 2.2 * rho_hc, rho_hc + 0.3)
+    coeff_a = np.where(
+        light_hc,
+        (1.19 - 0.16 * salinity) * rho_mf - 1.33 * rho_hc,
+        (1.19 - 0.16 * salinity) * rho_mf - 1.19 * rho_hc - 0.032,
+    )
+    coeff_b = 1.0 - hh / hw
+    matrix_density = float(dry_sand_point[1])
+    if abs(matrix_density - rho_mf) < 1e-8:
+        raise ValueError("Dry-sand density must differ from mud-filtrate density.")
+    phi_d = (matrix_density - rhob) / (matrix_density - rho_mf)
+    phi_dn = np.maximum(0.5 * (phi_d + nphi), 0.0)
+    target_vsh = np.clip(vsh_gr, 0.0, 1.0)
+    target_vsh = np.where(np.isfinite(target_vsh), target_vsh, 0.0)
+
+    corrected_nphi = nphi.copy()
+    corrected_rhob = rhob.copy()
+    selected_saturation = np.full(nphi.shape, np.nan, dtype=float)
+    best_error = np.full(nphi.shape, np.inf, dtype=float)
+    best_angle = np.full(nphi.shape, np.nan, dtype=float)
+
+    for saturation in np.linspace(0.0, 1.0, 101):
+        mixed_hi = saturation * hh + (1.0 - saturation) * hw
+        delta_rhob = coeff_a * phi_dn * saturation
+        delta_nphi = coeff_b * phi_dn * saturation + lithology_coeff * mixed_hi * (
+            2.0 * phi_dn**2 * mixed_hi + 0.04 * phi_dn
+        )
+        candidate_nphi = nphi + delta_nphi
+        candidate_rhob = rhob + delta_rhob
+        phi, vcl = nd_triangle_coords(
+            candidate_nphi,
+            candidate_rhob,
+            dry_sand_point,
+            dry_clay_point,
+            (hw, float(rho_mf)),
+        )
+        candidate_vsh = (
+            vcl
+            if target_mode == "bulk"
+            else np.divide(
+                vcl,
+                1.0 - phi,
+                out=np.full_like(vcl, np.nan, dtype=float),
+                where=np.abs(1.0 - phi) > 1e-12,
+            )
+        )
+        error = np.abs(candidate_vsh - target_vsh)
+        better = hc_flag & np.isfinite(error) & (error < best_error)
+        corrected_nphi[better] = candidate_nphi[better]
+        corrected_rhob[better] = candidate_rhob[better]
+        selected_saturation[better] = saturation
+        best_error[better] = error[better]
+        best_angle[better] = np.degrees(
+            np.arctan2(delta_rhob[better], delta_nphi[better])
+        )
+
+    return (
+        corrected_nphi,
+        corrected_rhob,
+        selected_saturation,
+        best_angle,
     )
 
 
@@ -1069,8 +1234,9 @@ def normalize_by_zone(
                     for bh_col in ("BADHOLE", "BAD_HOLE", "BAD_HOLE_FLAG"):
                         if bh_col in well_zone_df.columns:
                             bh_mask = (
-                                pd.to_numeric(well_zone_df[bh_col], errors="coerce")
-                                .fillna(0.0)
+                                pd.to_numeric(
+                                    well_zone_df[bh_col], errors="coerce"
+                                ).fillna(0.0)
                                 >= 0.5
                             )
                             if (~bh_mask & val_series.notna()).sum() >= 5:
@@ -1199,7 +1365,6 @@ def normalize_by_zone(
 stratigraphic_normalization = normalize_by_zone
 
 
-
 def gr_borehole_correction(
     gr: np.ndarray | pd.Series | float,
     cali: np.ndarray | pd.Series | float,
@@ -1243,7 +1408,9 @@ def gr_borehole_correction(
     rho_mud_ref = 9.0 / 8.3454  # 9.0 ppg reference calibration mud weight (~1.08 g/cc)
 
     # Effective fluid annulus thickness change relative to reference 8.5" borehole & 9 ppg mud
-    d_hole = np.clip(np.where(np.isnan(cali_arr), bs_arr, cali_arr), tool_diameter, 36.0)
+    d_hole = np.clip(
+        np.where(np.isnan(cali_arr), bs_arr, cali_arr), tool_diameter, 36.0
+    )
     d_ref = np.clip(bs_arr, tool_diameter, 36.0)
 
     geom_factor = 0.65 if tool_position.lower().startswith("ecc") else 1.0
@@ -1255,10 +1422,7 @@ def gr_borehole_correction(
         mu
         * half_inch_to_cm
         * geom_factor
-        * (
-            rho_mud * (d_hole - tool_diameter)
-            - rho_mud_ref * (d_ref - tool_diameter)
-        )
+        * (rho_mud * (d_hole - tool_diameter) - rho_mud_ref * (d_ref - tool_diameter))
     )
     cf = np.clip(np.exp(exponent), 0.5, 2.5)
     gr_corr = np.maximum(0.0, gr_arr * cf)
@@ -1325,7 +1489,7 @@ def nphi_environmental_correction(
 
     # Additive chartbook approximations (in porosity units v/v)
     corr_hole = -0.012 * delta_hole
-    corr_temp = 0.004 * (( np.where(np.isnan(temp_arr), 75.0, temp_arr) - 75.0) / 100.0)
+    corr_temp = 0.004 * ((np.where(np.isnan(temp_arr), 75.0, temp_arr) - 75.0) / 100.0)
     corr_pres = -0.0015 * (np.where(np.isnan(pres_arr), 0.0, pres_arr) / 1000.0)
     mw_ppg = np.where(mw_arr <= 3.0, mw_arr * 8.3454, mw_arr)
     corr_mw = 0.002 * (np.where(np.isnan(mw_ppg), 9.0, mw_ppg) - 9.0)
@@ -1379,7 +1543,9 @@ def density_mudcake_correction(
     bs_arr = np.asarray(bitsize, dtype=float)
 
     # Effective standoff / washout wall gap (inches)
-    gap_in = np.clip((np.where(np.isnan(cali_arr), bs_arr, cali_arr) - bs_arr) / 2.0, 0.0, 6.0)
+    gap_in = np.clip(
+        (np.where(np.isnan(cali_arr), bs_arr, cali_arr) - bs_arr) / 2.0, 0.0, 6.0
+    )
     # Pad sensitivity factor per inch of wall gap beyond compensation
     pad_factor = 0.06
     delta_rhob = pad_factor * gap_in * np.maximum(rhob_arr - rho_mudcake, 0.0)
@@ -1495,7 +1661,7 @@ def apply_environmental_corrections(
     salinity_ppm: float | str = 0.0,
     rho_mudcake: float = 1.5,
     inplace: bool = False,
-    suffix: str = "_CORR",
+    suffix: str = "_ENV_CORR",
 ) -> pd.DataFrame:
     """Apply automated borehole environmental and invasion corrections to a well log DataFrame.
 
@@ -1526,7 +1692,7 @@ def apply_environmental_corrections(
         rho_mudcake (float, optional): Mudcake density (g/cc). Defaults to 1.5.
         inplace (bool, optional): If True, overwrites `GR`, `NPHI`, `RHOB`, `RT` in place
             in addition to writing `<LOG><suffix>`. Defaults to False.
-        suffix (str, optional): Suffix for corrected log columns. Defaults to `'_CORR'`.
+        suffix (str, optional): Suffix for corrected log columns. Defaults to `'_ENV_CORR'`.
 
     Returns:
         pd.DataFrame: DataFrame with environmentally corrected curves and `INVASION_FLAG`.
@@ -1553,7 +1719,11 @@ def apply_environmental_corrections(
     )
 
     # Resolve temperature (°F) and hydrostatic pressure (psi)
-    depth_col = "TVD" if "TVD" in out_df.columns else ("DEPTH" if "DEPTH" in out_df.columns else None)
+    depth_col = (
+        "TVD"
+        if "TVD" in out_df.columns
+        else ("DEPTH" if "DEPTH" in out_df.columns else None)
+    )
     if "TEMP" in out_df.columns:
         temp = out_df["TEMP"]
     elif depth_col is not None:
@@ -1570,14 +1740,18 @@ def apply_environmental_corrections(
         d_vals = pd.to_numeric(out_df[depth_col], errors="coerce").fillna(0.0)
         depth_ft = d_vals * 3.28084 if d_vals.max() < 6000 else d_vals
         mw_val = mw if not isinstance(mw, pd.Series) else mw.fillna(9.0)
-        mw_ppg = np.where(np.asarray(mw_val) <= 3.0, np.asarray(mw_val) * 8.3454, np.asarray(mw_val))
+        mw_ppg = np.where(
+            np.asarray(mw_val) <= 3.0, np.asarray(mw_val) * 8.3454, np.asarray(mw_val)
+        )
         pressure = 0.052 * mw_ppg * depth_ft
     else:
         pressure = 0.0
 
     # 1. Gamma Ray borehole correction
     if "GR" in out_df.columns:
-        gr_corr = gr_borehole_correction(out_df["GR"], cali=cali, bitsize=bs, mud_weight=mw)
+        gr_corr = gr_borehole_correction(
+            out_df["GR"], cali=cali, bitsize=bs, mud_weight=mw
+        )
         if suffix:
             out_df[f"GR{suffix}"] = gr_corr
         if inplace:
@@ -1612,8 +1786,13 @@ def apply_environmental_corrections(
 
     # 4. Deep Resistivity invasion correction
     if "RT" in out_df.columns:
-        rm_col = next((c for c in ("RM", "ILM", "RMED", "RLA3") if c in out_df.columns), None)
-        rxo_col = next((c for c in ("RXO", "MSFL", "RSHAL", "RS", "RLA1") if c in out_df.columns), None)
+        rm_col = next(
+            (c for c in ("RM", "ILM", "RMED", "RLA3") if c in out_df.columns), None
+        )
+        rxo_col = next(
+            (c for c in ("RXO", "MSFL", "RSHAL", "RS", "RLA1") if c in out_df.columns),
+            None,
+        )
         rt_corr, inv_flag = resistivity_invasion_correction(
             out_df["RT"],
             rm=out_df[rm_col] if rm_col else None,
@@ -1626,5 +1805,3 @@ def apply_environmental_corrections(
         out_df["INVASION_FLAG"] = inv_flag
 
     return out_df
-
-

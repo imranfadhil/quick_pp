@@ -307,7 +307,7 @@ def fix_missing_volumetrics(df):
     volumetrics = [
         "VCLAY", "VSILT", "VSAND", "VCALC", "VDOLO", "VGAS", "VOIL", "VHC",
         "VFELD", "VKAOL", "VANHY", "VGYPS", "VHALI", "VPYRI", "VCOAL",
-        "VILLI", "VSMEC", "VCHLO", "VGLAUC", "VKFELD", "VALBI", "VSIDE", "VANKE", "VKERO",
+        "VILLI", "VSMEC", "VCHLO", "VGLAUC", "VMUSC", "VBIOT", "VKFELD", "VALBI", "VSIDE", "VANKE", "VKERO",
     ]
     for col in volumetrics:
         if col in df.columns:

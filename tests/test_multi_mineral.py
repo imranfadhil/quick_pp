@@ -6,6 +6,7 @@ including vectorized Active-Set Bounded Least Squares in `Optim.optimize()`,
 import numpy as np
 
 from quick_pp.lithology.multi_mineral import (
+    CLAY_MINERAL_NAMES,
     MultiMineral,
     Optim,
     dual_water_conductivity,
@@ -191,6 +192,79 @@ def test_complex_lithology_minerals_and_spectral_gr():
     # Check that Glauconite scenario correctly isolates VGLAUC > 0.35
     assert res_df["VGLAUC"].iloc[2] > 0.35
     assert res_df["VILLI"].iloc[2] < 0.05
+
+
+def test_mica_minerals_have_endpoints_and_volume_curves():
+    minerals = ["QUARTZ", "MUSCOVITE", "GLAUCONITE", "BIOTITE"]
+    fluid_props = {
+        "WATER": {
+            "density": 1.0,
+            "nphi": 1.0,
+            "pef": 0.36,
+            "dtc": 190.0,
+            "u": 0.36,
+        }
+    }
+    mm = MultiMineral(minerals=minerals, fluid_properties=fluid_props)
+    mm.fluids = ["WATER"]
+    mm.bounds = mm.mineral_bounds + ((0.0, 1.0),)
+
+    log_names = ["GR", "NPHI", "RHOB", "PEF", "DTC", "POTA", "THOR", "URAN"]
+    response_matrix = mm._build_response_matrix(log_names)
+    expected_volumes = np.array(
+        [
+            [0.45, 0.35, 0.0, 0.0, 0.20],
+            [0.45, 0.0, 0.35, 0.0, 0.20],
+            [0.45, 0.0, 0.0, 0.35, 0.20],
+        ]
+    )
+    synthetic_logs = expected_volumes @ response_matrix.T
+    result = mm.estimate_lithology(
+        gr=synthetic_logs[:, 0],
+        nphi=synthetic_logs[:, 1],
+        rhob=synthetic_logs[:, 2],
+        pef=synthetic_logs[:, 3],
+        dtc=synthetic_logs[:, 4],
+        pota=synthetic_logs[:, 5],
+        thor=synthetic_logs[:, 6],
+        uran=synthetic_logs[:, 7],
+    )
+
+    assert {"VMUSC", "VGLAUC", "VBIOT"}.issubset(result.columns)
+    np.testing.assert_allclose(
+        result[["VMUSC", "VGLAUC", "VBIOT"]].to_numpy(),
+        expected_volumes[:, 1:4],
+        atol=1e-4,
+    )
+    np.testing.assert_allclose(
+        result["PHIT_CONSTRUCTED"].to_numpy(), expected_volumes[:, 4], atol=1e-4
+    )
+    np.testing.assert_allclose(
+        result["URAN_RECONSTRUCTED"].to_numpy(), synthetic_logs[:, 7], atol=1e-4
+    )
+    assert "URAN" in mm.scaling_factors
+    assert "U" not in mm.scaling_factors
+    assert "GLAUCONITE" not in CLAY_MINERAL_NAMES
+
+
+def test_slsqp_rhob_objective_uses_linear_endpoint_responses():
+    minerals = ["QUARTZ", "CALCITE", "DOLOMITE", "SHALE"]
+    fluid_properties = {
+        "WATER": {
+            "density": 1.0,
+            "nphi": 1.0,
+            "pef": 0.36,
+            "dtc": 190.0,
+            "u": 0.36,
+        }
+    }
+    model = MultiMineral(minerals=minerals, fluid_properties=fluid_properties)
+    model.fluids = ["WATER"]
+    volumes = np.array([0.4, 0.2, 0.1, 0.1, 0.2])
+    rhob_response = model._build_response_matrix(["RHOB"])[0]
+    measured_rhob = float(volumes @ rhob_response)
+
+    assert model._error_function(volumes, {"RHOB": measured_rhob}) == 0.0
 
 
 def test_custom_bounds_and_pef_linearization():

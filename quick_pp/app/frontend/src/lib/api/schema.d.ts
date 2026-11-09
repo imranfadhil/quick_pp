@@ -97,6 +97,7 @@ export interface WellBundleResponse {
 	core_samples: Array<Record<string, any>>;
 	pressure_tests: Array<Record<string, any>>;
 	survey: Array<Record<string, any>>;
+	header?: Record<string, any>;
 	config: Record<string, any>;
 }
 
@@ -183,6 +184,20 @@ export interface paths {
 						rho_water?: number;
 						rho_hc?: number;
 						hi_hc?: number;
+						mode?: 'constant' | 'dynamic';
+						correction_method?: 'crossplot' | 'invaded_zone_standard';
+						mud_filtrate_density?: number | null;
+						mud_filtrate_salinity?: number | null;
+						lithology_coeff?: number;
+						use_apparent_elec_density?: boolean;
+						temp_grad?: number;
+						surf_temp?: number;
+						pres_grad?: number;
+						surf_pres?: number;
+						gas_gravity?: number;
+						oil_api?: number;
+						gor?: number;
+						salinity_ppm?: number;
 						buffer?: number;
 						flag_mode?: 'strict' | 'vsh_gr';
 						vsh_tol?: number;
@@ -542,4 +557,3 @@ export interface paths {
 		};
 	};
 }
-

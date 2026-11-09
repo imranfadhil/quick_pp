@@ -1,3 +1,5 @@
+import { resolveCrossplot, type CrossplotContext, type CrossplotId } from '../utils/crossplots';
+
 export type SingleWellStep =
 	| 'qaqc'
 	| 'ancillary'
@@ -9,6 +11,7 @@ export type SingleWellStep =
 	| 'report';
 export type MultiWellStep =
 	| 'inventory'
+	| 'batch-evaluation'
 	| 'qaqc'
 	| 'rock-typing'
 	| 'perm-transform'
@@ -97,6 +100,18 @@ export interface LithoEndpointParams {
 	rhoWater: number;
 	rhoHc: number;
 	hiHc: number;
+	hcFluidMode: 'constant' | 'dynamic';
+	hcCorrectionMethod: 'crossplot' | 'invaded_zone_standard';
+	hcLithologyCoeff: number;
+	hcUseApparentDensity: boolean;
+	fluidTempGrad: number;
+	fluidSurfTemp: number;
+	fluidPresGrad: number;
+	fluidSurfPres: number;
+	fluidGasGravity: number;
+	fluidOilApi: number;
+	fluidGor: number;
+	fluidSalinityPpm: number;
 	hcBuffer: number;
 	hcFlagMode: 'strict' | 'vsh_gr';
 	hcVshTol: number;
@@ -140,7 +155,7 @@ export interface ThomasStieberParams {
 
 export interface SaturationModelParams {
 	fwl: number;
-	method: 'waxman_smits' | 'archie';
+	method: 'waxman_smits' | 'archie' | 'simandoux' | 'indonesian' | 'dual_water';
 	rwMode: 'salinity_temp' | 'pickett';
 	measSystem: 'metric' | 'imperial';
 	waterSalinity: number;
@@ -151,9 +166,19 @@ export interface SaturationModelParams {
 	tempGradient: number;
 	surfaceTemp: number;
 	bMethod: string;
-	qvMethod: string;
+	qvMethod: 'cec' | 'qvn' | 'crossplot';
 	cecClay: number;
 	rhoDryClay: number;
+	bqvFitMode: 'auto' | 'manual';
+	bqvManualSlope: number;
+	bqvManualIntercept: number;
+	bqvReferenceDepth: number | null;
+	bqvAppliedSlope: number | null;
+	bqvAppliedRefDepth: number | null;
+	bqvAppliedRhoClay: number | null;
+	rsh: number;
+	swb: number;
+	rwb: number;
 }
 
 export interface ScalModelParams {
@@ -180,6 +205,15 @@ export interface ScalModelParams {
 	// Core Overburden & Klinkenberg Correction Parameters
 	core_lithology: 'sandstone' | 'friable_sandstone' | 'carbonate';
 	net_confining_stress: number;
+	use_log_stress_profile: boolean;
+	stress_tvd_curve: string;
+	stress_rhob_curve: string;
+	stress_dtc_curve: string;
+	stress_dts_curve: string;
+	stress_depth_unit: 'm' | 'ft';
+	stress_pore_pressure_gradient: number;
+	stress_biot_coefficient: number;
+	stress_poisson_ratio: number;
 	mean_pore_pressure: number;
 	compaction_coeff: number;
 	perm_compaction_coeff: number;
@@ -499,36 +533,24 @@ export interface MultiWellVolumetricsState {
 	zoneConfigs: Record<string, VolumetricZoneParamConfig>;
 }
 
-/**
- * Calculates the intersection point between:
- * 1. The silt line emanating from the water/fluid point (fluidNphi, fluidRhob) at siltLineAngle (in degrees).
- * 2. The rock line connecting the dry sand point (sandNphi, sandRhob) and dry clay point (clayNphi, clayRhob).
- */
+const DRY_SILT_RHOB = 2.68;
+
+/** Calculates the silt-line intersection with the configured dry-silt RHOB. */
 export function computeSiltIntersection(
-	sand: [number, number],
-	clay: [number, number],
 	fluid: [number, number],
-	siltLineAngleDeg: number
+	siltLineAngleDeg: number,
+	targetRhob: number = DRY_SILT_RHOB
 ): [number, number] {
 	const rad = (siltLineAngleDeg * Math.PI) / 180;
-	const pSilt: [number, number] = [fluid[0] + Math.cos(rad), fluid[1] + Math.sin(rad)];
-
-	const xdiff0 = sand[0] - clay[0];
-	const ydiff0 = sand[1] - clay[1];
-	const d0 = sand[0] * clay[1] - sand[1] * clay[0];
-
-	const xdiff1 = fluid[0] - pSilt[0];
-	const ydiff1 = fluid[1] - pSilt[1];
-	const d1 = fluid[0] * pSilt[1] - fluid[1] * pSilt[0];
-
-	const div = xdiff0 * ydiff1 - xdiff1 * ydiff0;
-	if (Math.abs(div) < 1e-12) {
-		return [(sand[0] + clay[0]) / 2, (sand[1] + clay[1]) / 2];
+	const sinAngle = Math.sin(rad);
+	if (Math.abs(sinAngle) < 1e-12) {
+		throw new Error(
+			'Cannot calculate dry silt point: silt line is parallel to the RHOB target'
+		);
 	}
 
-	const varX = (d0 * xdiff1 - d1 * xdiff0) / div;
-	const varY = (d0 * ydiff1 - d1 * ydiff0) / div;
-	return [varX, varY];
+	const distance = (targetRhob - fluid[1]) / sinAngle;
+	return [fluid[0] + distance * Math.cos(rad), targetRhob];
 }
 
 class WorkbenchState {
@@ -537,6 +559,7 @@ class WorkbenchState {
 	scope = $state<'single-well' | 'multi-well'>('single-well');
 	singleWellStep = $state<SingleWellStep>('qaqc');
 	multiWellStep = $state<MultiWellStep>('inventory');
+	batchEvaluationAffectedProjects = $state<string[]>([]);
 
 	// Global depth & zone filter
 	depthFilter = $state<{ min: number; max: number } | null>(null);
@@ -545,37 +568,45 @@ class WorkbenchState {
 	// Synchronized cursor & crossplot lasso brushing
 	cursorDepth = $state<number | null>(null);
 	brushedDepthIndices = $state<Set<number>>(new Set());
+	useBrushedCalculationFilter = $state<boolean>(false);
 	targetScrollDepth = $state<number | null>(null);
 
 	// Right pane view mode
-	rightPaneTab = $state<'crossplot' | 'grid' | 'split'>('split');
+	rightPaneTab = $state<'crossplot' | 'grid' | 'split' | 'missing'>('split');
+	missingMatrixRevision = $state(0);
 	/** Sub-tab within the right bottom data dock: 'data' (Step Data / QC) or 'params' (Parameters & Fits). */
 	rightGridSubTab = $state<'data' | 'params'>('data');
 
 	openParametersTab() {
 		this.rightGridSubTab = 'params';
-		if (this.rightPaneTab === 'crossplot') {
+		if (this.rightPaneTab === 'crossplot' || this.rightPaneTab === 'missing') {
 			this.rightPaneTab = 'split';
 		}
 	}
-	crossplotTemplateOverride = $state<
-		| 'auto'
-		| 'nphi-rhob'
-		| 'thomas-stieber'
-		| 'phi-k'
-		| 'pickett'
-		| 'histogram'
-		| 'mw-distribution'
-		| 'swirr-fit'
-		| 'shf'
-		| 'shf'
-		| 'relperm'
-		| 'core-qc'
-		| 'vsh-qc'
-	>('auto');
+	crossplotTemplateOverride = $state<CrossplotId | 'auto'>('auto');
+
+	get crossplotContext(): CrossplotContext {
+		return this.scope === 'single-well'
+			? { scope: 'single-well', step: this.singleWellStep }
+			: { scope: 'multi-well', step: this.multiWellStep };
+	}
+
+	get effectiveCrossplot(): CrossplotId | null {
+		return resolveCrossplot(this.crossplotContext, this.crossplotTemplateOverride);
+	}
 
 	// Active curve selected in QAQC for histogram / multi-well distribution inspection
 	selectedQaqcCurve = $state<string>('GR');
+	qaqcEditorMode = $state<'math' | 'splice' | 'manage'>('math');
+	qaqcSpliceRuns = $state<string[]>([]);
+	qaqcEditComparison = $state<{
+		projectId: string | null;
+		wellId: string | null;
+		wellLoadGeneration: number;
+		target: string;
+		sources: string[];
+		kind: 'math' | 'splice';
+	} | null>(null);
 	scalSubMode = $state<'static' | 'relperm'>('static');
 	swirrCrossplotTab = $state<'swirr-corr' | 'pc-qc' | 'scal-fit' | 'relperm'>('swirr-corr');
 	coreQcView = $state<'dual' | 'poro' | 'perm' | 'depth-error'>('dual');
@@ -667,6 +698,18 @@ class WorkbenchState {
 		rhoWater: 1.0,
 		rhoHc: 0.8,
 		hiHc: 0.9,
+		hcFluidMode: 'constant',
+		hcCorrectionMethod: 'crossplot',
+		hcLithologyCoeff: 1.0,
+		hcUseApparentDensity: false,
+		fluidTempGrad: 30.0,
+		fluidSurfTemp: 25.0,
+		fluidPresGrad: 10.2,
+		fluidSurfPres: 0.1013,
+		fluidGasGravity: 0.65,
+		fluidOilApi: 35.0,
+		fluidGor: 100.0,
+		fluidSalinityPpm: 30000.0,
 		hcBuffer: 0.0,
 		hcFlagMode: 'strict',
 		hcVshTol: 0.05,
@@ -678,8 +721,8 @@ class WorkbenchState {
 		denCorrMismatchThreshold: 0.15,
 		drySandNphi: -0.02,
 		drySandRhob: 2.65,
-		drySiltNphi: 0.078,
-		drySiltRhob: 2.664,
+		drySiltNphi: 0.069,
+		drySiltRhob: DRY_SILT_RHOB,
 		dryClayNphi: 0.33,
 		dryClayRhob: 2.7,
 		fluidNphi: 1.0,
@@ -727,7 +770,7 @@ class WorkbenchState {
 	});
 
 	saturationParams = $state<SaturationModelParams>({
-		method: 'waxman_smits',
+		method: 'archie',
 		rwMode: 'salinity_temp',
 		measSystem: 'metric',
 		waterSalinity: 35000,
@@ -741,6 +784,16 @@ class WorkbenchState {
 		qvMethod: 'cec',
 		cecClay: 0.1,
 		rhoDryClay: 2.71,
+		bqvFitMode: 'auto',
+		bqvManualSlope: 0.1,
+		bqvManualIntercept: 0,
+		bqvReferenceDepth: null,
+		bqvAppliedSlope: null,
+		bqvAppliedRefDepth: null,
+		bqvAppliedRhoClay: null,
+		rsh: 2.0,
+		swb: 0.2,
+		rwb: 0.1,
 		fwl: 0
 	});
 
@@ -767,6 +820,15 @@ class WorkbenchState {
 		n_points: 25,
 		core_lithology: 'sandstone',
 		net_confining_stress: 3500,
+		use_log_stress_profile: false,
+		stress_tvd_curve: 'TVD',
+		stress_rhob_curve: 'RHOB',
+		stress_dtc_curve: 'DTC',
+		stress_dts_curve: 'DTS',
+		stress_depth_unit: 'm',
+		stress_pore_pressure_gradient: 1.42,
+		stress_biot_coefficient: 1.0,
+		stress_poisson_ratio: 0.25,
 		mean_pore_pressure: 45,
 		compaction_coeff: 6e-6,
 		perm_compaction_coeff: 3e-5,
@@ -1036,10 +1098,14 @@ class WorkbenchState {
 		this.depthFilter = null;
 		this.selectedZones = [];
 		this.brushedDepthIndices = new Set();
+		this.useBrushedCalculationFilter = false;
 	}
 
 	setBrushedIndices(indices: number[]) {
 		this.brushedDepthIndices = new Set(indices);
+		if (this.brushedDepthIndices.size === 0) {
+			this.useBrushedCalculationFilter = false;
+		}
 	}
 
 	scrollToDepth(depth: number) {
@@ -1049,8 +1115,6 @@ class WorkbenchState {
 
 	updateSiltEndpointFromAngle() {
 		const [siltNphi, siltRhob] = computeSiltIntersection(
-			[this.lithoParams.drySandNphi, this.lithoParams.drySandRhob],
-			[this.lithoParams.dryClayNphi, this.lithoParams.dryClayRhob],
 			[this.lithoParams.fluidNphi, this.lithoParams.fluidRhob],
 			this.lithoParams.siltLineAngle
 		);

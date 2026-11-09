@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount, untrack } from 'svelte';
+	import { untrack } from 'svelte';
 	import { browser } from '$app/environment';
 	import { projectData } from '$lib/state/projectData.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
@@ -46,12 +46,6 @@
 			plotAreaRight = Math.max(0, plotContainer.clientWidth - (size.l + size.w));
 		}
 	}
-
-	onMount(() => {
-		if (workbench.projectId) {
-			void projectData.loadStickPlot(false);
-		}
-	});
 
 	$effect(() => {
 		if (!browser) return;
@@ -1172,6 +1166,7 @@
 			PlotlyLib.react(plotContainer, traces, layout, {
 				responsive: true,
 				displaylogo: false,
+				scrollZoom: true,
 				modeBarButtonsToRemove: ['lasso2d', 'select2d', 'autoScale2d']
 			})
 		).then(() => {
@@ -1559,4 +1554,3 @@
 		</div>
 	</div>
 </div>
-

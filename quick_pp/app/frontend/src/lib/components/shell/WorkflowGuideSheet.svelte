@@ -40,6 +40,7 @@
 		{ id: 'mw-step-6-volumetrics', num: 'Step 6', title: 'Probabilistic Volumetrics & Uncertainty (LHS)', stepId: 'volumetrics', isStandalone: false },
 		{ id: 'mw-step-7-report', num: 'Step 7', title: 'Field Development Plan (FDP) Synthesis Report', stepId: 'report', isStandalone: false },
 		// Standalone Modules
+		{ id: 'mw-standalone-batch-evaluation', num: 'Standalone', title: 'Multi-Well Evaluation (Shared Single-Well Models)', stepId: 'batch-evaluation', isStandalone: true },
 		{ id: 'mw-standalone-scal-relperm', num: 'Standalone', title: 'SCAL & Rel-Perm (Swirr Fit, Brooks-Corey, LET, SWOF)', stepId: 'swirr-corr', isStandalone: true },
 		{ id: 'mw-standalone-fpt', num: 'Standalone', title: 'Pressure & Contacts (MDT/RFT, Fluid Densities, FWL/OWC/GOC)', stepId: 'fpt', isStandalone: true },
 		{ id: 'mw-standalone-rt-classifier', num: 'Standalone', title: 'RT Classifier (Supervised RF/XGBoost, Registry)', stepId: 'rt-classifier', isStandalone: true },
@@ -456,7 +457,7 @@
 					</div>
 
 					<div class="grid grid-cols-2 gap-2 text-[10px]">
-						<div><span class="font-bold text-[var(--text-primary)]">Inputs:</span> RT, PHIT, PHIE, VSH, VCLAY, Formation Temp</div>
+						<div><span class="font-bold text-[var(--text-primary)]">Inputs:</span> RT, PHIT, VSH, VCLAY, Formation Temp. PHIE is retained as a QC curve.</div>
 						<div><span class="font-bold text-[var(--text-primary)]">Outputs:</span> SWT, SWE, BVW, BVW_IRR, Hydrocarbon Bulk Vol (BVHC)</div>
 					</div>
 				</section>
@@ -583,7 +584,7 @@
 					</span>
 				</div>
 				<p class="text-[11px] text-[var(--text-muted)]">
-					Multi-well field evaluation reconciles multi-decade drilling vintages through key-well quantile normalization, establishes rock-type permeability transforms, models field-scale saturation-height functions, and executes Monte Carlo Latin Hypercube reserves uncertainty. 4 standalone modules provide specialized capabilities for SCAL & Rel-Perm, Formation Pressure & Contacts, Discrete Rock Typing, and Conformal PIML.
+					Multi-well field evaluation reconciles multi-decade drilling vintages through key-well quantile normalization, establishes rock-type permeability transforms, models field-scale saturation-height functions, and executes Monte Carlo Latin Hypercube reserves uncertainty. Standalone modules provide batch evaluation, SCAL & Rel-Perm, Formation Pressure & Contacts, Discrete Rock Typing, and Conformal PIML.
 				</p>
 
 				<!-- Visual Step Path Progression -->
@@ -622,7 +623,7 @@
 								<div class="flex items-center justify-between rounded-xs border border-amber-200 bg-amber-50/50 p-2">
 									<div class="flex items-center gap-1.5 overflow-hidden">
 										<span class="rounded-xs bg-amber-200 px-1 py-0.5 text-[9px] font-bold text-amber-900 shrink-0">
-											{mod.id.includes('scal') ? 'SCAL' : mod.id.includes('fpt') ? 'FPT' : mod.id.includes('classifier') ? 'DRT' : 'PIML'}
+											{mod.id.includes('batch') ? 'BATCH' : mod.id.includes('scal') ? 'SCAL' : mod.id.includes('fpt') ? 'FPT' : mod.id.includes('classifier') ? 'DRT' : 'PIML'}
 										</span>
 										<span class="text-[10px] font-semibold text-amber-950 truncate" title={mod.title}>
 											{mod.title}
@@ -864,6 +865,18 @@
 				</section>
 			{/if}
 
+			{#if matchesSearch('multi well batch evaluation lithology porosity permeability saturation zones')}
+				<section id="mw-standalone-batch-evaluation" class="space-y-2.5 rounded-sm border border-teal-200 bg-teal-50/30 p-3.5 shadow-2xs">
+					<div class="flex items-center justify-between">
+						<h4 class="text-xs font-bold text-teal-950">Standalone: Multi-Well Evaluation</h4>
+						<button type="button" onclick={() => handleJumpToWorkbenchStep('multi-well', 'batch-evaluation')} class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 py-0.5 text-[10px] font-bold text-[var(--accent-primary)] hover:bg-[var(--accent-primary)] hover:text-white">Open Module</button>
+					</div>
+					<p>Choose wells and zones in the left pane, then preview and review paired changes in the right grid. Select a successful well/zone to load full-resolution existing and preview depth tracks in the center. Apply saves the previewed calculations without recalculating; previews expire after 30 minutes. Recompute dependent field interpretations afterward.</p>
+					<p>The separate Reservoir Summary tab shows only an in-session result for the active single well, not a batch preview; it may be stale after curve changes.</p>
+					<p>Crossplot Qv calibration and invaded-zone hydrocarbon correction require per-well validation and are not supported in this module.</p>
+				</section>
+			{/if}
+
 			<!-- MW STANDALONE 1: SCAL & RELPERM -->
 			{#if matchesSearch('scal swirr relative permeability corey let swof relperm fractional flow eclipse')}
 				<section id="mw-standalone-scal-relperm" class="space-y-2.5 rounded-sm border border-amber-200 bg-amber-50/30 p-3.5 shadow-2xs">
@@ -1028,7 +1041,7 @@
 
 	<!-- Bottom Footer -->
 	<div class="flex h-9 shrink-0 items-center justify-between border-t border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-4 text-[10px] text-[var(--text-muted)]">
-		<span>quick_pp SSOT Technical Reference v0.3.4</span>
+		<span>quick_pp SSOT Technical Reference v0.3.5</span>
 		<div class="flex items-center gap-2">
 			<span>Press <strong>Esc</strong> to close</span>
 		</div>

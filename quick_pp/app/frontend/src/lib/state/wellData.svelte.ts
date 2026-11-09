@@ -43,12 +43,7 @@ export type CurveEditOperation =
 	| 'depth_shift'
 	| 'smooth';
 
-export type CurveSpliceOverlapMode =
-	| 'blend'
-	| 'splice_depth'
-	| 'keep_first'
-	| 'keep_last'
-	| 'mean';
+export type CurveSpliceOverlapMode = 'blend' | 'splice_depth' | 'keep_first' | 'keep_last' | 'mean';
 
 export type CalculatedCurveGroupKey = 'qaqc' | 'litho_poro' | 'perm' | 'saturation' | 'ressum';
 
@@ -65,15 +60,17 @@ export const CALCULATED_CURVE_GROUPS: Record<
 			'BAD_HOLE_FLAG',
 			'BS',
 			'DCALI',
-			'GR_CORR',
-			'NPHI_CORR',
-			'RHOB_CORR',
-			'RT_CORR',
+			'GR_ENV_CORR',
+			'NPHI_ENV_CORR',
+			'RHOB_ENV_CORR',
+			'RT_ENV_CORR',
+			'INVASION_FLAG',
 			'GR_NORM',
 			'NPHI_NORM',
 			'NPHI_HC',
 			'RHOB_HC',
 			'HC_FLAG',
+			'SHC_INV',
 			'RHOB_DEN_CORR',
 			'DEN_CORR_FLAG'
 		]
@@ -121,7 +118,20 @@ export const CALCULATED_CURVE_GROUPS: Record<
 	perm: {
 		label: 'Permeability & Rock Type',
 		shortLabel: 'Perm & RT',
-		curves: ['PERM', 'PERM_TRANS', 'ROCK_FLAG', 'ROCK_FLAG_ML', 'FZI', 'R35', 'RFN', 'PHI_SEC', 'VDL', 'PERM_P10', 'PERM_P50', 'PERM_P90']
+		curves: [
+			'PERM',
+			'PERM_TRANS',
+			'ROCK_FLAG',
+			'ROCK_FLAG_ML',
+			'FZI',
+			'R35',
+			'RFN',
+			'PHI_SEC',
+			'VDL',
+			'PERM_P10',
+			'PERM_P50',
+			'PERM_P90'
+		]
 	},
 	saturation: {
 		label: 'Water Saturation & SHF',
@@ -131,6 +141,9 @@ export const CALCULATED_CURVE_GROUPS: Record<
 			'SWE',
 			'SWT_ARCHIE',
 			'SWT_WAXMAN',
+			'SWT_SIMANDOUX',
+			'SWT_INDONESIAN',
+			'SWT_DUAL_WATER',
 			'BVW',
 			'TEMP_GRAD',
 			'RW',
@@ -277,6 +290,7 @@ class WellDataState {
 
 	// Reservoir summary table & metrics from latest run
 	zonalSummary = $state.raw<Record<string, any>[]>([]);
+	zonalSummarySource = $state<{ projectId: string; wellId: string } | null>(null);
 	poroCoreMetrics = $state<CoreComparisonMetrics | null>(null);
 	permCoreMetrics = $state<CoreComparisonMetrics | null>(null);
 
@@ -289,9 +303,7 @@ class WellDataState {
 	// so updating CPORE/CPERM or VSH_GR/VSH_DN in this.curves will NOT invalidate downstream
 	// derivations that only depend on unaltered curves (like DEPT, GR, NPHI, RHOB, PHIT, PERM).
 	private static readonly EMPTY_ARR: number[] = [];
-	deptCurve = $derived(
-		this.curves['DEPT'] ?? this.curves['DEPTH'] ?? WellDataState.EMPTY_ARR
-	);
+	deptCurve = $derived(this.curves['DEPT'] ?? this.curves['DEPTH'] ?? WellDataState.EMPTY_ARR);
 	grCurve = $derived(this.curves['GR'] ?? WellDataState.EMPTY_ARR);
 	nphiCurve = $derived(this.curves['NPHI'] ?? WellDataState.EMPTY_ARR);
 	rhobCurve = $derived(this.curves['RHOB'] ?? WellDataState.EMPTY_ARR);
@@ -308,7 +320,7 @@ class WellDataState {
 	);
 	hcFlagCurve = $derived(this.curves['HC_FLAG'] ?? WellDataState.EMPTY_ARR);
 	swCurve = $derived(this.curves['SWT'] ?? this.curves['SWE'] ?? WellDataState.EMPTY_ARR);
-	phitCurve = $derived(this.curves['PHIT'] ?? this.curves['PHIE'] ?? WellDataState.EMPTY_ARR);
+	phitCurve = $derived(this.curves['PHIT'] ?? WellDataState.EMPTY_ARR);
 	permCurve = $derived(
 		this.curves['PERM'] ?? this.curves['PERM_TRANS'] ?? WellDataState.EMPTY_ARR
 	);
@@ -540,7 +552,10 @@ class WellDataState {
 				const bestIdx = Math.abs(dept[lo] - sd) <= 0.5 ? lo : -1;
 				if (bestIdx >= 0 && visibleSet.has(bestIdx)) {
 					const existing = sampleByIdx.get(bestIdx);
-					if (!existing || Math.abs(dept[bestIdx] - sd) < Math.abs(dept[bestIdx] - existing.plug_depth)) {
+					if (
+						!existing ||
+						Math.abs(dept[bestIdx] - sd) < Math.abs(dept[bestIdx] - existing.plug_depth)
+					) {
 						sampleByIdx.set(bestIdx, {
 							sample_name: String(s.sample_name ?? s.Sample ?? `Plug-${sIdx + 1}`),
 							cpore: sp,
@@ -585,14 +600,17 @@ class WellDataState {
 			if (cp === null && ck === null) continue;
 
 			const phitVal =
-				typeof phitArr[idx] === 'number' && Number.isFinite(phitArr[idx]) && phitArr[idx] >= 0
+				typeof phitArr[idx] === 'number' &&
+				Number.isFinite(phitArr[idx]) &&
+				phitArr[idx] >= 0
 					? phitArr[idx]
 					: null;
 			const permVal = normPerm(permArr[idx]);
 
 			const errPhit = cp !== null && phitVal !== null ? phitVal - cp : null;
 			const absErrPhit = errPhit !== null ? Math.abs(errPhit) : null;
-			const relErrPhit = errPhit !== null && cp !== null && cp > 1e-4 ? (errPhit / cp) * 100 : null;
+			const relErrPhit =
+				errPhit !== null && cp !== null && cp > 1e-4 ? (errPhit / cp) * 100 : null;
 
 			const errPerm = ck !== null && permVal !== null ? permVal - ck : null;
 			const log10ErrPerm =
@@ -627,7 +645,9 @@ class WellDataState {
 		}
 
 		// Compute Porosity (PHIT vs CPORE) error stats
-		const poroRows = rows.filter((r) => r.CPORE !== null && r.PHIT !== null && r.ERR_PHIT !== null);
+		const poroRows = rows.filter(
+			(r) => r.CPORE !== null && r.PHIT !== null && r.ERR_PHIT !== null
+		);
 		const poroStats = {
 			count: poroRows.length,
 			rmse: null as number | null,
@@ -775,16 +795,15 @@ class WellDataState {
 		const dept = this.deptCurve;
 		const grArr = this.grCurve;
 		const lp = workbench.lithoParams;
-		const useHc =
-			lp.logCorrectionMode === 'hc' && (lp.enableHcCorrection || lp.useHcCorrected);
+		const useHc = lp.logCorrectionMode === 'hc' && (lp.enableHcCorrection || lp.useHcCorrected);
 		const nphiHc = this.nphiHcCurve;
 		const rhobHc = this.rhobHcCurve;
 		const hasHcCorrectedCurves = Boolean(
 			useHc &&
-				nphiHc.length > 0 &&
-				nphiHc.some((v) => Number.isFinite(v)) &&
-				rhobHc.length > 0 &&
-				rhobHc.some((v) => Number.isFinite(v))
+			nphiHc.length > 0 &&
+			nphiHc.some((v) => Number.isFinite(v)) &&
+			rhobHc.length > 0 &&
+			rhobHc.some((v) => Number.isFinite(v))
 		);
 		const nphiArr = hasHcCorrectedCurves ? nphiHc : this.nphiCurve;
 		const rhobArr = hasHcCorrectedCurves ? rhobHc : this.rhobCurve;
@@ -810,7 +829,21 @@ class WellDataState {
 		const D: [number, number] = [lp.fluidNphi, lp.fluidRhob];
 
 		const rockLen = Math.max(1e-6, Math.hypot(A[0] - C[0], A[1] - C[1]));
-		const resLen = Math.max(1e-6, Math.hypot(A[0] - B[0], A[1] - B[1]));
+		const xdiff0 = A[0] - C[0];
+		const ydiff0 = A[1] - C[1];
+		const d0 = A[0] * C[1] - A[1] * C[0];
+		const xdiff1 = D[0] - B[0];
+		const ydiff1 = D[1] - B[1];
+		const d1 = D[0] * B[1] - D[1] * B[0];
+		const resDiv = xdiff0 * ydiff1 - xdiff1 * ydiff0;
+		if (Math.abs(resDiv) < 1e-12) {
+			throw new Error(
+				'Cannot calculate live VSH preview: fluid-silt line does not intersect the sand-clay line'
+			);
+		}
+		const resIntersectionX = (d0 * xdiff1 - d1 * xdiff0) / resDiv;
+		const resIntersectionY = (d0 * ydiff1 - d1 * ydiff0) / resDiv;
+		const resLen = Math.hypot(A[0] - resIntersectionX, A[1] - resIntersectionY);
 		const resRatio = Math.max(0.05, Math.min(0.95, resLen / rockLen));
 		const nonResLen = Math.max(1e-6, rockLen * (1 - resRatio));
 		const siltClayRatio = 0.25;
@@ -832,10 +865,6 @@ class WellDataState {
 			REGIME_LABEL: string;
 			logIndex: number;
 		}> = [];
-
-		const xdiff0 = A[0] - C[0];
-		const ydiff0 = A[1] - C[1];
-		const d0 = A[0] * C[1] - A[1] * C[0];
 
 		for (const idx of indices) {
 			const d = dept[idx];
@@ -1118,7 +1147,9 @@ class WellDataState {
 
 			for (const [col, arr] of Object.entries(data.curves || {})) {
 				if (col === 'ZONES') {
-					zCol = (arr || []).map((v) => (v !== null && v !== undefined ? String(v) : null));
+					zCol = (arr || []).map((v) =>
+						v !== null && v !== undefined ? String(v) : null
+					);
 					continue;
 				}
 				if (col === 'WELL_NAME') continue;
@@ -1168,12 +1199,15 @@ class WellDataState {
 				return compared > 0;
 			};
 
-			const hasCarbonateMinerals =
+			const hasMultiMineralCurves =
 				hasPositiveCurve('VCALC') ||
 				hasPositiveCurve('VDOLO') ||
 				hasPositiveCurve('VANHY') ||
-				hasPositiveCurve('VHALI');
-			if (hasCarbonateMinerals) {
+				hasPositiveCurve('VHALI') ||
+				hasPositiveCurve('VGLAUC') ||
+				hasPositiveCurve('VMUSC') ||
+				hasPositiveCurve('VBIOT');
+			if (hasMultiMineralCurves) {
 				if (isDuplicateArray(numericCurves['VSAND'], numericCurves['VCALC'])) {
 					numericCurves['VSAND'] = new Array(numericCurves['VSAND'].length).fill(0);
 					origCopy['VSAND'] = [...numericCurves['VSAND']];
@@ -1199,6 +1233,8 @@ class WellDataState {
 				if (hasPositiveCurve('VSMEC')) detectedMinerals.push('SMECTITE');
 				if (hasPositiveCurve('VCHLO')) detectedMinerals.push('CHLORITE');
 				if (hasPositiveCurve('VGLAUC')) detectedMinerals.push('GLAUCONITE');
+				if (hasPositiveCurve('VMUSC')) detectedMinerals.push('MUSCOVITE');
+				if (hasPositiveCurve('VBIOT')) detectedMinerals.push('BIOTITE');
 				if (hasPositiveCurve('VKFELD')) detectedMinerals.push('KFELD');
 				if (hasPositiveCurve('VALBI')) detectedMinerals.push('ALBITE');
 				if (hasPositiveCurve('VSIDE')) detectedMinerals.push('SIDERITE');
@@ -1234,7 +1270,11 @@ class WellDataState {
 					if (!Number.isFinite(sd)) continue;
 					const rawP = Number(s.porosity ?? s.CPORE ?? s.poro);
 					const pVal =
-						Number.isFinite(rawP) && rawP > 0 ? (rawP > 1.0 ? rawP / 100.0 : rawP) : null;
+						Number.isFinite(rawP) && rawP > 0
+							? rawP > 1.0
+								? rawP / 100.0
+								: rawP
+							: null;
 					const rawK = Number(s.permeability ?? s.CPERM ?? s.perm);
 					const kVal = Number.isFinite(rawK) && rawK > 0 ? rawK : null;
 					if (pVal === null && kVal === null) continue;
@@ -1279,8 +1319,12 @@ class WellDataState {
 				const hasCp = Boolean(cpArr && cpArr.length === baseDeptGrid.length);
 				const hasCk = Boolean(ckArr && ckArr.length === baseDeptGrid.length);
 				if (hasCp || hasCk) {
-					const cpClean = hasCp ? [...cpArr] : new Array(baseDeptGrid.length).fill(Number.NaN);
-					const ckClean = hasCk ? [...ckArr] : new Array(baseDeptGrid.length).fill(Number.NaN);
+					const cpClean = hasCp
+						? [...cpArr]
+						: new Array(baseDeptGrid.length).fill(Number.NaN);
+					const ckClean = hasCk
+						? [...ckArr]
+						: new Array(baseDeptGrid.length).fill(Number.NaN);
 					let modified = false;
 					const sameValOrBothNan = (a: number, b: number): boolean => {
 						const aFin = Number.isFinite(a);
@@ -1380,7 +1424,8 @@ class WellDataState {
 			const initCfg = (data.config || {}) as Record<string, any>;
 			this.coreShiftMode = initCfg.core_shift_mode === 'tie-points' ? 'tie-points' : 'affine';
 			this.coreShiftDelta =
-				typeof initCfg.core_shift_delta === 'number' && Number.isFinite(initCfg.core_shift_delta)
+				typeof initCfg.core_shift_delta === 'number' &&
+				Number.isFinite(initCfg.core_shift_delta)
 					? initCfg.core_shift_delta
 					: 0;
 			this.coreStretchFactor =
@@ -1389,17 +1434,20 @@ class WellDataState {
 					? initCfg.core_stretch_factor
 					: 1.0;
 			this.corePivotDepth =
-				typeof initCfg.core_pivot_depth === 'number' && Number.isFinite(initCfg.core_pivot_depth)
+				typeof initCfg.core_pivot_depth === 'number' &&
+				Number.isFinite(initCfg.core_pivot_depth)
 					? initCfg.core_pivot_depth
 					: null;
-			this.coreTiePoints = Array.isArray(initCfg.core_tie_points) ? initCfg.core_tie_points : [];
+			this.coreTiePoints = Array.isArray(initCfg.core_tie_points)
+				? initCfg.core_tie_points
+				: [];
 			this.coreShiftDirty = false;
 			this.coreShiftApplied = Boolean(
 				initCfg.core_shift_applied ||
-					Math.abs(this.coreShiftDelta) > 1e-4 ||
-					Math.abs(this.coreStretchFactor - 1.0) > 1e-4 ||
-					this.coreTiePoints.length > 0 ||
-					this.coreSamples.some((s: any) => Math.abs(Number(s.shift_m ?? 0)) > 1e-3)
+				Math.abs(this.coreShiftDelta) > 1e-4 ||
+				Math.abs(this.coreStretchFactor - 1.0) > 1e-4 ||
+				this.coreTiePoints.length > 0 ||
+				this.coreSamples.some((s: any) => Math.abs(Number(s.shift_m ?? 0)) > 1e-3)
 			);
 			this.scalPc = (data as any).scal_pc || [];
 			this.pressureTests = data.pressure_tests || [];
@@ -1414,6 +1462,7 @@ class WellDataState {
 			this.pendingParamSnapshots = {};
 			moduleParams.reset();
 			workbench.brushedDepthIndices = new Set();
+			workbench.useBrushedCalculationFilter = false;
 			workbench.tsParams.enabled = false;
 
 			// Restore persisted SCAL, Core Overburden/Klinkenberg & Pc scaling parameters from well config
@@ -1427,7 +1476,9 @@ class WellDataState {
 				const v = savedScal[key] ?? cfgAny[key];
 				return typeof v === 'number' && Number.isFinite(v) ? v : fallback;
 			};
-			workbench.scalParams.model = (savedScal.model ?? cfgAny.scal_model ?? workbench.scalParams.model) as any;
+			workbench.scalParams.model = (savedScal.model ??
+				cfgAny.scal_model ??
+				workbench.scalParams.model) as any;
 			workbench.scalParams.swirr = pickNum('swirr', workbench.scalParams.swirr);
 			workbench.scalParams.sor = pickNum('sor', workbench.scalParams.sor);
 			workbench.scalParams.krw_max = pickNum('krw_max', workbench.scalParams.krw_max);
@@ -1444,7 +1495,10 @@ class WellDataState {
 			workbench.scalParams.mu_w = pickNum('mu_w', workbench.scalParams.mu_w);
 			workbench.scalParams.mu_o = pickNum('mu_o', workbench.scalParams.mu_o);
 			workbench.scalParams.pc_entry = pickNum('pc_entry', workbench.scalParams.pc_entry);
-			workbench.scalParams.pc_exponent = pickNum('pc_exponent', workbench.scalParams.pc_exponent);
+			workbench.scalParams.pc_exponent = pickNum(
+				'pc_exponent',
+				workbench.scalParams.pc_exponent
+			);
 			workbench.scalParams.pc_max = pickNum('pc_max', workbench.scalParams.pc_max);
 			const rawCoreLith = savedScal.core_lithology ?? cfgAny.core_lithology;
 			workbench.scalParams.core_lithology =
@@ -1456,6 +1510,39 @@ class WellDataState {
 			workbench.scalParams.net_confining_stress = pickNum(
 				'net_confining_stress',
 				workbench.scalParams.net_confining_stress
+			);
+			workbench.scalParams.use_log_stress_profile = Boolean(
+				savedScal.use_log_stress_profile ?? false
+			);
+			workbench.scalParams.stress_tvd_curve =
+				typeof savedScal.stress_tvd_curve === 'string'
+					? savedScal.stress_tvd_curve
+					: workbench.scalParams.stress_tvd_curve;
+			workbench.scalParams.stress_rhob_curve =
+				typeof savedScal.stress_rhob_curve === 'string'
+					? savedScal.stress_rhob_curve
+					: workbench.scalParams.stress_rhob_curve;
+			workbench.scalParams.stress_dtc_curve =
+				typeof savedScal.stress_dtc_curve === 'string'
+					? savedScal.stress_dtc_curve
+					: workbench.scalParams.stress_dtc_curve;
+			workbench.scalParams.stress_dts_curve =
+				typeof savedScal.stress_dts_curve === 'string'
+					? savedScal.stress_dts_curve
+					: workbench.scalParams.stress_dts_curve;
+			workbench.scalParams.stress_depth_unit =
+				savedScal.stress_depth_unit === 'ft' ? 'ft' : 'm';
+			workbench.scalParams.stress_pore_pressure_gradient = pickNum(
+				'stress_pore_pressure_gradient',
+				workbench.scalParams.stress_pore_pressure_gradient
+			);
+			workbench.scalParams.stress_biot_coefficient = pickNum(
+				'stress_biot_coefficient',
+				workbench.scalParams.stress_biot_coefficient
+			);
+			workbench.scalParams.stress_poisson_ratio = pickNum(
+				'stress_poisson_ratio',
+				workbench.scalParams.stress_poisson_ratio
 			);
 			workbench.scalParams.mean_pore_pressure = pickNum(
 				'mean_pore_pressure',
@@ -1477,10 +1564,10 @@ class WellDataState {
 						? 4.0e-5
 						: 3.0e-5
 			);
-			workbench.scalParams.klinkenberg_method = ((savedScal.klinkenberg_method ??
-				cfgAny.klinkenberg_method) === 'heithaus'
-				? 'heithaus'
-				: 'jones');
+			workbench.scalParams.klinkenberg_method =
+				(savedScal.klinkenberg_method ?? cfgAny.klinkenberg_method) === 'heithaus'
+					? 'heithaus'
+					: 'jones';
 			workbench.scalParams.core_corrected = Boolean(
 				savedScal.core_corrected ?? cfgAny.core_corrected ?? false
 			);
@@ -1488,7 +1575,10 @@ class WellDataState {
 			workbench.scalParams.core_poro_res_mean = pickNullableNum('core_poro_res_mean', null);
 			workbench.scalParams.core_perm_air_mean = pickNullableNum('core_perm_air_mean', null);
 			workbench.scalParams.core_perm_liq_mean = pickNullableNum('core_perm_liq_mean', null);
-			workbench.scalParams.pc_lab_input = pickNum('pc_lab_input', workbench.scalParams.pc_lab_input);
+			workbench.scalParams.pc_lab_input = pickNum(
+				'pc_lab_input',
+				workbench.scalParams.pc_lab_input
+			);
 			workbench.scalParams.ift_lab = pickNum('ift_lab', workbench.scalParams.ift_lab);
 			workbench.scalParams.theta_lab = pickNum('theta_lab', workbench.scalParams.theta_lab);
 			workbench.scalParams.ift_res = pickNum(
@@ -1522,7 +1612,9 @@ class WellDataState {
 
 			if (focusMin === null && focusMax === null && typeof window !== 'undefined') {
 				try {
-					const raw = localStorage.getItem(this.getLocalStorageFocusKey(projectId, wellName));
+					const raw = localStorage.getItem(
+						this.getLocalStorageFocusKey(projectId, wellName)
+					);
 					if (raw) {
 						const parsed = JSON.parse(raw);
 						if (typeof parsed?.min === 'number' && Number.isFinite(parsed.min)) {
@@ -1605,14 +1697,25 @@ class WellDataState {
 	 */
 	mergeComputedCurves(
 		computedData: Record<string, (number | string | null)[]>,
-		newStats?: Record<string, CurveSummaryStats>
+		newStats?: Record<string, CurveSummaryStats>,
+		targetIndices?: ReadonlySet<number> | null
 	) {
 		const baseDept = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
-		const incomingDept = (computedData['DEPTH'] ?? computedData['DEPT'] ?? []) as (number | null)[];
+		const incomingDept = (computedData['DEPTH'] ?? computedData['DEPT'] ?? []) as (
+			| number
+			| null
+		)[];
+		const selectedIndices = targetIndices ?? null;
+		if (selectedIndices && selectedIndices.size === 0) {
+			throw new Error('Select at least one visible row before calculating on the selection.');
+		}
 
 		const updated = { ...this.curves };
 
-		if (incomingDept.length === baseDept.length || baseDept.length === 0) {
+		if (
+			!selectedIndices &&
+			(incomingDept.length === baseDept.length || baseDept.length === 0)
+		) {
 			for (const [col, vals] of Object.entries(computedData)) {
 				if (col === 'WELL_NAME' || col === 'ZONES') continue;
 				updated[col] = vals.map((v) =>
@@ -1621,47 +1724,72 @@ class WellDataState {
 			}
 			if (updated['DEPTH']) updated['DEPT'] = updated['DEPTH'];
 		} else {
-			// Depth-indexed merge for filtered interval calculations
+			// Depth-indexed merge for filtered interval and selected-row calculations
 			const depthToIdx = new Map<number, number>();
 			baseDept.forEach((d, idx) => {
 				if (Number.isFinite(d)) depthToIdx.set(Number(d.toFixed(4)), idx);
 			});
 
 			for (const [col, vals] of Object.entries(computedData)) {
-				if (col === 'DEPTH' || col === 'DEPT' || col === 'WELL_NAME' || col === 'ZONES') continue;
+				if (col === 'DEPTH' || col === 'DEPT' || col === 'WELL_NAME' || col === 'ZONES')
+					continue;
 				const targetArr = updated[col]
 					? [...updated[col]]
 					: new Array(baseDept.length).fill(Number.NaN);
-				incomingDept.forEach((d, i) => {
-					if (d === null || d === undefined) return;
-					const targetIdx = depthToIdx.get(Number(Number(d).toFixed(4)));
-					if (targetIdx !== undefined) {
+				const positionalRows = vals.length === baseDept.length;
+				const rowCount = incomingDept.length || (positionalRows ? vals.length : 0);
+				for (let i = 0; i < rowCount; i++) {
+					const d = incomingDept[i];
+					if ((d === null || d === undefined) && !positionalRows) continue;
+					const targetIdx =
+						d !== null && d !== undefined
+							? depthToIdx.get(Number(Number(d).toFixed(4)))
+							: positionalRows && i < baseDept.length
+								? i
+								: undefined;
+					if (
+						targetIdx !== undefined &&
+						(!selectedIndices || selectedIndices.has(targetIdx))
+					) {
 						const v = vals[i];
 						targetArr[targetIdx] =
 							typeof v === 'number' && Number.isFinite(v) ? v : Number.NaN;
 					}
-				});
+				}
 				updated[col] = targetArr;
 			}
 		}
 
 		this.curves = updated;
 		const finalDept = updated['DEPT'] ?? updated['DEPTH'] ?? baseDept;
-		const mergedStats: Record<string, CurveSummaryStats> = { ...this.stats, ...(newStats || {}) };
+		const mergedStats: Record<string, CurveSummaryStats> = {
+			...this.stats,
+			...(newStats || {})
+		};
 		for (const col of Object.keys(computedData)) {
-			if (col === 'DEPTH' || col === 'DEPT' || col === 'WELL_NAME' || col === 'ZONES') continue;
+			if (col === 'DEPTH' || col === 'DEPT' || col === 'WELL_NAME' || col === 'ZONES')
+				continue;
 			if (updated[col]) {
 				const calcSt = computeSummaryStats(updated[col], finalDept);
 				mergedStats[col] = {
 					...calcSt,
-					...(newStats?.[col] || {}),
-					top: newStats?.[col]?.top ?? calcSt.top,
-					bottom: newStats?.[col]?.bottom ?? calcSt.bottom,
-					std: newStats?.[col]?.std ?? calcSt.std
+					...(selectedIndices ? {} : newStats?.[col] || {}),
+					top: selectedIndices ? calcSt.top : (newStats?.[col]?.top ?? calcSt.top),
+					bottom: selectedIndices
+						? calcSt.bottom
+						: (newStats?.[col]?.bottom ?? calcSt.bottom),
+					std: selectedIndices ? calcSt.std : (newStats?.[col]?.std ?? calcSt.std)
 				};
 			}
 		}
 		this.stats = mergedStats;
+	}
+
+	getBrushedCalculationIndices(): Set<number> | null {
+		if (workbench.scope !== 'single-well' || !workbench.useBrushedCalculationFilter) {
+			return null;
+		}
+		return new Set(this.visibleIndices.filter((idx) => workbench.brushedDepthIndices.has(idx)));
 	}
 
 	/**
@@ -1716,10 +1844,7 @@ class WellDataState {
 	 * Record curve mnemonics produced by a module's `Run` action so the module's `Save` button
 	 * becomes enabled and can persist them directly without re-running the calculation.
 	 */
-	markModuleComputed(
-		moduleKey: string,
-		computedDataOrCols: Record<string, unknown> | string[]
-	) {
+	markModuleComputed(moduleKey: string, computedDataOrCols: Record<string, unknown> | string[]) {
 		const rawCols = Array.isArray(computedDataOrCols)
 			? computedDataOrCols
 			: Object.keys(computedDataOrCols || {});
@@ -1856,16 +1981,22 @@ class WellDataState {
 					}));
 				}
 				if (this.curves['CPORE']) {
-					this.originalCurves = { ...this.originalCurves, CPORE: [...this.curves['CPORE']] };
+					this.originalCurves = {
+						...this.originalCurves,
+						CPORE: [...this.curves['CPORE']]
+					};
 				}
 				if (this.curves['CPERM']) {
-					this.originalCurves = { ...this.originalCurves, CPERM: [...this.curves['CPERM']] };
+					this.originalCurves = {
+						...this.originalCurves,
+						CPERM: [...this.curves['CPERM']]
+					};
 				}
 				this.coreShiftDirty = false;
 				this.coreShiftApplied = Boolean(
 					Math.abs(this.coreShiftDelta) > 1e-4 ||
-						Math.abs(this.coreStretchFactor - 1.0) > 1e-4 ||
-						this.coreTiePoints.length > 0
+					Math.abs(this.coreStretchFactor - 1.0) > 1e-4 ||
+					this.coreTiePoints.length > 0
 				);
 			}
 
@@ -1980,10 +2111,8 @@ class WellDataState {
 		}
 
 		const oriName = src.endsWith('_ORI') ? null : `${src}_ORI`;
-		const origArr =
-			(oriName ? this.curves[oriName] : undefined) ??
-			this.originalCurves[src] ??
-			[...currentArr];
+		const origArr = (oriName ? this.curves[oriName] : undefined) ??
+			this.originalCurves[src] ?? [...currentArr];
 
 		if (!this.originalCurves[src]) {
 			this.originalCurves = { ...this.originalCurves, [src]: [...origArr] };
@@ -2016,8 +2145,10 @@ class WellDataState {
 		const val = Number(opts.value ?? 0);
 		const scale = Number(opts.scale ?? 1);
 		const offset = Number(opts.offset ?? 0);
-		const minVal = opts.minVal !== undefined && opts.minVal !== null ? Number(opts.minVal) : null;
-		const maxVal = opts.maxVal !== undefined && opts.maxVal !== null ? Number(opts.maxVal) : null;
+		const minVal =
+			opts.minVal !== undefined && opts.minVal !== null ? Number(opts.minVal) : null;
+		const maxVal =
+			opts.maxVal !== undefined && opts.maxVal !== null ? Number(opts.maxVal) : null;
 		const win = Math.max(3, Math.round(Number(opts.window ?? 5)));
 
 		if (op === 'depth_shift') {
@@ -2034,7 +2165,10 @@ class WellDataState {
 				for (const idx of targetIdxSet) {
 					const targetD = deptArr[idx];
 					if (!Number.isFinite(targetD)) continue;
-					if (targetD < validPairs[0].d || targetD > validPairs[validPairs.length - 1].d) {
+					if (
+						targetD < validPairs[0].d ||
+						targetD > validPairs[validPairs.length - 1].d
+					) {
 						result[idx] = Number.NaN;
 						continue;
 					}
@@ -2060,7 +2194,11 @@ class WellDataState {
 			for (const idx of targetIdxSet) {
 				let s = 0;
 				let c = 0;
-				for (let k = Math.max(0, idx - half); k <= Math.min(srcArr.length - 1, idx + half); k++) {
+				for (
+					let k = Math.max(0, idx - half);
+					k <= Math.min(srcArr.length - 1, idx + half);
+					k++
+				) {
 					if (Number.isFinite(srcArr[k])) {
 						s += srcArr[k];
 						c++;
@@ -2204,7 +2342,10 @@ class WellDataState {
 		const src = sourceCurve.trim().toUpperCase();
 		const dst = targetCurve.trim().toUpperCase().replace(/\s+/g, '_');
 		if (!dst || dst === src) throw new Error('Please enter a different target curve mnemonic.');
-		if (['DEPTH', 'DEPT', 'WELL_NAME', 'ZONES'].includes(src) || ['DEPTH', 'DEPT', 'WELL_NAME', 'ZONES'].includes(dst)) {
+		if (
+			['DEPTH', 'DEPT', 'WELL_NAME', 'ZONES'].includes(src) ||
+			['DEPTH', 'DEPT', 'WELL_NAME', 'ZONES'].includes(dst)
+		) {
 			throw new Error('Cannot rename protected depth/zone columns.');
 		}
 		const srcArr = this.curves[src];
@@ -2339,9 +2480,7 @@ class WellDataState {
 		if (opts?.curves && opts.curves.length > 0) {
 			candidateMnemonics = opts.curves
 				.map((c) => c.trim().toUpperCase())
-				.filter(
-					(c) => Boolean(c) && !['DEPTH', 'DEPT', 'WELL_NAME', 'ZONES'].includes(c)
-				);
+				.filter((c) => Boolean(c) && !['DEPTH', 'DEPT', 'WELL_NAME', 'ZONES'].includes(c));
 		} else if (opts?.groups && opts.groups.length > 0) {
 			candidateMnemonics = Array.from(
 				new Set(opts.groups.flatMap((g) => CALCULATED_CURVE_GROUPS[g]?.curves ?? []))
@@ -2391,6 +2530,7 @@ class WellDataState {
 
 			if (groupSet.has('ressum') || clearedSet.has('PHIT') || clearedSet.has('SWT')) {
 				this.zonalSummary = [];
+				this.zonalSummarySource = null;
 			}
 			if (groupSet.has('litho_poro') || clearedSet.has('PHIT')) {
 				this.poroCoreMetrics = null;
@@ -2436,9 +2576,7 @@ class WellDataState {
 
 		// Partial clear: 'formation' or 'filtered'
 		const zonesToUse =
-			scope === 'formation'
-				? (opts?.zones ?? []).filter(Boolean)
-				: workbench.selectedZones;
+			scope === 'formation' ? (opts?.zones ?? []).filter(Boolean) : workbench.selectedZones;
 		const targetIndices =
 			scope === 'formation' ? this.resolveIndicesForZones(zonesToUse) : this.visibleIndices;
 
@@ -2485,9 +2623,7 @@ class WellDataState {
 			const remaining = Object.keys(nextCurves).filter(
 				(k) => k !== 'DEPT' && k !== 'DEPTH' && k !== 'WELL_NAME' && k !== 'ZONES'
 			);
-			workbench.selectedQaqcCurve = remaining.includes('GR')
-				? 'GR'
-				: (remaining[0] ?? 'GR');
+			workbench.selectedQaqcCurve = remaining.includes('GR') ? 'GR' : (remaining[0] ?? 'GR');
 		}
 
 		const clearedDepths = targetIndices
@@ -2582,7 +2718,9 @@ class WellDataState {
 
 		const validSources = opts.sourceCurves
 			.map((c) => c.trim().toUpperCase())
-			.filter((c, idx, self) => Boolean(c) && Boolean(this.curves[c]) && self.indexOf(c) === idx);
+			.filter(
+				(c, idx, self) => Boolean(c) && Boolean(this.curves[c]) && self.indexOf(c) === idx
+			);
 		if (validSources.length < 2) {
 			throw new Error('Select at least two distinct curves to splice.');
 		}
@@ -2595,9 +2733,8 @@ class WellDataState {
 		const existingDst = this.curves[dst];
 		const oriName = existingDst && !dst.endsWith('_ORI') ? `${dst}_ORI` : null;
 		const origDstArr = existingDst
-			? (oriName ? this.curves[oriName] : undefined) ??
-				this.originalCurves[dst] ??
-				[...existingDst]
+			? ((oriName ? this.curves[oriName] : undefined) ??
+				this.originalCurves[dst] ?? [...existingDst])
 			: null;
 
 		if (existingDst && origDstArr && !this.originalCurves[dst]) {
@@ -2663,9 +2800,12 @@ class WellDataState {
 					? Number(opts.spliceDepth)
 					: overlapCount > 0
 						? 0.5 * (ovTop + ovBot)
-						: 0.5 * ((Number.isFinite(topA) ? topA : 0) + (Number.isFinite(topB) ? topB : 0));
+						: 0.5 *
+							((Number.isFinite(topA) ? topA : 0) +
+								(Number.isFinite(topB) ? topB : 0));
 
-			const aIsUpper = (Number.isFinite(topA) ? topA : 0) <= (Number.isFinite(topB) ? topB : 0);
+			const aIsUpper =
+				(Number.isFinite(topA) ? topA : 0) <= (Number.isFinite(topB) ? topB : 0);
 			const ovSpan = ovBot - ovTop;
 
 			const combined = new Array<number>(n).fill(Number.NaN);
@@ -2978,7 +3118,12 @@ class WellDataState {
 						sample_name: String(s.sample_name ?? s.Sample ?? `Plug-${i + 1}`),
 						raw_depth: rd,
 						saved_depth: Number.isFinite(savedD) ? savedD : rd,
-						porosity: Number.isFinite(pRaw) && pRaw > 0 ? (pRaw > 1 ? pRaw / 100 : pRaw) : null,
+						porosity:
+							Number.isFinite(pRaw) && pRaw > 0
+								? pRaw > 1
+									? pRaw / 100
+									: pRaw
+								: null,
 						permeability: Number.isFinite(kRaw) && kRaw > 0 ? kRaw : null,
 						extra: s
 					};
@@ -3058,7 +3203,11 @@ class WellDataState {
 		overrideDelta?: number,
 		overrideStretch?: number
 	): number {
-		if (this.coreShiftMode === 'tie-points' && overrideDelta === undefined && overrideStretch === undefined) {
+		if (
+			this.coreShiftMode === 'tie-points' &&
+			overrideDelta === undefined &&
+			overrideStretch === undefined
+		) {
 			const validPts = this.coreTiePoints
 				.filter((p) => Number.isFinite(p.coreDepth) && Number.isFinite(p.logDepth))
 				.sort((a, b) => a.coreDepth - b.coreDepth);
@@ -3079,7 +3228,10 @@ class WellDataState {
 				if (rawDepth >= p0.coreDepth && rawDepth <= p1.coreDepth) {
 					const span = p1.coreDepth - p0.coreDepth;
 					if (Math.abs(span) < 1e-9) return p0.logDepth;
-					return p0.logDepth + ((rawDepth - p0.coreDepth) / span) * (p1.logDepth - p0.logDepth);
+					return (
+						p0.logDepth +
+						((rawDepth - p0.coreDepth) / span) * (p1.logDepth - p0.logDepth)
+					);
 				}
 			}
 			return rawDepth;
@@ -3093,19 +3245,21 @@ class WellDataState {
 
 	buildCoreShiftConfigExtra(): Record<string, any> {
 		const shifts = this.coreSamples
-			.map((s) => Number(s.shift_m ?? (Number(s.depth) - Number(s.raw_depth ?? s.depth))))
+			.map((s) => Number(s.shift_m ?? Number(s.depth) - Number(s.raw_depth ?? s.depth)))
 			.filter((v) => Number.isFinite(v));
 		const meanShift =
 			shifts.length > 0
 				? Number((shifts.reduce((a, b) => a + b, 0) / shifts.length).toFixed(3))
 				: this.coreShiftDelta;
-		const minShift = shifts.length > 0 ? Number(Math.min(...shifts).toFixed(3)) : this.coreShiftDelta;
-		const maxShift = shifts.length > 0 ? Number(Math.max(...shifts).toFixed(3)) : this.coreShiftDelta;
+		const minShift =
+			shifts.length > 0 ? Number(Math.min(...shifts).toFixed(3)) : this.coreShiftDelta;
+		const maxShift =
+			shifts.length > 0 ? Number(Math.max(...shifts).toFixed(3)) : this.coreShiftDelta;
 		const isApplied = Boolean(
 			Math.abs(this.coreShiftDelta) > 1e-4 ||
-				Math.abs(this.coreStretchFactor - 1.0) > 1e-4 ||
-				this.coreTiePoints.length > 0 ||
-				shifts.some((v) => Math.abs(v) > 1e-3)
+			Math.abs(this.coreStretchFactor - 1.0) > 1e-4 ||
+			this.coreTiePoints.length > 0 ||
+			shifts.some((v) => Math.abs(v) > 1e-3)
 		);
 		return {
 			core_shift_applied: isApplied,
@@ -3252,7 +3406,7 @@ class WellDataState {
 		const maxShift = opts?.maxShiftM ?? 5.0;
 
 		const dept = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
-		const phitArr = this.curves['PHIT'] ?? this.curves['PHIE'] ?? [];
+		const phitArr = this.curves['PHIT'] ?? [];
 		const permArr = this.curves['PERM'] ?? this.curves['PERM_TRANS'] ?? [];
 
 		const allPlugs = this.getBaseCorePlugs();
@@ -3358,7 +3512,9 @@ class WellDataState {
 		// Fine local refinement around best coarse candidate
 		const fineStretches = allowStretch
 			? Array.from({ length: 13 }, (_, i) =>
-					Number(Math.max(0.85, Math.min(1.15, bestStretch - 0.006 + i * 0.001)).toFixed(4))
+					Number(
+						Math.max(0.85, Math.min(1.15, bestStretch - 0.006 + i * 0.001)).toFixed(4)
+					)
 				)
 			: [1.0];
 		const baseD = bestDelta;
@@ -3484,9 +3640,7 @@ class WellDataState {
 			if (this.scalPc.length > 0) {
 				this.originalScalPc = this.scalPc.map((s, idx) => ({
 					...s,
-					raw_depth: Number(
-						s.raw_depth ?? this.originalScalPc[idx]?.raw_depth ?? s.depth
-					)
+					raw_depth: Number(s.raw_depth ?? this.originalScalPc[idx]?.raw_depth ?? s.depth)
 				}));
 			}
 			if (this.curves['CPORE']) {
@@ -3545,7 +3699,8 @@ class WellDataState {
 			const kRaw = Number(s.permeability ?? s.CPERM ?? s.perm);
 			const pAmbRaw = Number(s.porosity_amb ?? s.CPORE_AMB ?? s.CPORE_ORI);
 			const kAirRaw = Number(s.perm_air ?? s.CPERM_AIR ?? s.CPERM_ORI);
-			const pVal = Number.isFinite(pRaw) && pRaw > 0 ? (pRaw > 1.0 ? pRaw / 100.0 : pRaw) : null;
+			const pVal =
+				Number.isFinite(pRaw) && pRaw > 0 ? (pRaw > 1.0 ? pRaw / 100.0 : pRaw) : null;
 			const kVal = Number.isFinite(kRaw) && kRaw > 0 ? kRaw : null;
 			const pAmbVal =
 				Number.isFinite(pAmbRaw) && pAmbRaw > 0
@@ -3660,7 +3815,10 @@ class WellDataState {
 		const brushedRows = brushed.size > 0 ? vc.rows.filter((r) => brushed.has(r.logIndex)) : [];
 
 		if (goodRows.length < 3) {
-			appStatus.info('Not enough valid GR & NPHI-RHOB points to calibrate', workbench.wellId ?? undefined);
+			appStatus.info(
+				'Not enough valid GR & NPHI-RHOB points to calibrate',
+				workbench.wellId ?? undefined
+			);
 			return;
 		}
 
@@ -3718,7 +3876,11 @@ class WellDataState {
 			const seedClay = Math.max(seedClean + 25.0, Math.min(250.0, seedClean + slope));
 
 			let bestScore = Infinity;
-			for (let cClean = Math.max(0, seedClean - 25); cClean <= Math.min(90, seedClean + 25); cClean += 1.0) {
+			for (
+				let cClean = Math.max(0, seedClean - 25);
+				cClean <= Math.min(90, seedClean + 25);
+				cClean += 1.0
+			) {
 				for (
 					let cClay = Math.max(cClean + 25, seedClay - 35);
 					cClay <= Math.min(250, seedClay + 35);
@@ -3738,7 +3900,11 @@ class WellDataState {
 			// Fine 0.5 gAPI local refinement
 			const baseClean = bestClean;
 			const baseClay = bestClay;
-			for (let cClean = Math.max(0, baseClean - 2); cClean <= Math.min(90, baseClean + 2); cClean += 0.5) {
+			for (
+				let cClean = Math.max(0, baseClean - 2);
+				cClean <= Math.min(90, baseClean + 2);
+				cClean += 0.5
+			) {
 				for (
 					let cClay = Math.max(cClean + 25, baseClay - 2);
 					cClay <= Math.min(250, baseClay + 2);
@@ -3771,7 +3937,11 @@ class WellDataState {
 			}
 			const baseClean = bestClean;
 			const baseClay = bestClay;
-			for (let cClean = Math.max(0, baseClean - 3); cClean <= Math.min(90, baseClean + 3); cClean += 0.5) {
+			for (
+				let cClean = Math.max(0, baseClean - 3);
+				cClean <= Math.min(90, baseClean + 3);
+				cClean += 0.5
+			) {
 				for (
 					let cClay = Math.max(cClean + 25, baseClay - 4);
 					cClay <= Math.min(250, baseClay + 4);
@@ -3835,6 +4005,8 @@ class WellDataState {
 			'RT_MOD',
 			'NPHI',
 			'RHOB',
+			'NPHI_HC',
+			'RHOB_HC',
 			'DTC',
 			'DT',
 			'DTCO',
@@ -3885,7 +4057,7 @@ class WellDataState {
 			'PAY',
 			'BADHOLE'
 		]) {
-			const arr = this.curves[k] ?? this.curves[k + "."];
+			const arr = this.curves[k] ?? this.curves[k + '.'];
 			if (arr) {
 				const v = arr[lo];
 				out[k] = Number.isFinite(v) ? v : null;
@@ -3916,11 +4088,19 @@ class WellDataState {
 			}
 			if (bestSample) {
 				const p = Number(bestSample.porosity ?? bestSample.CPORE ?? bestSample.poro);
-				if (Number.isFinite(p) && p > 0 && (out['CPORE'] === null || out['CPORE'] === undefined)) {
+				if (
+					Number.isFinite(p) &&
+					p > 0 &&
+					(out['CPORE'] === null || out['CPORE'] === undefined)
+				) {
 					out['CPORE'] = p > 1.0 ? p / 100.0 : p;
 				}
 				const k = Number(bestSample.permeability ?? bestSample.CPERM ?? bestSample.perm);
-				if (Number.isFinite(k) && k > 0 && (out['CPERM'] === null || out['CPERM'] === undefined)) {
+				if (
+					Number.isFinite(k) &&
+					k > 0 &&
+					(out['CPERM'] === null || out['CPERM'] === undefined)
+				) {
 					out['CPERM'] = k;
 				}
 			}

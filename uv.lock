@@ -5272,7 +5272,7 @@ wheels = [
 
 [[package]]
 name = "quick-pp"
-version = "0.3.4"
+version = "0.3.5"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
@@ -5527,8 +5527,8 @@ requires-dist = [
     { name = "build", marker = "extra == 'dev'", specifier = ">=0.10" },
     { name = "click", specifier = ">=7.0" },
     { name = "click", marker = "extra == 'core'", specifier = ">=7.0" },
-    { name = "dlisio" },
-    { name = "dlisio", marker = "extra == 'core'" },
+    { name = "dlisio", specifier = ">=0.3.0" },
+    { name = "dlisio", marker = "extra == 'core'", specifier = ">=0.3.0" },
     { name = "dtw-python", marker = "extra == 'dev'" },
     { name = "email-validator", marker = "extra == 'app'" },
     { name = "fastapi", marker = "extra == 'app'" },

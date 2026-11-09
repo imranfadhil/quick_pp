@@ -2,6 +2,16 @@
 
 The Single-Well space delivers deterministic, optimization-driven, and core-calibrated formation evaluation along a single wellbore trajectory. It is structured into **7 Primary Sequential Workflow Steps** culminating in a Computer Processed Interpretation (CPI) report, accompanied by a **Standalone Core & Pc Prep Lab Module**.
 
+When importing LAS logs, check the depth curve's **Source Unit** in the uploader. Feet are converted to meters by multiplying the depth values by 0.3048; edit the source unit if the LAS curve header is incorrect. Previously imported wells are not automatically corrected, and importing into an existing well merges data rather than replacing it.
+
+The same log uploader also accepts DLIS and LIS79 (`.lis`) files. LIS Enhanced LIS/LIS84 variants are not supported by the current parser.
+
+The **Log / interval** unit selector (m or ft) affects the single-well log plot and readouts, working interval and top-bar depth filter, and shared tables whose values are in meters. Table edits, pasted values, and ancillary quick-entry depths are converted back to meters for processing. The preference is saved in the browser; it does not change stored data. Other plots, reports, and exports retain their existing units.
+
+Zone-filtered workspace calculations require resolved zone labels for the selected well, normally from its zone data or formation tops. If zone labels are unavailable, the calculation reports an error instead of evaluating the entire well.
+
+In Data & QAQC, **Missing Data Imputation** saves selected logs as new `_IMP` curves by default. Alternatively, replace the selected curves while preserving a full-well `_ORI` backup; existing backups are never overwritten. Choose mean, median, most frequent, forward/backward fill, depth-based linear interpolation, KNN, or iterative imputation; multivariate methods require at least two curves. Linear interpolation fills only gaps between observed samples, without extrapolating end gaps. Directional fills follow increasing depth and may also leave end gaps unfilled. Active depth and zone filters apply; existing `_IMP` curves must be renamed or deleted before re-running in new-curve mode. The right-pane **Missing Matrix** shows binned missing fractions by curve, with deeper depths at the top and grey bins indicating no samples.
+
 ---
 
 ## 1. Workflow Architecture (Level 1 & Level 2) {#sw-level-1-2-diagrams}
@@ -125,13 +135,30 @@ flowchart TD
       Corrupted pad readings are reconstructed via multivariate regression or Random Forest models trained on in-gauge intervals ($\text{BADHOLE} = 0$) using deep-reading, borehole-insensitive logs ($\text{GR}, \text{DTC}, \ln(\text{RT})$).
 
 * **Input Curves:** `CALI`, `BS`, `GR`, `RHOB`, `NPHI`, `DTC`, `RT`  
-* **Output Curves:** `BADHOLE` (flag), `RHOB_CORR`, `NPHI_CORR`, `GR_CORR`
+* **Output Curves:** `BADHOLE` (flag), `GR_ENV_CORR`, `NPHI_ENV_CORR`, `RHOB_ENV_CORR`, `RT_ENV_CORR`.
+  Environmental-correction outputs are preview curves; downstream calculations continue to use
+  their configured raw or hydrocarbon-corrected inputs until explicitly selected.
+
+* **Curve editing and splicing:** In Curve Editor & Management, select **View log vs depth in
+  right pane** to compare the selected curve with its original backup or edit source. In splice
+  mode the selected runs are shown alongside the applied splice result; apply the splice to
+  update the result. The plot follows the active depth and zone filters and preserves gaps.
+  Use the plot selector to return to the histogram or another view. Log-versus-depth plots lock
+  the horizontal scale; the mouse wheel zooms depth, while selection tools remain available.
 
 ---
 
 ### Step 2: Tops & Ancillary Data (`InspectorAncillary`) {#sw-step-2-ancillary}
 
 * **Objective:** Establish the True Vertical Depth Sub-Sea ($\text{TVDSS}$) coordinate frame, ingest stratigraphic formation tops, and manage wellbore survey geometry.
+
+* **Formation-test mobility:** Enter or import optional drawdown mobility with formation pressure
+  tests. The well plot displays positive mobility values as pink triangles at measured depth in
+  Track 5, with a separate 0.01–10,000 mD/cP logarithmic scale and an FPT mobility toggle.
+  Points outside that scale are counted as off-scale; depth and zone filters apply. Hover a
+  point for its value, depth, and available fluid, quality, and remarks. Mobility is not
+  permeability: matching numerical positions on the two scales do not imply equivalent
+  properties, and no viscosity or permeability conversion is assumed.
 
 * **Technical Foundation:**
 
@@ -330,6 +357,8 @@ flowchart TD
       
       where $C_\phi$ and $C_k$ are rock-specific compaction coefficients (sandstone, friable sandstone, carbonate).
 
+      **Log-derived option:** Integrates bulk density over positive-down TVD to calculate vertical stress, estimates pore pressure from a user-selected gradient, and applies Biot's coefficient. When both DTC and DTS are available, dynamic Poisson's ratio is calculated from their velocity ratio; otherwise a configured fallback is used. Equivalent effective confining stress is the mean of vertical and two uniaxial-strain horizontal effective stresses. The profile assumes density at the shallowest valid sample continues to the depth datum; measured depth is only a TVD approximation when no TVD curve is available. It does not infer pore pressure from sonic compaction trends.
+
     * **Klinkenberg Gas Slippage Correction:**
       Corrects air permeability ($k_{\text{air}}$) to equivalent liquid permeability ($k_{\infty}$):
       
@@ -343,4 +372,4 @@ flowchart TD
       $$P_{c,\text{res}} = P_{c,\text{lab}} \cdot \frac{(\sigma \cos\theta)_{\text{res}}}{(\sigma \cos\theta)_{\text{lab}}}$$
 
 * **Input Data:** Core plugs table (`DEPTH`, `CPORE`, `CPERM`), Overburden stress parameters, Lab IFT and contact angle  
-* **Output Data:** `CPOR_SHIFTED`, `CPERM_SHIFTED`, Stress-corrected core properties, Scaled $P_c$ curves
+* **Output Data:** `CPOR_SHIFTED`, `CPERM_SHIFTED`, `SV_EST`, `PP_EST`, `NU_DYN`, `NCS_EST`, Stress-corrected core properties, Scaled $P_c$ curves

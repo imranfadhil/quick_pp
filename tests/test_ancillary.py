@@ -1,3 +1,5 @@
+from uuid import uuid4
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -7,6 +9,57 @@ app = FastAPI()
 app.include_router(api_router)
 
 client = TestClient(app)
+
+
+def test_well_delete_clears_tops_and_surveys_before_reupload():
+    project_name = f"WellDeleteAncillary-{uuid4().hex}"
+    well_name = f"Well-{uuid4().hex}"
+    uwi = f"UWI-{uuid4().hex}"
+    project_res = client.post(
+        "/quick_pp/database/projects", json={"name": project_name}
+    )
+    assert project_res.status_code == 200
+    pid = project_res.json()["project_id"]
+
+    well_res = client.post(
+        f"/quick_pp/database/projects/{pid}/wells",
+        json={"name": well_name, "uwi": uwi},
+    )
+    assert well_res.status_code == 200
+
+    tops_res = client.post(
+        f"/quick_pp/database/projects/{pid}/wells/{well_name}/formation_tops",
+        json={"tops": [{"name": "Top-A", "depth": 1000.0}]},
+    )
+    assert tops_res.status_code == 200
+    surveys_res = client.post(
+        f"/quick_pp/database/projects/{pid}/wells/{well_name}/well_surveys",
+        json={"surveys": [{"md": 1000.0, "inc": 15.0, "azim": 90.0}]},
+    )
+    assert surveys_res.status_code == 200
+
+    delete_res = client.delete(
+        f"/quick_pp/database/projects/{pid}/wells/{well_name}"
+    )
+    assert delete_res.status_code == 200
+
+    reupload_res = client.post(
+        f"/quick_pp/database/projects/{pid}/wells",
+        json={"name": well_name, "uwi": uwi},
+    )
+    assert reupload_res.status_code == 200
+
+    tops_after = client.get(
+        f"/quick_pp/database/projects/{pid}/wells/{well_name}/formation_tops"
+    )
+    surveys_after = client.get(
+        f"/quick_pp/database/projects/{pid}/well_surveys",
+        params={"well_name": well_name},
+    )
+    assert tops_after.status_code == 200
+    assert tops_after.json()["tops"] == []
+    assert surveys_after.status_code == 200
+    assert surveys_after.json()["well_surveys"] == []
 
 
 def test_formation_tops_lifecycle():

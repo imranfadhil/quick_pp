@@ -36,6 +36,7 @@ flowchart TD
             MW6 --> MW7["7. FDP Report"]
         end
         subgraph MW_Stand["Standalone Specialized Modules"]
+            MW_BATCH["Multi-Well Evaluation\n(Shared single-well models)"]
             MW_SCAL["SCAL & Rel-Perm\n(Swirr, Corey, LET, SWOF Deck)"]
             MW_FPT["Pressure & Contacts\n(MDT/RFT Gradients, FWL/OWC/GOC)"]
             MW_RT["RT Classifier\n(Discrete Rock Type Predictor)"]
@@ -64,6 +65,8 @@ flowchart TD
 
 The tables below define the 1-to-1 correspondence between the SvelteKit workbench UI (`WorkflowStepper.svelte`), backend modules, and technical documentation anchors.
 
+The right-pane crossplot selector shows only plots supported by the active single- or multi-well space. Plots relevant to the current step appear first; other plots are grouped by workflow step or standalone module. Auto follows the current step, or shows an empty state when that step has no recommended crossplot. A manual selection remains active across steps in the same space; switching spaces resets it to Auto if the plot is unavailable there. Relevant plots remain listed even when their input data is not yet available.
+
 ### Single-Well Space
 
 | Step Category | Stepper ID | UI Component | Markdown Anchor | Primary Petrophysical Function |
@@ -88,6 +91,7 @@ The tables below define the 1-to-1 correspondence between the SvelteKit workbenc
 | **Step 5** | `shf` | `MultiWellShf.svelte` | [`#mw-step-5-shf`](multi_well.md#mw-step-5-shf) | Saturation-Height Modeling (Leverett $J$ / Skelt-Harrison), fluid contacts & log reconciliation |
 | **Step 6** | `volumetrics` | `MultiWellVolumetrics.svelte` | [`#mw-step-6-volumetrics`](multi_well.md#mw-step-6-volumetrics) | Probabilistic Monte Carlo LHS STOIIP/GIIP (P90/P50/P10) & Tornado |
 | **Step 7** | `report` | `InspectorReport.svelte` | [`#mw-step-7-report`](multi_well.md#mw-step-7-report) | Field Development Plan (FDP) comprehensive report generation |
+| **Standalone** | `batch-evaluation` | `MultiWellEvaluation.svelte` | [`#mw-standalone-batch-evaluation`](multi_well.md#mw-standalone-batch-evaluation) | Preview and apply isolated single-well calculations by well and zone |
 | **Standalone** | `swirr-corr` | `MultiWellSwirr.svelte` | [`#mw-standalone-scal-relperm`](multi_well.md#mw-standalone-scal-relperm) | **SCAL & Rel-Perm**: Field Swirr fit, Brooks-Corey, LET & SWOF decks |
 | **Standalone** | `fpt` | `MultiWellFpt.svelte` | [`#mw-standalone-fpt`](multi_well.md#mw-standalone-fpt) | **Pressure & Contacts**: MDT/RFT gradients, excess pressure, FWL/OWC/GOC |
 | **Standalone** | `rt-classifier` | `MultiWellRtClassifierTrainer.svelte` | [`#mw-standalone-rt-classifier`](multi_well.md#mw-standalone-rt-classifier) | **RT Classifier**: Supervised classification (Random Forest / XGBoost) |
@@ -101,4 +105,4 @@ The tables below define the 1-to-1 correspondence between the SvelteKit workbenc
   Covers the 7-step deterministic evaluation pipeline and the standalone Core & Pc Prep module.
 
 - [**Multi-Well Field Evaluation Workflow**](multi_well.md):
-  Covers the 7-step field characterization pipeline and the 4 standalone specialized modules (SCAL & Rel-Perm, Formation Pressure & Contacts, RT Classifier, Conformal PIML).
+  Covers the 7-step field characterization pipeline and the 5 standalone specialized modules (Multi-Well Evaluation, SCAL & Rel-Perm, Formation Pressure & Contacts, RT Classifier, Conformal PIML).

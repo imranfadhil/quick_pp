@@ -1,10 +1,13 @@
 <script lang="ts">
+	import { onMount, untrack } from 'svelte';
 	import logo from '$lib/assets/logo.png';
 	import { authState } from '$lib/state/auth.svelte';
 	import { projectData } from '$lib/state/projectData.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
+	import { depthDisplay } from '$lib/state/depthDisplay.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
 	import { downloadCsv, fmtDepth } from '$lib/utils/formatters';
+	import { depthFromMeters, depthToMeters } from '$lib/utils/depthUnits';
 	import { apiPost, downloadHandoverPackage, downloadWellLas } from '$lib/api/client';
 
 	let isResettingDemo = $state(false);
@@ -35,6 +38,24 @@
 	let mgmtError = $state<string | null>(null);
 	let minDepthInput = $state<string>('');
 	let maxDepthInput = $state<string>('');
+	let previousDepthUnit = depthDisplay.unit;
+	onMount(() => depthDisplay.initialize());
+
+	$effect(() => {
+		const unit = depthDisplay.unit;
+		if (unit === previousDepthUnit) return;
+		const oldUnit = previousDepthUnit;
+		previousDepthUnit = unit;
+		untrack(() => {
+			if (!showFilterPopover) return;
+			const convertDraft = (value: string) => {
+				if (!value.trim() || !Number.isFinite(Number(value))) return value;
+				return String(depthFromMeters(depthToMeters(Number(value), oldUnit), unit));
+			};
+			minDepthInput = convertDraft(minDepthInput);
+			maxDepthInput = convertDraft(maxDepthInput);
+		});
+	});
 
 	function openManageProjectPopover() {
 		showNewProjectPopover = false;
@@ -134,8 +155,8 @@
 		if (Number.isFinite(minV) || Number.isFinite(maxV)) {
 			const dr = wellData.depthRange;
 			await wellData.saveWellFocusDepth(
-				Number.isFinite(minV) ? minV : dr.min,
-				Number.isFinite(maxV) ? maxV : dr.max,
+				Number.isFinite(minV) ? depthToMeters(minV, depthDisplay.unit) : dr.min,
+				Number.isFinite(maxV) ? depthToMeters(maxV, depthDisplay.unit) : dr.max,
 				true
 			);
 		} else {
@@ -223,7 +244,7 @@
 			parts.push(`Zones: ${workbench.selectedZones.join(', ')}`);
 		}
 		if (workbench.depthFilter) {
-			parts.push(`${fmtDepth(workbench.depthFilter.min)}–${fmtDepth(workbench.depthFilter.max)}`);
+			parts.push(`${fmtDepth(depthFromMeters(workbench.depthFilter.min, depthDisplay.unit), depthDisplay.unit)}–${fmtDepth(depthFromMeters(workbench.depthFilter.max, depthDisplay.unit), depthDisplay.unit)}`);
 		}
 		if (parts.length > 0) return parts.join(' | ');
 		return workbench.scope === 'multi-well' ? 'All Wells, Zones & Depths' : 'All Zones & Depths';
@@ -605,8 +626,8 @@
 		<button
 			type="button"
 			onclick={() => {
-				minDepthInput = workbench.depthFilter ? String(workbench.depthFilter.min) : '';
-				maxDepthInput = workbench.depthFilter ? String(workbench.depthFilter.max) : '';
+				minDepthInput = workbench.depthFilter ? String(depthFromMeters(workbench.depthFilter.min, depthDisplay.unit)) : '';
+				maxDepthInput = workbench.depthFilter ? String(depthFromMeters(workbench.depthFilter.max, depthDisplay.unit)) : '';
 				showFilterPopover = !showFilterPopover;
 			}}
 			class="flex h-7 items-center gap-1.5 rounded-sm border px-2.5 text-xs transition-colors {hasActiveFilter
@@ -707,23 +728,30 @@
 					</div>
 				{/if}
 
+				<label class="mb-1.5 flex items-center justify-between text-[10px] text-[var(--text-muted)]">
+					Log / interval / table unit (other plots and exports unchanged)
+					<select value={depthDisplay.unit} onchange={(e) => depthDisplay.setUnit(e.currentTarget.value === 'ft' ? 'ft' : 'm')} class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-[10px]">
+						<option value="m">m</option>
+						<option value="ft">ft</option>
+					</select>
+				</label>
 				<div class="mb-2.5 grid grid-cols-2 gap-2">
 					<label class="block">
-						<span class="mb-0.5 block text-[10px] text-[var(--text-muted)]">Min Depth (m)</span>
+						<span class="mb-0.5 block text-[10px] text-[var(--text-muted)]">Min Depth ({depthDisplay.unit})</span>
 						<input
 							type="number"
 							step="any"
-							placeholder={String(wellData.depthRange.min)}
+							placeholder={String(Number(depthFromMeters(wellData.depthRange.min, depthDisplay.unit).toFixed(4)))}
 							bind:value={minDepthInput}
 							class="mono-num h-7 w-full rounded-sm border border-[var(--border-hairline)] px-2 text-xs"
 						/>
 					</label>
 					<label class="block">
-						<span class="mb-0.5 block text-[10px] text-[var(--text-muted)]">Max Depth (m)</span>
+						<span class="mb-0.5 block text-[10px] text-[var(--text-muted)]">Max Depth ({depthDisplay.unit})</span>
 						<input
 							type="number"
 							step="any"
-							placeholder={String(wellData.depthRange.max)}
+							placeholder={String(Number(depthFromMeters(wellData.depthRange.max, depthDisplay.unit).toFixed(4)))}
 							bind:value={maxDepthInput}
 							class="mono-num h-7 w-full rounded-sm border border-[var(--border-hairline)] px-2 text-xs"
 						/>

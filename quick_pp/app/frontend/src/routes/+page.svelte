@@ -7,6 +7,7 @@
 	import LogTrackCanvas from '$lib/components/workbench/LogTrackCanvas.svelte';
 	import StickPlotCanvas from '$lib/components/workbench/StickPlotCanvas.svelte';
 	import CrossplotCanvas from '$lib/components/workbench/CrossplotCanvas.svelte';
+	import MissingDataMatrix from '$lib/components/workbench/MissingDataMatrix.svelte';
 	import CompactDataGrid, {
 		type GridColumn
 	} from '$lib/components/workbench/CompactDataGrid.svelte';
@@ -26,6 +27,7 @@
 	import MultiWellQaqc from '$lib/components/modules/MultiWellQaqc.svelte';
 	import MultiWellRockTyping from '$lib/components/modules/MultiWellRockTyping.svelte';
 	import MultiWellPermTransform from '$lib/components/modules/MultiWellPermTransform.svelte';
+	import MultiWellEvaluation from '$lib/components/modules/MultiWellEvaluation.svelte';
 	import MultiWellSwirr from '$lib/components/modules/MultiWellSwirr.svelte';
 	import MultiWellShf from '$lib/components/modules/MultiWellShf.svelte';
 	import MultiWellRtClassifierTrainer from '$lib/components/modules/MultiWellRtClassifierTrainer.svelte';
@@ -50,6 +52,14 @@
 		selectionKey
 	} from '$lib/state/moduleParams.svelte';
 	import { projectParams, zoneSelectionKey } from '$lib/state/projectParams.svelte';
+	import { isCrossplotAvailable } from '$lib/utils/crossplots';
+
+	$effect(() => {
+		const selected = workbench.crossplotTemplateOverride;
+		if (selected !== 'auto' && !isCrossplotAvailable(selected, workbench.scope)) {
+			workbench.crossplotTemplateOverride = 'auto';
+		}
+	});
 
 	// Auto-restore saved single-well module parameters on exact zone / depth-interval match.
 	// Re-applies only when the loaded well, the selection key, or the scope changes (not on every
@@ -178,11 +188,9 @@
 	let rightGridConfig = $derived.by(
 		(): { title: string; columns: GridColumn[]; rows: Record<string, any>[] } => {
 			if (
-				(workbench.crossplotTemplateOverride === 'relperm' ||
-					(workbench.scope === 'multi-well' &&
-						workbench.multiWellStep === 'swirr-corr' &&
-						(workbench.scalSubMode === 'relperm' ||
-							workbench.swirrCrossplotTab === 'relperm'))) &&
+				(workbench.effectiveCrossplot === 'relperm' ||
+					(workbench.effectiveCrossplot === 'swirr-fit' &&
+						workbench.swirrCrossplotTab === 'relperm')) &&
 				workbench.scalResult?.swofTable?.length
 			) {
 				return {
@@ -690,7 +698,7 @@
 			}
 
 			if (
-				workbench.crossplotTemplateOverride === 'vsh-qc' &&
+				workbench.effectiveCrossplot === 'vsh-qc' &&
 				wellData.vshComparison.rows.length > 0
 			) {
 				const vc = wellData.vshComparison;
@@ -714,7 +722,7 @@
 
 			if (
 				wellData.coreComparison.rows.length > 0 &&
-				(workbench.crossplotTemplateOverride === 'core-qc' ||
+				(workbench.effectiveCrossplot === 'core-qc' ||
 					(workbench.scope === 'single-well' &&
 						(workbench.singleWellStep === 'litho-poro' ||
 							workbench.singleWellStep === 'perm' ||
@@ -763,7 +771,8 @@
 			if (wellData.tops.length > 0) {
 				const sorted = [...wellData.tops].sort((a, b) => a.depth - b.depth);
 				const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
-				const phie = wellData.curves['PHIE'] ?? wellData.curves['PHIT'] ?? [];
+				const phit = wellData.curves['PHIT'] ?? [];
+				const phie = wellData.curves['PHIE'] ?? [];
 				const vcl = wellData.curves['VCLAY'] ?? wellData.curves['GR'] ?? [];
 				const sw = wellData.curves['SWT'] ?? wellData.curves['SWE'] ?? [];
 
@@ -773,8 +782,10 @@
 						idx + 1 < sorted.length ? sorted[idx + 1].depth : wellData.depthRange.max;
 					const gross = Math.max(0, botD - topD);
 
-					let phiSum = 0;
-					let phiN = 0;
+					let phitSum = 0;
+					let phitN = 0;
+					let phieSum = 0;
+					let phieN = 0;
 					let vclSum = 0;
 					let vclN = 0;
 					let swSum = 0;
@@ -782,9 +793,13 @@
 
 					dept.forEach((d, i) => {
 						if (d >= topD && d < botD) {
+							if (Number.isFinite(phit[i])) {
+								phitSum += phit[i];
+								phitN++;
+							}
 							if (Number.isFinite(phie[i])) {
-								phiSum += phie[i];
-								phiN++;
+								phieSum += phie[i];
+								phieN++;
 							}
 							if (Number.isFinite(vcl[i])) {
 								vclSum += vcl[i];
@@ -801,7 +816,8 @@
 						Zone: t.name,
 						depth: topD,
 						Gross: gross,
-						PHIE: phiN > 0 ? phiSum / phiN : null,
+						PHIT: phitN > 0 ? phitSum / phitN : null,
+						PHIE_QC: phieN > 0 ? phieSum / phieN : null,
 						VCLAY: vclN > 0 ? vclSum / vclN : null,
 						SW: swN > 0 ? swSum / swN : null
 					};
@@ -813,7 +829,8 @@
 						{ key: 'Zone', label: 'Zone' },
 						{ key: 'depth', label: 'Top', unit: 'm', numeric: true, decimals: 1 },
 						{ key: 'Gross', label: 'Gross', unit: 'm', numeric: true, decimals: 1 },
-						{ key: 'PHIE', label: 'PHIE', unit: 'v/v', numeric: true, decimals: 3 },
+						{ key: 'PHIT', label: 'PHIT', unit: 'v/v', numeric: true, decimals: 3 },
+						{ key: 'PHIE_QC', label: 'PHIE (QC)', unit: 'v/v', numeric: true, decimals: 3 },
 						{ key: 'VCLAY', label: 'VCLAY', unit: 'v/v', numeric: true, decimals: 3 },
 						{ key: 'SW', label: 'SW', unit: 'v/v', numeric: true, decimals: 3 }
 					],
@@ -849,8 +866,17 @@
 	);
 </script>
 
-<div class="h-full w-full overflow-hidden">
-	<PaneGroup direction="horizontal" autoSaveId="quick-pp-3pane-layout" class="h-full w-full">
+<div class="flex h-full w-full flex-col overflow-hidden">
+	{#if workbench.projectId && workbench.batchEvaluationAffectedProjects.includes(workbench.projectId)}
+		<div role="status" class="flex items-center justify-between gap-2 border-b border-amber-200 bg-amber-50 px-3 py-1 text-xs text-amber-900">
+			<span>Batch evaluation changed curves. Reservoir summaries and dependent field interpretations may be stale; reload the active well and recompute them.</span>
+			<button type="button" class="shrink-0 underline" onclick={() => (workbench.batchEvaluationAffectedProjects = workbench.batchEvaluationAffectedProjects.filter((id) => id !== workbench.projectId))}>Dismiss</button>
+		</div>
+	{/if}
+	{#if workbench.scope === 'multi-well' && workbench.multiWellStep === 'batch-evaluation'}
+		<MultiWellEvaluation />
+	{:else}
+	<PaneGroup direction="horizontal" autoSaveId="quick-pp-3pane-layout" class="min-h-0 w-full flex-1">
 		<!-- LEFT PANE (25% default width): Parameter Inspector -->
 		<Pane defaultSize={25} minSize={18} maxSize={42} class="h-full overflow-hidden">
 			<div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
@@ -968,6 +994,8 @@
 			<Pane defaultSize={30} minSize={20} class="h-full overflow-hidden">
 				{#if isVolumetricsMode}
 					<VolumetricsRightPanel />
+				{:else if workbench.rightPaneTab === 'missing'}
+					<MissingDataMatrix />
 				{:else if workbench.rightPaneTab === 'crossplot'}
 					{#if isFptMode}
 						<FptPlotCanvas initialMode="excess" />
@@ -1094,4 +1122,5 @@
 			</Pane>
 		{/if}
 	</PaneGroup>
+	{/if}
 </div>

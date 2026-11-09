@@ -611,18 +611,20 @@ def generate_nd_crossplot(
             else:
                 rad = math.radians(float(silt_line_angle))
                 p_silt = (D[0] + math.cos(rad), D[1] + math.sin(rad))
-                silt_inter = line_intersection((A, C), (D, p_silt))
-                if (
-                    silt_inter is not None
-                    and np.isfinite(silt_inter[0])
-                    and np.isfinite(silt_inter[1])
-                ):
-                    B = (float(silt_inter[0]), float(silt_inter[1]))
-                else:
-                    drysilt_NPHI = 1.0 - 1.68 * math.tan(
-                        float(silt_line_angle - 90) * math.pi / 180.0
+                target_rhob = (
+                    float(dry_silt_point[1])
+                    if dry_silt_point and dry_silt_point[1] is not None
+                    else 2.68
+                )
+                silt_inter = line_intersection(
+                    (D, p_silt), ((0.0, target_rhob), (1.0, target_rhob))
+                )
+                if not np.isfinite(silt_inter[0]) or not np.isfinite(silt_inter[1]):
+                    raise ValueError(
+                        "Cannot calculate dry silt point: silt line does not intersect "
+                        f"RHOB={target_rhob:.3f} g/cc"
                     )
-                    B = (drysilt_NPHI, 2.68)
+                B = (float(silt_inter[0]), target_rhob)
 
             # Plot SSC ternary model lines
             ax1.plot(

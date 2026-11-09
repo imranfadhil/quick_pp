@@ -76,6 +76,12 @@ class WellHeaderMetadata(BaseModel):
     rmc: Optional[float] = None
     mud_density: Optional[float] = None
     mud_weight: Optional[float] = None
+    mud_filtrate_salinity: Optional[float] = Field(
+        None, ge=0, description="Mud-filtrate salinity in ppm by weight"
+    )
+    mud_filtrate_density: Optional[float] = Field(
+        None, gt=0, description="Mud-filtrate density in g/cc"
+    )
     # Raw fallback for unmapped headers
     raw_well_header: Dict[str, Any] = Field(default_factory=dict)
     raw_parameters: Dict[str, Any] = Field(default_factory=dict)

@@ -1,13 +1,20 @@
 import base64
 import io
+from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
+from dlisio import lis as dlisio_lis
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from quick_pp.app.backend.router import api_router
+from quick_pp.app.backend.services import database as database_service
+from quick_pp.app.backend.services import las_handler as log_import_service
 from quick_pp.app.backend.services.ancillary import (
     align_and_shift_core_depths,
     compute_survey_minimum_curvature,
@@ -15,16 +22,24 @@ from quick_pp.app.backend.services.ancillary import (
     parse_tabular_ancillary_file,
     resolve_ancillary_columns,
 )
-from quick_pp.app.backend.services.las_handler import import_logs_router
+from quick_pp.app.backend.services.las_handler import (
+    _parse_single_log_file_worker,
+    import_logs_router,
+)
 from quick_pp.config import Config
+from quick_pp.database.models import Base
+from quick_pp.database.objects import Project
+from quick_pp.database.objects import Well as WellObject
 from quick_pp.las_handler import (
     extract_las_metadata,
     fast_read_las,
     inspect_dlis,
+    inspect_lis,
     mnemonic_mapper,
     normalize_las3_to_las2_stream,
     read_dlis_frame,
     read_las_file_fast,
+    read_lis_frame,
     splice_and_regularize_runs,
     standardize_curve_units,
 )
@@ -84,6 +99,212 @@ def test_fast_read_las_costa_feet_conversion():
     assert meta["depth_unit"] == "m"
     # Original HW-10.las starts at 8440.0 ft (2572.512 m)
     assert np.isclose(float(df["DEPTH"].min()), 2572.512, atol=1e-2)
+
+
+@pytest.mark.parametrize("mnemonic", ["DEPT", "MD", "DEPTH"])
+@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize(
+    ("target_unit", "expected"), [("m", [304.8, 305.1048]), ("ft", [1000, 1001])]
+)
+def test_log_import_converts_depth_index_from_feet(tmp_path, mnemonic, wrapped, target_unit, expected):
+    las_text = f"""~Version
+VERS. 2.0 : VERSION
+WRAP. {"YES" if wrapped else "NO"} : WRAPPED
+~Well
+STRT.FT 1000 : START
+STOP.FT 1001 : STOP
+STEP.FT 1 : STEP
+NULL. -999.25 : NULL
+WELL. TEST : WELL
+~Curve
+{mnemonic}.FT : DEPTH
+GR.API : GAMMA RAY
+~Ascii
+1000 50
+1001 60
+"""
+    path = tmp_path / "feet.las"
+    path.write_text(las_text)
+    result = _parse_single_log_file_worker(
+        {"file_path": str(path), "target_depth_uom": target_unit}
+    )
+    assert result["well_data"]["DEPTH"].tolist() == pytest.approx(expected)
+    assert result["units"]["DEPTH"].lower() == target_unit
+
+
+def test_log_import_respects_depth_source_unit_override(tmp_path):
+    path = tmp_path / "override.las"
+    path.write_text("""~Version
+VERS. 2.0 : VERSION
+WRAP. NO : WRAPPED
+~Well
+STRT.M 1000 : START
+STOP.M 1001 : STOP
+STEP.M 1 : STEP
+NULL. -999.25 : NULL
+WELL. TEST : WELL
+~Curve
+DEPT.M : DEPTH
+GR.API : GAMMA RAY
+~Ascii
+1000 50
+1001 60
+""")
+    result = _parse_single_log_file_worker(
+        {"file_path": str(path), "target_depth_uom": "m", "unit_map": {"DEPT": "ft"}}
+    )
+    assert result["well_data"]["DEPTH"].tolist() == pytest.approx([304.8, 305.1048])
+    assert result["units"]["DEPTH"] == "m"
+
+
+def test_log_import_persists_converted_depths(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(log_import_service, "STAGING_DIR", tmp_path / "staging")
+    monkeypatch.setattr(log_import_service, "is_demo_mode", lambda: False)
+    engine = create_engine(f"sqlite:///{(tmp_path / 'test.db').as_posix()}")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine)
+
+    @contextmanager
+    def test_db():
+        with session_factory() as session:
+            try:
+                yield session
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+
+    monkeypatch.setattr(log_import_service, "get_db", test_db)
+    with test_db() as session:
+        project_id = Project(session, name="DepthConversionTest").project_id
+
+    las_bytes = (TEST_DATA_DIR / "sample_feet.las").read_bytes()
+    inspect = client.post(
+        "/api/v1/import/logs/inspect",
+        files=[("files", ("sample_feet.las", las_bytes, "text/plain"))],
+    )
+    assert inspect.status_code == 200
+    info = inspect.json()["files"][0]
+    depth_curve = info["curves"][0]
+    assert depth_curve["unit_conversion_applied"] is True
+    commit = client.post(
+        "/api/v1/import/logs/commit",
+        json={
+            "project_id": project_id,
+            "target_depth_uom": "m",
+            "files": [{
+                "file_id": info["file_id"],
+                "filename": info["filename"],
+                "metadata_overrides": info["metadata"],
+                "mnemonic_map": {depth_curve["raw_mnemonic"]: "DEPTH"},
+                "unit_map": {depth_curve["raw_mnemonic"]: depth_curve["raw_unit"]},
+            }],
+        },
+    )
+    assert commit.status_code == 200, commit.text
+    well_name = commit.json()["wells_imported"][0]["well_name"]
+    with test_db() as session:
+        project = Project.load(session, project_id=project_id)
+        assert project.get_well(well_name).depth_uom == "m"
+        data = project.get_well_data_optimized(well_name)
+        assert data["DEPTH"].min() == pytest.approx(2572.512, abs=1e-4)
+    engine.dispose()
+
+
+def test_log_import_rejects_duplicate_uwi_with_different_well_name(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(log_import_service, "STAGING_DIR", tmp_path / "staging")
+    monkeypatch.setattr(log_import_service, "is_demo_mode", lambda: False)
+    monkeypatch.setattr(database_service, "is_demo_mode", lambda: False)
+    engine = create_engine(f"sqlite:///{(tmp_path / 'test.db').as_posix()}")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine)
+
+    @contextmanager
+    def test_db():
+        with session_factory() as session:
+            try:
+                yield session
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+
+    monkeypatch.setattr(log_import_service, "get_db", test_db)
+    monkeypatch.setattr(database_service, "get_db", test_db)
+    with test_db() as session:
+        project_id = Project(session, name="UWIConflictTest").project_id
+        WellObject(
+            session,
+            project_id=project_id,
+            name="23-21-2",
+            uwi="1127",
+        )
+
+    las_bytes = b"""~Version
+VERS. 2.0 : VERSION
+WRAP. NO : WRAPPED
+~Well
+STRT.M 1000 : START
+STOP.M 1001 : STOP
+STEP.M 1 : STEP
+NULL. -999.25 : NULL
+WELL. 23-21-7 : WELL
+UWI. 1127 : UNIQUE WELL IDENTIFIER
+~Curve
+DEPT.M : DEPTH
+GR.API : GAMMA RAY
+~Ascii
+1000 50
+1001 60
+"""
+    inspect = client.post(
+        "/api/v1/import/logs/inspect",
+        files=[("files", ("23-21-7.las", las_bytes, "text/plain"))],
+    )
+    assert inspect.status_code == 200, inspect.text
+    info = inspect.json()["files"][0]
+    commit = client.post(
+        "/api/v1/import/logs/commit",
+        json={
+            "project_id": project_id,
+            "files": [
+                {
+                    "file_id": info["file_id"],
+                    "filename": info["filename"],
+                    "metadata_overrides": info["metadata"],
+                    "mnemonic_map": {
+                        curve["raw_mnemonic"]: curve["target_mnemonic"]
+                        for curve in info["curves"]
+                    },
+                    "unit_map": {
+                        curve["raw_mnemonic"]: curve["raw_unit"]
+                        for curve in info["curves"]
+                    },
+                }
+            ],
+        },
+    )
+    assert commit.status_code == 409
+    assert "UWI '1127' already belongs to well '23-21-2'" in commit.json()["detail"]
+    assert "No data was imported" in commit.json()["detail"]
+
+    legacy_upload = client.post(
+        f"/quick_pp/database/projects/{project_id}/read_las",
+        files=[("files", ("23-21-7.las", las_bytes, "text/plain"))],
+    )
+    assert legacy_upload.status_code == 409
+    assert "UWI '1127' already belongs to well '23-21-2'" in legacy_upload.json()["detail"]
+
+    with test_db() as session:
+        project = Project.load(session, project_id=project_id)
+        assert project.get_well_names() == ["23-21-2"]
+        assert project.get_well("23-21-2")._orm_well.curves == []
+    assert not list((tmp_path / "uploads" / "las_db").glob("*"))
+    engine.dispose()
 
 
 def test_mnemonic_mapper_and_unit_standardization():
@@ -289,6 +510,166 @@ def test_dlis_inspect_and_read_frame():
     assert 5000.0 < float(df["DEPTH"].max()) < 5500.0
 
 
+def test_lis_inspect_read_and_api_upload(tmp_path, monkeypatch):
+    class FakeDfsr:
+        index_mnem = "DEPT"
+        index_units = ".1IN"
+        spacing = 10
+        absent_value = -999.25
+        specs = [
+            type("Spec", (), {"mnem": "DEPT", "units": ".1IN"})(),
+            type("Spec", (), {"mnem": "GR", "units": "GAPI"})(),
+            type("Spec", (), {"mnem": "NPHI", "units": "%"})(),
+        ]
+
+        def sample_rates(self):
+            return {1, 2}
+
+    class FakeLogicalFile:
+        def data_format_specs(self):
+            return [FakeDfsr()]
+
+    class FakePhysicalFile:
+        logical_files = [FakeLogicalFile()]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+        def __len__(self):
+            return len(self.logical_files)
+
+        def __iter__(self):
+            return iter(self.logical_files)
+
+        def __getitem__(self, index):
+            return self.logical_files[index]
+
+    class EmptyPhysicalFile(FakePhysicalFile):
+        logical_files = [
+            type("EmptyLogicalFile", (), {"data_format_specs": lambda self: []})()
+        ]
+
+    def fake_curves(_logical_file, _dfsr, sample_rate=None):
+        if sample_rate == 1:
+            return np.rec.fromarrays(
+                [[1000.0, 1010.0], [10.0, 20.0]], names=["DEPT", "GR"]
+            )
+        return np.rec.fromarrays(
+            [[1000.0, 1005.0, 1010.0], [20.0, 30.0, 40.0]],
+            names=["DEPT", "NPHI"],
+        )
+
+    monkeypatch.setattr(
+        dlisio_lis, "load", lambda _path, error_handler=None: FakePhysicalFile()
+    )
+    monkeypatch.setattr(dlisio_lis, "curves", fake_curves)
+    monkeypatch.setattr(log_import_service, "STAGING_DIR", tmp_path / "staging")
+
+    inspected = client.post(
+        "/api/v1/import/logs/inspect",
+        files=[("files", ("legacy.lis", b"fixture", "application/octet-stream"))],
+    )
+    assert inspected.status_code == 200, inspected.text
+    file_info = inspected.json()["files"][0]
+    assert file_info["format"] == "LIS79"
+    assert file_info["metadata"]["well_name"] == "legacy"
+    assert file_info["dlis_frames"][0]["frame_name"] == "LIS-LF0-DFSR0"
+    depth_curve = next(curve for curve in file_info["curves"] if curve["raw_mnemonic"] == "DEPT")
+    assert depth_curve["target_mnemonic"] == "DEPTH"
+    assert depth_curve["unit_conversion_applied"] is True
+
+    staged_path = log_import_service._STAGED_FILES[file_info["file_id"]]["path"]
+    parser_info = inspect_lis(staged_path, filename=file_info["filename"])
+    direct_df, _, _ = read_lis_frame(
+        staged_path, frame_name=parser_info["frames"][0].frame_name, filename=file_info["filename"]
+    )
+    assert direct_df["DEPTH"].tolist() == pytest.approx([2.54, 2.5527, 2.5654])
+
+    result = _parse_single_log_file_worker(
+        {
+            "file_path": staged_path,
+            "filename": file_info["filename"],
+            "selected_dlis_frames": ["LIS-LF0-DFSR0"],
+            "target_depth_uom": "m",
+        }
+    )
+    well_data = result["well_data"]
+    assert well_data["DEPTH"].tolist() == pytest.approx([2.54, 2.5527, 2.5654])
+    assert well_data["GR"].tolist()[0] == pytest.approx(10.0)
+    assert well_data["NPHI"].tolist() == pytest.approx([0.2, 0.3, 0.4])
+
+    project_response = client.post(
+        "/quick_pp/database/projects", json={"name": "LIS79ImportTest"}
+    )
+    assert project_response.status_code == 200
+    committed = client.post(
+        "/api/v1/import/logs/commit",
+        json={
+            "project_id": project_response.json()["project_id"],
+            "target_depth_uom": "m",
+            "files": [
+                {
+                    "file_id": file_info["file_id"],
+                    "filename": file_info["filename"],
+                    "metadata_overrides": file_info["metadata"],
+                    "mnemonic_map": {
+                        curve["raw_mnemonic"]: curve["target_mnemonic"]
+                        for curve in file_info["curves"]
+                    },
+                    "unit_map": {
+                        curve["raw_mnemonic"]: curve["raw_unit"]
+                        for curve in file_info["curves"]
+                    },
+                    "selected_dlis_frames": ["LIS-LF0-DFSR0"],
+                }
+            ],
+        },
+    )
+    assert committed.status_code == 200, committed.text
+    assert committed.json()["status"] == "success"
+    assert committed.json()["wells_imported"][0]["row_count"] == 3
+
+    log_import_service._STAGED_FILES.pop(file_info["file_id"], None)
+
+    def load_with_predecessor_warning(_path, error_handler=None):
+        error_handler.critical(
+            "Problem: iodevice::index_record: predecessor/successor inconsistency\n"
+            "Action taken: Indexing stopped at physical tell 1934 (dec)"
+        )
+        return FakePhysicalFile()
+
+    monkeypatch.setattr(dlisio_lis, "load", load_with_predecessor_warning)
+    partial_inspection = client.post(
+        "/api/v1/import/logs/inspect",
+        files=[("files", ("partial.lis", b"fixture", "application/octet-stream"))],
+    )
+    assert partial_inspection.status_code == 200, partial_inspection.text
+    partial_file = partial_inspection.json()["files"][0]
+    assert any("indexing stopped early" in warning.lower() for warning in partial_file["qaqc_warnings"])
+    log_import_service._STAGED_FILES.pop(partial_file["file_id"], None)
+
+    def load_truncated_without_log_sets(_path, error_handler=None):
+        error_handler.critical(
+            "Problem: iodevice::index_record: physical record truncated\n"
+            "Action taken: Indexing stopped at physical tell 44432 (dec)"
+        )
+        return EmptyPhysicalFile()
+
+    monkeypatch.setattr(dlisio_lis, "load", load_truncated_without_log_sets)
+    staged_files_before_failure = set((tmp_path / "staging").iterdir())
+    failed_inspection = client.post(
+        "/api/v1/import/logs/inspect",
+        files=[("files", ("truncated.lis", b"fixture", "application/octet-stream"))],
+    )
+    assert failed_inspection.status_code == 400
+    assert "physical record truncated" in failed_inspection.json()["detail"]
+    assert "44432" in failed_inspection.json()["detail"]
+    assert set((tmp_path / "staging").iterdir()) == staged_files_before_failure
+
+
 def test_api_two_pass_log_inspect_and_commit_with_int64_headers():
     # Create project
     res_proj = client.post("/quick_pp/database/projects", json={"name": "ImportEngineTestProj"})
@@ -444,6 +825,8 @@ CTRY.  UK           : COUNTRY
 CTRY.               : DUPLICATE EMPTY COUNTRY SHOULD NOT OVERWRITE
 SRVC.  ATLAS        : SERVICE COMPANY
 DATE.  06-JAN-1981  : LOG DATE
+MFSAL.PPM 200000    : MUD FILTRATE SALINITY
+MFDEN.G/CC 1.0      : MUD FILTRATE DENSITY
 LATI.  56 41 57.80 N: LATITUDE SPACE SEPARATED DMS
 LONG.  02 15 23.30 E: LONGITUDE SPACE SEPARATED DMS
 GDAT.  MSL          : GEODETIC DATUM
@@ -470,6 +853,8 @@ GR  .GAPI : Gamma Ray
     assert meta["country"] == "UK"
     assert meta["field"] == "JOANNE"
     assert meta["service_company"] == "ATLAS"
+    assert meta["mud_filtrate_salinity"] == 200000.0
+    assert meta["mud_filtrate_density"] == 1.0
     assert meta["location"] == "CENTRAL NORTH SEA"
     assert meta["province"] == "UKCS"
     assert meta["log_date"] == "06-JAN-1981"
@@ -504,6 +889,8 @@ GR  .GAPI : Gamma Ray
     assert hdr["country"] == "UK"
     assert hdr["field"] == "JOANNE"
     assert hdr["service_company"] == "ATLAS"
+    assert hdr["mud_filtrate_salinity"] == 200000.0
+    assert hdr["mud_filtrate_density"] == 1.0
     assert hdr["location"] == "CENTRAL NORTH SEA"
     assert hdr["province"] == "UKCS"
     assert np.isclose(hdr["latitude"], 56.6993889, atol=1e-5)
@@ -517,6 +904,28 @@ GR  .GAPI : Gamma Ray
     assert res_cfg.status_code == 200
     assert res_cfg.json()["header"]["company"] == "Updated Operator"
     assert res_cfg.json()["header"]["country"] == "United Kingdom"
+    res_cfg = client.post(
+        f"/quick_pp/workspace/projects/{pid}/wells/{w_name}/config",
+        json={
+            "header": {
+                "mud_filtrate_salinity": 200000,
+                "mud_filtrate_density": 1.0,
+            }
+        },
+    )
+    assert res_cfg.status_code == 200
+    assert res_cfg.json()["header"]["mud_filtrate_salinity"] == 200000
+    assert res_cfg.json()["header"]["mud_filtrate_density"] == 1.0
+    res_invalid_salinity = client.post(
+        f"/quick_pp/workspace/projects/{pid}/wells/{w_name}/config",
+        json={"header": {"mud_filtrate_salinity": -1}},
+    )
+    assert res_invalid_salinity.status_code == 422
+    res_invalid_density = client.post(
+        f"/quick_pp/workspace/projects/{pid}/wells/{w_name}/config",
+        json={"header": {"mud_filtrate_density": 0}},
+    )
+    assert res_invalid_density.status_code == 422
 
 
 def test_same_well_las_import_append_skip_identical_and_suffix_different():
@@ -630,5 +1039,3 @@ NPHI.V/V    : Neutron Porosity
     assert np.allclose(curves_data["RHOB"], [2.35, 2.40, 2.45], atol=1e-3)
     assert np.allclose(curves_data["RHOB_1"], [2.50, 2.55, 2.60], atol=1e-3)
     assert np.allclose(curves_data["NPHI"], [0.22, 0.20, 0.18], atol=1e-3)
-
-

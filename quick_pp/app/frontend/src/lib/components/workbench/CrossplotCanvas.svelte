@@ -5,11 +5,22 @@
 	import { projectData } from '$lib/state/projectData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
 	import {
+		getCurveUnit,
 		getRockTypeColor,
 		LITHOLOGY_TRACK_SPECS,
 		PETRO_COLORS
 	} from '$lib/utils/petrophysicsColors';
 	import { fmtDepth, fmtNum } from '$lib/utils/formatters';
+	import { crossplotGroups, crossplotLabel, resolveCrossplot } from '$lib/utils/crossplots';
+	import { curveDepthSeries } from '$lib/utils/curveDepth';
+	import {
+		estimateBqvReferenceRw,
+		fillMissingCurve,
+		fitBqvCrossplot,
+		fitBqvCrossplotLine,
+		fitBqvCrossplotWithFixedIntercept,
+		getBqvFitIndices
+	} from '$lib/utils/saturation';
 	import CoreDepthShiftPanel from '$lib/components/workbench/CoreDepthShiftPanel.svelte';
 	import VshCalibrationPanel from '$lib/components/workbench/VshCalibrationPanel.svelte';
 
@@ -26,29 +37,152 @@
 	let swirrLogY = $state<boolean>(false);
 	let showCoreShiftDrawer = $state<boolean>(false);
 	let showVshCalibDrawer = $state<boolean>(false);
+	let emptyPlotMessage = $state<string | null>(null);
 
-	let effectiveMode = $derived.by(() => {
-		if (workbench.crossplotTemplateOverride !== 'auto') {
-			return workbench.crossplotTemplateOverride;
-		}
-		if (workbench.scope === 'multi-well') {
-			if (workbench.multiWellStep === 'qaqc') return 'mw-distribution';
-			if (workbench.multiWellStep === 'swirr-corr') return 'swirr-fit';
-			if (workbench.multiWellStep === 'shf') return 'shf';
-			return 'phi-k';
-		}
-		switch (workbench.singleWellStep) {
-			case 'qaqc':
-				return 'histogram';
-			case 'perm':
-				return 'phi-k';
-			case 'saturation':
-				return 'pickett';
-			case 'scal':
-				return 'core-qc';
+	let effectiveMode = $derived(workbench.effectiveCrossplot);
+	let autoMode = $derived(resolveCrossplot(workbench.crossplotContext, 'auto'));
+	let plotGroups = $derived(crossplotGroups(workbench.crossplotContext));
+
+	function plotLabel(id: NonNullable<typeof effectiveMode>) {
+		return crossplotLabel(id, workbench.scope === 'multi-well' ? projectData.drtMethod : 'fzi');
+	}
+
+	function getEmptyPlotMessage(mode: typeof effectiveMode, traces: any[]): string | null {
+		const hasTrace = (matches: (name: string) => boolean) =>
+			traces.some(
+				(trace) =>
+					matches(String(trace.name ?? '')) &&
+					(Array.isArray(trace.x) ? trace.x.length > 0 : Array.isArray(trace.y) && trace.y.length > 0)
+			);
+		switch (mode) {
+		case 'curve-depth':
+			return traces.some((trace) => trace.x?.some((value: number | null) => value !== null))
+				? null
+				: 'No curve values in the current depth and zone selection.';
+		case 'histogram':
+				return hasTrace(() => true) ? null : 'No values for the selected curve. Select a populated curve or adjust the depth and zone filters.';
+			case 'mw-distribution':
+				return projectData.multiWellQaqcResult?.plot_data?.well_names?.length
+					? null
+					: 'No multi-well distribution data. Load wells and run Data & QAQC.';
+			case 'nphi-rhob':
+				return hasTrace((name) => name.startsWith('Log Data') || name.startsWith('Coal Flagged') || name.startsWith('Badhole Flagged'))
+					? null
+					: 'No paired NPHI and RHOB values in the current selection. Load the curves or adjust the filters.';
+			case 'thomas-stieber':
+				return hasTrace((name) => name.startsWith('Log Data'))
+					? null
+					: 'No paired porosity and shale-volume values in the current selection. Calculate them or adjust the filters.';
+			case 'pickett':
+				return hasTrace((name) => name === 'Pickett (Rt vs Φ)')
+					? null
+					: 'No valid RT and PHIT pairs in the current selection. Load or calculate the curves, or adjust the filters.';
+			case 'bqv':
+				return hasTrace((name) => name === 'Log samples')
+					? null
+					: 'No valid RT, porosity and shale-volume samples in the current selection. Check the curves and filters.';
+			case 'sw-comparison':
+				return hasTrace(() => true)
+					? null
+					: 'No saturation or shale-volume data in the current selection. Calculate the curves or adjust the filters.';
+			case 'core-qc':
+				return wellData.coreComparison.rows.length
+					? null
+					: 'No matched core and log data in the current selection. Load core samples and calculate porosity or permeability.';
+			case 'vsh-qc':
+				return wellData.vshComparison.rows.length
+					? null
+					: 'No Vsh calibration data in the current selection. Check GR, NPHI and RHOB curves and filters.';
 			default:
-				return 'nphi-rhob';
+				return null;
 		}
+	}
+
+	let bqvPlotData = $derived.by(() => {
+		const visibleIndices = wellData.visibleIndices;
+		const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
+		const tsPhit = wellData.curves['PHIT_SAND'];
+		const useTs =
+			workbench.tsParams.useInSaturation &&
+			Boolean(tsPhit?.some((value) => Number.isFinite(value)));
+		const rawRt = wellData.curves['RT'] ?? [];
+		const rawPhi = wellData.curves['PHIT'] ?? [];
+		const rawVcl = wellData.curves['VCLAY'] ?? wellData.curves['VSHALE'] ?? [];
+		const rtArr = useTs ? fillMissingCurve(wellData.curves['RSAND_TS'], rawRt) : rawRt;
+		const phiArr = useTs ? fillMissingCurve(tsPhit, rawPhi) : rawPhi;
+		const vclKey =
+			useTs && wellData.curves['VSH_DIS'] !== undefined
+				? 'VSH_DIS'
+				: wellData.curves['VCLAY'] !== undefined
+					? 'VCLAY'
+					: 'VSHALE';
+		const vclArr =
+			useTs && vclKey === 'VSH_DIS'
+				? fillMissingCurve(wellData.curves['VSH_DIS'], rawVcl)
+				: rawVcl;
+		const rtKey = useTs && wellData.curves['RSAND_TS'] !== undefined ? 'RSAND_TS' : 'RT';
+		const phiKey = useTs && tsPhit !== undefined ? 'PHIT_SAND' : 'PHIT';
+		const m = workbench.saturationParams.m;
+		const allFit = fitBqvCrossplot(rtArr, phiArr, vclArr, dept, visibleIndices, m);
+		const selectedFit = fitBqvCrossplot(
+			rtArr,
+			phiArr,
+			vclArr,
+			dept,
+			getBqvFitIndices(visibleIndices, workbench.brushedDepthIndices),
+			m
+		);
+		const params = workbench.saturationParams;
+		const defaultReferenceDepth = visibleIndices.reduce(
+			(maxDepth, index) =>
+				Number.isFinite(dept[index]) ? Math.max(maxDepth, dept[index]) : maxDepth,
+			wellData.depthRange.max
+		);
+		const referenceDepth = params.bqvReferenceDepth ?? defaultReferenceDepth;
+		const tvd = wellData.curves['TVDSS'] ?? wellData.curves['TVD'] ?? dept;
+		const fallbackTvd = wellData.curves['DEPTH'] ?? dept;
+		const referenceRw = estimateBqvReferenceRw(
+			params,
+			dept,
+			tvd,
+			fallbackTvd,
+			visibleIndices,
+			referenceDepth
+		);
+		const anchoredAutoFit = fitBqvCrossplotWithFixedIntercept(
+			selectedFit.points,
+			params.a > 0 && referenceRw.rw > 0
+				? 1 / (params.a * referenceRw.rw)
+				: Number.NaN
+		);
+		const fit =
+			params.bqvFitMode === 'manual'
+				? fitBqvCrossplotLine(
+						selectedFit.points,
+						params.bqvManualSlope,
+						params.bqvManualIntercept
+					)
+				: anchoredAutoFit;
+		return { allFit, fit, rtKey, phiKey, vclKey, m, referenceRw };
+	});
+
+	let bqvPlotSummary = $derived.by(() => {
+		const points = bqvPlotData.fit.points;
+		const depths = points.map((point) => point.depth);
+		return {
+			visibleCount: bqvPlotData.allFit.points.length,
+			fitCount: points.length,
+			minDepth: depths.length > 0 ? Math.min(...depths) : null,
+			maxDepth: depths.length > 0 ? Math.max(...depths) : null,
+			hasSelection: workbench.brushedDepthIndices.size > 0,
+			fit: bqvPlotData.fit,
+			mode: workbench.saturationParams.bqvFitMode,
+			rw: bqvPlotData.referenceRw.rw,
+			effectiveBqv:
+				bqvPlotData.fit.slope === null
+					? null
+					: bqvPlotData.fit.slope * workbench.saturationParams.a
+		};
 	});
 
 	const MW_PALETTE = [
@@ -128,6 +262,52 @@
 				titlefont: { family: 'Inter', size: 11, color: '#0F172A' }
 			}
 		};
+
+		if (effectiveMode === 'curve-depth') {
+			const selected = workbench.selectedQaqcCurve;
+			const comparison = workbench.qaqcEditComparison;
+			const currentComparison =
+				comparison?.projectId === workbench.projectId &&
+				comparison?.wellId === workbench.wellId &&
+				comparison?.wellLoadGeneration === wellData.wellLoadGeneration
+					? comparison
+					: null;
+			const series = curveDepthSeries(
+				wellData.curves,
+				deptAll,
+				indices,
+				selected,
+				workbench.qaqcEditorMode,
+				workbench.qaqcSpliceRuns,
+				currentComparison
+			);
+			const colors = ['#64748B', '#D97706', '#0D9488', '#9333EA', '#EA580C'];
+			series.forEach((item, index) => {
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: item.name,
+					x: item.x,
+					y: item.y,
+					customdata: item.customdata,
+					connectgaps: false,
+					line: {
+						color: item.role === 'result' ? '#2563EB' : colors[index % colors.length],
+						width: item.role === 'result' ? 2 : 1.3,
+						dash: item.role === 'result' ? 'solid' : 'dash'
+					},
+					hovertemplate: `${item.name}<br>Value: %{x:.4g}<br>Depth: %{y:.2f} m<extra></extra>`
+				});
+			});
+			const unit = getCurveUnit(selected);
+			baseLayout.xaxis.title = { text: unit ? `Curve value (${unit})` : 'Curve value' };
+			baseLayout.xaxis.fixedrange = true;
+			baseLayout.yaxis.autorange = 'reversed';
+			baseLayout.yaxis.title = { text: 'Depth (m)' };
+			baseLayout.dragmode = 'zoom';
+			baseLayout.uirevision = `curve-depth-${workbench.projectId}-${workbench.wellId}-${selected}`;
+			return { traces, layout: baseLayout };
+		}
 
 		if (effectiveMode === 'histogram') {
 			const curveName = workbench.selectedQaqcCurve || 'GR';
@@ -875,7 +1055,7 @@
 		}
 
 		if (effectiveMode === 'thomas-stieber') {
-			const phitArr = wellData.curves['PHIT'] ?? wellData.curves['PHIE'] ?? [];
+			const phitArr = wellData.curves['PHIT'] ?? [];
 			const vshTsArr = wellData.curves['VSH_TS'];
 			const vclayArr = wellData.curves['VCLAY'] ?? wellData.curves['VSHALE'] ?? [];
 			const grArr = wellData.curves['GR'] ?? [];
@@ -1689,11 +1869,7 @@
 					});
 				}
 			} else {
-				const phitArr =
-					wellData.curves['PHIT'] ??
-					wellData.curves['PHIE'] ??
-					wellData.curves['NPHI'] ??
-					[];
+				const phitArr = wellData.curves['PHIT'] ?? [];
 				const permArr = wellData.curves['PERM'] ?? [];
 				const cporeArr = wellData.curves['CPORE'] ?? [];
 				const cpermArr = wellData.curves['CPERM'] ?? [];
@@ -1893,10 +2069,202 @@
 			return { traces, layout: baseLayout };
 		}
 
+		if (effectiveMode === 'sw-comparison') {
+			const vshKey = 'VSHALE';
+			const vclay = wellData.curves['VCLAY'] ?? [];
+			const vsilt = wellData.curves['VSILT'] ?? [];
+			const savedVshale = wellData.curves['VSHALE'] ?? [];
+			const isSscModel = workbench.lithoParams.model === 'ssc';
+			const getVshale = (index: number) => {
+				const saved = savedVshale[index];
+				if (Number.isFinite(saved) && saved >= 0 && saved <= 1) return saved;
+				const clay = vclay[index];
+				const silt = vsilt[index];
+				if (isSscModel && Number.isFinite(clay) && Number.isFinite(silt)) {
+					return clay + silt;
+				}
+				if (!isSscModel && Number.isFinite(clay)) {
+					return clay;
+				}
+				return savedVshale[index];
+			};
+			const models = [
+				{ key: 'SWT_ARCHIE', label: 'Archie', color: '#64748B', method: 'archie' },
+				{
+					key: 'SWT_WAXMAN',
+					label: 'Waxman-Smits',
+					color: '#2563EB',
+					method: 'waxman_smits'
+				},
+				{ key: 'SWT_SIMANDOUX', label: 'Simandoux', color: '#D97706', method: 'simandoux' },
+				{
+					key: 'SWT_INDONESIAN',
+					label: 'Indonesian',
+					color: '#059669',
+					method: 'indonesian'
+				},
+				{
+					key: 'SWT_DUAL_WATER',
+					label: 'Dual Water',
+					color: '#7C3AED',
+					method: 'dual_water'
+				}
+			] as const;
+
+			const vshX: number[] = [];
+			const vshY: number[] = [];
+			const vshIndices: number[] = [];
+			for (const idx of indices) {
+				const vsh = getVshale(idx);
+				const depth = deptAll[idx];
+				if (Number.isFinite(vsh) && vsh >= 0 && vsh <= 1 && Number.isFinite(depth)) {
+					vshX.push(vsh);
+					vshY.push(depth);
+					vshIndices.push(idx);
+				}
+			}
+
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: vshKey,
+				x: vshX,
+				y: vshY,
+				xaxis: 'x',
+				customdata: vshIndices,
+				line: { color: '#16A34A', width: 1.5 },
+				fill: 'tozerox',
+				fillcolor: 'rgba(22, 163, 74, 0.16)',
+				hovertemplate: `${vshKey}: %{x:.3f} v/v<br>Depth: %{y:.2f} m<extra></extra>`
+			});
+
+			for (const model of models) {
+				const modelSw = wellData.curves[model.key] ?? [];
+				const xs: number[] = [];
+				const ys: number[] = [];
+				const customIdx: number[] = [];
+				const vshAtDepth: (number | null)[] = [];
+				for (const idx of indices) {
+					const modelValue = modelSw[idx];
+					if (
+						Number.isFinite(modelValue) &&
+						modelValue >= 0 &&
+						modelValue <= 1 &&
+						Number.isFinite(deptAll[idx])
+					) {
+						xs.push(modelValue);
+						ys.push(deptAll[idx]);
+						customIdx.push(idx);
+						const vsh = getVshale(idx);
+						vshAtDepth.push(
+							Number.isFinite(vsh) && vsh >= 0 && vsh <= 1 ? vsh : null
+						);
+					}
+				}
+				const isSelected = workbench.saturationParams.method === model.method;
+				traces.push({
+					type: 'scatter',
+					mode: 'lines+markers',
+					name: model.label,
+					x: xs,
+					y: ys,
+					xaxis: 'x2',
+					customdata: customIdx,
+					text: vshAtDepth,
+					marker: {
+						size: isSelected ? 4 : 2.5,
+						color: model.color,
+						opacity: isSelected ? 0.95 : 0.65,
+						line: { color: '#FFFFFF', width: 0.4 }
+					},
+					line: { color: model.color, width: isSelected ? 2.2 : 1.2 },
+					hovertemplate: `Depth: %{y:.2f} m<br>${model.label} Sw: %{x:.3f}<br>${vshKey}: %{text:.3f}<extra></extra>`
+				});
+			}
+
+			baseLayout.dragmode = 'lasso';
+			baseLayout.xaxis.domain = [0, 0.24];
+			baseLayout.xaxis.title = { text: `${vshKey} (v/v)` };
+			baseLayout.xaxis.range = [0, 1];
+			baseLayout.xaxis.anchor = 'y';
+			baseLayout.xaxis.fixedrange = true;
+			baseLayout.xaxis2 = {
+				...baseLayout.xaxis,
+				domain: [0.34, 1],
+				title: { text: 'Water Saturation Sw (v/v)' },
+				range: [1, 0],
+				anchor: 'y'
+			};
+			baseLayout.yaxis.autorange = 'reversed';
+			baseLayout.yaxis.title = { text: 'Depth (m)' };
+			return { traces, layout: baseLayout };
+		}
+
+		if (effectiveMode === 'bqv') {
+			const { allFit, fit, rtKey, phiKey, vclKey, m } = bqvPlotData;
+			const xs = allFit.points.map((point) => point.x);
+			const ys = allFit.points.map((point) => point.y);
+			const depths = allFit.points.map((point) => point.depth);
+			const customIdx = allFit.points.map((point) => point.index);
+
+			traces.push({
+				type: 'scatter',
+				mode: 'markers',
+				name: 'Log samples',
+				showlegend: false,
+				x: xs,
+				y: ys,
+				customdata: customIdx,
+				text: depths,
+				marker: {
+					size: 6,
+					color: '#2563EB',
+					opacity: 0.7,
+					line: { color: '#FFFFFF', width: 0.6 }
+				},
+				hovertemplate:
+					`Depth: %{text:.2f} m<br>${vclKey}/${phiKey}: %{x:.4f}<br>` +
+					`1/(${rtKey}·${phiKey}<sup>${m}</sup>): %{y:.4f} 1/ohm·m<extra></extra>`
+			});
+
+			if (fit.slope !== null && fit.intercept !== null) {
+				const { slope, intercept, r2 } = fit;
+				const a = workbench.saturationParams.a;
+				const effectiveBqv = slope * a;
+				const fitXs = fit.points.map((point) => point.x);
+				const minX = Math.min(...fitXs);
+				const maxX = Math.max(...fitXs);
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'BQv fit',
+					showlegend: false,
+					x: [minX, maxX],
+					y: [slope * minX + intercept, slope * maxX + intercept],
+					line: { color: '#DC2626', width: 2, dash: 'dash' },
+					hovertemplate:
+						`Fit slope (BQv/a): ${fmtNum(slope, 4)}<br>` +
+						`Effective BQv (a×slope): ${fmtNum(effectiveBqv, 4)}<br>` +
+						`Intercept (1/aRw): ${fmtNum(intercept, 4)} 1/ohm·m<br>` +
+						`R²: ${r2 === null ? '—' : fmtNum(r2, 4)}<extra></extra>`
+				});
+			}
+
+			baseLayout.showlegend = false;
+			baseLayout.margin.t = 10;
+			baseLayout.xaxis.title = { text: `${vclKey} / ${phiKey} (v/v)` };
+			baseLayout.xaxis.range = [0, 5];
+			baseLayout.yaxis.title = {
+				text: `1 / (${rtKey} · ${phiKey}<sup>${m}</sup>) (1 / ohm·m)`
+			};
+			baseLayout.yaxis.range = [0, 50];
+			return { traces, layout: baseLayout };
+		}
+
 		if (effectiveMode === 'pickett') {
-			const phiArr =
-				wellData.curves['PHIT'] ?? wellData.curves['PHIE'] ?? wellData.curves['NPHI'] ?? [];
+			const phiArr = wellData.curves['PHIT'] ?? [];
 			const rtArr = wellData.curves['RT'] ?? [];
+			const colorCurve = wellData.curves['VCLAY'] !== undefined ? 'VCLAY' : 'GR';
 			const vclArr = wellData.curves['VCLAY'] ?? wellData.curves['GR'] ?? [];
 
 			const xs: number[] = [];
@@ -1926,7 +2294,14 @@
 					size: 5.5,
 					color: cols,
 					colorscale: 'YlGnBu',
-					opacity: 0.85
+					showscale: true,
+					opacity: 0.85,
+					colorbar: {
+						title: { text: colorCurve, font: { size: 9 } },
+						thickness: 10,
+						len: 0.75,
+						tickfont: { family: 'JetBrains Mono', size: 8 }
+					}
 				},
 				hovertemplate: 'Rt: %{x:.2f} ohm.m<br>Φ: %{y:.3f} v/v<extra></extra>'
 			});
@@ -4219,7 +4594,6 @@
 			void workbench.lithoParams.coalNphiMin;
 		} else if (mode === 'thomas-stieber') {
 			void wellData.curves['PHIT'];
-			void wellData.curves['PHIE'];
 			void wellData.curves['VSH_TS'];
 			void wellData.curves['VCLAY'];
 			void wellData.curves['VSHALE'];
@@ -4231,10 +4605,51 @@
 			void wellData.curves[cName];
 			void wellData.curves[`${cName}_ORI`];
 			void wellData.stats[cName];
+		} else if (mode === 'curve-depth') {
+			void wellData.curves;
+			void workbench.selectedQaqcCurve;
+			void workbench.qaqcEditorMode;
+			void workbench.qaqcSpliceRuns;
+			void workbench.qaqcEditComparison;
+			void workbench.projectId;
+			void workbench.wellId;
+			void wellData.wellLoadGeneration;
+		} else if (mode === 'sw-comparison') {
+			void wellData.curves['DEPT'];
+			void wellData.curves['DEPTH'];
+			void wellData.curves['VSHALE'];
+			void wellData.curves['VCLAY'];
+			void wellData.curves['VSILT'];
+			void wellData.curves['SWT_ARCHIE'];
+			void wellData.curves['SWT_WAXMAN'];
+			void wellData.curves['SWT_SIMANDOUX'];
+			void wellData.curves['SWT_INDONESIAN'];
+			void wellData.curves['SWT_DUAL_WATER'];
+			void workbench.saturationParams.method;
+			void workbench.lithoParams.model;
+		} else if (mode === 'bqv') {
+			void wellData.curves['RT'];
+			void wellData.curves['PHIT'];
+			void wellData.curves['VCLAY'];
+			void wellData.curves['VSHALE'];
+			void wellData.curves['PHIT_SAND'];
+			void wellData.curves['RSAND_TS'];
+			void wellData.curves['VSH_DIS'];
+			void workbench.tsParams.useInSaturation;
+			void workbench.saturationParams.m;
+			void workbench.saturationParams.a;
+			void workbench.saturationParams.rwMode;
+			void workbench.saturationParams.rwPickett;
+			void workbench.saturationParams.measSystem;
+			void workbench.saturationParams.waterSalinity;
+			void workbench.saturationParams.surfaceTemp;
+			void workbench.saturationParams.tempGradient;
+			void workbench.saturationParams.bqvReferenceDepth;
+			void workbench.saturationParams.bqvFitMode;
+			void workbench.saturationParams.bqvManualSlope;
+			void workbench.saturationParams.bqvManualIntercept;
 		} else if (mode === 'pickett') {
 			void wellData.curves['PHIT'];
-			void wellData.curves['PHIE'];
-			void wellData.curves['NPHI'];
 			void wellData.curves['RT'];
 			void wellData.curves['VCLAY'];
 			void wellData.curves['GR'];
@@ -4337,7 +4752,14 @@
 				applyBrushedSelectionOverlay(res.traces);
 				return res;
 			});
+			emptyPlotMessage = untrack(() => getEmptyPlotMessage(mode, traces));
 			layout.autosize = true;
+			const depthPlot = mode === 'curve-depth' || mode === 'sw-comparison' ||
+				(mode === 'core-qc' && workbench.coreQcView !== 'dual') ||
+				(mode === 'vsh-qc' && workbench.vshQcView !== 'gr-fit');
+			if (depthPlot && !layout.uirevision) {
+				layout.uirevision = `${mode}-${workbench.projectId}-${workbench.wellId}-${workbench.coreQcView}-${workbench.vshQcView}`;
+			}
 			const visibleLegendTraces = traces.filter(
 				(t: any) => t.showlegend !== false && t.name
 			).length;
@@ -4355,10 +4777,23 @@
 				PlotlyLib.react(plotEl, traces, layout, {
 					responsive: true,
 					displaylogo: false,
+					scrollZoom: depthPlot,
 					modeBarButtonsToAdd: ['lasso2d', 'select2d']
 				})
 			).then(() => {
 				if (cancelled || !plotEl) return;
+				for (const axisName of ['xaxis', 'xaxis2', 'yaxis', 'yaxis2']) {
+					const axisLayout = layout[axisName];
+					const fullAxis = (plotEl as any)._fullLayout?.[axisName];
+					if (!axisLayout || !fullAxis) continue;
+					const initialRange = Array.isArray(axisLayout.range)
+						? axisLayout.range
+						: fullAxis.range;
+					if (Array.isArray(initialRange) && initialRange.length === 2) {
+						fullAxis._rangeInitial0 = initialRange[0];
+						fullAxis._rangeInitial1 = initialRange[1];
+					}
+				}
 				if (!eventsBound && plotEl) {
 					eventsBound = true;
 					(plotEl as any).on('plotly_selected', (ev: any) => {
@@ -4598,24 +5033,14 @@
 				bind:value={workbench.crossplotTemplateOverride}
 				class="h-5 max-w-[195px] truncate rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-[11px] font-medium text-[var(--text-primary)] focus:outline-none"
 			>
-				<option value="auto">Auto ({effectiveMode.toUpperCase()})</option>
-				<option value="mw-distribution">Multi-Well Distribution (QAQC)</option>
-				<option value="nphi-rhob">NPHI vs. RHOB (SSC)</option>
-				<option value="vsh-qc">Vsh Calibration (VSH_GR × VSH_DN)</option>
-				<option value="thomas-stieber">Thomas-Stieber (Vsh vs. Φ)</option>
-				<option value="phi-k"
-					>Porosity vs. Perm ({projectData.drtMethod === 'winland'
-						? 'Winland R35'
-						: projectData.drtMethod === 'lucia'
-							? 'Lucia RFN'
-							: 'FZI'})</option
-				>
-				<option value="core-qc">Core Parity &amp; Error (Φ &amp; K)</option>
-				<option value="pickett">Pickett Plot (Rt vs Φ)</option>
-				<option value="relperm">Rel-Perm & Fractional Flow (SCAL)</option>
-				<option value="swirr-fit">Swirr &amp; Pc Fit (SCAL)</option>
-				<option value="shf">Sw vs. Height (SHF)</option>
-				<option value="histogram">Single-Well Histogram</option>
+				<option value="auto">Auto — {autoMode ? plotLabel(autoMode) : 'No recommended plot'}</option>
+				{#each plotGroups as group (group.label)}
+					<optgroup label={group.label}>
+						{#each group.plots as plot (plot.id)}
+							<option value={plot.id}>{plotLabel(plot.id)}</option>
+						{/each}
+					</optgroup>
+				{/each}
 			</select>
 		</div>
 
@@ -4872,6 +5297,50 @@
 			</div>
 		{/if}
 	</div>
+
+	{#if effectiveMode === 'bqv'}
+		<div
+			class="mono-num flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-[var(--border-hairline)] bg-slate-50/90 px-2.5 py-1 text-[10px]"
+		>
+			<div class="flex flex-wrap items-center gap-x-1.5">
+				<strong class="text-slate-800">Fit interval:</strong>
+				<span>
+					{bqvPlotSummary.hasSelection ? 'Lasso selection' : 'All visible samples'} —
+					<strong>{bqvPlotSummary.fitCount}</strong> valid of {bqvPlotSummary.visibleCount}
+				</span>
+				{#if bqvPlotSummary.minDepth !== null && bqvPlotSummary.maxDepth !== null}
+					<span class="text-[var(--text-muted)]">
+						({fmtDepth(bqvPlotSummary.minDepth)}–{fmtDepth(bqvPlotSummary.maxDepth)})
+					</span>
+				{:else if bqvPlotSummary.hasSelection}
+					<span class="text-amber-800">No valid BQv points in this selection</span>
+				{/if}
+				{#if bqvPlotSummary.hasSelection}
+					<button
+						type="button"
+						onclick={() => workbench.setBrushedIndices([])}
+						class="font-semibold text-blue-700 hover:underline"
+					>
+						Clear selection
+					</button>
+				{/if}
+			</div>
+			<div class="flex flex-wrap items-center gap-x-2 text-slate-700">
+				<span>{bqvPlotSummary.mode === 'manual' ? 'Manual' : 'Autofit'}</span>
+				<span>Slope: <strong>{fmtNum(bqvPlotSummary.fit.slope, 4)}</strong></span>
+				{#if bqvPlotSummary.mode === 'manual'}
+					<span>Intercept: <strong>{fmtNum(bqvPlotSummary.fit.intercept, 4)}</strong></span>
+				{:else}
+					<span>Fixed 1/(a·Rw): <strong>{fmtNum(bqvPlotSummary.fit.intercept, 4)}</strong></span>
+				{/if}
+				<span>R²: <strong>{fmtNum(bqvPlotSummary.fit.r2, 3)}</strong></span>
+				{#if bqvPlotSummary.mode === 'auto'}
+					<span>Rw: <strong>{fmtNum(bqvPlotSummary.rw, 4)} Ω·m</strong></span>
+				{/if}
+				<span>a×slope: <strong>{fmtNum(bqvPlotSummary.effectiveBqv, 4)}</strong></span>
+			</div>
+		</div>
+	{/if}
 
 	{#if isScalCrossplotActive && scalQcSummary.samples.length > 0}
 		<div
@@ -5130,6 +5599,16 @@
 
 	<div class="relative min-h-0 flex-1 overflow-hidden">
 		<div bind:this={plotEl} class="absolute inset-0 h-full w-full"></div>
+		{#if effectiveMode !== null && emptyPlotMessage}
+			<div role="status" class="pointer-events-none absolute inset-x-2 top-1 rounded-xs border border-amber-200 bg-amber-50/95 px-2 py-1 text-center text-[10px] text-amber-900">
+				{emptyPlotMessage}
+			</div>
+		{/if}
+		{#if effectiveMode === null}
+			<div class="absolute inset-0 flex items-center justify-center bg-[var(--bg-surface)] p-4 text-center text-xs text-[var(--text-secondary)]">
+				No crossplot is recommended for this step. Choose a plot from another workflow step or standalone module.
+			</div>
+		{/if}
 	</div>
 
 	{#if projectData.selectedScalPointIds.length > 0}
@@ -5183,22 +5662,39 @@
 		</div>
 	{/if}
 
-	{#if brushedSummary}
+	{#if brushedSummary && effectiveMode !== 'bqv'}
 		<div
-			class="mono-num flex h-6 shrink-0 items-center justify-between border-t border-[var(--border-hairline)] bg-blue-50/70 px-2.5 text-[11px] text-blue-900"
+			class="mono-num flex min-h-6 shrink-0 flex-wrap items-center justify-between gap-1 border-t border-[var(--border-hairline)] bg-blue-50/70 px-2.5 py-0.5 text-[11px] text-blue-900"
 		>
 			<span>
 				Lasso: <strong>{brushedSummary.count} pts</strong> ({fmtDepth(
 					brushedSummary.min
 				)}–{fmtDepth(brushedSummary.max)})
 			</span>
-			<button
-				type="button"
-				onclick={() => workbench.setBrushedIndices([])}
-				class="text-[10px] font-semibold text-blue-700 hover:underline"
-			>
-				Clear Selection ×
-			</button>
+			<div class="flex items-center gap-2">
+				{#if workbench.scope === 'single-well'}
+					<label
+						class="flex items-center gap-1 rounded-xs border px-1.5 py-0.5 text-[10px] font-medium {workbench.useBrushedCalculationFilter
+							? 'border-amber-300 bg-amber-100 text-amber-900'
+							: 'border-blue-200 bg-blue-50 text-blue-700'}"
+						title="When enabled, calculation results update only the selected rows. Other rows are preserved."
+					>
+						<input
+							type="checkbox"
+							bind:checked={workbench.useBrushedCalculationFilter}
+							class="h-3 w-3 rounded-sm"
+						/>
+						Apply to selection
+					</label>
+				{/if}
+				<button
+					type="button"
+					onclick={() => workbench.setBrushedIndices([])}
+					class="text-[10px] font-semibold text-blue-700 hover:underline"
+				>
+					Clear Selection ×
+				</button>
+			</div>
 		</div>
 	{/if}
 </div>

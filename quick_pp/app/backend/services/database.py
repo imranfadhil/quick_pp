@@ -576,13 +576,24 @@ def delete_well(project_id: int, well_name: str, request: Request):
                 if target_orm_well is not None:
                     wid = target_orm_well.well_id
                     session.expunge_all()
-                    session.execute(
-                        text(
-                            "DELETE FROM curve_data WHERE curve_id IN ("
-                            "SELECT curve_id FROM curves WHERE well_id = :wid)"
-                        ),
-                        {"wid": wid},
-                    )
+                    for statement in (
+                        "DELETE FROM curve_data WHERE curve_id IN "
+                        "(SELECT curve_id FROM curves WHERE well_id = :wid)",
+                        "DELETE FROM core_measurements WHERE sample_id IN "
+                        "(SELECT sample_id FROM core_samples WHERE well_id = :wid)",
+                        "DELETE FROM relative_permeability WHERE sample_id IN "
+                        "(SELECT sample_id FROM core_samples WHERE well_id = :wid)",
+                        "DELETE FROM capillary_pressure WHERE sample_id IN "
+                        "(SELECT sample_id FROM core_samples WHERE well_id = :wid)",
+                        "DELETE FROM formation_tops WHERE well_id = :wid",
+                        "DELETE FROM fluid_contacts WHERE well_id = :wid",
+                        "DELETE FROM pressure_tests WHERE well_id = :wid",
+                        "DELETE FROM perforations WHERE well_id = :wid",
+                        "DELETE FROM well_surveys WHERE well_id = :wid",
+                        "DELETE FROM core_samples WHERE well_id = :wid",
+                        "DELETE FROM curves WHERE well_id = :wid",
+                    ):
+                        session.execute(text(statement), {"wid": wid})
                     session.execute(
                         text("DELETE FROM wells WHERE well_id = :wid"),
                         {"wid": wid},
@@ -1399,6 +1410,17 @@ def project_read_las(
             "files": [Path(p).name for p in saved_paths],
         }
 
+    except db_objects.WellIdentityConflictError as e:
+        cleanup_errors = []
+        for saved_path in saved_paths:
+            try:
+                Path(saved_path).unlink(missing_ok=True)
+            except OSError as cleanup_error:
+                cleanup_errors.append(f"{saved_path}: {cleanup_error}")
+        detail = str(e)
+        if cleanup_errors:
+            detail += " Failed to remove uploaded file(s): " + "; ".join(cleanup_errors)
+        raise HTTPException(status_code=409, detail=detail) from e
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:

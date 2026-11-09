@@ -2,7 +2,9 @@
 
 The Multi-Well workspace harmonizes multi-vintage logging suites across the entire field, establishes consistent stratigraphic baselines, models core-calibrated Petrophysical Rock Types and permeability transforms, calculates field-wide Saturation-Height Functions ($\text{SHF}$), and runs Monte Carlo volumetric uncertainty.
 
-The workflow is structured into **7 Primary Sequential Steps** for end-to-end field evaluation, complemented by **4 Standalone Specialized Modules** (SCAL & Dynamic Relative Permeability, Formation Pressure & Contacts, Discrete Rock Type Classifier Trainer, and Conformal Physics-Informed ML Trainer).
+In Field QA/QC, **Missing Data Imputation** uses selected wells and the active depth and zone filters. Mean, median, most frequent, KNN, and iterative models fit pooled samples; KNN scales curves before computing distances. Forward/backward fill and depth-based linear interpolation operate independently within each well; interpolation leaves end gaps missing. Results are saved as separate `_IMP` curves by default. Alternatively, replace existing curves while preserving a full-well `_ORI` backup; existing backups are never overwritten. Replacement requires the source curve to exist in every selected well. Existing `_IMP` outputs must be renamed or deleted before re-running in new-curve mode, and curves with no observed values across the selected wells cannot be imputed. The right-pane **Missing Matrix** displays one selected well at a time, with deeper depths at the top and colors showing the missing fraction in each depth bin.
+
+The workflow is structured into **7 Primary Sequential Steps** for end-to-end field evaluation, complemented by **5 Standalone Specialized Modules** (Multi-Well Evaluation, SCAL & Dynamic Relative Permeability, Formation Pressure & Contacts, Discrete Rock Type Classifier Trainer, and Conformal Physics-Informed ML Trainer).
 
 ---
 
@@ -10,7 +12,7 @@ The workflow is structured into **7 Primary Sequential Steps** for end-to-end fi
 
 ### Level 1: Macro Workflow
 
-High-level progression from field data ingestion to probabilistic reserves, showing the 7 sequential steps and the 4 standalone modules.
+High-level progression from field data ingestion to probabilistic reserves, showing the 7 sequential steps and the 5 standalone modules.
 
 ```mermaid
 flowchart TD
@@ -26,6 +28,7 @@ flowchart TD
 
     subgraph Standalone ["Standalone Specialized Modules"]
         direction TB
+        M_BATCH["Multi-Well Evaluation\n(Shared single-well models)"]
         M_SCAL["SCAL & Rel-Perm\n(Swirr Fit, Brooks-Corey, LET, SWOF)"]
         M_FPT["Pressure & Contacts (FPT)\n(MDT/RFT, Fluid Densities, FWL/OWC/GOC)"]
         M_CLF["RT Classifier\n(Supervised RF/XGBoost, Model Registry)"]
@@ -339,18 +342,65 @@ flowchart TD
 
 ## 3. Standalone Specialized Modules
 
-The Multi-Well workspace provides 4 standalone specialized modules accessible at any point during field evaluation.
+### Multi-Well Evaluation {#mw-standalone-batch-evaluation}
+
+This optional utility repeats the current single-well lithology, porosity, permeability and
+saturation settings independently for selected well/zone pairs. It is not a pooled field
+calibration or a required step of the field workflow. Set the desired parameters in the
+single-well modules, select wells and named zones, and preview before applying any results.
+The left pane shows the selected wells, zones, and parameter template; expand the snapshot
+for full settings. The current depth filter and
+brushed interval are not used; each zone is resolved in each well.
+
+For each well/zone pair, the backend evaluates optional hydrocarbon or density correction,
+lithology, porosity, optional Thomas-Stieber analysis, permeability, and saturation in that
+order. Preview calculations are isolated: they do not save curves or alter the well data
+used by other evaluations. Zone labels must be available for each selected well, and
+duplicate depths prevent reliable evaluation. A run may use only one correction; invaded-zone
+correction and crossplot-calibrated Qv are excluded because they require well-specific inputs.
+When a correction is selected, the lithology and porosity settings must use its corrected
+logs. Thomas-Stieber settings are required when permeability or saturation requests that
+model.
+
+The preview reports failures per well/zone and compares paired valid values for VCLAY, PHIT,
+PERM and SWT. The right-hand evaluation grid includes coverage and failures; select a
+successful well/zone to load its full-resolution existing and preview curves in the center depth tracks.
+PHIT, PERM and SWT can be shown together or individually, and VCLAY individually. PERM
+uses a logarithmic track and changes are shown as a median ratio. Zoom and scroll the
+depth tracks to inspect details. The separate Reservoir Summary grid shows only an
+in-session summary previously calculated for the active single well, not batch-preview
+results; it can be stale and must be recomputed after curve changes.
+Only checked successful results are applied, with parameter
+snapshots saved per zone. Apply saves the previously calculated preview without recalculating,
+after checking the input fingerprint against the current well data and settings; if input
+data changed, preview again. Full-resolution curve profiles are loaded on demand, rather
+than being included with every preview result. Preview data is
+held temporarily in the backend process for 30 minutes and is released on leaving or changing
+scope. If it expires, the server restarts, or a request reaches a different worker, preview
+again. Deployments with multiple backend workers need sticky routing to the preview's worker.
+Well/zone saves are independent,
+so review each apply status. The results are calculated using the workspace's current merged
+well data, which can include unsaved single-well previews.
+
+Invaded-zone hydrocarbon correction and crossplot-calibrated Qv are not supported in this
+utility because they require well-specific metadata or calibration validation. Recompute
+reservoir summaries and dependent field interpretations after applying results, and reload
+the active well view to see saved curves.
+
+The Multi-Well workspace provides 5 standalone specialized modules accessible at any point during field evaluation.
 
 ```mermaid
 graph LR
     subgraph Standalone_Modules ["Multi-Well Standalone Specialized Modules"]
         direction TB
+        M0["Multi-Well Evaluation\n(MultiWellEvaluation.svelte)\n#mw-standalone-batch-evaluation"]
         M1["SCAL & Rel-Perm\n(MultiWellSwirr.svelte)\n#mw-standalone-scal-relperm"]
         M2["Pressure & Contacts (FPT)\n(MultiWellFpt.svelte)\n#mw-standalone-fpt"]
         M3["RT Classifier Trainer\n(MultiWellRtClassifierTrainer.svelte)\n#mw-standalone-rt-classifier"]
         M4["Conformal ML Trainer\n(MultiWellMlTrainer.svelte)\n#mw-standalone-ml-training"]
     end
 
+    style M0 fill:#f0fdfa,stroke:#0f766e,stroke-width:1.5px
     style M1 fill:#fffbeb,stroke:#b45309,stroke-width:1.5px
     style M2 fill:#fff1f2,stroke:#be123c,stroke-width:1.5px
     style M3 fill:#f0fdfa,stroke:#0f766e,stroke-width:1.5px

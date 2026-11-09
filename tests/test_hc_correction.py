@@ -8,6 +8,7 @@ import pytest
 from quick_pp.qaqc import (
     den_correction,
     den_correction_params_from_endpoints,
+    invaded_zone_hc_correction,
     neu_den_xplot_hc_correction,
     neu_den_xplot_hc_correction_angle,
 )
@@ -38,7 +39,9 @@ def correct(nphi, rhob, vsh, **kwargs):
 
 # --------------------------------------------------------------------------- angle
 def test_angle_measured_from_horizontal():
-    assert neu_den_xplot_hc_correction_angle(1.0, 0.3, 0.66) == pytest.approx(64.09, abs=0.01)
+    assert neu_den_xplot_hc_correction_angle(1.0, 0.3, 0.66) == pytest.approx(
+        64.09, abs=0.01
+    )
 
 
 def test_angle_liquid_defaults_and_hi_above_one():
@@ -46,6 +49,48 @@ def test_angle_liquid_defaults_and_hi_above_one():
     assert neu_den_xplot_hc_correction_angle(1.0, 0.8) == pytest.approx(90.0)
     # HI > 1 means NPHI reads high in HC: correction angle exceeds 90 degrees
     assert neu_den_xplot_hc_correction_angle(1.0, 0.8, 1.05) > 90.0
+
+
+def test_invaded_zone_correction_selects_best_saturation_step():
+    nphi, rhob, saturation, angle = invaded_zone_hc_correction(
+        nphi=np.array([0.1]),
+        rhob=np.array([2.35]),
+        vsh_gr=np.array([0.0]),
+        rho_hc=np.array([0.1]),
+        rho_mf=1.0,
+        salinity_ppm=0.0,
+        dry_sand_point=SAND,
+        dry_clay_point=CLAY,
+        hc_flag=np.array([True]),
+        lithology_coeff=0.0,
+    )
+
+    assert saturation[0] == pytest.approx(0.32)
+    phi_dn = ((2.65 - 2.35) / 1.65 + 0.1) / 2
+    assert rhob[0] == pytest.approx(2.35 + 1.057 * phi_dn * 0.32)
+    assert nphi[0] == pytest.approx(0.1 + 0.78 * phi_dn * 0.32)
+    assert np.isfinite(angle[0])
+
+
+def test_invaded_zone_correction_leaves_unflagged_samples_unchanged():
+    nphi0 = np.array([0.1])
+    rhob0 = np.array([2.35])
+    nphi, rhob, saturation, angle = invaded_zone_hc_correction(
+        nphi=nphi0,
+        rhob=rhob0,
+        vsh_gr=np.array([0.0]),
+        rho_hc=np.array([0.1]),
+        rho_mf=1.0,
+        salinity_ppm=0.0,
+        dry_sand_point=SAND,
+        dry_clay_point=CLAY,
+        hc_flag=np.array([False]),
+    )
+
+    np.testing.assert_array_equal(nphi, nphi0)
+    np.testing.assert_array_equal(rhob, rhob0)
+    assert np.isnan(saturation[0])
+    assert np.isnan(angle[0])
 
 
 # --------------------------------------------------------------------------- core
@@ -97,7 +142,7 @@ def test_buffer_only_widens_flagging():
 def test_shaly_gas_sand_strict_vs_vsh_gr_mode():
     nphi, rhob = forward(0.22, 0.30, 0.6)
     nphi_wet, rhob_wet = forward(0.22, 0.30, 0.0)
-    args = (np.array([nphi]), np.array([rhob]), np.array([0.30]))
+    args = (np.array([nphi]), np.array([rhob]), np.array([0.30 / 0.78]))
 
     nc, rc, flag = correct(*args, flag_mode="strict")
     assert flag[0] == 0.0
@@ -112,7 +157,7 @@ def test_shaly_gas_sand_strict_vs_vsh_gr_mode():
 def test_vsh_gr_mode_does_not_touch_water_bearing_points():
     nphi, rhob = forward(0.22, 0.30, 0.0)
     nc, rc, flag = correct(
-        np.array([nphi]), np.array([rhob]), np.array([0.30]), flag_mode="vsh_gr"
+        np.array([nphi]), np.array([rhob]), np.array([0.30 / 0.78]), flag_mode="vsh_gr"
     )
     assert flag[0] == 0.0
     assert rc[0] == pytest.approx(float(rhob))
@@ -130,6 +175,43 @@ def test_bulk_target_recovers_shaly_gas_and_solid_target_matches_projection():
     nc, rc, _ = correct(*args, target_mode="solid")
     phi, vcl = nd_triangle_coords(nc, rc, SAND, CLAY, WATER)
     assert (vcl / (1.0 - phi))[0] == pytest.approx(0.20, abs=1e-10)
+
+
+def test_default_target_is_solid_and_differs_from_bulk():
+    nphi, rhob = forward(0.22, 0.20, 0.6)
+    args = (np.array([nphi]), np.array([rhob]), np.array([0.20]))
+
+    default = correct(*args)
+    solid = correct(*args, target_mode="solid")
+    bulk = correct(*args, target_mode="bulk")
+    for actual, expected in zip(default, solid, strict=True):
+        np.testing.assert_allclose(actual, expected)
+    assert default[2][0] == 1.0
+    phi, vcl = nd_triangle_coords(default[0], default[1], SAND, CLAY, WATER)
+    assert (vcl / (1.0 - phi))[0] == pytest.approx(0.20, abs=1e-10)
+    assert default[0][0] < bulk[0][0]
+    assert default[1][0] < bulk[1][0]
+
+
+def test_invaded_zone_default_target_is_solid():
+    kwargs = {
+        "nphi": np.array([0.1]),
+        "rhob": np.array([2.35]),
+        "vsh_gr": np.array([0.2]),
+        "rho_hc": np.array([0.1]),
+        "rho_mf": 1.0,
+        "salinity_ppm": 0.0,
+        "dry_sand_point": SAND,
+        "dry_clay_point": CLAY,
+        "hc_flag": np.array([True]),
+        "lithology_coeff": 0.0,
+    }
+    default = invaded_zone_hc_correction(**kwargs)
+    solid = invaded_zone_hc_correction(**kwargs, target_mode="solid")
+    bulk = invaded_zone_hc_correction(**kwargs, target_mode="bulk")
+    for actual, expected in zip(default, solid, strict=True):
+        np.testing.assert_allclose(actual, expected)
+    assert default[2][0] != bulk[2][0]
 
 
 def test_nan_vsh_gr_is_skipped():
@@ -157,6 +239,22 @@ def test_scalar_inputs_and_none_vsh():
     assert float(flag) == 1.0
 
 
+def test_per_sample_correction_angles_are_supported():
+    nphi, rhob = forward(0.25, 0.0, 0.5)
+    nc, rc, flag = correct(
+        np.full(2, nphi),
+        np.full(2, rhob),
+        np.zeros(2),
+        corr_angle=np.array([GAS_ANGLE - 5.0, GAS_ANGLE + 5.0]),
+    )
+
+    assert np.all(flag == 1.0)
+    assert nc.shape == rc.shape == flag.shape == (2,)
+    assert np.isfinite(nc).all()
+    assert np.isfinite(rc).all()
+    assert nc[0] != pytest.approx(nc[1])
+
+
 def test_invalid_modes_raise():
     with pytest.raises(ValueError):
         correct(np.array([0.1]), np.array([2.2]), None, flag_mode="bogus")
@@ -170,7 +268,12 @@ def test_den_correction_params_reproduce_triangle_model():
     for phi, vcl in [(0.25, 0.2), (0.15, 0.3), (0.0, 1.0), (0.3, 0.0)]:
         nphi, rhob = forward(phi, vcl, 0.0)
         rr = den_correction(
-            nphi, vsh_gr=vcl, phin_sh=phin_sh, phid_sh=phid_sh, rho_ma=rho_ma, rho_water=1.0
+            nphi,
+            vsh_gr=vcl,
+            phin_sh=phin_sh,
+            phid_sh=phid_sh,
+            rho_ma=rho_ma,
+            rho_water=1.0,
         )
         assert float(rr) == pytest.approx(float(rhob), abs=1e-10)
 
@@ -178,4 +281,3 @@ def test_den_correction_params_reproduce_triangle_model():
 def test_den_correction_requires_gr_or_vsh():
     with pytest.raises(ValueError):
         den_correction(0.2)
-

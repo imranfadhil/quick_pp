@@ -12,6 +12,7 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from quick_pp.rock_physics.geomechanics import estimate_log_stress_profile
 from quick_pp.scal import (
     brooks_corey_relperm,
     corey_relperm,
@@ -34,21 +35,33 @@ class RelPermEvalInput(BaseModel):
         default=None,
         description="Water saturation array (v/v). If omitted, generates 25 points from swirr to 1 - sor.",
     )
-    swirr: float = Field(0.15, ge=0.0, lt=1.0, description="Irreducible water saturation")
-    sor: float = Field(0.20, ge=0.0, lt=1.0, description="Residual hydrocarbon saturation")
+    swirr: float = Field(
+        0.15, ge=0.0, lt=1.0, description="Irreducible water saturation"
+    )
+    sor: float = Field(
+        0.20, ge=0.0, lt=1.0, description="Residual hydrocarbon saturation"
+    )
     sorw: Optional[float] = Field(
         default=None, description="Optional alias for residual oil saturation (sor)"
     )
-    krw_max: float = Field(0.30, gt=0.0, le=1.0, description="Endpoint water rel-perm at 1 - sor")
-    kro_max: float = Field(0.90, gt=0.0, le=1.0, description="Endpoint hydrocarbon rel-perm at swirr")
+    krw_max: float = Field(
+        0.30, gt=0.0, le=1.0, description="Endpoint water rel-perm at 1 - sor"
+    )
+    kro_max: float = Field(
+        0.90, gt=0.0, le=1.0, description="Endpoint hydrocarbon rel-perm at swirr"
+    )
     nw: float = Field(3.0, gt=0.0, description="Corey water exponent")
     no: float = Field(2.5, gt=0.0, description="Corey hydrocarbon exponent")
-    lam: float = Field(2.0, gt=0.0, description="Brooks-Corey pore size distribution index")
+    lam: float = Field(
+        2.0, gt=0.0, description="Brooks-Corey pore size distribution index"
+    )
     lw: float = Field(2.0, gt=0.0, description="LET water lower parameter L_w")
     ew: float = Field(1.5, gt=0.0, description="LET water elevation parameter E_w")
     tw: float = Field(2.0, gt=0.0, description="LET water top parameter T_w")
     lo: float = Field(2.0, gt=0.0, description="LET hydrocarbon lower parameter L_o")
-    eo: float = Field(1.5, gt=0.0, description="LET hydrocarbon elevation parameter E_o")
+    eo: float = Field(
+        1.5, gt=0.0, description="LET hydrocarbon elevation parameter E_o"
+    )
     to: float = Field(2.0, gt=0.0, description="LET hydrocarbon top parameter T_o")
 
 
@@ -73,12 +86,16 @@ class RelPermFitInput(BaseModel):
 
 
 class SWOFTableInput(BaseModel):
-    n_points: int = Field(21, ge=5, le=200, description="Number of saturation table rows")
+    n_points: int = Field(
+        21, ge=5, le=200, description="Number of saturation table rows"
+    )
     model: str = Field(
         "corey",
         description="Relative permeability model ('corey', 'brooks_corey', or 'let')",
     )
-    swirr: float = Field(0.15, ge=0.0, lt=1.0, description="Irreducible water saturation")
+    swirr: float = Field(
+        0.15, ge=0.0, lt=1.0, description="Irreducible water saturation"
+    )
     sor: float = Field(0.20, ge=0.0, lt=1.0, description="Residual oil saturation")
     krw_max: float = Field(0.30, gt=0.0, le=1.0, description="Endpoint krw at 1 - sor")
     kro_max: float = Field(0.90, gt=0.0, le=1.0, description="Endpoint kro at swirr")
@@ -92,8 +109,12 @@ class SWOFTableInput(BaseModel):
     eo: float = Field(1.5, gt=0.0, description="LET oil E_o")
     to: float = Field(2.0, gt=0.0, description="LET oil T_o")
     pc_entry: float = Field(1.5, ge=0.0, description="Capillary entry pressure (psi)")
-    pc_exponent: float = Field(1.5, gt=0.0, description="Capillary pressure pore-throat exponent")
-    pc_max: float = Field(50.0, gt=0.0, description="Maximum capillary pressure at swirr (psi)")
+    pc_exponent: float = Field(
+        1.5, gt=0.0, description="Capillary pressure pore-throat exponent"
+    )
+    pc_max: float = Field(
+        50.0, gt=0.0, description="Maximum capillary pressure at swirr (psi)"
+    )
 
 
 class CoreCorrectionsInput(BaseModel):
@@ -131,28 +152,68 @@ class CoreCorrectionsInput(BaseModel):
         False, description="Whether core plugs were oven-dried prior to Dean-Stark"
     )
     replace_ori: bool = Field(
-        False, description="Overwrite CPORE/CPERM in-place instead of preserving _AMB/_AIR columns"
+        False,
+        description="Overwrite CPORE/CPERM in-place instead of preserving _AMB/_AIR columns",
     )
     data: List[Dict[str, Any]] = Field(..., description="Core/log records")
 
 
+class StressProfileInput(BaseModel):
+    md: List[Optional[float]] = Field(
+        ..., description="Measured depth aligned with the log arrays"
+    )
+    tvd: List[Optional[float]] = Field(
+        ..., description="Positive-down true vertical depth aligned with the log arrays"
+    )
+    rhob: List[Optional[float]] = Field(..., description="Bulk density [g/cm³]")
+    dtc: Optional[List[Optional[float]]] = Field(
+        default=None, description="Compressional sonic slowness"
+    )
+    dts: Optional[List[Optional[float]]] = Field(
+        default=None, description="Shear sonic slowness; same units as DTC"
+    )
+    depth_unit: str = Field("m", description="'m' or 'ft', matching TVD")
+    pore_pressure_gradient: float = Field(
+        1.42, ge=0.0, description="Pore-pressure gradient [psi per selected depth unit]"
+    )
+    biot_coefficient: float = Field(1.0, ge=0.0, le=1.0)
+    poisson_ratio: float = Field(
+        0.25,
+        ge=0.0,
+        lt=0.5,
+        description="Fallback Poisson's ratio when sonic data are invalid",
+    )
+
+
 class PcLabToReservoirInput(BaseModel):
     pc_lab: List[float] = Field(..., description="Laboratory capillary pressure (psi)")
-    ift_lab: float = Field(72.0, gt=0.0, description="Laboratory interfacial tension (dynes/cm)")
-    theta_lab: float = Field(0.0, ge=0.0, le=180.0, description="Laboratory contact angle (deg)")
-    ift_res: float = Field(30.0, gt=0.0, description="Reservoir interfacial tension (dynes/cm)")
-    theta_res: float = Field(30.0, ge=0.0, le=180.0, description="Reservoir contact angle (deg)")
+    ift_lab: float = Field(
+        72.0, gt=0.0, description="Laboratory interfacial tension (dynes/cm)"
+    )
+    theta_lab: float = Field(
+        0.0, ge=0.0, le=180.0, description="Laboratory contact angle (deg)"
+    )
+    ift_res: float = Field(
+        30.0, gt=0.0, description="Reservoir interfacial tension (dynes/cm)"
+    )
+    theta_res: float = Field(
+        30.0, ge=0.0, le=180.0, description="Reservoir contact angle (deg)"
+    )
     phi_amb: Optional[Union[float, List[float]]] = Field(
-        default=None, description="Optional ambient porosity (v/v) for Leverett-J stress correction"
+        default=None,
+        description="Optional ambient porosity (v/v) for Leverett-J stress correction",
     )
     phi_res: Optional[Union[float, List[float]]] = Field(
-        default=None, description="Optional reservoir porosity (v/v) for Leverett-J stress correction"
+        default=None,
+        description="Optional reservoir porosity (v/v) for Leverett-J stress correction",
     )
     k_amb: Optional[Union[float, List[float]]] = Field(
-        default=None, description="Optional ambient permeability (mD) for Leverett-J stress correction"
+        default=None,
+        description="Optional ambient permeability (mD) for Leverett-J stress correction",
     )
     k_res: Optional[Union[float, List[float]]] = Field(
-        default=None, description="Optional reservoir permeability (mD) for Leverett-J stress correction"
+        default=None,
+        description="Optional reservoir permeability (mD) for Leverett-J stress correction",
     )
 
 
@@ -290,6 +351,67 @@ async def generate_swof_endpoint(inputs: SWOFTableInput):
 
 
 @router.post(
+    "/stress_profile",
+    summary="Estimate a Log-Based Effective Confining Stress Profile",
+    operation_id="estimate_scal_stress_profile",
+)
+async def estimate_stress_profile_endpoint(inputs: StressProfileInput):
+    """Estimate vertical, pore, and equivalent effective confining stress from logs."""
+    try:
+        if not (len(inputs.md) == len(inputs.tvd) == len(inputs.rhob)):
+            raise ValueError("md, tvd, and rhob must have matching lengths.")
+        if (inputs.dtc is None) != (inputs.dts is None):
+            raise ValueError("Provide both DTC and DTS for dynamic Poisson's ratio.")
+        if inputs.dtc is not None and (
+            len(inputs.dtc) != len(inputs.md) or len(inputs.dts or []) != len(inputs.md)
+        ):
+            raise ValueError(
+                "DTC and DTS must match the lengths of the other log arrays."
+            )
+
+        def to_array(values):
+            if values is None:
+                return None
+            return np.asarray(
+                [np.nan if value is None else value for value in values], dtype=float
+            )
+
+        result = estimate_log_stress_profile(
+            md=to_array(inputs.md),
+            tvd=to_array(inputs.tvd),
+            rhob=to_array(inputs.rhob),
+            dtc=to_array(inputs.dtc),
+            dts=to_array(inputs.dts),
+            depth_unit=inputs.depth_unit.strip().lower(),
+            pore_pressure_gradient=inputs.pore_pressure_gradient,
+            biot_coefficient=inputs.biot_coefficient,
+            poisson_ratio=inputs.poisson_ratio,
+        )
+        rows = [
+            {
+                "DEPTH": float(md) if np.isfinite(md) else None,
+                "SV_EST": float(sv) if np.isfinite(sv) else None,
+                "PP_EST": float(pp) if np.isfinite(pp) else None,
+                "NU_DYN": float(nu) if np.isfinite(nu) else None,
+                "NCS_EST": float(ncs) if np.isfinite(ncs) else None,
+            }
+            for md, sv, pp, nu, ncs in zip(
+                result["md"],
+                result["sv_psi"],
+                result["pp_psi"],
+                result["nu"],
+                result["ncs_equivalent_psi"],
+                strict=False,
+            )
+        ]
+        return {"data": rows}
+    except Exception as e:
+        raise HTTPException(
+            status_code=400, detail=f"Error estimating log-based stress profile: {e}"
+        ) from e
+
+
+@router.post(
     "/core_corrections",
     summary="Apply Overburden, Klinkenberg, and Clay-Bound Water Corrections to Core Data",
     operation_id="apply_scal_core_corrections",
@@ -301,7 +423,11 @@ async def apply_core_corrections_endpoint(inputs: CoreCorrectionsInput):
         eff_perm_coeff = (
             inputs.perm_compaction_coeff
             if inputs.perm_compaction_coeff is not None
-            else (float(inputs.compaction_coeff) * 5.0 if inputs.compaction_coeff else 2.0e-5)
+            else (
+                float(inputs.compaction_coeff) * 5.0
+                if inputs.compaction_coeff
+                else 2.0e-5
+            )
         )
         corr_df = correct_core_data(
             df,
@@ -351,10 +477,18 @@ async def convert_pc_lab_to_reservoir_endpoint(inputs: PcLabToReservoirInput):
                     theta_lab=inputs.theta_lab,
                     ift_res=inputs.ift_res,
                     theta_res=inputs.theta_res,
-                    phi_amb=inputs.phi_amb if isinstance(inputs.phi_amb, (int, float)) else None,
-                    phi_res=inputs.phi_res if isinstance(inputs.phi_res, (int, float)) else None,
-                    k_amb=inputs.k_amb if isinstance(inputs.k_amb, (int, float)) else None,
-                    k_res=inputs.k_res if isinstance(inputs.k_res, (int, float)) else None,
+                    phi_amb=inputs.phi_amb
+                    if isinstance(inputs.phi_amb, (int, float))
+                    else None,
+                    phi_res=inputs.phi_res
+                    if isinstance(inputs.phi_res, (int, float))
+                    else None,
+                    k_amb=inputs.k_amb
+                    if isinstance(inputs.k_amb, (int, float))
+                    else None,
+                    k_res=inputs.k_res
+                    if isinstance(inputs.k_res, (int, float))
+                    else None,
                 )
             ).flat[0]
         )
@@ -366,4 +500,3 @@ async def convert_pc_lab_to_reservoir_endpoint(inputs: PcLabToReservoirInput):
         raise HTTPException(
             status_code=400, detail=f"Error converting capillary pressure: {e}"
         ) from e
-

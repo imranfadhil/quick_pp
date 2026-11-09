@@ -1738,12 +1738,15 @@ def build_report_context(
     raw_sw_key = str(
         merged_configs.get("sw_model_key")
         or merged_configs.get("sw_model")
-        or "waxman_smits"
+        or "archie"
     ).strip().lower()
-    if raw_sw_key == "archie":
-        sw_model_display = "Archie Clean-Sand Water Saturation Model"
-    else:
-        sw_model_display = "Waxman-Smits Shaly-Sand Cation Exchange ($Q_v$) Model"
+    sw_model_display = {
+        "archie": "Archie Clean-Sand Water Saturation Model",
+        "waxman_smits": "Waxman-Smits Shaly-Sand Cation Exchange ($Q_v$) Model",
+        "simandoux": "Simandoux Shaly-Sand Water Saturation Model",
+        "indonesian": "Indonesian Shaly-Sand Water Saturation Model",
+        "dual_water": "Dual-Water Shaly-Sand Water Saturation Model",
+    }.get(raw_sw_key, "Archie Clean-Sand Water Saturation Model")
 
     dry_sand_pt = merged_configs.get("dry_sand_point")
     dry_clay_pt = merged_configs.get("dry_clay_point")
@@ -1958,6 +1961,9 @@ def build_report_context(
         "a": round(_safe_float(merged_configs.get("sw_a"), 1.0), 2),
         "m": round(_safe_float(merged_configs.get("sw_m"), 2.0), 2),
         "n": round(_safe_float(merged_configs.get("sw_n"), 2.0), 2),
+        "rsh": round(_safe_float(merged_configs.get("sw_rsh"), 2.0), 3),
+        "swb": round(_safe_float(merged_configs.get("sw_swb"), 0.2), 3),
+        "rwb": round(_safe_float(merged_configs.get("sw_rwb"), 0.1), 3),
     }
     ift_res_cfg = _safe_float(
         merged_configs.get("ift_res", scal_cfg.get("ift_res", merged_configs.get("ift"))),

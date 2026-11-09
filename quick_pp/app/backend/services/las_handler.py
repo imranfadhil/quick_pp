@@ -38,11 +38,13 @@ from quick_pp.las_handler import (
     extract_las_metadata,
     fast_read_las,
     inspect_dlis,
+    inspect_lis,
     merge_well_curves_with_dedup,
     mnemonic_mapper,
     read_dlis_frame,
     read_las_file_fast,
     read_las_file_welly,
+    read_lis_frame,
     splice_and_regularize_runs,
     standardize_curve_units,
 )
@@ -51,7 +53,7 @@ router = APIRouter(prefix="/las_handler", tags=["File Handler"])
 import_logs_router = APIRouter(prefix="/import/logs", tags=["Log Import Engine"])
 
 # Allowed file extensions
-ALLOWED_EXTENSIONS = {".LAS", ".las", ".DLIS", ".dlis", ".CSV", ".csv", ".PARQUET", ".parquet"}
+ALLOWED_EXTENSIONS = {".las", ".dlis", ".lis", ".csv", ".parquet"}
 STAGING_DIR = Path("uploads/import_staging")
 
 # Registry mapping file_id -> staged file path & metadata
@@ -63,7 +65,7 @@ def validate_file_extension(filename: str):
     if ext.lower() not in {e.lower() for e in ALLOWED_EXTENSIONS}:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid file extension '{ext}'. Allowed extensions: .las, .dlis, .csv, .parquet",
+            detail=f"Invalid file extension '{ext}'. Allowed extensions: .las, .dlis, .lis, .csv, .parquet",
         )
 
 
@@ -101,26 +103,30 @@ def read_las_file(input_path: Path, destination: Path):
 def _inspect_single_log_file_worker(
     file_id: str, file_path_str: str, original_filename: str
 ) -> Dict[str, Any]:
-    """Top-level worker for inspecting a single `.las` (v2.0/v3.0) or `.dlis` file in <150ms."""
+    """Top-level worker for inspecting a single supported well-log file."""
     t0 = time.perf_counter()
     p = Path(file_path_str)
     ext = p.suffix.lower()
     file_size = p.stat().st_size if p.exists() else 0
 
-    if ext == ".dlis":
-        dlis_info = inspect_dlis(p)
+    if ext in (".dlis", ".lis"):
+        log_info = (
+            inspect_dlis(p)
+            if ext == ".dlis"
+            else inspect_lis(p, filename=original_filename)
+        )
         elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 2)
         res = LogInspectFileResult(
             file_id=file_id,
             filename=original_filename,
-            format="DLIS",
+            format="DLIS" if ext == ".dlis" else "LIS79",
             file_size_bytes=file_size,
-            metadata=dlis_info["metadata"],
-            curves=dlis_info["curves"],
-            dlis_frames=dlis_info["frames"],
+            metadata=log_info["metadata"],
+            curves=log_info["curves"],
+            dlis_frames=log_info["frames"],
             has_embedded_core=False,
             has_embedded_tops=False,
-            qaqc_warnings=[],
+            qaqc_warnings=log_info.get("qaqc_warnings", []),
             inspection_ms=elapsed_ms,
         )
         return res.model_dump()
@@ -234,6 +240,10 @@ def _parse_single_log_file_worker(task_spec: Dict[str, Any]) -> Dict[str, Any]:
     original_filename = task_spec.get("filename") or file_path.name
     target_depth_uom = task_spec.get("target_depth_uom", "m")
     custom_mnemonic_map = task_spec.get("mnemonic_map") or {}
+    unit_overrides = {
+        str(k).strip().upper(): str(v or "").strip()
+        for k, v in (task_spec.get("unit_map") or {}).items()
+    }
     excluded_curves = {str(c).upper() for c in (task_spec.get("excluded_curves") or [])}
     metadata_overrides = task_spec.get("metadata_overrides") or {}
     selected_frames = task_spec.get("selected_dlis_frames")
@@ -279,6 +289,43 @@ def _parse_single_log_file_worker(task_spec: Dict[str, Any]) -> Dict[str, Any]:
                 if not isinstance(v, (dict, list)) and v is not None
             ]
         )
+    elif ext == ".lis":
+        info = inspect_lis(file_path, filename=original_filename)
+        frames_to_read = selected_frames or [
+            frame.frame_name for frame in info["frames"] if frame.selected
+        ]
+        if not frames_to_read and info["frames"]:
+            frames_to_read = [info["frames"][0].frame_name]
+
+        frame_dfs: List[pd.DataFrame] = []
+        meta_dict = info["metadata"].model_dump()
+        std_units: Dict[str, str] = {}
+        for frame_name in frames_to_read:
+            frame_df, frame_meta, frame_units = read_lis_frame(
+                file_path,
+                frame_name=frame_name,
+                target_depth_uom=target_depth_uom,
+                custom_mnemonic_map=custom_mnemonic_map,
+                unit_overrides=unit_overrides,
+                metadata=meta_dict,
+                filename=original_filename,
+            )
+            frame_dfs.append(frame_df)
+            meta_dict.update({key: value for key, value in frame_meta.items() if value is not None})
+            std_units.update(frame_units)
+
+        df = (
+            splice_and_regularize_runs(frame_dfs, step=0.1524, conflict_mode="keep_last")
+            if len(frame_dfs) > 1
+            else (frame_dfs[0] if frame_dfs else pd.DataFrame())
+        )
+        header_df = pd.DataFrame(
+            [
+                {"section": "Well", "mnemonic": key.upper(), "unit": "", "value": value, "descr": key}
+                for key, value in meta_dict.items()
+                if not isinstance(value, (dict, list)) and value is not None
+            ]
+        )
     elif ext == ".parquet":
         df = pd.read_parquet(file_path)
         df, std_units, _ = standardize_curve_units(
@@ -309,8 +356,17 @@ def _parse_single_log_file_worker(task_spec: Dict[str, Any]) -> Dict[str, Any]:
             str(c.mnemonic).strip().upper(): str(getattr(c, "unit", "") or "").strip()
             for c in las_header.curves
         }
-        # Ensure first curve is mapped to DEPTH if it's the index curve
+        raw_units.update(unit_overrides)
+        # fast_read_las may rename the index curve before its header units and
+        # user overrides are applied.
+        index_mnemonic = str(las_header.curves[0].mnemonic).strip().upper()
         first_col = str(raw_df.columns[0]).strip().upper()
+        if first_col != index_mnemonic:
+            raw_units[first_col] = raw_units.get(index_mnemonic, "")
+            custom_upper = {str(k).strip().upper(): v for k, v in custom_mnemonic_map.items()}
+            if index_mnemonic in custom_upper:
+                custom_mnemonic_map = {**custom_mnemonic_map, first_col: custom_upper[index_mnemonic]}
+        # Ensure first curve is mapped to DEPTH if it's the index curve
         if first_col not in custom_mnemonic_map and Config.resolve_mnemonic_alias(first_col) == "DEPTH":
             custom_mnemonic_map = {"DEPTH": "DEPTH", first_col: "DEPTH", **custom_mnemonic_map}
 
@@ -436,13 +492,13 @@ async def _run_tasks_in_pool(worker_fn, task_args_list: List[Any]) -> List[Any]:
 @import_logs_router.post(
     "/inspect",
     response_model=LogInspectResponse,
-    summary="Pass 1: Fast header inspection (<150ms) for LAS 2.0/3.0 & DLIS files",
+    summary="Pass 1: Inspect LAS 2.0/3.0, DLIS, and LIS79 files",
 )
 async def inspect_log_files(files: List[UploadFile] = File(...)) -> LogInspectResponse:
-    """Inspect uploaded `.las` (v2.0/v3.0) and `.dlis` files without parsing full curve arrays.
+    """Inspect supported log headers, curves, and LIS log-set index samples.
 
     Returns extracted `WellHeaderMetadata`, detected curves, suggested standard mnemonics,
-    automated unit conversions, QA/QC warnings, and DLIS frames.
+    automated unit conversions, QA/QC warnings, and available DLIS frames/LIS log sets.
     """
     t0 = time.perf_counter()
     STAGING_DIR.mkdir(parents=True, exist_ok=True)
@@ -479,6 +535,17 @@ async def inspect_log_files(files: List[UploadFile] = File(...)) -> LogInspectRe
             )
             results.append(LogInspectFileResult(**inspected_dict))
         except Exception as e:
+            _STAGED_FILES.pop(fid, None)
+            try:
+                staged_path.unlink(missing_ok=True)
+            except OSError as cleanup_error:
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        f"Failed to inspect '{orig_name}': {e}. "
+                        f"Could not remove the failed upload from staging: {cleanup_error}"
+                    ),
+                ) from e
             raise HTTPException(
                 status_code=400,
                 detail=f"Failed to inspect '{orig_name}': {e}",
@@ -490,7 +557,7 @@ async def inspect_log_files(files: List[UploadFile] = File(...)) -> LogInspectRe
 
 @import_logs_router.post(
     "/commit",
-    summary="Pass 2: Parallel C-engine/DLIS ingestion, unit normalization, splicing, and DB/Parquet commit",
+    summary="Pass 2: Parallel LAS/DLIS/LIS ingestion, unit normalization, splicing, and commit",
 )
 async def commit_log_files(request: Request) -> Dict[str, Any]:
     """Commit inspected log files with user-confirmed mnemonic/unit mappings & splicing rules.
@@ -593,6 +660,36 @@ async def commit_log_files(request: Request) -> Dict[str, Any]:
         runs_by_well.setdefault(res["well_name"], []).append(res)
 
     project_id = payload.project_id
+    if project_id is not None:
+        try:
+            with get_db() as session:
+                proj = db_objects.Project.load(session, project_id=project_id)
+                existing_names_by_uwi = {
+                    well.uwi: well.name for well in proj._orm_project.wells
+                }
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+
+        incoming_names_by_uwi: Dict[str, str] = {}
+        try:
+            for parsed in parsed_results:
+                well_name = parsed["well_name"]
+                uwi = parsed["uwi"]
+                db_objects.ensure_well_uwi_matches_name(
+                    project_id,
+                    well_name,
+                    uwi,
+                    existing_names_by_uwi.get(uwi),
+                )
+                db_objects.ensure_well_uwi_matches_name(
+                    project_id,
+                    well_name,
+                    uwi,
+                    incoming_names_by_uwi.get(uwi),
+                )
+                incoming_names_by_uwi[uwi] = well_name
+        except db_objects.WellIdentityConflictError as e:
+            raise HTTPException(status_code=409, detail=str(e)) from e
 
     def _commit_wells_to_db_sync() -> List[Dict[str, Any]]:
         committed: List[Dict[str, Any]] = []
@@ -777,7 +874,10 @@ async def commit_log_files(request: Request) -> Dict[str, Any]:
 
         return committed
 
-    committed_wells = await asyncio.to_thread(_commit_wells_to_db_sync)
+    try:
+        committed_wells = await asyncio.to_thread(_commit_wells_to_db_sync)
+    except db_objects.WellIdentityConflictError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
 
     # Clean up staged files after commit
     for spec in task_specs:
@@ -813,6 +913,11 @@ async def process_las_file(files: List[UploadFile] = File(...)):
     for file in files:
         try:
             validate_file_extension(str(file.filename))
+            if Path(str(file.filename)).suffix.lower() == ".lis":
+                raise HTTPException(
+                    status_code=400,
+                    detail="LIS79 files must be imported through the two-pass /import/logs endpoint.",
+                )
 
             file_name = f"{unique_id(file)}-{file.filename}"
             raw_file_path = Path(f"uploads/las/{file_name}")

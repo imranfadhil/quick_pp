@@ -357,7 +357,8 @@
 				title: { text: mode === 'excess' ? `Excess Pressure (${pu})` : `Formation Pressure (${pu})`, font: { size: 11 } },
 				gridcolor: '#E2E8F0',
 				zeroline: false,
-				side: 'top'
+				side: 'top',
+				fixedrange: true
 			},
 			yaxis: {
 				title: { text: `TVDSS (${du})`, font: { size: 11 } },
@@ -400,6 +401,7 @@
 				PlotlyLib.react(plotEl, traces, layout, {
 					responsive: true,
 					displaylogo: false,
+					scrollZoom: true,
 					modeBarButtonsToAdd: ['lasso2d', 'select2d'],
 					modeBarButtonsToRemove: ['autoScale2d']
 				})

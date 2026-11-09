@@ -106,7 +106,7 @@
 			id: 'litho-poro',
 			num: 3,
 			label: 'Lithology & Porosity',
-			readyCheck: () => Boolean(wellData.curves['PHIE'] || wellData.curves['PHIT'])
+			readyCheck: () => Boolean(wellData.curves['PHIT'])
 		},
 		{
 			id: 'perm',
@@ -215,7 +215,8 @@
 			'swirr-corr': 'mw-standalone-scal-relperm',
 			'fpt': 'mw-standalone-fpt',
 			'rt-classifier': 'mw-standalone-rt-classifier',
-			'ml-training': 'mw-standalone-ml-training'
+			'ml-training': 'mw-standalone-ml-training',
+			'batch-evaluation': 'mw-standalone-batch-evaluation'
 		};
 		return mwMap[workbench.multiWellStep] ?? 'mw-step-1-inventory';
 	}
@@ -346,6 +347,17 @@
 			>
 				Standalone:
 			</span>
+			<button
+				type="button"
+				onclick={() => (workbench.multiWellStep = 'batch-evaluation')}
+				title="Apply a shared single-well interpretation to selected wells and zones"
+				class="flex h-7 items-center gap-1.5 rounded-sm border px-2.5 text-xs font-medium whitespace-nowrap transition-colors {workbench.multiWellStep === 'batch-evaluation'
+					? 'border-[var(--accent-primary)] bg-blue-50/90 font-semibold text-[var(--accent-primary)]'
+					: 'border-[var(--border-hairline)] bg-[var(--bg-subtle)]/60 text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] hover:text-[var(--text-primary)]'}"
+			>
+				<span class="rounded-xs bg-teal-100 px-1 text-[9px] font-bold text-teal-700">BATCH</span>
+				<span>Multi-Well Evaluation</span>
+			</button>
 			{@const isSwirrActive = workbench.multiWellStep === 'swirr-corr'}
 			{@const isSwirrDone =
 				projectData.swirrResult !== null ||
@@ -709,6 +721,7 @@
 			</div>
 		{/if}
 
+		{#if !(workbench.scope === 'multi-well' && workbench.multiWellStep === 'batch-evaluation')}
 		<div
 			class="flex h-6 items-center rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-0.5 text-[10px]"
 		>
@@ -724,6 +737,13 @@
 					{lbl}
 				</button>
 			{/each}
+			{#if (workbench.scope === 'single-well' && workbench.singleWellStep === 'qaqc') || (workbench.scope === 'multi-well' && workbench.multiWellStep === 'qaqc')}
+				<button type="button" onclick={() => (workbench.rightPaneTab = 'missing')}
+					class="h-5 shrink-0 whitespace-nowrap rounded-xs px-1.5 font-medium {workbench.rightPaneTab === 'missing' ? 'bg-[var(--bg-surface)] text-[var(--text-primary)] shadow-2xs' : 'text-[var(--text-muted)]'}">
+					Missing Matrix
+				</button>
+			{/if}
 		</div>
+		{/if}
 	</div>
 </nav>

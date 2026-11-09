@@ -30,6 +30,8 @@
 		'SMECTITE',
 		'CHLORITE',
 		'GLAUCONITE',
+		'MUSCOVITE',
+		'BIOTITE',
 		'KFELD',
 		'ALBITE',
 		'SIDERITE',
@@ -91,6 +93,7 @@
 		mean_vsh_gr_hc: number | null;
 		mean_dnphi: number;
 		mean_drhob: number;
+		mean_invaded_hc_saturation?: number | null;
 	} | null>(null);
 
 	let denSummary = $state<{
@@ -114,6 +117,27 @@
 		workbench.lithoParams.enableHcCorrection = mode !== 'none';
 		workbench.lithoParams.useHcCorrected = mode !== 'none';
 		executeLithoPoro(false);
+	}
+
+	function syncFluidPtFromSaturation() {
+		workbench.lithoParams.fluidTempGrad = workbench.saturationParams.tempGradient;
+		workbench.lithoParams.fluidSurfTemp = workbench.saturationParams.surfaceTemp;
+		workbench.lithoParams.fluidSalinityPpm = workbench.saturationParams.waterSalinity;
+		executeLithoPoro(false);
+	}
+
+	function medianVisibleCurve(mnemonic: string): number | null {
+		const curve = wellData.curves[mnemonic];
+		if (!curve) return null;
+		const values = wellData.visibleIndices
+			.map((index) => curve[index])
+			.filter((value) => Number.isFinite(value))
+			.sort((a, b) => a - b);
+		if (values.length === 0) return null;
+		const middle = Math.floor(values.length / 2);
+		return values.length % 2 === 0
+			? (values[middle - 1] + values[middle]) / 2
+			: values[middle];
 	}
 
 	async function loadMlModelsStatus(projectId: string | number) {
@@ -174,10 +198,8 @@
 	});
 
 	$effect(() => {
-		// Keep drySiltNphi and drySiltRhob synchronized with silt line angle & rock line
+		// Keep the dry silt point on the silt line at the fixed 2.68 g/cc RHOB.
 		const [siltNphi, siltRhob] = computeSiltIntersection(
-			[workbench.lithoParams.drySandNphi, workbench.lithoParams.drySandRhob],
-			[workbench.lithoParams.dryClayNphi, workbench.lithoParams.dryClayRhob],
 			[workbench.lithoParams.fluidNphi, workbench.lithoParams.fluidRhob],
 			workbench.lithoParams.siltLineAngle
 		);
@@ -233,6 +255,12 @@
 
 	async function executeLithoPoro(persist: boolean = false) {
 		if (!workbench.projectId || !workbench.wellId) return;
+		const selectionIndices = wellData.getBrushedCalculationIndices();
+		if (selectionIndices && selectionIndices.size === 0) {
+			wellData.lastError = 'The selection contains no rows in the active depth/zone filter.';
+			return;
+		}
+		const selectionMode = selectionIndices !== null;
 		const runId = ++lithoPoroRunId;
 		wellData.isCalculating = true;
 		wellData.lastError = null;
@@ -248,7 +276,7 @@
 			min_depth: workbench.depthFilter?.min ?? null,
 			max_depth: workbench.depthFilter?.max ?? null,
 			zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
-			save: persist
+			save: persist && !selectionMode
 		};
 
 		const coalArgs = {
@@ -264,31 +292,39 @@
 			// 1. Mutually exclusive NPHI/RHOB Log Correction: HC Correction OR Density Correction
 			if (lp.logCorrectionMode === 'hc') {
 				denSummary = null;
-				const { data: hcData, error: hcErr } = await api.POST(
-					'/quick_pp/workspace/projects/{project_id}/wells/{well_name}/hc_correction',
+				const hcData = await postJson<any>(
+					`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/wells/${encodeURIComponent(workbench.wellId)}/hc_correction`,
 					{
-						params: {
-							path: { project_id: workbench.projectId, well_name: workbench.wellId }
-						},
-						body: {
-							dry_sand_point: [lp.drySandNphi, lp.drySandRhob],
-							dry_clay_point: [lp.dryClayNphi, lp.dryClayRhob],
-							water_point: [lp.fluidNphi, lp.fluidRhob],
-							rho_water: lp.rhoWater,
-							rho_hc: lp.rhoHc,
-							hi_hc: lp.hiHc,
-							buffer: lp.hcBuffer,
-							flag_mode: lp.hcFlagMode ?? 'strict',
-							vsh_tol: lp.hcVshTol ?? 0.05,
-							gr_clean: lp.grClean,
-							gr_clay: lp.grClay,
-							...coalArgs,
-							...filterArgs
-						} as any
+						dry_sand_point: [lp.drySandNphi, lp.drySandRhob],
+						dry_clay_point: [lp.dryClayNphi, lp.dryClayRhob],
+						water_point: [lp.fluidNphi, lp.fluidRhob],
+						rho_water: lp.rhoWater,
+						rho_hc: lp.rhoHc,
+						hi_hc: lp.hiHc,
+						mode: lp.hcFluidMode,
+						use_apparent_elec_density: lp.hcUseApparentDensity,
+						correction_method: lp.hcCorrectionMethod,
+						mud_filtrate_density: wellData.header?.mud_filtrate_density ?? null,
+						mud_filtrate_salinity: wellData.header?.mud_filtrate_salinity ?? null,
+						lithology_coeff: lp.hcLithologyCoeff,
+						temp_grad: lp.fluidTempGrad,
+						surf_temp: lp.fluidSurfTemp,
+						pres_grad: lp.fluidPresGrad,
+						surf_pres: lp.fluidSurfPres,
+						gas_gravity: lp.fluidGasGravity,
+						oil_api: lp.fluidOilApi,
+						gor: lp.fluidGor,
+						salinity_ppm: lp.fluidSalinityPpm,
+						buffer: lp.hcBuffer,
+						flag_mode: lp.hcFlagMode ?? 'strict',
+						vsh_tol: lp.hcVshTol ?? 0.05,
+						gr_clean: lp.grClean,
+						gr_clay: lp.grClay,
+						...coalArgs,
+						...filterArgs
 					}
 				);
 				if (runId !== lithoPoroRunId) return;
-				if (hcErr) throw new Error(String((hcErr as any)?.detail ?? 'HC Correction failed'));
 				if (hcData) {
 					if (hcData.data) Object.assign(batchedCurves, hcData.data);
 					if (hcData.stats) Object.assign(batchedStats, hcData.stats);
@@ -430,17 +466,21 @@
 
 			// Apply all computed curves from Steps 1–4 in a single atomic reactive update
 			if (Object.keys(batchedCurves).length > 0) {
-				wellData.mergeComputedCurves(batchedCurves, batchedStats);
+				wellData.mergeComputedCurves(batchedCurves, batchedStats, selectionIndices);
 				wellData.markModuleComputed('litho-poro', batchedCurves);
 			}
 
 			if (persist) {
-				wellData.lastSavedMessage = 'Litho & Poro Saved ✓';
+				if (selectionMode) {
+					await wellData.saveModuleComputed('litho-poro', 'Litho & Poro Saved ✓');
+				} else {
+					wellData.lastSavedMessage = 'Litho & Poro Saved ✓';
+				}
 			}
 		} catch (e: any) {
 			if (runId !== lithoPoroRunId) return;
 			if (Object.keys(batchedCurves).length > 0) {
-				wellData.mergeComputedCurves(batchedCurves, batchedStats);
+				wellData.mergeComputedCurves(batchedCurves, batchedStats, selectionIndices);
 				wellData.markModuleComputed('litho-poro', batchedCurves);
 			}
 			wellData.lastError = e?.message || 'Lithology/Porosity error';
@@ -453,6 +493,12 @@
 
 	async function executeThomasStieber(persist: boolean = false, chained: boolean = false) {
 		if (!workbench.projectId || !workbench.wellId) return;
+		const selectionIndices = wellData.getBrushedCalculationIndices();
+		if (selectionIndices && selectionIndices.size === 0) {
+			wellData.lastError = 'The selection contains no rows in the active depth/zone filter.';
+			return;
+		}
+		const selectionMode = selectionIndices !== null;
 		if (!chained) {
 			wellData.isCalculating = true;
 			wellData.lastError = null;
@@ -477,11 +523,11 @@
 					min_depth: workbench.depthFilter?.min ?? null,
 					max_depth: workbench.depthFilter?.max ?? null,
 					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
-					save: persist
+					save: persist && !selectionMode
 				}
 			);
 			if (res.data) {
-				wellData.mergeComputedCurves(res.data, res.stats);
+				wellData.mergeComputedCurves(res.data, res.stats, selectionIndices);
 				wellData.markModuleComputed('litho-poro', res.data);
 			}
 			workbench.tsParams.enabled = true;
@@ -489,7 +535,11 @@
 				tsSummary = res.summary;
 			}
 			if (persist && !chained) {
-				wellData.lastSavedMessage = 'Thomas-Stieber Saved ✓';
+				if (selectionMode) {
+					await wellData.saveModuleComputed('litho-poro', 'Thomas-Stieber Saved ✓');
+				} else {
+					wellData.lastSavedMessage = 'Thomas-Stieber Saved ✓';
+				}
 			}
 		} catch (e: any) {
 			wellData.lastError = e?.message || 'Thomas-Stieber estimation failed';
@@ -514,6 +564,12 @@
 
 	async function executePretrainedMlInference(persist: boolean = false) {
 		if (!workbench.projectId || !workbench.wellId) return;
+		const selectionIndices = wellData.getBrushedCalculationIndices();
+		if (selectionIndices && selectionIndices.size === 0) {
+			wellData.lastError = 'The selection contains no rows in the active depth/zone filter.';
+			return;
+		}
+		const selectionMode = selectionIndices !== null;
 		wellData.isCalculating = true;
 		wellData.lastError = null;
 		try {
@@ -526,14 +582,14 @@
 					min_depth: workbench.depthFilter?.min ?? null,
 					max_depth: workbench.depthFilter?.max ?? null,
 					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
-					save: persist
+					save: persist && !selectionMode
 				}
 			);
 			if (res.data) {
-				wellData.mergeComputedCurves(res.data, res.stats);
+				wellData.mergeComputedCurves(res.data, res.stats, selectionIndices);
 				wellData.markModuleComputed('litho-poro', res.data);
 			} else if (res.computed_curves) {
-				wellData.mergeComputedCurves(res.computed_curves, res.stats);
+				wellData.mergeComputedCurves(res.computed_curves, res.stats, selectionIndices);
 				wellData.markModuleComputed('litho-poro', res.computed_curves);
 			}
 			mlSummary = {
@@ -546,7 +602,14 @@
 				perm_median_p90_p10_factor: res.interval_width_summary?.perm_median_p90_p10_factor ?? 1
 			};
 			if (persist) {
-				wellData.lastSavedMessage = 'Pre-Trained Conformal Bounds Applied ✓';
+				if (selectionMode) {
+					await wellData.saveModuleComputed(
+						'litho-poro',
+						'Pre-Trained Conformal Bounds Applied ✓'
+					);
+				} else {
+					wellData.lastSavedMessage = 'Pre-Trained Conformal Bounds Applied ✓';
+				}
 			}
 		} catch (e: any) {
 			wellData.lastError = e?.message || 'Pre-trained ML inference failed';
@@ -796,35 +859,221 @@
 
 			{#if workbench.lithoParams.logCorrectionMode === 'hc'}
 				<div class="my-1.5 rounded-xs border border-emerald-200 bg-emerald-50/70 px-2 py-1 text-[10px] leading-snug text-emerald-950">
-					Shifts HC-flagged <span class="mono-num font-semibold">(NPHI, RHOB)</span> points along the fluid correction angle until crossplot <span class="mono-num font-semibold">VSH_DN</span> matches calibrated <span class="mono-num font-semibold">VSH_GR</span> (<span class="mono-num font-semibold">{fmtNum(workbench.lithoParams.grClean, 1)}–{fmtNum(workbench.lithoParams.grClay, 1)} gAPI</span>).
+					{#if workbench.lithoParams.hcCorrectionMethod === 'invaded_zone_standard'}
+						Applies the invaded-zone correction equations and selects S<sub>hi</sub> (0–1) in 0.01 increments to match the binary solid-relative clay fraction to VSH<sub>GR</sub>.
+					{:else}
+						Shifts HC-flagged <span class="mono-num font-semibold">(NPHI, RHOB)</span> points along the fluid correction angle toward a binary solid-relative clay fraction matching calibrated <span class="mono-num font-semibold">VSH_GR</span> (<span class="mono-num font-semibold">{fmtNum(workbench.lithoParams.grClean, 1)}–{fmtNum(workbench.lithoParams.grClay, 1)} gAPI</span>). This target differs from SSC VSH<sub>DN</sub>.
+					{/if}
 				</div>
-				<NumericScrubber
-					label="Water Density"
-					bind:value={workbench.lithoParams.rhoWater}
-					unit="g/cc"
-					min={0.9}
-					max={1.25}
-					step={0.01}
-					onrun={() => executeLithoPoro(false)}
-				/>
-				<NumericScrubber
-					label="HC Fluid Density"
-					bind:value={workbench.lithoParams.rhoHc}
-					unit="g/cc"
-					min={0.1}
-					max={0.95}
-					step={0.01}
-					onrun={() => executeLithoPoro(false)}
-				/>
-				<NumericScrubber
-					label="HC Hydrogen Index"
-					bind:value={workbench.lithoParams.hiHc}
-					unit="v/v"
-					min={0.1}
-					max={1.1}
-					step={0.02}
-					onrun={() => executeLithoPoro(false)}
-				/>
+				<div class="grid grid-cols-2 gap-1">
+					{#each [
+						['crossplot', 'Crossplot'],
+						['invaded_zone_standard', 'Invaded Zone (Standard)']
+					] as [method, label]}
+						<button
+							type="button"
+							onclick={() => {
+								workbench.lithoParams.hcCorrectionMethod =
+									method as 'crossplot' | 'invaded_zone_standard';
+								executeLithoPoro(false);
+							}}
+							class="h-6 rounded-xs border px-1.5 text-[10px] font-semibold transition-colors {workbench.lithoParams.hcCorrectionMethod ===
+							method
+								? 'border-emerald-700 bg-emerald-700 text-white'
+								: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+						>
+							{label}
+						</button>
+					{/each}
+				</div>
+				{#if workbench.lithoParams.hcCorrectionMethod === 'invaded_zone_standard'}
+					<div class="mt-1 rounded-xs border border-amber-200 bg-amber-50/70 px-2 py-1 text-[10px] leading-snug text-amber-950">
+						Uses mud-filtrate density/salinity from well metadata and estimates invaded-zone HC saturation in 0.01 increments to best match the binary solid-relative clay fraction to VSH_GR.
+						{#if wellData.header?.mud_filtrate_density == null || wellData.header?.mud_filtrate_salinity == null}
+							<span class="font-bold"> Set both mud-filtrate properties in QAQC → Well Header before running.</span>
+						{/if}
+					</div>
+					<NumericScrubber
+						label="Lithology Coefficient (K)"
+						bind:value={workbench.lithoParams.hcLithologyCoeff}
+						min={0}
+						max={5}
+						step={0.1}
+						decimals={1}
+						onrun={() => executeLithoPoro(false)}
+					/>
+				{/if}
+				<div class="mb-1.5 grid grid-cols-2 gap-1">
+					{#each [['constant', 'Constant'], ['dynamic', 'Dynamic (P-T)']] as [mode, label]}
+						<button
+							type="button"
+							onclick={() => {
+								workbench.lithoParams.hcFluidMode = mode as 'constant' | 'dynamic';
+								executeLithoPoro(false);
+							}}
+							class="h-6 rounded-xs border px-1.5 text-[10.5px] font-semibold transition-colors {workbench.lithoParams.hcFluidMode ===
+							mode
+								? 'border-emerald-700 bg-emerald-700 text-white'
+								: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+						>
+							{label}
+						</button>
+					{/each}
+				</div>
+				{#if workbench.lithoParams.hcFluidMode === 'constant'}
+					<NumericScrubber
+						label="Water Density"
+						bind:value={workbench.lithoParams.rhoWater}
+						unit="g/cc"
+						min={0.9}
+						max={1.25}
+						step={0.01}
+						onrun={() => executeLithoPoro(false)}
+					/>
+					<NumericScrubber
+						label="HC Fluid Density"
+						bind:value={workbench.lithoParams.rhoHc}
+						unit="g/cc"
+						min={0.1}
+						max={0.95}
+						step={0.01}
+						onrun={() => executeLithoPoro(false)}
+					/>
+					<NumericScrubber
+						label="HC Hydrogen Index"
+						bind:value={workbench.lithoParams.hiHc}
+						unit="v/v"
+						min={0.1}
+						max={1.1}
+						step={0.02}
+						onrun={() => executeLithoPoro(false)}
+					/>
+				{:else}
+					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 py-1 text-[10px] font-semibold uppercase text-[var(--text-secondary)]">
+						P-T Regime
+					</div>
+					<button
+						type="button"
+						onclick={syncFluidPtFromSaturation}
+						class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-[10px] font-semibold text-[var(--text-secondary)] hover:bg-slate-100"
+					>
+						Sync from Saturation
+					</button>
+					<NumericScrubber
+						label="Temperature Gradient"
+						bind:value={workbench.lithoParams.fluidTempGrad}
+						unit="°C/km"
+						min={5}
+						max={100}
+						step={1}
+						onrun={() => executeLithoPoro(false)}
+					/>
+					<NumericScrubber
+						label="Surface Temperature"
+						bind:value={workbench.lithoParams.fluidSurfTemp}
+						unit="°C"
+						min={0}
+						max={60}
+						step={1}
+						onrun={() => executeLithoPoro(false)}
+					/>
+					<NumericScrubber
+						label="Pressure Gradient"
+						bind:value={workbench.lithoParams.fluidPresGrad}
+						unit="MPa/km"
+						min={5}
+						max={25}
+						step={0.1}
+						onrun={() => executeLithoPoro(false)}
+					/>
+					<NumericScrubber
+						label="Surface Pressure"
+						bind:value={workbench.lithoParams.fluidSurfPres}
+						unit="MPa"
+						min={0}
+						max={5}
+						step={0.01}
+						onrun={() => executeLithoPoro(false)}
+					/>
+					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 py-1 text-[10px] font-semibold uppercase text-[var(--text-secondary)]">
+						Fluid Composition
+					</div>
+					<NumericScrubber
+						label="Gas Gravity"
+						bind:value={workbench.lithoParams.fluidGasGravity}
+						unit="air = 1"
+						min={0.55}
+						max={1.5}
+						step={0.01}
+						onrun={() => executeLithoPoro(false)}
+					/>
+					<NumericScrubber
+						label="Oil API"
+						bind:value={workbench.lithoParams.fluidOilApi}
+						unit="°API"
+						min={5}
+						max={70}
+						step={1}
+						onrun={() => executeLithoPoro(false)}
+					/>
+					<NumericScrubber
+						label="Solution GOR"
+						bind:value={workbench.lithoParams.fluidGor}
+						unit="Sm³/Sm³"
+						min={0}
+						max={5000}
+						step={10}
+						onrun={() => executeLithoPoro(false)}
+					/>
+					<NumericScrubber
+						label="Brine Salinity"
+						bind:value={workbench.lithoParams.fluidSalinityPpm}
+						unit="ppm"
+						min={0}
+						max={350000}
+						step={1000}
+						onrun={() => executeLithoPoro(false)}
+					/>
+					{#if workbench.lithoParams.hcCorrectionMethod === 'crossplot'}
+						<label class="flex items-center gap-2 py-0.5 text-[10px] font-medium">
+							<input
+								type="checkbox"
+								bind:checked={workbench.lithoParams.hcUseApparentDensity}
+								onchange={() => executeLithoPoro(false)}
+								class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+							/>
+							<span>Use apparent electron density in correction angle</span>
+						</label>
+					{/if}
+					<div class="grid grid-cols-3 gap-1 text-[10px]">
+						{#each [
+							['RHO_W', 'ρw'],
+							['RHO_O', 'ρo'],
+							['RHO_G', 'ρg']
+						] as [curve, label]}
+							<div class="rounded-xs border border-[var(--border-hairline)] px-1.5 py-1 text-center">
+								<span class="text-[var(--text-secondary)]">{label}</span>
+								<div class="mono-num font-semibold">
+									{fmtNum(medianVisibleCurve(curve), 2)} g/cc
+								</div>
+							</div>
+						{/each}
+					</div>
+					<div class="grid grid-cols-3 gap-1 text-[10px]">
+						{#each [
+							['HI_W', 'HIw'],
+							['HI_O', 'HIo'],
+							['HI_G', 'HIg']
+						] as [curve, label]}
+							<div class="rounded-xs border border-[var(--border-hairline)] px-1.5 py-1 text-center">
+								<span class="text-[var(--text-secondary)]">{label}</span>
+								<div class="mono-num font-semibold">
+									{fmtNum(medianVisibleCurve(curve), 2)} v/v
+								</div>
+							</div>
+						{/each}
+					</div>
+				{/if}
 				<NumericScrubber
 					label="HC Flag Buffer"
 					bind:value={workbench.lithoParams.hcBuffer}
@@ -844,7 +1093,7 @@
 						class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
 					>
 						<option value="strict">Beyond Clean-Sand Line</option>
-						<option value="vsh_gr">VSH_DN &lt; VSH_GR − Tol</option>
+						<option value="vsh_gr">Solid clay &lt; VSH_GR − Tol</option>
 					</select>
 				</div>
 				{#if workbench.lithoParams.hcFlagMode === 'vsh_gr'}
@@ -888,6 +1137,16 @@
 								</div>
 							</div>
 						</div>
+						{#if workbench.lithoParams.hcCorrectionMethod === 'invaded_zone_standard'}
+							<div class="mt-1 border-t border-emerald-100 pt-1 text-center">
+								<span class="text-[var(--text-muted)]">Mean S<sub>hi</sub>:</span>
+								<strong class="mono-num ml-1 text-emerald-900">
+									{hcSummary.mean_invaded_hc_saturation != null
+										? fmtNum(hcSummary.mean_invaded_hc_saturation, 2)
+										: '—'}
+								</strong>
+							</div>
+						{/if}
 					</div>
 				{/if}
 			{:else if workbench.lithoParams.logCorrectionMode === 'den'}

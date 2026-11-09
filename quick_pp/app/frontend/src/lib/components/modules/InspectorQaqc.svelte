@@ -7,6 +7,7 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
 	import { postJson } from '$lib/api/client';
+	import ImputationControls from '$lib/components/modules/ImputationControls.svelte';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
 	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
@@ -22,6 +23,8 @@
 	import { workbench } from '$lib/state/workbench.svelte';
 	import { getCurveUnit } from '$lib/utils/petrophysicsColors';
 	import { fmtDepth, fmtNum } from '$lib/utils/formatters';
+	import { depthDisplay } from '$lib/state/depthDisplay.svelte';
+	import { depthFromMeters, depthToMeters } from '$lib/utils/depthUnits';
 
 	const REQUIRED_STANDARD = ['GR', 'RT', 'NPHI', 'RHOB', 'CALI', 'DTC', 'PEF'];
 	const EVALUATED_CURVES = ALL_CALCULATED_CURVE_MNEMONICS;
@@ -55,6 +58,11 @@
 	let spliceInterpGaps = $state<boolean>(false);
 	let spliceMaxGapM = $state<number>(2.0);
 	let spliceTargetName = $state<string>('');
+
+	$effect(() => {
+		workbench.qaqcEditorMode = editorMode;
+		workbench.qaqcSpliceRuns = [...spliceRuns];
+	});
 
 	// Curve Management (Duplicate / Rename / Delete) state
 	let duplicateTargetName = $state<string>('');
@@ -314,7 +322,7 @@
 			wellData.lastError = 'Please select at least 2 distinct curves to splice.';
 			return;
 		}
-		const target = (spliceTargetName.trim() || validCols[0]).toUpperCase();
+		const target = (spliceTargetName.trim() || validCols[0]).toUpperCase().replace(/\s+/g, '_');
 		try {
 			await wellData.spliceCurves({
 				sourceCurves: validCols,
@@ -326,6 +334,14 @@
 				maxGapMeters: spliceMaxGapM,
 				persist
 			});
+			workbench.qaqcEditComparison = {
+				projectId: workbench.projectId,
+				wellId: workbench.wellId,
+				wellLoadGeneration: wellData.wellLoadGeneration,
+				target,
+				sources: [...validCols],
+				kind: 'splice'
+			};
 			const st = wellData.stats[target];
 			editStatusMsg = persist
 				? `Saved spliced curve ${target} (${st?.top ?? '—'}–${st?.bottom ?? '—'} m) ✓`
@@ -415,6 +431,14 @@
 				scope: editScope,
 				persist
 			});
+			workbench.qaqcEditComparison = {
+				projectId: workbench.projectId,
+				wellId: workbench.wellId,
+				wellLoadGeneration: wellData.wellLoadGeneration,
+				target,
+				sources: [src],
+				kind: 'math'
+			};
 			const hasOri = target === src && !src.endsWith('_ORI');
 			editStatusMsg = persist
 				? hasOri
@@ -527,18 +551,22 @@
 	$effect(() => {
 		const dr = wellData.depthRange;
 		const df = workbench.depthFilter;
-		workingTopDepth = Number((df ? df.min : dr.min).toFixed(1));
-		workingBottomDepth = Number((df ? df.max : dr.max).toFixed(1));
+		workingTopDepth = Number(depthFromMeters(df ? df.min : dr.min, depthDisplay.unit).toFixed(4));
+		workingBottomDepth = Number(depthFromMeters(df ? df.max : dr.max, depthDisplay.unit).toFixed(4));
 	});
 
 	async function applyWorkingDepthInterval(persist: boolean = true) {
-		await wellData.saveWellFocusDepth(workingTopDepth, workingBottomDepth, persist);
+		await wellData.saveWellFocusDepth(
+			depthToMeters(workingTopDepth, depthDisplay.unit),
+			depthToMeters(workingBottomDepth, depthDisplay.unit),
+			persist
+		);
 	}
 
 	async function resetWorkingDepthInterval() {
 		const dr = wellData.depthRange;
-		workingTopDepth = Number(dr.min.toFixed(1));
-		workingBottomDepth = Number(dr.max.toFixed(1));
+		workingTopDepth = Number(depthFromMeters(dr.min, depthDisplay.unit).toFixed(4));
+		workingBottomDepth = Number(depthFromMeters(dr.max, depthDisplay.unit).toFixed(4));
 		await wellData.saveWellFocusDepth(null, null, true);
 	}
 
@@ -548,9 +576,9 @@
 		if (topD === undefined) return;
 		const botD =
 			topIdx + 1 < sorted.length ? sorted[topIdx + 1].depth : wellData.depthRange.max;
-		workingTopDepth = Number(topD.toFixed(1));
-		workingBottomDepth = Number(botD.toFixed(1));
-		await wellData.saveWellFocusDepth(workingTopDepth, workingBottomDepth, true);
+		workingTopDepth = Number(depthFromMeters(topD, depthDisplay.unit).toFixed(4));
+		workingBottomDepth = Number(depthFromMeters(botD, depthDisplay.unit).toFixed(4));
+		await wellData.saveWellFocusDepth(topD, botD, true);
 	}
 
 	// Borehole Environmental Correction parameters
@@ -622,7 +650,9 @@
 			bht_unit: h.bht_unit || 'degC',
 			bit_size: h.bit_size ?? null,
 			rmf: h.rmf ?? null,
-			mud_density: h.mud_density ?? null
+			mud_density: h.mud_density ?? null,
+			mud_filtrate_salinity: h.mud_filtrate_salinity ?? null,
+			mud_filtrate_density: h.mud_filtrate_density ?? null
 		};
 		editingWellHeader = true;
 	}
@@ -673,6 +703,12 @@
 
 	async function runBadholeFlagging(persist: boolean = false) {
 		if (!workbench.projectId || !workbench.wellId) return;
+		const selectionIndices = wellData.getBrushedCalculationIndices();
+		if (selectionIndices && selectionIndices.size === 0) {
+			wellData.lastError = 'The selection contains no rows in the active depth/zone filter.';
+			return;
+		}
+		const selectionMode = selectionIndices !== null;
 		wellData.isCalculating = true;
 		wellData.lastError = null;
 		const bp = workbench.badholeParams;
@@ -698,18 +734,22 @@
 					min_depth: workbench.depthFilter?.min ?? null,
 					max_depth: workbench.depthFilter?.max ?? null,
 					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
-					save: persist
+					save: persist && !selectionMode
 				}
 			);
 			if (res.data) {
-				wellData.mergeComputedCurves(res.data, res.stats);
+				wellData.mergeComputedCurves(res.data, res.stats, selectionIndices);
 				wellData.markModuleComputed('qaqc-badhole', res.data);
 			}
 			if (res.badhole_summary) {
 				badholeSummary = res.badhole_summary;
 			}
 			if (persist) {
-				wellData.lastSavedMessage = 'Badhole Flags Saved ✓';
+				if (selectionMode) {
+					await wellData.saveModuleComputed('qaqc-badhole', 'Badhole Flags Saved ✓');
+				} else {
+					wellData.lastSavedMessage = 'Badhole Flags Saved ✓';
+				}
 			}
 		} catch (e: any) {
 			wellData.lastError = e?.message || 'Badhole flagging error';
@@ -739,6 +779,12 @@
 
 	async function runEnvCorrections(persist: boolean = false) {
 		if (!workbench.projectId || !workbench.wellId) return;
+		const selectionIndices = wellData.getBrushedCalculationIndices();
+		if (selectionIndices && selectionIndices.size === 0) {
+			wellData.lastError = 'The selection contains no rows in the active depth/zone filter.';
+			return;
+		}
+		const selectionMode = selectionIndices !== null;
 		wellData.isCalculating = true;
 		wellData.lastError = null;
 		try {
@@ -753,15 +799,19 @@
 					min_depth: workbench.depthFilter?.min ?? null,
 					max_depth: workbench.depthFilter?.max ?? null,
 					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
-					save: persist
+					save: persist && !selectionMode
 				}
 			);
 			if (res.data) {
-				wellData.mergeComputedCurves(res.data, res.stats);
+				wellData.mergeComputedCurves(res.data, res.stats, selectionIndices);
 				wellData.markModuleComputed('qaqc-env', res.data);
 			}
 			if (persist) {
-				wellData.lastSavedMessage = 'Env Corrections Saved ✓';
+				if (selectionMode) {
+					await wellData.saveModuleComputed('qaqc-env', 'Env Corrections Saved ✓');
+				} else {
+					wellData.lastSavedMessage = 'Env Corrections Saved ✓';
+				}
 			}
 		} catch (e: any) {
 			wellData.lastError = e?.message || 'Environmental corrections error';
@@ -908,6 +958,12 @@
 						<div class="text-[9.5px] text-[var(--text-muted)]">BHT / Bit Size / Rmf</div>
 						<div class="mono-num truncate font-semibold text-[var(--text-primary)]">
 							{hdr.bht != null ? `${hdr.bht}°` : '—'} • {hdr.bit_size != null ? `${hdr.bit_size}"` : '—'} • {hdr.rmf != null ? `${hdr.rmf} Ωm` : '—'}
+						</div>
+					</div>
+					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1">
+						<div class="text-[9.5px] text-[var(--text-muted)]">Mud Filtrate Density / Salinity</div>
+						<div class="mono-num truncate font-semibold text-[var(--text-primary)]">
+							{hdr.mud_filtrate_density != null ? `${fmtNum(hdr.mud_filtrate_density, 3)} g/cc` : '—'} • {hdr.mud_filtrate_salinity != null ? `${fmtNum(hdr.mud_filtrate_salinity, 0)} ppm` : '—'}
 						</div>
 					</div>
 				</div>
@@ -1057,6 +1113,27 @@
 								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
 							/>
 						</label>
+						<label class="flex flex-col gap-0.5">
+							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">Mud Filtrate Salinity (ppm)</span>
+							<input
+								type="number"
+								min="0"
+								step="1000"
+								bind:value={headerDraft.mud_filtrate_salinity}
+								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+							/>
+						</label>
+						<label class="flex flex-col gap-0.5">
+							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">Mud Filtrate Density (g/cc)</span>
+							<input
+								type="number"
+								min="0.1"
+								max="2"
+								step="0.01"
+								bind:value={headerDraft.mud_filtrate_density}
+								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+							/>
+						</label>
 					</div>
 					<div class="flex justify-end gap-1.5 pt-1">
 						<button
@@ -1087,7 +1164,7 @@
 				<span>
 					Full Log Range:
 					<strong class="mono-num text-[var(--text-secondary)]">
-						{fmtDepth(wellData.depthRange.min)} – {fmtDepth(wellData.depthRange.max)}
+						{fmtDepth(depthFromMeters(wellData.depthRange.min, depthDisplay.unit), depthDisplay.unit)} – {fmtDepth(depthFromMeters(wellData.depthRange.max, depthDisplay.unit), depthDisplay.unit)}
 					</strong>
 				</span>
 				{#if hasCustomWorkingInterval}
@@ -1100,26 +1177,26 @@
 			<div class="grid grid-cols-2 gap-2">
 				<label class="block rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
 					<span class="mb-0.5 block text-[10px] font-medium text-[var(--text-muted)]">
-						Top Depth (m)
+						Top Depth ({depthDisplay.unit})
 					</span>
 					<input
 						type="number"
-						step="0.5"
-						min={wellData.depthRange.min}
-						max={wellData.depthRange.max}
+						step="any"
+						min={depthFromMeters(wellData.depthRange.min, depthDisplay.unit)}
+						max={depthFromMeters(wellData.depthRange.max, depthDisplay.unit)}
 						bind:value={workingTopDepth}
 						class="mono-num h-6 w-full rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-xs font-semibold text-[var(--text-primary)]"
 					/>
 				</label>
 				<label class="block rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
 					<span class="mb-0.5 block text-[10px] font-medium text-[var(--text-muted)]">
-						Bottom Depth (m)
+						Bottom Depth ({depthDisplay.unit})
 					</span>
 					<input
 						type="number"
-						step="0.5"
-						min={wellData.depthRange.min}
-						max={wellData.depthRange.max}
+						step="any"
+						min={depthFromMeters(wellData.depthRange.min, depthDisplay.unit)}
+						max={depthFromMeters(wellData.depthRange.max, depthDisplay.unit)}
 						bind:value={workingBottomDepth}
 						class="mono-num h-6 w-full rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-xs font-semibold text-[var(--text-primary)]"
 					/>
@@ -1394,6 +1471,16 @@
 			title="Curve Editor & Management"
 			badge={workbench.selectedQaqcCurve || 'Select Curve'}
 		>
+			<button
+				type="button"
+				onclick={() => {
+					workbench.crossplotTemplateOverride = 'curve-depth';
+					if (workbench.rightPaneTab === 'grid') workbench.rightPaneTab = 'split';
+				}}
+				class="h-6 w-full rounded-sm border border-blue-200 bg-blue-50 text-[10px] font-semibold text-blue-700 hover:bg-blue-100"
+			>
+				View log vs depth in right pane
+			</button>
 			<!-- Target Curve Picker + Revert Button -->
 			<div class="flex items-center gap-1.5">
 				<span class="shrink-0 text-[11px] font-medium text-[var(--text-secondary)]">Curve:</span>
@@ -2050,6 +2137,8 @@
 				</div>
 			{/if}
 		</ParameterSection>
+
+		<ImputationControls />
 
 		<ParameterSection
 			title="Badhole Flagging"
