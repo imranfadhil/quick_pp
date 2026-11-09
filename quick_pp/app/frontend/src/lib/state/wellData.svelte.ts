@@ -4003,6 +4003,8 @@ class WellDataState {
 			'RT_MOD',
 			'NPHI',
 			'RHOB',
+			'NPHI_HC',
+			'RHOB_HC',
 			'DTC',
 			'DT',
 			'DTCO',

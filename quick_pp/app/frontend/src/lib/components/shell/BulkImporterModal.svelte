@@ -101,6 +101,8 @@
 
 	async function handleInspectLogs() {
 		if (!lasFiles || lasFiles.length === 0) return;
+		inspectedFiles = [];
+		expandedFileIdx = null;
 		if (authState.isDemoMode) {
 			const fileArr = Array.from(lasFiles);
 			const oversized = fileArr.filter((f) => f.size > MAX_DEMO_LAS_BYTES);
@@ -159,10 +161,14 @@
 			await handleQuickUpload();
 			return;
 		}
+		if (inspectedFiles.length === 0) {
+			uploadStatus = 'No files passed inspection. Fix the inspection error and re-inspect before importing.';
+			return;
+		}
 
 		uploadingLas = true;
 		uploadStatus = null;
-		const totalFiles = inspectedFiles.length || lasFiles.length;
+		const totalFiles = inspectedFiles.length;
 		const taskId = appStatus.startTask(`Importing ${totalFiles} log file(s)...`);
 		const committedList: any[] = [];
 		try {
@@ -225,9 +231,13 @@
 				inspectedFiles = inspectedFiles.filter((f) => !committedIds.has(f.file_id));
 			}
 
+			if (committedList.length === 0) {
+				throw new Error('The server did not report any wells committed.');
+			}
+
 			const preferredWell = committedList[0]?.well_name || workbench.wellId;
 			await projectData.selectProject(workbench.projectId, preferredWell);
-			const wellCount = committedList.length || totalFiles;
+			const wellCount = committedList.length;
 			const wellSummaries = committedList.map((w: any) => {
 				const parts: string[] = [];
 				if (Array.isArray(w.appended_curves) && w.appended_curves.length > 0) {

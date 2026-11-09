@@ -3080,6 +3080,12 @@
 						Multi-Well Stick Plot
 					</button>
 				</div>
+
+				<style>
+					.inspection-box :global(.text-slate-400) {
+						color: #475569;
+					}
+				</style>
 			{/if}
 			<span class="font-semibold text-[var(--text-primary)]">
 				{workbench.wellId ?? 'No Well Selected'}
@@ -3911,13 +3917,13 @@
 						style="left: 0.0%; width: 14.6%;"
 						class="absolute {isAbove
 							? 'bottom-0'
-							: 'top-0'} flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
+							: 'top-0'} inspection-box flex flex-col gap-0.5 rounded-xs border border-slate-300 bg-white/95 px-1.5 py-1 text-[8px] leading-tight text-slate-900 shadow-md backdrop-blur-sm"
 					>
 						<div
-							class="flex items-center justify-between border-b border-slate-600/70 pb-0.5 font-bold text-slate-200"
+							class="flex items-center justify-between border-b border-slate-300 pb-0.5 font-bold text-slate-700"
 						>
 							<span>T1 · LITH</span>
-							<span class="mono-num text-[7.5px] text-slate-300"
+							<span class="mono-num text-[7.5px] text-slate-600"
 								>{formatLogDepth(readout.DEPT ?? workbench.cursorDepth)}</span
 							>
 						</div>
@@ -3976,7 +3982,7 @@
 						{/if}
 						{#if readout.CALI !== null && readout.CALI !== undefined}
 							<div class="flex items-center justify-between">
-								<span class="font-bold text-amber-300">CALI</span>
+								<span class="font-bold text-amber-700">CALI</span>
 								<span class="mono-num font-semibold"
 									>{fmtNum(readout.CALI, 2)}<span
 										class="text-[7px] text-slate-400">"</span
@@ -3985,7 +3991,7 @@
 							</div>
 						{/if}
 						{#if readout.BS !== null && readout.BS !== undefined}
-							<div class="flex items-center justify-between text-slate-300">
+							<div class="flex items-center justify-between text-slate-600">
 								<span class="font-semibold">BS</span>
 								<span class="mono-num"
 									>{fmtNum(readout.BS, 2)}<span class="text-[7px]">"</span></span
@@ -3999,13 +4005,13 @@
 						style="left: 15.6%; width: 14.6%;"
 						class="absolute {isAbove
 							? 'bottom-0'
-							: 'top-0'} flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
+							: 'top-0'} inspection-box flex flex-col gap-0.5 rounded-xs border border-slate-300 bg-white/95 px-1.5 py-1 text-[8px] leading-tight text-slate-900 shadow-md backdrop-blur-sm"
 					>
 						<div
-							class="flex items-center justify-between border-b border-slate-600/70 pb-0.5 font-bold text-slate-200"
+							class="flex items-center justify-between border-b border-slate-300 pb-0.5 font-bold text-slate-700"
 						>
 							<span>T2 · RES</span>
-							<span class="text-[7.5px] text-slate-300">Ω·m</span>
+							<span class="text-[7.5px] text-slate-600">Ω·m</span>
 						</div>
 						<div class="flex items-center justify-between">
 							<span class="font-bold" style="color: {PETRO_COLORS.rt}">RT</span>
@@ -4046,13 +4052,13 @@
 						style="left: 31.2%; width: 14.6%;"
 						class="absolute {isAbove
 							? 'bottom-0'
-							: 'top-0'} flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
+							: 'top-0'} inspection-box flex flex-col gap-0.5 rounded-xs border border-slate-300 bg-white/95 px-1.5 py-1 text-[8px] leading-tight text-slate-900 shadow-md backdrop-blur-sm"
 					>
 						<div
-							class="flex items-center justify-between border-b border-slate-600/70 pb-0.5 font-bold text-slate-200"
+							class="flex items-center justify-between border-b border-slate-300 pb-0.5 font-bold text-slate-700"
 						>
 							<span>T3 · POR LOGS</span>
-							<span class="text-[7.5px] text-slate-300">D-N-S</span>
+							<span class="text-[7.5px] text-slate-600">D-N-S</span>
 						</div>
 						<div class="flex items-center justify-between">
 							<span class="font-bold" style="color: {PETRO_COLORS.rhob}">RHOB</span>
@@ -4068,6 +4074,24 @@
 								<span class="text-[7px] text-slate-400">v/v</span></span
 							>
 						</div>
+						{#if workbench.lithoParams.enableHcCorrection && readout.RHOB_HC !== null && readout.RHOB_HC !== undefined}
+							<div class="flex items-center justify-between">
+								<span class="font-bold text-red-700">RHOB_HC</span>
+								<span class="mono-num font-semibold"
+									>{fmtNum(readout.RHOB_HC, 3)}
+									<span class="text-[7px] text-slate-600">g/cc</span></span
+								>
+							</div>
+						{/if}
+						{#if workbench.lithoParams.enableHcCorrection && readout.NPHI_HC !== null && readout.NPHI_HC !== undefined}
+							<div class="flex items-center justify-between">
+								<span class="font-bold text-blue-700">NPHI_HC</span>
+								<span class="mono-num font-semibold"
+									>{fmtNum(readout.NPHI_HC, 3)}
+									<span class="text-[7px] text-slate-600">v/v</span></span
+								>
+							</div>
+						{/if}
 						{#if hasDtc && showDtc && (readout.DTC ?? readout.DT ?? readout.DTCO ?? readout.AC ?? readout.DT4P) !== null && (readout.DTC ?? readout.DT ?? readout.DTCO ?? readout.AC ?? readout.DT4P) !== undefined}
 							<div class="flex items-center justify-between">
 								<span class="font-bold" style="color: {PETRO_COLORS.dt}">DTC</span>
@@ -4105,30 +4129,30 @@
 						style="left: 46.8%; width: 14.6%;"
 						class="absolute {isAbove
 							? 'bottom-0'
-							: 'top-0'} flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
+							: 'top-0'} inspection-box flex flex-col gap-0.5 rounded-xs border border-slate-300 bg-white/95 px-1.5 py-1 text-[8px] leading-tight text-slate-900 shadow-md backdrop-blur-sm"
 					>
 						<div
-							class="flex items-center justify-between border-b border-slate-600/70 pb-0.5 font-bold text-slate-200"
+							class="flex items-center justify-between border-b border-slate-300 pb-0.5 font-bold text-slate-700"
 						>
 							<span>T4 · LITH & PORO</span>
-							<span class="text-[7.5px] text-slate-300">v/v</span>
+							<span class="text-[7.5px] text-slate-600">v/v</span>
 						</div>
 						{#if tsOverlayActive && readout.VSH_LAM !== null && readout.VSH_LAM !== undefined}
 							<div class="flex items-center justify-between">
-								<span class="font-bold text-slate-300">VSH_LAM</span>
+								<span class="font-bold text-slate-700">VSH_LAM</span>
 								<span class="mono-num font-semibold"
 									>{fmtNum(readout.VSH_LAM, 3)}</span
 								>
 							</div>
 							<div class="flex items-center justify-between">
-								<span class="font-bold text-sky-300">VSH_DIS</span>
+								<span class="font-bold text-sky-700">VSH_DIS</span>
 								<span class="mono-num font-semibold"
 									>{fmtNum(readout.VSH_DIS, 3)}</span
 								>
 							</div>
 						{:else}
 							<div class="flex items-center justify-between">
-								<span class="font-bold text-amber-200">VCLAY</span>
+								<span class="font-bold text-amber-800">VCLAY</span>
 								<span class="mono-num font-semibold"
 									>{fmtNum(
 										readout.VCLAY ?? readout.VSH ?? readout.VSH_GR,
@@ -4139,7 +4163,7 @@
 						{/if}
 						{#if readout.VSAND !== null && readout.VSAND !== undefined && readout.VSAND > 0.001}
 							<div class="flex items-center justify-between">
-								<span class="font-bold text-yellow-300">VSAND</span>
+								<span class="font-bold text-yellow-700">VSAND</span>
 								<span class="mono-num font-semibold"
 									>{fmtNum(readout.VSAND, 3)}</span
 								>
@@ -4147,7 +4171,7 @@
 						{/if}
 						{#if readout.VSILT !== null && readout.VSILT !== undefined && readout.VSILT > 0.001}
 							<div class="flex items-center justify-between">
-								<span class="font-bold text-orange-300">VSILT</span>
+								<span class="font-bold text-orange-700">VSILT</span>
 								<span class="mono-num font-semibold"
 									>{fmtNum(readout.VSILT, 3)}</span
 								>
@@ -4175,7 +4199,7 @@
 						{/if}
 						{#if readout.VCOAL !== null && readout.VCOAL !== undefined && readout.VCOAL > 0.001}
 							<div class="flex items-center justify-between">
-								<span class="font-bold text-slate-300">VCOAL</span>
+								<span class="font-bold text-slate-700">VCOAL</span>
 								<span class="mono-num font-semibold"
 									>{fmtNum(readout.VCOAL, 3)}</span
 								>
@@ -4183,7 +4207,7 @@
 						{/if}
 						{#if readout.VANHY !== null && readout.VANHY !== undefined && readout.VANHY > 0.001}
 							<div class="flex items-center justify-between">
-								<span class="font-bold text-indigo-300">VANHY</span>
+								<span class="font-bold text-indigo-700">VANHY</span>
 								<span class="mono-num font-semibold"
 									>{fmtNum(readout.VANHY, 3)}</span
 								>
@@ -4191,7 +4215,7 @@
 						{/if}
 						{#if (readout.VPYRI ?? readout.VPYR ?? 0) > 0.001}
 							<div class="flex items-center justify-between">
-								<span class="font-bold text-amber-400">VPYR</span>
+								<span class="font-bold text-amber-800">VPYR</span>
 								<span class="mono-num font-semibold"
 									>{fmtNum(readout.VPYRI ?? readout.VPYR, 3)}</span
 								>
@@ -4199,14 +4223,14 @@
 						{/if}
 						{#if (readout.VSIDE ?? readout.VSID ?? 0) > 0.001}
 							<div class="flex items-center justify-between">
-								<span class="font-bold text-amber-500">VSID</span>
+								<span class="font-bold text-amber-800">VSID</span>
 								<span class="mono-num font-semibold"
 									>{fmtNum(readout.VSIDE ?? readout.VSID, 3)}</span
 								>
 							</div>
 						{/if}
 						<div
-							class="mt-0.5 flex items-center justify-between border-t border-slate-700/60 pt-0.5"
+							class="mt-0.5 flex items-center justify-between border-t border-slate-300 pt-0.5"
 						>
 							<span class="font-bold" style="color: {PETRO_COLORS.phit}">PHIT</span>
 							<span class="mono-num font-semibold"
@@ -4215,7 +4239,7 @@
 							>
 						</div>
 						{#if readout.PHIE !== null && readout.PHIE !== undefined}
-							<div class="flex items-center justify-between text-slate-400">
+							<div class="flex items-center justify-between text-slate-600">
 								<span class="font-bold">PHIE (QC)</span>
 								<span class="mono-num font-semibold"
 									>{fmtNum(readout.PHIE, 3)}
@@ -4235,7 +4259,7 @@
 							</div>
 						{/if}
 						{#if (readout.CPORE ?? readout.CORE_PORO) !== null && (readout.CPORE ?? readout.CORE_PORO) !== undefined}
-							<div class="flex items-center justify-between text-cyan-300">
+							<div class="flex items-center justify-between text-cyan-700">
 								<span class="font-bold">CPORE</span>
 								<span class="mono-num font-semibold"
 									>{fmtNum(readout.CPORE ?? readout.CORE_PORO, 3)}
@@ -4250,20 +4274,20 @@
 						style="left: 62.4%; width: 14.6%;"
 						class="absolute {isAbove
 							? 'bottom-0'
-							: 'top-0'} flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
+							: 'top-0'} inspection-box flex flex-col gap-0.5 rounded-xs border border-slate-300 bg-white/95 px-1.5 py-1 text-[8px] leading-tight text-slate-900 shadow-md backdrop-blur-sm"
 					>
 						<div
-							class="flex items-center justify-between border-b border-slate-600/70 pb-0.5 font-bold text-slate-200"
+							class="flex items-center justify-between border-b border-slate-300 pb-0.5 font-bold text-slate-700"
 						>
 							<span>T5 · PERM</span>
-							<span class="text-[7.5px] text-slate-300">mD</span>
+							<span class="text-[7.5px] text-slate-600">mD</span>
 						</div>
 						<div class="flex items-center justify-between">
 							<span class="font-bold" style="color: {PETRO_COLORS.perm}">PERM</span>
 							<span class="mono-num font-semibold">{fmtPerm(readout.PERM)}</span>
 						</div>
 						{#if (readout.CPERM ?? readout.CORE_PERM) !== null && (readout.CPERM ?? readout.CORE_PERM) !== undefined}
-							<div class="flex items-center justify-between text-cyan-300">
+							<div class="flex items-center justify-between text-cyan-700">
 								<span class="font-bold">CPERM</span>
 								<span class="mono-num font-semibold"
 									>{fmtPerm(readout.CPERM ?? readout.CORE_PERM)}</span
@@ -4272,14 +4296,14 @@
 						{/if}
 						{#if readout.PERM_TRANS !== null && readout.PERM_TRANS !== undefined}
 							<div class="flex items-center justify-between">
-								<span class="font-bold text-purple-300">PERM_TR</span>
+								<span class="font-bold text-purple-700">PERM_TR</span>
 								<span class="mono-num font-semibold"
 									>{fmtPerm(readout.PERM_TRANS)}</span
 								>
 							</div>
 						{/if}
 						{#if readout.PERM_BLK !== null && readout.PERM_BLK !== undefined}
-							<div class="flex items-center justify-between text-slate-300">
+							<div class="flex items-center justify-between text-slate-700">
 								<span class="font-bold">PERM_BLK</span>
 								<span class="mono-num font-semibold"
 									>{fmtPerm(readout.PERM_BLK)}</span
@@ -4293,10 +4317,10 @@
 						style="left: 78.0%; width: 6.4%;"
 						class="absolute {isAbove
 							? 'bottom-0'
-							: 'top-0'} flex flex-col items-center gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-0.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
+							: 'top-0'} inspection-box flex flex-col items-center gap-0.5 rounded-xs border border-slate-300 bg-white/95 px-0.5 py-1 text-[8px] leading-tight text-slate-900 shadow-md backdrop-blur-sm"
 					>
 						<span
-							class="border-b border-slate-600/70 pb-0.5 text-[7.5px] font-bold text-slate-200"
+							class="border-b border-slate-300 pb-0.5 text-[7.5px] font-bold text-slate-700"
 							>DRT</span
 						>
 						{#if (readout.ROCK_FLAG ?? readout.ROCK_FLAG_ML ?? readout.DRT) !== null && (readout.ROCK_FLAG ?? readout.ROCK_FLAG_ML ?? readout.DRT) !== undefined && Number(readout.ROCK_FLAG ?? readout.ROCK_FLAG_ML ?? readout.DRT) >= 1}
@@ -4310,7 +4334,7 @@
 								{rfVal}
 							</span>
 						{:else}
-							<span class="mt-0.5 text-[7.5px] text-slate-400">—</span>
+							<span class="mt-0.5 text-[7.5px] text-slate-600">—</span>
 						{/if}
 					</div>
 
@@ -4319,13 +4343,13 @@
 						style="left: 85.4%; width: 14.6%;"
 						class="absolute {isAbove
 							? 'bottom-0'
-							: 'top-0'} flex flex-col gap-0.5 rounded-xs border border-slate-600/80 bg-slate-800/90 px-1.5 py-1 text-[8px] leading-tight text-white shadow-lg backdrop-blur-sm"
+							: 'top-0'} inspection-box flex flex-col gap-0.5 rounded-xs border border-slate-300 bg-white/95 px-1.5 py-1 text-[8px] leading-tight text-slate-900 shadow-md backdrop-blur-sm"
 					>
 						<div
-							class="flex items-center justify-between border-b border-slate-600/70 pb-0.5 font-bold text-slate-200"
+							class="flex items-center justify-between border-b border-slate-300 pb-0.5 font-bold text-slate-700"
 						>
 							<span>T7 · SAT</span>
-							<span class="text-[7.5px] text-slate-300">FLUIDS</span>
+							<span class="text-[7.5px] text-slate-600">FLUIDS</span>
 						</div>
 						<div class="flex items-center justify-between">
 							<span class="font-bold" style="color: {PETRO_COLORS.water}">SW</span>
@@ -4335,7 +4359,7 @@
 							>
 						</div>
 						{#if (readout.SHF ?? readout.SW_SHF) !== null && (readout.SHF ?? readout.SW_SHF) !== undefined}
-							<div class="flex items-center justify-between text-red-400">
+							<div class="flex items-center justify-between text-red-700">
 								<span class="font-bold">SHF</span>
 								<span class="mono-num font-semibold"
 									>{fmtNum(readout.SHF ?? readout.SW_SHF, 3)}</span
@@ -4343,7 +4367,7 @@
 							</div>
 						{/if}
 						{#if readout.SWIRR !== null && readout.SWIRR !== undefined}
-							<div class="flex items-center justify-between text-amber-400">
+							<div class="flex items-center justify-between text-amber-700">
 								<span class="font-bold">SWIRR</span>
 								<span class="mono-num font-semibold"
 									>{fmtNum(readout.SWIRR, 3)}</span
