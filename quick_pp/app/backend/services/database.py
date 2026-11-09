@@ -1410,6 +1410,17 @@ def project_read_las(
             "files": [Path(p).name for p in saved_paths],
         }
 
+    except db_objects.WellIdentityConflictError as e:
+        cleanup_errors = []
+        for saved_path in saved_paths:
+            try:
+                Path(saved_path).unlink(missing_ok=True)
+            except OSError as cleanup_error:
+                cleanup_errors.append(f"{saved_path}: {cleanup_error}")
+        detail = str(e)
+        if cleanup_errors:
+            detail += " Failed to remove uploaded file(s): " + "; ".join(cleanup_errors)
+        raise HTTPException(status_code=409, detail=detail) from e
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:

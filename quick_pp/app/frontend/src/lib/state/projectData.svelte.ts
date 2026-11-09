@@ -2964,7 +2964,14 @@ class ProjectDataState {
 						}
 						throw new Error(`Server Error (HTTP ${res.status}) while uploading ${f.name}`);
 					}
-					throw new Error(trimmed || `Upload failed for ${f.name} (HTTP ${res.status})`);
+					let message = trimmed;
+					try {
+						const parsed = JSON.parse(trimmed);
+						if (typeof parsed?.detail === 'string') message = parsed.detail;
+					} catch {
+						// Keep the raw response when the server does not return JSON.
+					}
+					throw new Error(message || `Upload failed for ${f.name} (HTTP ${res.status})`);
 				}
 				uploadedCount++;
 			}

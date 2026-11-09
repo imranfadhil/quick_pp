@@ -88,6 +88,26 @@ _FPT_QUALITY_ALIASES = {
 }
 
 
+class WellIdentityConflictError(ValueError):
+    """Raised when a project UWI is submitted for a differently named well."""
+
+    def __init__(
+        self, project_id: int, uwi: str, existing_name: str, incoming_name: str
+    ) -> None:
+        super().__init__(
+            f"UWI '{uwi}' already belongs to well '{existing_name}' in project "
+            f"{project_id}, but the incoming well name is '{incoming_name}'. "
+            "No data was imported. Correct the incoming well name or UWI and retry."
+        )
+
+
+def ensure_well_uwi_matches_name(
+    project_id: int, well_name: str, uwi: str, existing_name: Optional[str]
+) -> None:
+    if existing_name is not None and existing_name != well_name:
+        raise WellIdentityConflictError(project_id, uwi, existing_name, well_name)
+
+
 def normalize_fpt_fluid_type(value: Any) -> str:
     """Normalize a fluid phase label to GAS / OIL / WATER / UNASSIGNED."""
     if value is None:
@@ -275,6 +295,34 @@ class Project(object):
                 "new_wells": [],
                 "updated_wells": [],
             }
+
+        existing_project_wells = (
+            self.db_session.execute(
+                select(ORMWell).filter_by(project_id=self.project_id)
+            )
+            .scalars()
+            .all()
+        )
+        existing_names_by_uwi = {
+            well.uwi: well.name for well in existing_project_wells
+        }
+        incoming_names_by_uwi: Dict[str, str] = {}
+        for parsed in parsed_files:
+            well_name = parsed["well_name"]
+            uwi = str(parsed.get("uwi") or well_name)
+            ensure_well_uwi_matches_name(
+                self.project_id,
+                well_name,
+                uwi,
+                existing_names_by_uwi.get(uwi),
+            )
+            ensure_well_uwi_matches_name(
+                self.project_id,
+                well_name,
+                uwi,
+                incoming_names_by_uwi.get(uwi),
+            )
+            incoming_names_by_uwi[uwi] = well_name
 
         # Optimization 2: Batch fetch all existing wells for this project
         well_names = list(dict.fromkeys(pf["well_name"] for pf in parsed_files))
@@ -860,9 +908,9 @@ class Well(object):
         """Initializes or loads a Well.
 
         If a `well_id` is provided, it loads an existing well from the database.
-        If `project_id`, `name`, and `uwi` are provided, it first checks if a well
-        with that UWI (which is globally unique) exists and loads it. If not, it
-        creates a new well instance.
+        If `project_id`, `name`, and `uwi` are provided, it loads a well by name
+        within the project. If the UWI belongs to a differently named well in the
+        same project, it raises `WellIdentityConflictError` rather than merging.
 
         At least one of `well_id` or (`project_id`, `name`, `uwi`) must be provided.
 
@@ -902,6 +950,10 @@ class Well(object):
                 existing_well = self.db_session.scalar(
                     select(ORMWell).filter_by(project_id=project_id, uwi=uwi)
                 )
+                if existing_well:
+                    ensure_well_uwi_matches_name(
+                        project_id, name, uwi, existing_well.name
+                    )
 
             # Lastly, check for global match by UWI only
             if not existing_well and uwi:

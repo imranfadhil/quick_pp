@@ -660,6 +660,36 @@ async def commit_log_files(request: Request) -> Dict[str, Any]:
         runs_by_well.setdefault(res["well_name"], []).append(res)
 
     project_id = payload.project_id
+    if project_id is not None:
+        try:
+            with get_db() as session:
+                proj = db_objects.Project.load(session, project_id=project_id)
+                existing_names_by_uwi = {
+                    well.uwi: well.name for well in proj._orm_project.wells
+                }
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+
+        incoming_names_by_uwi: Dict[str, str] = {}
+        try:
+            for parsed in parsed_results:
+                well_name = parsed["well_name"]
+                uwi = parsed["uwi"]
+                db_objects.ensure_well_uwi_matches_name(
+                    project_id,
+                    well_name,
+                    uwi,
+                    existing_names_by_uwi.get(uwi),
+                )
+                db_objects.ensure_well_uwi_matches_name(
+                    project_id,
+                    well_name,
+                    uwi,
+                    incoming_names_by_uwi.get(uwi),
+                )
+                incoming_names_by_uwi[uwi] = well_name
+        except db_objects.WellIdentityConflictError as e:
+            raise HTTPException(status_code=409, detail=str(e)) from e
 
     def _commit_wells_to_db_sync() -> List[Dict[str, Any]]:
         committed: List[Dict[str, Any]] = []
@@ -844,7 +874,10 @@ async def commit_log_files(request: Request) -> Dict[str, Any]:
 
         return committed
 
-    committed_wells = await asyncio.to_thread(_commit_wells_to_db_sync)
+    try:
+        committed_wells = await asyncio.to_thread(_commit_wells_to_db_sync)
+    except db_objects.WellIdentityConflictError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
 
     # Clean up staged files after commit
     for spec in task_specs:

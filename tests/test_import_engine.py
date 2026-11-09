@@ -13,6 +13,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from quick_pp.app.backend.router import api_router
+from quick_pp.app.backend.services import database as database_service
 from quick_pp.app.backend.services import las_handler as log_import_service
 from quick_pp.app.backend.services.ancillary import (
     align_and_shift_core_depths,
@@ -28,6 +29,7 @@ from quick_pp.app.backend.services.las_handler import (
 from quick_pp.config import Config
 from quick_pp.database.models import Base
 from quick_pp.database.objects import Project
+from quick_pp.database.objects import Well as WellObject
 from quick_pp.las_handler import (
     extract_las_metadata,
     fast_read_las,
@@ -207,6 +209,101 @@ def test_log_import_persists_converted_depths(tmp_path, monkeypatch):
         assert project.get_well(well_name).depth_uom == "m"
         data = project.get_well_data_optimized(well_name)
         assert data["DEPTH"].min() == pytest.approx(2572.512, abs=1e-4)
+    engine.dispose()
+
+
+def test_log_import_rejects_duplicate_uwi_with_different_well_name(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(log_import_service, "STAGING_DIR", tmp_path / "staging")
+    monkeypatch.setattr(log_import_service, "is_demo_mode", lambda: False)
+    monkeypatch.setattr(database_service, "is_demo_mode", lambda: False)
+    engine = create_engine(f"sqlite:///{(tmp_path / 'test.db').as_posix()}")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine)
+
+    @contextmanager
+    def test_db():
+        with session_factory() as session:
+            try:
+                yield session
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+
+    monkeypatch.setattr(log_import_service, "get_db", test_db)
+    monkeypatch.setattr(database_service, "get_db", test_db)
+    with test_db() as session:
+        project_id = Project(session, name="UWIConflictTest").project_id
+        WellObject(
+            session,
+            project_id=project_id,
+            name="23-21-2",
+            uwi="1127",
+        )
+
+    las_bytes = b"""~Version
+VERS. 2.0 : VERSION
+WRAP. NO : WRAPPED
+~Well
+STRT.M 1000 : START
+STOP.M 1001 : STOP
+STEP.M 1 : STEP
+NULL. -999.25 : NULL
+WELL. 23-21-7 : WELL
+UWI. 1127 : UNIQUE WELL IDENTIFIER
+~Curve
+DEPT.M : DEPTH
+GR.API : GAMMA RAY
+~Ascii
+1000 50
+1001 60
+"""
+    inspect = client.post(
+        "/api/v1/import/logs/inspect",
+        files=[("files", ("23-21-7.las", las_bytes, "text/plain"))],
+    )
+    assert inspect.status_code == 200, inspect.text
+    info = inspect.json()["files"][0]
+    commit = client.post(
+        "/api/v1/import/logs/commit",
+        json={
+            "project_id": project_id,
+            "files": [
+                {
+                    "file_id": info["file_id"],
+                    "filename": info["filename"],
+                    "metadata_overrides": info["metadata"],
+                    "mnemonic_map": {
+                        curve["raw_mnemonic"]: curve["target_mnemonic"]
+                        for curve in info["curves"]
+                    },
+                    "unit_map": {
+                        curve["raw_mnemonic"]: curve["raw_unit"]
+                        for curve in info["curves"]
+                    },
+                }
+            ],
+        },
+    )
+    assert commit.status_code == 409
+    assert "UWI '1127' already belongs to well '23-21-2'" in commit.json()["detail"]
+    assert "No data was imported" in commit.json()["detail"]
+
+    legacy_upload = client.post(
+        f"/quick_pp/database/projects/{project_id}/read_las",
+        files=[("files", ("23-21-7.las", las_bytes, "text/plain"))],
+    )
+    assert legacy_upload.status_code == 409
+    assert "UWI '1127' already belongs to well '23-21-2'" in legacy_upload.json()["detail"]
+
+    with test_db() as session:
+        project = Project.load(session, project_id=project_id)
+        assert project.get_well_names() == ["23-21-2"]
+        assert project.get_well("23-21-2")._orm_well.curves == []
+    assert not list((tmp_path / "uploads" / "las_db").glob("*"))
     engine.dispose()
 
 
