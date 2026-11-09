@@ -11,6 +11,7 @@ export type SingleWellStep =
 	| 'report';
 export type MultiWellStep =
 	| 'inventory'
+	| 'batch-evaluation'
 	| 'qaqc'
 	| 'rock-typing'
 	| 'perm-transform'
@@ -558,6 +559,7 @@ class WorkbenchState {
 	scope = $state<'single-well' | 'multi-well'>('single-well');
 	singleWellStep = $state<SingleWellStep>('qaqc');
 	multiWellStep = $state<MultiWellStep>('inventory');
+	batchEvaluationAffectedProjects = $state<string[]>([]);
 
 	// Global depth & zone filter
 	depthFilter = $state<{ min: number; max: number } | null>(null);

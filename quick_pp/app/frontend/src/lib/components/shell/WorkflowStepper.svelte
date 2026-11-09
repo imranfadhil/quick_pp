@@ -215,7 +215,8 @@
 			'swirr-corr': 'mw-standalone-scal-relperm',
 			'fpt': 'mw-standalone-fpt',
 			'rt-classifier': 'mw-standalone-rt-classifier',
-			'ml-training': 'mw-standalone-ml-training'
+			'ml-training': 'mw-standalone-ml-training',
+			'batch-evaluation': 'mw-standalone-batch-evaluation'
 		};
 		return mwMap[workbench.multiWellStep] ?? 'mw-step-1-inventory';
 	}
@@ -346,6 +347,17 @@
 			>
 				Standalone:
 			</span>
+			<button
+				type="button"
+				onclick={() => (workbench.multiWellStep = 'batch-evaluation')}
+				title="Apply a shared single-well interpretation to selected wells and zones"
+				class="flex h-7 items-center gap-1.5 rounded-sm border px-2.5 text-xs font-medium whitespace-nowrap transition-colors {workbench.multiWellStep === 'batch-evaluation'
+					? 'border-[var(--accent-primary)] bg-blue-50/90 font-semibold text-[var(--accent-primary)]'
+					: 'border-[var(--border-hairline)] bg-[var(--bg-subtle)]/60 text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] hover:text-[var(--text-primary)]'}"
+			>
+				<span class="rounded-xs bg-teal-100 px-1 text-[9px] font-bold text-teal-700">BATCH</span>
+				<span>Multi-Well Evaluation</span>
+			</button>
 			{@const isSwirrActive = workbench.multiWellStep === 'swirr-corr'}
 			{@const isSwirrDone =
 				projectData.swirrResult !== null ||

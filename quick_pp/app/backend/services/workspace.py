@@ -5,13 +5,18 @@ only sends lightweight model parameters (and optional depth/zone filters + `save
 instead of round-tripping 10,000+ log rows on every parameter adjustment.
 """
 
+import hashlib
+import json
+import logging
 import math
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from contextvars import ContextVar
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Literal, Optional, Tuple, TypeVar
 
 import numpy as np
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -128,8 +133,24 @@ router = APIRouter(
     prefix="/workspace/projects/{project_id}",
     tags=["Workspace Compute"],
 )
+logger = logging.getLogger(__name__)
 
 _ephemeral_well_configs: Dict[Tuple[int, str], Dict[str, Any]] = {}
+
+
+@dataclass
+class _IsolatedEvaluation:
+    """Request-local data and curve updates used to chain batch preview stages."""
+
+    project_id: int
+    well_name: str
+    data: pd.DataFrame
+    updates: Dict[str, pd.Series] = field(default_factory=dict)
+
+
+_isolated_evaluation: ContextVar[Optional[_IsolatedEvaluation]] = ContextVar(
+    "isolated_well_evaluation", default=None
+)
 
 ALL_LITHOLOGY_VOL_COLS: Tuple[str, ...] = (
     "VSAND",
@@ -157,6 +178,30 @@ def _update_in_memory_well_cache(
     project_id: int, well_name: str, curves_df: pd.DataFrame
 ) -> None:
     """Update the in-memory merged DataFrame cache so chained live calculations see fresh curves immediately."""
+    isolated = _isolated_evaluation.get()
+    if isolated is not None:
+        if (project_id, well_name) != (isolated.project_id, isolated.well_name):
+            raise RuntimeError("Isolated evaluation attempted to update a different well")
+        if curves_df.empty:
+            return
+        if "DEPTH" not in curves_df or curves_df["DEPTH"].duplicated().any():
+            raise ValueError("Computed curve depths must be present and unique")
+        indexed = isolated.data.set_index("DEPTH")
+        updates = curves_df.set_index("DEPTH")
+        if not updates.index.isin(indexed.index).all():
+            raise ValueError("Computed curve depths do not match the evaluated well")
+        for col in updates.columns:
+            if col == "WELL_NAME":
+                continue
+            if col not in indexed:
+                indexed[col] = np.nan
+            indexed.loc[updates.index, col] = updates[col]
+            prior = isolated.updates.get(col, pd.Series(dtype=float))
+            isolated.updates[col] = pd.concat(
+                [prior[~prior.index.isin(updates.index)], updates[col]]
+            )
+        isolated.data = indexed.reset_index()
+        return
     if curves_df is None or curves_df.empty or "DEPTH" not in curves_df.columns:
         return
     try:
@@ -301,10 +346,20 @@ def _get_filtered_well_df(
     tolerance: float = 0.16,
 ) -> pd.DataFrame:
     """Fetch cached merged well DataFrame and apply optional depth/zone filters."""
-    merged = _get_merged_dataframe_sync(project_id, well_name, tolerance=tolerance)
+    isolated = _isolated_evaluation.get()
+    if isolated is not None:
+        if (project_id, well_name) != (isolated.project_id, isolated.well_name):
+            raise RuntimeError("Isolated evaluation attempted to read a different well")
+        merged = isolated.data.copy()
+    else:
+        merged = _get_merged_dataframe_sync(project_id, well_name, tolerance=tolerance)
     if merged.empty:
         raise ValueError(
             f"No data found for well '{well_name}' in project {project_id}"
+        )
+    if zones and any(str(zone).strip() for zone in zones) and "ZONES" not in merged.columns:
+        raise ValueError(
+            f"Cannot filter well '{well_name}' by zone: no zone data or formation tops are available"
         )
     filtered = filter_merged_dataframe(
         merged, min_depth=min_depth, max_depth=max_depth, zones=zones
@@ -2514,6 +2569,8 @@ def _record_well_model_config(
     persist_db: bool = False,
 ) -> None:
     """Record active petrophysical model & parameter selections in ephemeral and (optionally) DB well config."""
+    if _isolated_evaluation.get() is not None:
+        return
     clean_upd = {k: v for k, v in updates.items() if v is not None}
     if not clean_upd:
         return
@@ -2542,6 +2599,335 @@ def _record_well_model_config(
                     session.commit()
         except Exception:
             pass
+
+
+class BatchEvaluationRequest(BaseModel):
+    well_names: List[str] = Field(min_length=1, max_length=100)
+    zones: List[str] = Field(min_length=1, max_length=100)
+    lithology: WorkspaceLithologyRequest
+    porosity: WorkspacePorosityRequest
+    permeability: WorkspacePermeabilityRequest
+    saturation: WorkspaceSaturationRequest
+    hc_correction: Optional[WorkspaceHCCorrectionRequest] = None
+    den_correction: Optional[WorkspaceDenCorrectionRequest] = None
+    thomas_stieber: Optional[WorkspaceThomasStieberRequest] = None
+    parameter_snapshots: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+
+    @field_validator("well_names", "zones")
+    @classmethod
+    def validate_names(cls, names: List[str]) -> List[str]:
+        if any(not name.strip() for name in names):
+            raise ValueError("Well and zone names must not be blank")
+        return [name.strip() for name in names]
+
+
+class BatchEvaluationApplyRequest(BaseModel):
+    evaluation: BatchEvaluationRequest
+    fingerprints: Dict[str, Dict[str, str]]
+
+
+_FilterRequest = TypeVar("_FilterRequest", bound=WorkspaceFilterBase)
+
+
+def _batch_evaluate_zone(
+    project_id: int, well_name: str, zone: str, req: BatchEvaluationRequest
+) -> Tuple[Dict[str, Any], pd.DataFrame]:
+    baseline = _get_filtered_well_df(project_id, well_name, zones=[zone])
+    if baseline["DEPTH"].duplicated().any():
+        raise ValueError("Duplicate depths prevent reliable batch evaluation")
+    if req.hc_correction is not None and req.den_correction is not None:
+        raise ValueError("Choose only one log correction")
+    if (
+        req.hc_correction is not None
+        and req.hc_correction.correction_method == "invaded_zone_standard"
+    ):
+        raise ValueError(
+            "Invaded-zone correction requires per-well mud-filtrate metadata "
+            "and is not supported in batch evaluation"
+        )
+    if req.saturation.qv_method == "crossplot":
+        raise ValueError(
+            "Crossplot Qv calibration must be validated per well "
+            "and is not supported in batch evaluation"
+        )
+    use_corrected = req.hc_correction is not None or req.den_correction is not None
+    if (
+        req.lithology.use_hc_corrected != use_corrected
+        or req.porosity.use_hc_corrected != use_corrected
+    ):
+        raise ValueError("Correction and lithology/porosity settings do not match")
+    if (
+        req.permeability.use_thomas_stieber or req.saturation.use_thomas_stieber
+    ) and req.thomas_stieber is None:
+        raise ValueError("Thomas-Stieber inputs require Thomas-Stieber evaluation")
+
+    isolated = _IsolatedEvaluation(project_id, well_name, baseline.copy())
+    # A previous evaluation must never be treated as an output of the current run.
+    stale_cols = list(ALL_LITHOLOGY_VOL_COLS) + [
+        "PHIT", "PHIE", "PHID", "PHIT_SH", "RHOM", "PHIT_SAND", "VSH_LAM",
+        "VSH_DIS", "RSAND_TS", "NPHI_HC", "RHOB_HC",
+    ]
+    isolated.data = isolated.data.drop(columns=stale_cols, errors="ignore")
+    token = _isolated_evaluation.set(isolated)
+    stage = "preflight"
+    try:
+        def scoped(model: _FilterRequest) -> _FilterRequest:
+            return model.model_copy(
+                update={
+                    "save": False,
+                    "zones": [zone],
+                    "min_depth": None,
+                    "max_depth": None,
+                }
+            )
+
+        if req.hc_correction is not None:
+            stage = "hydrocarbon correction"
+            workspace_hc_correction(project_id, well_name, scoped(req.hc_correction))
+        if req.den_correction is not None:
+            stage = "density correction"
+            workspace_den_correction(project_id, well_name, scoped(req.den_correction))
+        stage = "lithology"
+        lithology_result = workspace_lithology(project_id, well_name, scoped(req.lithology))
+        lithology_data = lithology_result["data"]
+        extra_lithology = {
+            col: lithology_data[col]
+            for col in ("PROJ_NPHI", "PROJ_RHOB", "PHIT_CONSTRUCTED")
+            if col in lithology_data
+        }
+        if extra_lithology:
+            _update_in_memory_well_cache(
+                project_id, well_name,
+                pd.DataFrame({"DEPTH": lithology_data["DEPTH"], **extra_lithology}),
+            )
+        stage = "porosity"
+        porosity_result = workspace_porosity(project_id, well_name, scoped(req.porosity))
+        porosity_data = porosity_result["data"]
+        if "PHIT_SH" in porosity_data:
+            _update_in_memory_well_cache(
+                project_id, well_name,
+                pd.DataFrame({"DEPTH": porosity_data["DEPTH"], "PHIT_SH": porosity_data["PHIT_SH"]}),
+            )
+        if req.thomas_stieber is not None:
+            stage = "Thomas-Stieber"
+            workspace_thomas_stieber(project_id, well_name, scoped(req.thomas_stieber))
+        stage = "permeability"
+        workspace_permeability(
+            project_id,
+            well_name,
+            scoped(req.permeability).model_copy(
+                update={
+                    "depths": None, "phit": None, "vclay": None, "vsilt": None,
+                    "phit_sand": None, "vsh_lam": None, "vsh_dis": None,
+                }
+            ),
+        )
+        stage = "saturation"
+        saturation_result = workspace_saturation(
+            project_id,
+            well_name,
+            scoped(req.saturation).model_copy(
+                update={
+                    "depths": None, "phit": None, "vclay": None, "phit_sand": None,
+                    "vsh_lam": None, "vsh_dis": None, "rsand_ts": None,
+                }
+            ),
+        )
+        saturation_data = saturation_result["data"]
+        saturation_columns = (
+            "TEMP_GRAD", "RW", "B", "QVN", "M_STAR", "SWT_ARCHIE", "SWT_WAXMAN",
+            "SWT_SIMANDOUX", "SWT_INDONESIAN", "SWT_DUAL_WATER", "VCL_OVER_PHI", "CWA",
+        )
+        _update_in_memory_well_cache(
+            project_id,
+            well_name,
+            pd.DataFrame({
+                "DEPTH": saturation_data["DEPTH"],
+                **{col: saturation_data[col] for col in saturation_columns if col in saturation_data},
+            }),
+        )
+    except HTTPException as exc:
+        raise ValueError(f"{stage}: {exc.detail}") from exc
+    finally:
+        _isolated_evaluation.reset(token)
+
+    computed = pd.DataFrame(isolated.updates)
+    computed.index.name = "DEPTH"
+    computed = computed.reset_index()
+    if computed.empty:
+        raise ValueError("No computed rows were produced")
+
+    metrics: Dict[str, Any] = {}
+    profiles: Dict[str, Any] = {}
+    base = baseline.set_index("DEPTH")
+    for curve in ("VCLAY", "PHIT", "PERM", "SWT"):
+        if curve not in computed:
+            raise ValueError(f"{stage}: missing computed {curve}")
+        values = pd.to_numeric(
+            computed.set_index("DEPTH")[curve], errors="coerce"
+        ).replace([np.inf, -np.inf], np.nan)
+        previous = (
+            pd.to_numeric(base[curve], errors="coerce").reindex(values.index)
+            if curve in base
+            else pd.Series(np.nan, index=values.index)
+        ).replace([np.inf, -np.inf], np.nan)
+        paired = values.notna() & previous.notna()
+        ratios = (values[paired & (previous > 0)] / previous[paired & (previous > 0)]).replace(
+            [np.inf, -np.inf], np.nan
+        ).dropna()
+        metrics[curve] = {
+            "valid": int(values.notna().sum()),
+            "paired": int(paired.sum()),
+            "before": float(previous[paired].median()) if paired.any() else None,
+            "after": float(values[paired].median()) if paired.any() else None,
+            "after_all": float(values.median()) if values.notna().any() else None,
+            "delta": float((values[paired] - previous[paired]).median())
+            if paired.any()
+            else None,
+            "ratio": float(ratios.median()) if not ratios.empty else None,
+        }
+        profile = pd.DataFrame({
+            "DEPTH": values.index, "before": previous.to_numpy(), "after": values.to_numpy()
+        })
+        if len(profile) > 200:
+            profile = profile.iloc[np.linspace(0, len(profile) - 1, 200, dtype=int)]
+        profiles[curve] = dataframe_to_records(profile)
+        if not values.notna().any():
+            raise ValueError(f"No valid {curve} values produced")
+    digest_data = {
+        "project_id": project_id,
+        "well_name": well_name,
+        "zone": zone,
+        "request": req.model_dump(mode="json", exclude={"well_names", "zones"}),
+        "baseline": dataframe_to_columnar(
+            baseline.dropna(axis=1, how="all").reindex(
+                sorted(baseline.dropna(axis=1, how="all").columns), axis=1
+            )
+        ),
+    }
+    fingerprint = hashlib.sha256(
+        json.dumps(
+            digest_data, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode()
+    ).hexdigest()
+    return {
+        "well_name": well_name,
+        "zone": zone,
+        "status": "ready",
+        "rows": len(baseline),
+        "metrics": metrics,
+        "profiles": profiles,
+        "fingerprint": fingerprint,
+    }, computed
+
+
+@router.post("/batch_evaluation/preview", summary="Preview isolated single-well evaluations by zone")
+def workspace_batch_evaluation_preview(project_id: int, req: BatchEvaluationRequest) -> Dict[str, Any]:
+    results = []
+    for well_name in dict.fromkeys(req.well_names):
+        for zone in dict.fromkeys(req.zones):
+            try:
+                result, _ = _batch_evaluate_zone(project_id, well_name, zone, req)
+                results.append(result)
+            except (ValueError, HTTPException) as exc:
+                results.append({
+                    "well_name": well_name, "zone": zone, "status": "error",
+                    "error": str(exc.detail if isinstance(exc, HTTPException) else exc),
+                })
+            except Exception:
+                logger.exception("Batch evaluation failed for well %s zone %s", well_name, zone)
+                results.append({
+                    "well_name": well_name, "zone": zone, "status": "error",
+                    "error": "Unexpected evaluation error; see server logs",
+                })
+    return {"results": results}
+
+
+def _save_batch_evaluation(
+    project_id: int,
+    well_name: str,
+    computed: pd.DataFrame,
+    entries: List["WorkspaceModuleParamsEntry"],
+) -> None:
+    if is_demo_mode():
+        _save_curves_to_well(project_id, well_name, computed)
+        if entries:
+            try:
+                workspace_save_module_params(
+                    project_id, well_name, WorkspaceModuleParamsRequest(entries=entries)
+                )
+            except HTTPException as exc:
+                raise ValueError(f"Curves were saved, but parameter snapshots failed: {exc.detail}") from exc
+        return
+
+    db_name = resolve_db_well_name(project_id, well_name)
+    cached_before = _get_merged_dataframe_sync(project_id, well_name)
+    with get_db() as session:
+        well = session.scalar(
+            select(db_models.Well).filter_by(project_id=project_id, name=db_name)
+        )
+        if well is None:
+            raise ValueError(f"Well '{well_name}' could not be found for saving")
+        proj = db_objects.Project.load(session, project_id=project_id)
+        curves = computed.copy()
+        curves["WELL_NAME"] = db_name
+        proj.update_data(curves, group_by="WELL_NAME")
+        if entries:
+            config = dict(well.config_data) if isinstance(well.config_data, dict) else {}
+            config[MODULE_PARAMS_CONFIG_KEY] = _merge_module_params(
+                config.get(MODULE_PARAMS_CONFIG_KEY), entries
+            )
+            well.config_data = _sanitize_for_json(config)
+            flag_modified(well, "config_data")
+        proj.save()
+
+    for key in {well_name, db_name}:
+        ephemeral = _ephemeral_well_configs.get((project_id, key))
+        if ephemeral and MODULE_PARAMS_CONFIG_KEY in ephemeral:
+            ephemeral = dict(ephemeral)
+            ephemeral.pop(MODULE_PARAMS_CONFIG_KEY)
+            _ephemeral_well_configs[(project_id, key)] = ephemeral
+    invalidate_well_cache(project_id=project_id, well_name=well_name)
+    _update_in_memory_well_cache(project_id, well_name, cached_before)
+    _update_in_memory_well_cache(project_id, well_name, computed)
+
+
+@router.post("/batch_evaluation/apply", summary="Apply reviewed batch evaluation results")
+def workspace_batch_evaluation_apply(project_id: int, req: BatchEvaluationApplyRequest) -> Dict[str, Any]:
+    results = []
+    for well_name, zones in req.fingerprints.items():
+        if well_name not in req.evaluation.well_names:
+            raise HTTPException(status_code=400, detail=f"Well {well_name} was not in the preview request")
+        for zone, fingerprint in zones.items():
+            if zone not in req.evaluation.zones:
+                raise HTTPException(status_code=400, detail=f"Zone {zone} was not in the preview request")
+            try:
+                result, computed = _batch_evaluate_zone(project_id, well_name, zone, req.evaluation)
+                if fingerprint != result["fingerprint"]:
+                    raise ValueError("Input data or parameters changed; preview again")
+                selection = {"zones": [zone], "min_depth": None, "max_depth": None}
+                entries = [
+                    WorkspaceModuleParamsEntry(
+                        module=module, key=f"zone:{zone}", selection=selection,
+                        label=f"Zone {zone}", params=params,
+                    )
+                    for module, params in req.evaluation.parameter_snapshots.items()
+                    if module in ("litho-poro", "perm", "saturation")
+                ]
+                _save_batch_evaluation(project_id, well_name, computed, entries)
+                results.append({"well_name": well_name, "zone": zone, "status": "saved"})
+            except (ValueError, HTTPException) as exc:
+                results.append({
+                    "well_name": well_name, "zone": zone, "status": "error",
+                    "error": str(exc.detail if isinstance(exc, HTTPException) else exc),
+                })
+            except Exception:
+                logger.exception("Batch apply failed for well %s zone %s", well_name, zone)
+                results.append({
+                    "well_name": well_name, "zone": zone, "status": "error",
+                    "error": "Unexpected apply error; check saved data and server logs",
+                })
+    return {"results": results}
 
 
 @router.post(

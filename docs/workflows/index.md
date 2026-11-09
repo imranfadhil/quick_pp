@@ -36,6 +36,7 @@ flowchart TD
             MW6 --> MW7["7. FDP Report"]
         end
         subgraph MW_Stand["Standalone Specialized Modules"]
+            MW_BATCH["Multi-Well Evaluation\n(Shared single-well models)"]
             MW_SCAL["SCAL & Rel-Perm\n(Swirr, Corey, LET, SWOF Deck)"]
             MW_FPT["Pressure & Contacts\n(MDT/RFT Gradients, FWL/OWC/GOC)"]
             MW_RT["RT Classifier\n(Discrete Rock Type Predictor)"]
@@ -103,4 +104,4 @@ The right-pane crossplot selector shows only plots supported by the active singl
   Covers the 7-step deterministic evaluation pipeline and the standalone Core & Pc Prep module.
 
 - [**Multi-Well Field Evaluation Workflow**](multi_well.md):
-  Covers the 7-step field characterization pipeline and the 4 standalone specialized modules (SCAL & Rel-Perm, Formation Pressure & Contacts, RT Classifier, Conformal PIML).
+  Covers the 7-step field characterization pipeline and the 5 standalone specialized modules (Multi-Well Evaluation, SCAL & Rel-Perm, Formation Pressure & Contacts, RT Classifier, Conformal PIML).

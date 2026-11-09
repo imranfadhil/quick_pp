@@ -27,6 +27,7 @@
 	import MultiWellQaqc from '$lib/components/modules/MultiWellQaqc.svelte';
 	import MultiWellRockTyping from '$lib/components/modules/MultiWellRockTyping.svelte';
 	import MultiWellPermTransform from '$lib/components/modules/MultiWellPermTransform.svelte';
+	import MultiWellEvaluation from '$lib/components/modules/MultiWellEvaluation.svelte';
 	import MultiWellSwirr from '$lib/components/modules/MultiWellSwirr.svelte';
 	import MultiWellShf from '$lib/components/modules/MultiWellShf.svelte';
 	import MultiWellRtClassifierTrainer from '$lib/components/modules/MultiWellRtClassifierTrainer.svelte';
@@ -865,8 +866,14 @@
 	);
 </script>
 
-<div class="h-full w-full overflow-hidden">
-	<PaneGroup direction="horizontal" autoSaveId="quick-pp-3pane-layout" class="h-full w-full">
+<div class="flex h-full w-full flex-col overflow-hidden">
+	{#if workbench.projectId && workbench.batchEvaluationAffectedProjects.includes(workbench.projectId)}
+		<div role="status" class="flex items-center justify-between gap-2 border-b border-amber-200 bg-amber-50 px-3 py-1 text-xs text-amber-900">
+			<span>Batch evaluation changed curves. Reservoir summaries and dependent field interpretations may be stale; reload the active well and recompute them.</span>
+			<button type="button" class="shrink-0 underline" onclick={() => (workbench.batchEvaluationAffectedProjects = workbench.batchEvaluationAffectedProjects.filter((id) => id !== workbench.projectId))}>Dismiss</button>
+		</div>
+	{/if}
+	<PaneGroup direction="horizontal" autoSaveId="quick-pp-3pane-layout" class="min-h-0 w-full flex-1">
 		<!-- LEFT PANE (25% default width): Parameter Inspector -->
 		<Pane defaultSize={25} minSize={18} maxSize={42} class="h-full overflow-hidden">
 			<div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
@@ -934,6 +941,10 @@
 						<MultiWellRockTyping />
 					{:else if workbench.multiWellStep === 'perm-transform'}
 						<MultiWellPermTransform />
+					{:else if workbench.multiWellStep === 'batch-evaluation'}
+						<div class="p-3 text-xs text-[var(--text-secondary)]">
+							Select wells and zones, preview the shared interpretation, then review and apply the results in the evaluation panel.
+						</div>
 					{:else if workbench.multiWellStep === 'swirr-corr'}
 						<MultiWellSwirr />
 					{:else if workbench.multiWellStep === 'rt-classifier'}
@@ -957,7 +968,11 @@
 			class="w-[3px] cursor-col-resize bg-[var(--border-hairline)] transition-colors hover:bg-[var(--accent-primary)] active:bg-[var(--accent-primary)]"
 		/>
 
-		{#if isReportMode}
+		{#if workbench.scope === 'multi-well' && workbench.multiWellStep === 'batch-evaluation'}
+			<Pane defaultSize={75} minSize={45} class="h-full overflow-hidden">
+				<MultiWellEvaluation />
+			</Pane>
+		{:else if isReportMode}
 			<!-- REPORT WORKBENCH (75% default width): Live A4 Preview & Markdown Editor -->
 			<Pane defaultSize={75} minSize={45} class="h-full overflow-hidden">
 				<ReportPreviewCanvas />

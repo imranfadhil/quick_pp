@@ -16,6 +16,7 @@
 		scal: 'SCAL & Rel-Perm',
 		ressum: 'Reservoir Summary',
 		inventory: 'Field Inventory',
+		'batch-evaluation': 'Multi-Well Evaluation',
 		'rock-typing': 'Rock Typing (DRT)',
 		'perm-transform': 'Perm Transform',
 		shf: 'Saturation Height (SHF)',
@@ -343,4 +344,3 @@
 		animation: status-slide 1.2s ease-in-out infinite;
 	}
 </style>
-

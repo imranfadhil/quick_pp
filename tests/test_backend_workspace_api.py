@@ -123,6 +123,230 @@ def test_project_summary_endpoint(client_and_project):
     assert well_a["core_availability_pct"] == 50.0
 
 
+def test_workspace_zone_filter_requires_zone_data(monkeypatch):
+    merged = pd.DataFrame(
+        {"DEPTH": [1000.0, 1001.0], "NPHI": [0.2, 0.25], "RHOB": [2.4, 2.5]}
+    )
+    monkeypatch.setattr(ws_service, "_get_merged_dataframe_sync", lambda *args, **kwargs: merged)
+
+    with pytest.raises(ValueError, match="no zone data or formation tops"):
+        ws_service._get_filtered_well_df(1, "Well-A", zones=["Zone-1"])
+    assert len(ws_service._get_filtered_well_df(1, "Well-A")) == 2
+
+
+def test_zone_filtered_lithology_rejects_missing_zone_data(client_and_project, monkeypatch):
+    client, pid = client_and_project
+    merged = pd.DataFrame(
+        {"DEPTH": [1000.0, 1001.0], "NPHI": [0.2, 0.25], "RHOB": [2.4, 2.5]}
+    )
+    monkeypatch.setattr(ws_service, "_get_merged_dataframe_sync", lambda *args, **kwargs: merged)
+
+    response = client.post(
+        f"/quick_pp/workspace/projects/{pid}/wells/Well-A/lithology",
+        json={"zones": ["Zone-1"]},
+    )
+    assert response.status_code == 400
+    assert "no zone data or formation tops" in response.json()["detail"]
+
+
+def test_workspace_zone_filter_uses_matching_rows(monkeypatch):
+    merged = pd.DataFrame(
+        {"DEPTH": [1000.0, 1001.0], "ZONES": ["Zone-1", "Zone-2"]}
+    )
+    monkeypatch.setattr(ws_service, "_get_merged_dataframe_sync", lambda *args, **kwargs: merged)
+
+    filtered = ws_service._get_filtered_well_df(1, "Well-A", zones=["Zone-1"])
+    assert filtered["DEPTH"].tolist() == [1000.0]
+    with pytest.raises(ValueError, match="No data rows remain"):
+        ws_service._get_filtered_well_df(1, "Well-A", zones=["Missing"])
+
+
+def test_batch_preview_is_isolated_and_apply_checks_staleness(client_and_project, monkeypatch):
+    client, pid = client_and_project
+    monkeypatch.setattr(ws_service, "is_demo_mode", lambda: False)
+    endpoint = f"/quick_pp/workspace/projects/{pid}/batch_evaluation"
+    payload = {
+        "well_names": ["Well-A", "Well-Empty"],
+        "zones": ["Zone-1", "Missing"],
+        "lithology": {"model": "ssc"},
+        "porosity": {"method": "den", "lithology_model": "ssc"},
+        "permeability": {"method": "choo"},
+        "saturation": {"method": "archie"},
+        "parameter_snapshots": {
+            "litho-poro": {"litho": {"model": "ssc"}, "ts": {}},
+            "perm": {"method": "choo"},
+            "saturation": {"method": "archie"},
+        },
+    }
+    original = db_service._get_merged_dataframe_sync(pid, "Well-A")
+    response = client.post(f"{endpoint}/preview", json=payload)
+    assert response.status_code == 200, response.text
+    results = response.json()["results"]
+    ready = next(r for r in results if r["well_name"] == "Well-A" and r["zone"] == "Zone-1")
+    assert ready["status"] == "ready", ready
+    assert ready["rows"] == 5
+    assert ready["metrics"]["PHIT"]["valid"] > 0
+    assert all(r["status"] == "error" for r in results if r is not ready)
+    pd.testing.assert_frame_equal(original, db_service._get_merged_dataframe_sync(pid, "Well-A"))
+    apply_body = {"evaluation": payload, "fingerprints": {"Well-A": {"Zone-1": "invalid"}}}
+    stale = client.post(f"{endpoint}/apply", json=apply_body)
+    assert stale.status_code == 200, stale.text
+    assert stale.json()["results"][0]["status"] == "error"
+    apply_body["fingerprints"]["Well-A"]["Zone-1"] = ready["fingerprint"]
+    applied = client.post(f"{endpoint}/apply", json=apply_body)
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["results"][0]["status"] == "saved", applied.text
+    db_service.invalidate_well_cache()
+    saved = db_service._get_merged_dataframe_sync(pid, "Well-A")
+    assert saved.loc[saved["ZONES"] == "Zone-1", "PHIT"].notna().any()
+    assert saved.loc[saved["ZONES"] == "Zone-2", "PHIT"].isna().all()
+    assert saved.loc[saved["ZONES"] == "Zone-1", "PHIT_SH"].notna().any()
+    assert saved.loc[saved["ZONES"] == "Zone-1", "SWT_ARCHIE"].notna().any()
+    assert saved.loc[saved["ZONES"] == "Zone-1", "RW"].notna().any()
+    config = client.get(f"/quick_pp/workspace/projects/{pid}/wells/Well-A/bundle").json()["config"]
+    assert config["module_params"]["perm"]["zone:Zone-1"]["params"]["method"] == "choo"
+
+
+def test_batch_apply_multiple_zones_and_uses_new_porosity(client_and_project, monkeypatch):
+    client, pid = client_and_project
+    monkeypatch.setattr(ws_service, "is_demo_mode", lambda: False)
+    endpoint = f"/quick_pp/workspace/projects/{pid}/batch_evaluation"
+    prior = pd.DataFrame({
+        "DEPTH": np.linspace(1000, 1009, 10),
+        "PHIT": [0.01] * 10,
+        "PERM": [0.01] * 10,
+    })
+    ws_service._save_curves_to_well(pid, "Well-A", prior)
+    payload = {
+        "well_names": ["Well-A"],
+        "zones": ["Zone-1", "Zone-2"],
+        "lithology": {"model": "ssc"},
+        "porosity": {"method": "den", "lithology_model": "ssc"},
+        "permeability": {"method": "choo"},
+        "saturation": {"method": "archie"},
+    }
+    response = client.post(f"{endpoint}/preview", json=payload)
+    assert response.status_code == 200, response.text
+    results = response.json()["results"]
+    assert all(r["status"] == "ready" for r in results), results
+    assert all(r["metrics"]["PHIT"]["after"] > 0.01 for r in results)
+    assert all(r["metrics"]["PERM"]["after"] != pytest.approx(0.01) for r in results)
+    ws_service._save_curves_to_well(
+        pid, "Well-A", pd.DataFrame({
+            "DEPTH": prior["DEPTH"], "PHIT": [0.55] * 10, "PHIT_SH": [0.55] * 10
+        })
+    )
+    changed = client.post(f"{endpoint}/preview", json=payload).json()["results"]
+    for before, after in zip(results, changed):
+        assert before["metrics"]["PERM"]["after"] == pytest.approx(after["metrics"]["PERM"]["after"])
+        assert before["metrics"]["SWT"]["after_all"] == pytest.approx(after["metrics"]["SWT"]["after_all"])
+    results = changed
+    fingerprints = {"Well-A": {r["zone"]: r["fingerprint"] for r in results}}
+    applied = client.post(f"{endpoint}/apply", json={"evaluation": payload, "fingerprints": fingerprints})
+    assert applied.status_code == 200, applied.text
+    assert [r["status"] for r in applied.json()["results"]] == ["saved", "saved"], applied.text
+
+
+def test_batch_preview_supports_thomas_stieber_and_rejects_mismatched_correction(client_and_project):
+    client, pid = client_and_project
+    endpoint = f"/quick_pp/workspace/projects/{pid}/batch_evaluation/preview"
+    payload = {
+        "well_names": ["Well-A"], "zones": ["Zone-1"],
+        "lithology": {"model": "ssc"}, "porosity": {"lithology_model": "ssc"},
+        "permeability": {"use_thomas_stieber": True},
+        "saturation": {"use_thomas_stieber": True},
+        "thomas_stieber": {"use_hc_corrected": False},
+    }
+    response = client.post(endpoint, json=payload)
+    assert response.status_code == 200, response.text
+    assert response.json()["results"][0]["status"] == "ready", response.text
+    payload["lithology"]["use_hc_corrected"] = True
+    response = client.post(endpoint, json=payload)
+    assert response.json()["results"][0]["status"] == "error"
+    assert "settings do not match" in response.json()["results"][0]["error"]
+
+
+def test_batch_preview_rejects_blank_zone(client_and_project):
+    client, pid = client_and_project
+    response = client.post(
+        f"/quick_pp/workspace/projects/{pid}/batch_evaluation/preview",
+        json={
+            "well_names": ["Well-A"], "zones": [" "], "lithology": {},
+            "porosity": {}, "permeability": {}, "saturation": {},
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_batch_apply_detects_real_input_changes_and_preserves_other_zones(client_and_project, monkeypatch):
+    client, pid = client_and_project
+    monkeypatch.setattr(ws_service, "is_demo_mode", lambda: False)
+    depths = np.linspace(1000, 1009, 10)
+    ws_service._save_curves_to_well(
+        pid, "Well-A", pd.DataFrame({"DEPTH": depths, "PHIT": [0.17] * 10})
+    )
+    endpoint = f"/quick_pp/workspace/projects/{pid}/batch_evaluation"
+    payload = {
+        "well_names": ["Well-A"], "zones": ["Zone-1"], "lithology": {},
+        "porosity": {"lithology_model": "ssc"}, "permeability": {}, "saturation": {},
+    }
+    preview = client.post(f"{endpoint}/preview", json=payload).json()["results"][0]
+    ws_service._save_curves_to_well(
+        pid, "Well-A", pd.DataFrame({"DEPTH": [1000.0], "RHOB": [2.35]})
+    )
+    apply = {"evaluation": payload, "fingerprints": {"Well-A": {"Zone-1": preview["fingerprint"]}}}
+    stale = client.post(f"{endpoint}/apply", json=apply).json()["results"][0]
+    assert stale["status"] == "error"
+    assert "preview again" in stale["error"]
+    fresh = client.post(f"{endpoint}/preview", json=payload).json()["results"][0]
+    apply["fingerprints"]["Well-A"]["Zone-1"] = fresh["fingerprint"]
+    assert client.post(f"{endpoint}/apply", json=apply).json()["results"][0]["status"] == "saved"
+    db_service.invalidate_well_cache()
+    saved = db_service._get_merged_dataframe_sync(pid, "Well-A")
+    assert saved.loc[saved["ZONES"] == "Zone-2", "PHIT"].tolist() == pytest.approx([0.17] * 5)
+
+
+def test_batch_apply_rolls_back_curves_if_parameter_save_fails(client_and_project, monkeypatch):
+    from contextlib import contextmanager
+
+    client, pid = client_and_project
+    monkeypatch.setattr(ws_service, "is_demo_mode", lambda: False)
+    original_get_db = ws_service.get_db
+
+    @contextmanager
+    def transactional_db():
+        with original_get_db() as session:
+            try:
+                yield session
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+
+    monkeypatch.setattr(ws_service, "get_db", transactional_db)
+    endpoint = f"/quick_pp/workspace/projects/{pid}/batch_evaluation"
+    payload = {
+        "well_names": ["Well-A"], "zones": ["Zone-1"], "lithology": {},
+        "porosity": {"lithology_model": "ssc"}, "permeability": {}, "saturation": {},
+        "parameter_snapshots": {"perm": {"method": "choo"}},
+    }
+    preview = client.post(f"{endpoint}/preview", json=payload).json()["results"][0]
+    assert preview["status"] == "ready", preview
+
+    def fail_params(*args, **kwargs):
+        raise ValueError("snapshot failure")
+
+    monkeypatch.setattr(ws_service, "_merge_module_params", fail_params)
+    response = client.post(
+        f"{endpoint}/apply",
+        json={"evaluation": payload, "fingerprints": {"Well-A": {"Zone-1": preview["fingerprint"]}}},
+    )
+    assert response.json()["results"][0]["status"] == "error"
+    db_service.invalidate_well_cache()
+    saved = db_service._get_merged_dataframe_sync(pid, "Well-A")
+    assert "PHIT" not in saved.columns or saved["PHIT"].isna().all()
+
+
 def test_imputation_persists_new_curve_and_matrix(client_and_project, monkeypatch):
     client, pid = client_and_project
     monkeypatch.setattr(ws_service, "is_demo_mode", lambda: False)

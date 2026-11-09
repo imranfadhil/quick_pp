@@ -4,7 +4,7 @@ The Multi-Well workspace harmonizes multi-vintage logging suites across the enti
 
 In Field QA/QC, **Missing Data Imputation** uses selected wells and the active depth and zone filters. Mean, median, most frequent, KNN, and iterative models fit pooled samples; KNN scales curves before computing distances. Forward/backward fill follows increasing depth independently within each well. Results are saved as separate `_IMP` curves, leaving original logs unchanged. Existing outputs must be renamed or deleted before re-running, and curves with no observed values across the selected wells cannot be imputed. The right-pane **Missing Matrix** displays one selected well at a time, with deeper depths at the top and colors showing the missing fraction in each depth bin.
 
-The workflow is structured into **7 Primary Sequential Steps** for end-to-end field evaluation, complemented by **4 Standalone Specialized Modules** (SCAL & Dynamic Relative Permeability, Formation Pressure & Contacts, Discrete Rock Type Classifier Trainer, and Conformal Physics-Informed ML Trainer).
+The workflow is structured into **7 Primary Sequential Steps** for end-to-end field evaluation, complemented by **5 Standalone Specialized Modules** (Multi-Well Evaluation, SCAL & Dynamic Relative Permeability, Formation Pressure & Contacts, Discrete Rock Type Classifier Trainer, and Conformal Physics-Informed ML Trainer).
 
 ---
 
@@ -12,7 +12,7 @@ The workflow is structured into **7 Primary Sequential Steps** for end-to-end fi
 
 ### Level 1: Macro Workflow
 
-High-level progression from field data ingestion to probabilistic reserves, showing the 7 sequential steps and the 4 standalone modules.
+High-level progression from field data ingestion to probabilistic reserves, showing the 7 sequential steps and the 5 standalone modules.
 
 ```mermaid
 flowchart TD
@@ -28,6 +28,7 @@ flowchart TD
 
     subgraph Standalone ["Standalone Specialized Modules"]
         direction TB
+        M_BATCH["Multi-Well Evaluation\n(Shared single-well models)"]
         M_SCAL["SCAL & Rel-Perm\n(Swirr Fit, Brooks-Corey, LET, SWOF)"]
         M_FPT["Pressure & Contacts (FPT)\n(MDT/RFT, Fluid Densities, FWL/OWC/GOC)"]
         M_CLF["RT Classifier\n(Supervised RF/XGBoost, Model Registry)"]
@@ -341,18 +342,42 @@ flowchart TD
 
 ## 3. Standalone Specialized Modules
 
-The Multi-Well workspace provides 4 standalone specialized modules accessible at any point during field evaluation.
+### Multi-Well Evaluation {#mw-standalone-batch-evaluation}
+
+This optional utility repeats the current single-well lithology, porosity, permeability and
+saturation settings independently for selected well/zone pairs. It is not a pooled field
+calibration or a required step of the field workflow. Set the desired parameters in the
+single-well modules, select wells and named zones, and preview before applying any results.
+The full captured parameter template is shown in the panel. The current depth filter and
+brushed interval are not used; each zone is resolved in each well.
+
+The preview reports failures per well/zone and compares paired valid values for VCLAY, PHIT,
+PERM and SWT. The comparison includes coverage and a depth-sample drill-down; PERM changes
+are shown as a median ratio. Only checked successful results are applied, with parameter
+snapshots saved per zone. The server recalculates and checks the input fingerprint before
+saving; if input data or parameters changed, preview again. Well/zone saves are independent,
+so review each apply status. The results are calculated using the workspace's current merged
+well data, which can include unsaved single-well previews.
+
+Invaded-zone hydrocarbon correction and crossplot-calibrated Qv are not supported in this
+utility because they require well-specific metadata or calibration validation. Recompute
+reservoir summaries and dependent field interpretations after applying results, and reload
+the active well view to see saved curves.
+
+The Multi-Well workspace provides 5 standalone specialized modules accessible at any point during field evaluation.
 
 ```mermaid
 graph LR
     subgraph Standalone_Modules ["Multi-Well Standalone Specialized Modules"]
         direction TB
+        M0["Multi-Well Evaluation\n(MultiWellEvaluation.svelte)\n#mw-standalone-batch-evaluation"]
         M1["SCAL & Rel-Perm\n(MultiWellSwirr.svelte)\n#mw-standalone-scal-relperm"]
         M2["Pressure & Contacts (FPT)\n(MultiWellFpt.svelte)\n#mw-standalone-fpt"]
         M3["RT Classifier Trainer\n(MultiWellRtClassifierTrainer.svelte)\n#mw-standalone-rt-classifier"]
         M4["Conformal ML Trainer\n(MultiWellMlTrainer.svelte)\n#mw-standalone-ml-training"]
     end
 
+    style M0 fill:#f0fdfa,stroke:#0f766e,stroke-width:1.5px
     style M1 fill:#fffbeb,stroke:#b45309,stroke-width:1.5px
     style M2 fill:#fff1f2,stroke:#be123c,stroke-width:1.5px
     style M3 fill:#f0fdfa,stroke:#0f766e,stroke-width:1.5px
