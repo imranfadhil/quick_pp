@@ -352,6 +352,16 @@ The left pane shows the selected wells, zones, and parameter template; expand th
 for full settings. The current depth filter and
 brushed interval are not used; each zone is resolved in each well.
 
+For each well/zone pair, the backend evaluates optional hydrocarbon or density correction,
+lithology, porosity, optional Thomas-Stieber analysis, permeability, and saturation in that
+order. Preview calculations are isolated: they do not save curves or alter the well data
+used by other evaluations. Zone labels must be available for each selected well, and
+duplicate depths prevent reliable evaluation. A run may use only one correction; invaded-zone
+correction and crossplot-calibrated Qv are excluded because they require well-specific inputs.
+When a correction is selected, the lithology and porosity settings must use its corrected
+logs. Thomas-Stieber settings are required when permeability or saturation requests that
+model.
+
 The preview reports failures per well/zone and compares paired valid values for VCLAY, PHIT,
 PERM and SWT. The right-hand evaluation grid includes coverage and failures; select a
 successful well/zone to load its full-resolution existing and preview curves in the center depth tracks.
@@ -362,7 +372,9 @@ in-session summary previously calculated for the active single well, not batch-p
 results; it can be stale and must be recomputed after curve changes.
 Only checked successful results are applied, with parameter
 snapshots saved per zone. Apply saves the previously calculated preview without recalculating,
-after checking the input fingerprint; if input data changed, preview again. Preview data is
+after checking the input fingerprint against the current well data and settings; if input
+data changed, preview again. Full-resolution curve profiles are loaded on demand, rather
+than being included with every preview result. Preview data is
 held temporarily in the backend process for 30 minutes and is released on leaving or changing
 scope. If it expires, the server restarts, or a request reaches a different worker, preview
 again. Deployments with multiple backend workers need sticky routing to the preview's worker.

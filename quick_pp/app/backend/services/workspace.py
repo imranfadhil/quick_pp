@@ -2605,6 +2605,13 @@ def _record_well_model_config(
 
 
 class BatchEvaluationRequest(BaseModel):
+    """Single-well model settings to preview for selected well/zone combinations.
+
+    Well and zone lists must each contain 1-100 non-blank names. Optional correction
+    and Thomas-Stieber settings are applied as part of the isolated evaluation chain;
+    parameter snapshots are persisted per zone only when a preview is applied.
+    """
+
     well_names: List[str] = Field(min_length=1, max_length=100)
     zones: List[str] = Field(min_length=1, max_length=100)
     lithology: WorkspaceLithologyRequest
@@ -2625,6 +2632,8 @@ class BatchEvaluationRequest(BaseModel):
 
 
 class BatchEvaluationApplyRequest(BaseModel):
+    """Select previewed well/zone results and provide their input fingerprints."""
+
     preview_id: str
     fingerprints: Dict[str, Dict[str, str]]
 
@@ -2639,6 +2648,8 @@ _batch_preview_lock = threading.RLock()
 
 @dataclass
 class _BatchPreviewItem:
+    """Computed curves, baseline profile, and save state for one well/zone."""
+
     fingerprint: str
     computed: pd.DataFrame
     baseline: pd.DataFrame
@@ -2647,6 +2658,8 @@ class _BatchPreviewItem:
 
 @dataclass
 class _BatchPreview:
+    """Process-local batch preview retained until expiry or explicit release."""
+
     project_id: int
     request: BatchEvaluationRequest
     items: Dict[Tuple[str, str], _BatchPreviewItem]
@@ -2658,6 +2671,7 @@ _batch_previews: Dict[str, _BatchPreview] = {}
 
 
 def _batch_preview_get(project_id: int, preview_id: str) -> _BatchPreview:
+    """Return a live preview for its owning project, removing expired entries."""
     now = time.monotonic()
     for key in list(_batch_previews):
         if _batch_previews[key].expires_at <= now:
@@ -2674,6 +2688,7 @@ def _batch_fingerprint(
     project_id: int, well_name: str, zone: str,
     req: BatchEvaluationRequest, baseline: pd.DataFrame,
 ) -> str:
+    """Hash the request and current zone inputs so apply can reject stale previews."""
     populated = baseline.dropna(axis=1, how="all")
     digest_data = {
         "project_id": project_id,
@@ -2690,6 +2705,11 @@ def _batch_fingerprint(
 def _batch_evaluate_zone(
     project_id: int, well_name: str, zone: str, req: BatchEvaluationRequest
 ) -> Tuple[Dict[str, Any], pd.DataFrame, pd.DataFrame]:
+    """Compute one zone without persistence and return metrics, curves, and baseline.
+
+    Raises ValueError for unsupported settings, missing zone data, duplicate depths,
+    or evaluations that do not produce valid comparison curves.
+    """
     baseline = _get_filtered_well_df(project_id, well_name, zones=[zone])
     if baseline["DEPTH"].duplicated().any():
         raise ValueError("Duplicate depths prevent reliable batch evaluation")
@@ -2858,6 +2878,11 @@ def _batch_evaluate_zone(
 
 @router.post("/batch_evaluation/preview", summary="Preview isolated single-well evaluations by zone")
 def workspace_batch_evaluation_preview(project_id: int, req: BatchEvaluationRequest) -> Dict[str, Any]:
+    """Evaluate every unique requested well/zone pair and retain successful previews.
+
+    Individual evaluation failures are returned with their well/zone result. Successful
+    previews are process-local, size-limited, and expire after the configured TTL.
+    """
     results = []
     items: Dict[Tuple[str, str], _BatchPreviewItem] = {}
     size = 0
@@ -2914,6 +2939,7 @@ def workspace_batch_evaluation_preview(project_id: int, req: BatchEvaluationRequ
 def workspace_batch_evaluation_profile(
     project_id: int, preview_id: str, well_name: str, zone: str,
 ) -> Dict[str, Any]:
+    """Return on-demand full-resolution before/after profiles for one previewed zone."""
     with _batch_preview_lock:
         preview = _batch_preview_get(project_id, preview_id)
         item = preview.items.get((well_name, zone))
@@ -2937,6 +2963,7 @@ def _save_batch_evaluation(
     computed: pd.DataFrame,
     entries: List["WorkspaceModuleParamsEntry"],
 ) -> None:
+    """Persist computed curves and associated zone-scoped model parameter snapshots."""
     if is_demo_mode():
         _save_curves_to_well(project_id, well_name, computed)
         if entries:
@@ -2982,6 +3009,11 @@ def _save_batch_evaluation(
 
 @router.post("/batch_evaluation/apply", summary="Apply reviewed batch evaluation results")
 def workspace_batch_evaluation_apply(project_id: int, req: BatchEvaluationApplyRequest) -> Dict[str, Any]:
+    """Save selected preview results only after verifying their inputs remain current.
+
+    Results are applied independently per well/zone; already-saved or stale results
+    return an error entry and must be previewed again.
+    """
     results = []
     with _batch_preview_lock:
         preview = _batch_preview_get(project_id, req.preview_id)
@@ -3025,6 +3057,7 @@ def workspace_batch_evaluation_apply(project_id: int, req: BatchEvaluationApplyR
 
 @router.delete("/batch_evaluation/{preview_id}", summary="Release batch preview")
 def workspace_batch_evaluation_delete(project_id: int, preview_id: str) -> Dict[str, str]:
+    """Release a live batch preview and its retained computed curves."""
     with _batch_preview_lock:
         _batch_preview_get(project_id, preview_id)
         del _batch_previews[preview_id]
@@ -8188,6 +8221,12 @@ class WorkspaceMultiWellConditioningRequest(BaseModel):
 
 
 class WorkspaceImputationRequest(BaseModel):
+    """Choose curve imputation, optional well/zone/depth filters, and save mode.
+
+    Statistical and multivariate methods use pooled selected samples; directional
+    fills and linear interpolation are applied independently within each well.
+    """
+
     well_names: Optional[List[str]] = None
     zones: Optional[List[str]] = None
     min_depth: Optional[float] = None
@@ -8201,6 +8240,8 @@ class WorkspaceImputationRequest(BaseModel):
 
 
 class WorkspaceMissingMatrixRequest(BaseModel):
+    """Select one well and optional zone/depth filters for its missing-data matrix."""
+
     well_name: str
     zones: Optional[List[str]] = None
     min_depth: Optional[float] = None
@@ -8317,7 +8358,7 @@ def _load_multi_well_dfs(
 def workspace_missing_matrix(
     project_id: int, req: WorkspaceMissingMatrixRequest
 ) -> Dict[str, Any]:
-    """Return depth-binned missing fractions for the selected well."""
+    """Return numeric-curve missing fractions in up to 300 depth bins."""
     try:
         dfs = _load_multi_well_dfs(
             project_id, [req.well_name], req.min_depth, req.max_depth, req.zones
@@ -8378,7 +8419,12 @@ def workspace_missing_matrix(
 def workspace_impute(
     project_id: int, req: WorkspaceImputationRequest
 ) -> Dict[str, Any]:
-    """Impute selected curves, optionally replacing them with an original backup."""
+    """Impute selected curves and save new outputs or replace originals.
+
+    By default, imputed values are stored in ``*_IMP`` curves. Replacement preserves
+    each source curve as a full-well ``*_ORI`` backup; fills and interpolations are
+    restricted to the selected depths, while statistical methods fit pooled samples.
+    """
     try:
         curves = [c.strip().upper() for c in req.curves]
         if any(not c or c in {"DEPTH", "DEPT", "WELL_NAME", "ZONES"} for c in curves):

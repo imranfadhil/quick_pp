@@ -5272,7 +5272,7 @@ wheels = [
 
 [[package]]
 name = "quick-pp"
-version = "0.3.4"
+version = "0.3.5"
 source = { editable = "." }
 dependencies = [
     { name = "click" },

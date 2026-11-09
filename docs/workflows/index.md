@@ -91,6 +91,7 @@ The right-pane crossplot selector shows only plots supported by the active singl
 | **Step 5** | `shf` | `MultiWellShf.svelte` | [`#mw-step-5-shf`](multi_well.md#mw-step-5-shf) | Saturation-Height Modeling (Leverett $J$ / Skelt-Harrison), fluid contacts & log reconciliation |
 | **Step 6** | `volumetrics` | `MultiWellVolumetrics.svelte` | [`#mw-step-6-volumetrics`](multi_well.md#mw-step-6-volumetrics) | Probabilistic Monte Carlo LHS STOIIP/GIIP (P90/P50/P10) & Tornado |
 | **Step 7** | `report` | `InspectorReport.svelte` | [`#mw-step-7-report`](multi_well.md#mw-step-7-report) | Field Development Plan (FDP) comprehensive report generation |
+| **Standalone** | `batch-evaluation` | `MultiWellEvaluation.svelte` | [`#mw-standalone-batch-evaluation`](multi_well.md#mw-standalone-batch-evaluation) | Preview and apply isolated single-well calculations by well and zone |
 | **Standalone** | `swirr-corr` | `MultiWellSwirr.svelte` | [`#mw-standalone-scal-relperm`](multi_well.md#mw-standalone-scal-relperm) | **SCAL & Rel-Perm**: Field Swirr fit, Brooks-Corey, LET & SWOF decks |
 | **Standalone** | `fpt` | `MultiWellFpt.svelte` | [`#mw-standalone-fpt`](multi_well.md#mw-standalone-fpt) | **Pressure & Contacts**: MDT/RFT gradients, excess pressure, FWL/OWC/GOC |
 | **Standalone** | `rt-classifier` | `MultiWellRtClassifierTrainer.svelte` | [`#mw-standalone-rt-classifier`](multi_well.md#mw-standalone-rt-classifier) | **RT Classifier**: Supervised classification (Random Forest / XGBoost) |
