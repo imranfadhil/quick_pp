@@ -9,6 +9,9 @@ import hashlib
 import json
 import logging
 import math
+import secrets
+import threading
+import time
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional, Tuple, TypeVar
@@ -2622,16 +2625,71 @@ class BatchEvaluationRequest(BaseModel):
 
 
 class BatchEvaluationApplyRequest(BaseModel):
-    evaluation: BatchEvaluationRequest
+    preview_id: str
     fingerprints: Dict[str, Dict[str, str]]
 
 
 _FilterRequest = TypeVar("_FilterRequest", bound=WorkspaceFilterBase)
 
+_BATCH_PREVIEW_TTL_SECONDS = 1800
+_BATCH_PREVIEW_MAX_BYTES = 256 * 1024 * 1024
+_BATCH_PREVIEW_MAX_COUNT = 16
+_batch_preview_lock = threading.RLock()
+
+
+@dataclass
+class _BatchPreviewItem:
+    fingerprint: str
+    computed: pd.DataFrame
+    baseline: pd.DataFrame
+    saved: bool = False
+
+
+@dataclass
+class _BatchPreview:
+    project_id: int
+    request: BatchEvaluationRequest
+    items: Dict[Tuple[str, str], _BatchPreviewItem]
+    expires_at: float
+    size: int
+
+
+_batch_previews: Dict[str, _BatchPreview] = {}
+
+
+def _batch_preview_get(project_id: int, preview_id: str) -> _BatchPreview:
+    now = time.monotonic()
+    for key in list(_batch_previews):
+        if _batch_previews[key].expires_at <= now:
+            del _batch_previews[key]
+    preview = _batch_previews.get(preview_id)
+    if preview is None or preview.project_id != project_id:
+        raise HTTPException(
+            status_code=404, detail="Preview expired or is unavailable; preview again"
+        )
+    return preview
+
+
+def _batch_fingerprint(
+    project_id: int, well_name: str, zone: str,
+    req: BatchEvaluationRequest, baseline: pd.DataFrame,
+) -> str:
+    populated = baseline.dropna(axis=1, how="all")
+    digest_data = {
+        "project_id": project_id,
+        "well_name": well_name,
+        "zone": zone,
+        "request": req.model_dump(mode="json", exclude={"well_names", "zones"}),
+        "baseline": dataframe_to_columnar(populated.reindex(sorted(populated.columns), axis=1)),
+    }
+    return hashlib.sha256(
+        json.dumps(digest_data, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    ).hexdigest()
+
 
 def _batch_evaluate_zone(
     project_id: int, well_name: str, zone: str, req: BatchEvaluationRequest
-) -> Tuple[Dict[str, Any], pd.DataFrame]:
+) -> Tuple[Dict[str, Any], pd.DataFrame, pd.DataFrame]:
     baseline = _get_filtered_well_df(project_id, well_name, zones=[zone])
     if baseline["DEPTH"].duplicated().any():
         raise ValueError("Duplicate depths prevent reliable batch evaluation")
@@ -2758,7 +2816,6 @@ def _batch_evaluate_zone(
         raise ValueError("No computed rows were produced")
 
     metrics: Dict[str, Any] = {}
-    profiles: Dict[str, Any] = {}
     base = baseline.set_index("DEPTH")
     for curve in ("VCLAY", "PHIT", "PERM", "SWT"):
         if curve not in computed:
@@ -2786,53 +2843,50 @@ def _batch_evaluate_zone(
             else None,
             "ratio": float(ratios.median()) if not ratios.empty else None,
         }
-        profile = pd.DataFrame({
-            "DEPTH": values.index, "before": previous.to_numpy(), "after": values.to_numpy()
-        })
-        if len(profile) > 200:
-            profile = profile.iloc[np.linspace(0, len(profile) - 1, 200, dtype=int)]
-        profiles[curve] = dataframe_to_records(profile)
         if not values.notna().any():
             raise ValueError(f"No valid {curve} values produced")
-    digest_data = {
-        "project_id": project_id,
-        "well_name": well_name,
-        "zone": zone,
-        "request": req.model_dump(mode="json", exclude={"well_names", "zones"}),
-        "baseline": dataframe_to_columnar(
-            baseline.dropna(axis=1, how="all").reindex(
-                sorted(baseline.dropna(axis=1, how="all").columns), axis=1
-            )
-        ),
-    }
-    fingerprint = hashlib.sha256(
-        json.dumps(
-            digest_data, sort_keys=True, separators=(",", ":"), allow_nan=False
-        ).encode()
-    ).hexdigest()
+    fingerprint = _batch_fingerprint(project_id, well_name, zone, req, baseline)
     return {
         "well_name": well_name,
         "zone": zone,
         "status": "ready",
         "rows": len(baseline),
         "metrics": metrics,
-        "profiles": profiles,
         "fingerprint": fingerprint,
-    }, computed
+    }, computed, baseline
 
 
 @router.post("/batch_evaluation/preview", summary="Preview isolated single-well evaluations by zone")
 def workspace_batch_evaluation_preview(project_id: int, req: BatchEvaluationRequest) -> Dict[str, Any]:
     results = []
+    items: Dict[Tuple[str, str], _BatchPreviewItem] = {}
+    size = 0
     for well_name in dict.fromkeys(req.well_names):
         for zone in dict.fromkeys(req.zones):
             try:
-                result, _ = _batch_evaluate_zone(project_id, well_name, zone, req)
+                result, computed, baseline = _batch_evaluate_zone(project_id, well_name, zone, req)
+                profile_baseline = baseline.reindex(
+                    columns=["DEPTH", "VCLAY", "PHIT", "PERM", "SWT"]
+                ).copy()
+                size += int(computed.memory_usage(index=True, deep=True).sum())
+                size += int(profile_baseline.memory_usage(index=True, deep=True).sum())
+                if size > _BATCH_PREVIEW_MAX_BYTES:
+                    raise HTTPException(status_code=413, detail="Preview is too large to retain; select fewer wells or zones")
+                items[(well_name, zone)] = _BatchPreviewItem(
+                    fingerprint=result["fingerprint"], computed=computed, baseline=profile_baseline
+                )
                 results.append(result)
-            except (ValueError, HTTPException) as exc:
+            except HTTPException as exc:
+                if exc.status_code == 413:
+                    raise
                 results.append({
                     "well_name": well_name, "zone": zone, "status": "error",
-                    "error": str(exc.detail if isinstance(exc, HTTPException) else exc),
+                    "error": str(exc.detail),
+                })
+            except ValueError as exc:
+                results.append({
+                    "well_name": well_name, "zone": zone, "status": "error",
+                    "error": str(exc),
                 })
             except Exception:
                 logger.exception("Batch evaluation failed for well %s zone %s", well_name, zone)
@@ -2840,7 +2894,41 @@ def workspace_batch_evaluation_preview(project_id: int, req: BatchEvaluationRequ
                     "well_name": well_name, "zone": zone, "status": "error",
                     "error": "Unexpected evaluation error; see server logs",
                 })
-    return {"results": results}
+    preview_id = secrets.token_urlsafe(32)
+    with _batch_preview_lock:
+        now = time.monotonic()
+        for key in list(_batch_previews):
+            if _batch_previews[key].expires_at <= now:
+                del _batch_previews[key]
+        if len(_batch_previews) >= _BATCH_PREVIEW_MAX_COUNT or (
+            sum(p.size for p in _batch_previews.values()) + size > _BATCH_PREVIEW_MAX_BYTES
+        ):
+            raise HTTPException(status_code=503, detail="Preview storage is full; try again after existing previews expire")
+        _batch_previews[preview_id] = _BatchPreview(
+            project_id, req.model_copy(deep=True), items, now + _BATCH_PREVIEW_TTL_SECONDS, size
+        )
+    return {"preview_id": preview_id, "results": results}
+
+
+@router.get("/batch_evaluation/{preview_id}/profile")
+def workspace_batch_evaluation_profile(
+    project_id: int, preview_id: str, well_name: str, zone: str,
+) -> Dict[str, Any]:
+    with _batch_preview_lock:
+        preview = _batch_preview_get(project_id, preview_id)
+        item = preview.items.get((well_name, zone))
+        if item is None:
+            raise HTTPException(status_code=404, detail="Well/zone not in this preview")
+        base = item.baseline.set_index("DEPTH")
+        computed = item.computed.set_index("DEPTH")
+        profiles = {}
+        for curve in ("VCLAY", "PHIT", "PERM", "SWT"):
+            values = pd.to_numeric(computed[curve], errors="coerce").replace([np.inf, -np.inf], np.nan)
+            previous = pd.to_numeric(base[curve], errors="coerce").reindex(values.index).replace([np.inf, -np.inf], np.nan)
+            profiles[curve] = dataframe_to_records(pd.DataFrame({
+                "DEPTH": values.index, "before": previous.to_numpy(), "after": values.to_numpy()
+            }))
+        return {"profiles": profiles}
 
 
 def _save_batch_evaluation(
@@ -2895,39 +2983,52 @@ def _save_batch_evaluation(
 @router.post("/batch_evaluation/apply", summary="Apply reviewed batch evaluation results")
 def workspace_batch_evaluation_apply(project_id: int, req: BatchEvaluationApplyRequest) -> Dict[str, Any]:
     results = []
-    for well_name, zones in req.fingerprints.items():
-        if well_name not in req.evaluation.well_names:
-            raise HTTPException(status_code=400, detail=f"Well {well_name} was not in the preview request")
-        for zone, fingerprint in zones.items():
-            if zone not in req.evaluation.zones:
-                raise HTTPException(status_code=400, detail=f"Zone {zone} was not in the preview request")
-            try:
-                result, computed = _batch_evaluate_zone(project_id, well_name, zone, req.evaluation)
-                if fingerprint != result["fingerprint"]:
-                    raise ValueError("Input data or parameters changed; preview again")
-                selection = {"zones": [zone], "min_depth": None, "max_depth": None}
-                entries = [
-                    WorkspaceModuleParamsEntry(
-                        module=module, key=f"zone:{zone}", selection=selection,
-                        label=f"Zone {zone}", params=params,
-                    )
-                    for module, params in req.evaluation.parameter_snapshots.items()
-                    if module in ("litho-poro", "perm", "saturation")
-                ]
-                _save_batch_evaluation(project_id, well_name, computed, entries)
-                results.append({"well_name": well_name, "zone": zone, "status": "saved"})
-            except (ValueError, HTTPException) as exc:
-                results.append({
-                    "well_name": well_name, "zone": zone, "status": "error",
-                    "error": str(exc.detail if isinstance(exc, HTTPException) else exc),
-                })
-            except Exception:
-                logger.exception("Batch apply failed for well %s zone %s", well_name, zone)
-                results.append({
-                    "well_name": well_name, "zone": zone, "status": "error",
-                    "error": "Unexpected apply error; check saved data and server logs",
-                })
+    with _batch_preview_lock:
+        preview = _batch_preview_get(project_id, req.preview_id)
+        for well_name, zones in req.fingerprints.items():
+            for zone, fingerprint in zones.items():
+                try:
+                    item = preview.items.get((well_name, zone))
+                    if item is None:
+                        raise ValueError("Well/zone was not in this preview")
+                    if item.saved:
+                        raise ValueError("This result was already saved; preview again")
+                    baseline = _get_filtered_well_df(project_id, well_name, zones=[zone])
+                    if fingerprint != item.fingerprint or _batch_fingerprint(
+                        project_id, well_name, zone, preview.request, baseline
+                    ) != item.fingerprint:
+                        raise ValueError("Input data changed; preview again")
+                    selection = {"zones": [zone], "min_depth": None, "max_depth": None}
+                    entries = [
+                        WorkspaceModuleParamsEntry(
+                            module=module, key=f"zone:{zone}", selection=selection,
+                            label=f"Zone {zone}", params=params,
+                        )
+                        for module, params in preview.request.parameter_snapshots.items()
+                        if module in ("litho-poro", "perm", "saturation")
+                    ]
+                    _save_batch_evaluation(project_id, well_name, item.computed, entries)
+                    item.saved = True
+                    results.append({"well_name": well_name, "zone": zone, "status": "saved"})
+                except (ValueError, HTTPException) as exc:
+                    results.append({
+                        "well_name": well_name, "zone": zone, "status": "error",
+                        "error": str(exc.detail if isinstance(exc, HTTPException) else exc),
+                    })
+                except Exception:
+                    logger.exception("Batch apply failed for well %s zone %s", well_name, zone)
+                    results.append({
+                        "well_name": well_name, "zone": zone, "status": "error",
+                        "error": "Unexpected apply error; check saved data and server logs",
+                    })
     return {"results": results}
+
+@router.delete("/batch_evaluation/{preview_id}", summary="Release batch preview")
+def workspace_batch_evaluation_delete(project_id: int, preview_id: str) -> Dict[str, str]:
+    with _batch_preview_lock:
+        _batch_preview_get(project_id, preview_id)
+        del _batch_previews[preview_id]
+    return {"status": "released"}
 
 
 @router.post(
@@ -8093,9 +8194,10 @@ class WorkspaceImputationRequest(BaseModel):
     max_depth: Optional[float] = None
     curves: List[str] = Field(..., min_length=1)
     method: Literal[
-        "mean", "median", "most_frequent", "ffill", "bfill", "knn", "iterative"
+        "mean", "median", "most_frequent", "ffill", "bfill", "linear", "knn", "iterative"
     ]
     neighbors: int = Field(5, ge=1, le=100)
+    replace_original: bool = Field(False)
 
 
 class WorkspaceMissingMatrixRequest(BaseModel):
@@ -8276,13 +8378,15 @@ def workspace_missing_matrix(
 def workspace_impute(
     project_id: int, req: WorkspaceImputationRequest
 ) -> Dict[str, Any]:
-    """Impute selected curves using pooled wells and save separate _IMP curves."""
+    """Impute selected curves, optionally replacing them with an original backup."""
     try:
         curves = [c.strip().upper() for c in req.curves]
         if any(not c or c in {"DEPTH", "DEPT", "WELL_NAME", "ZONES"} for c in curves):
             raise ValueError("Select valid numeric log curves, not depth or metadata.")
         if len(set(curves)) != len(curves):
             raise ValueError("Each curve may only be selected once.")
+        if req.replace_original and any(c.endswith("_ORI") for c in curves):
+            raise ValueError("Backup curves ending in _ORI cannot be replaced.")
         dfs = _load_multi_well_dfs(
             project_id, req.well_names, req.min_depth, req.max_depth, req.zones
         )
@@ -8295,7 +8399,7 @@ def workspace_impute(
             ):
                 raise ValueError(f"Invalid depth values in {df['WELL_NAME'].iloc[0]}.")
             for curve in curves:
-                if f"{curve}_IMP" in df.columns:
+                if not req.replace_original and f"{curve}_IMP" in df.columns:
                     raise ValueError(
                         f"{curve}_IMP already exists in {df['WELL_NAME'].iloc[0]}; rename or delete it before running."
                     )
@@ -8306,6 +8410,33 @@ def workspace_impute(
                     .all()
                 ):
                     raise ValueError(f"{curve} is not a numeric curve.")
+                if req.replace_original and curve not in df:
+                    raise ValueError(
+                        f"{curve} does not exist in {df['WELL_NAME'].iloc[0]}; "
+                        "use separate output curves instead."
+                    )
+
+        backups: Dict[str, pd.DataFrame] = {}
+        if req.replace_original:
+            for df in dfs:
+                wn = str(df["WELL_NAME"].iloc[0])
+                full_df = _get_merged_dataframe_sync(project_id, wn)
+                depths = pd.to_numeric(full_df["DEPTH"], errors="coerce")
+                if not np.isfinite(depths).all() or depths.duplicated().any():
+                    raise ValueError(
+                        f"Invalid or duplicate depths in {wn}; cannot safely back up curves."
+                    )
+                backup = pd.DataFrame({"DEPTH": depths.to_numpy()})
+                for curve in curves:
+                    if f"{curve}_ORI" not in full_df.columns:
+                        source = full_df[curve]
+                        numeric = pd.to_numeric(source, errors="coerce")
+                        if numeric[source.notna()].isna().any():
+                            raise ValueError(
+                                f"{curve} contains non-numeric values in {wn}; cannot safely back it up."
+                            )
+                        backup[f"{curve}_ORI"] = numeric.to_numpy()
+                backups[wn] = backup
 
         frames = [
             pd.DataFrame(
@@ -8326,15 +8457,34 @@ def workspace_impute(
         if req.method in {"knn", "iterative"} and len(curves) < 2:
             raise ValueError("Multivariate imputation requires at least two curves.")
 
-        if req.method in {"ffill", "bfill"}:
+        if req.method in {"ffill", "bfill", "linear"}:
             outputs = []
             for df, frame in zip(dfs, frames, strict=True):
-                order = np.argsort(
-                    pd.to_numeric(df["DEPTH"], errors="coerce").to_numpy(),
-                    kind="stable",
-                )
+                depths = pd.to_numeric(df["DEPTH"], errors="coerce").to_numpy()
+                if req.method == "linear" and pd.Index(depths).has_duplicates:
+                    raise ValueError(
+                        f"Duplicate depths in {df['WELL_NAME'].iloc[0]} prevent linear interpolation."
+                    )
+                order = np.argsort(depths, kind="stable")
                 ordered = frame.iloc[order]
-                filled = ordered.ffill() if req.method == "ffill" else ordered.bfill()
+                if req.method == "linear":
+                    filled = ordered.copy()
+                    sorted_depths = depths[order]
+                    for curve in curves:
+                        values = ordered[curve].to_numpy(dtype=float, copy=True)
+                        observed = np.isfinite(values)
+                        if observed.sum() >= 2:
+                            missing = (
+                                ~observed
+                                & (sorted_depths >= sorted_depths[observed][0])
+                                & (sorted_depths <= sorted_depths[observed][-1])
+                            )
+                            values[missing] = np.interp(
+                                sorted_depths[missing], sorted_depths[observed], values[observed]
+                            )
+                        filled[curve] = values
+                else:
+                    filled = ordered.ffill() if req.method == "ffill" else ordered.bfill()
                 outputs.append(filled.iloc[np.argsort(order)].reset_index(drop=True))
         else:
             if req.method == "knn":
@@ -8372,17 +8522,21 @@ def workspace_impute(
             wn = str(df["WELL_NAME"].iloc[0])
             out = pd.DataFrame({"DEPTH": df["DEPTH"].to_numpy()})
             for curve in curves:
-                out[f"{curve}_IMP"] = after[curve].to_numpy()
+                target = curve if req.replace_original else f"{curve}_IMP"
+                out[target] = after[curve].to_numpy()
                 summaries.append(
                     {
                         "well_name": wn,
                         "curve": curve,
+                        "target_curve": target,
                         "filled": int(
                             (before[curve].isna() & after[curve].notna()).sum()
                         ),
                         "remaining": int(after[curve].isna().sum()),
                     }
                 )
+            if req.replace_original and len(backups[wn].columns) > 1:
+                _save_curves_to_well(project_id, wn, backups[wn])
             _save_curves_to_well(project_id, wn, out)
         return {"saved": True, "summaries": summaries}
     except ValueError as e:

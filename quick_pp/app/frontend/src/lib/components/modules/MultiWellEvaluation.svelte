@@ -1,6 +1,11 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
-	import { postJson } from '$lib/api/client';
+	import { onDestroy, untrack } from 'svelte';
+	import { PaneGroup, Pane, PaneResizer } from 'paneforge';
+	import { deleteJson, getJson, postJson } from '$lib/api/client';
+	import BatchEvaluationPlot from './BatchEvaluationPlot.svelte';
+	import CompactDataGrid, {
+		type GridColumn
+	} from '$lib/components/workbench/CompactDataGrid.svelte';
 	import { snapshotModuleParams } from '$lib/state/moduleParams.svelte';
 	import { projectData } from '$lib/state/projectData.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
@@ -25,7 +30,6 @@
 		rows?: number;
 		fingerprint?: string;
 		metrics?: Record<Curve, Metric>;
-		profiles?: Record<Curve, Point[]>;
 	};
 	type Request = {
 		well_names: string[];
@@ -48,11 +52,17 @@
 	let results = $state<Result[]>([]);
 	let selected = $state<string[]>([]);
 	let previewRequest = $state<Request | null>(null);
+	let previewId = $state<string | null>(null);
+	let detailProfiles = $state<Record<Curve, Point[]> | null>(null);
+	let detailLoading = $state(false);
+	let detailError = $state<string | null>(null);
+	let detailGeneration = 0;
+	let destroyed = false;
 	let busy = $state(false);
 	let error = $state<string | null>(null);
 	let message = $state<string | null>(null);
 	let detailKey = $state<string | null>(null);
-	let detailCurve = $state<Curve>('PHIT');
+	let gridTab = $state<'changes' | 'summary'>('changes');
 
 	$effect(() => {
 		const id = workbench.projectId;
@@ -60,6 +70,7 @@
 		const summaryId = projectData.summary?.project_id;
 		if (id !== project) {
 			untrack(() => {
+				releasePreview();
 				project = id;
 				initializedProject = null;
 				wells = [];
@@ -67,6 +78,7 @@
 				results = [];
 				selected = [];
 				previewRequest = null;
+				detailKey = null;
 			});
 		}
 		if (id && String(summaryId) === id && initializedProject !== id) {
@@ -81,19 +93,19 @@
 	const format = (v: number | null | undefined) =>
 		v == null || !Number.isFinite(v) ? '—' : Number(v.toPrecision(4)).toString();
 	let detail = $derived(results.find((r) => key(r.well_name, r.zone) === detailKey));
-	let points = $derived(detail?.profiles?.[detailCurve] ?? []);
-	function plotValue(value: number | null): number | null {
-		if (value === null || !Number.isFinite(value)) return null;
-		if (detailCurve === 'PERM') return value > 0 ? Math.log10(value) : null;
-		return value;
-	}
-	let range = $derived.by(() => {
-		const values = points
-			.flatMap((p) => [plotValue(p.before), plotValue(p.after)])
-			.filter((v): v is number => v !== null && Number.isFinite(v));
-		if (values.length === 0) return { min: 0, span: 1 };
-		const min = Math.min(...values);
-		return { min, span: Math.max(Math.max(...values) - min, 1e-9) };
+	let summaryAvailable = $derived(
+		wellData.zonalSummarySource?.projectId === workbench.projectId &&
+			wellData.zonalSummarySource?.wellId === workbench.wellId
+	);
+	let summaryColumns = $derived.by((): GridColumn[] => {
+		const sample = wellData.zonalSummary[0];
+		if (!sample) return [];
+		return Object.keys(sample).map((key) => ({
+			key,
+			label: key,
+			numeric: typeof sample[key] === 'number',
+			decimals: 3
+		}));
 	});
 
 	function toggle(list: string[], value: string): string[] {
@@ -101,12 +113,56 @@
 	}
 
 	function clearPreview() {
+		releasePreview();
 		results = [];
 		selected = [];
 		previewRequest = null;
 		detailKey = null;
 		message = null;
 		error = null;
+	}
+
+	function releasePreview() {
+		detailGeneration++;
+		detailProfiles = null;
+		detailError = null;
+		detailLoading = false;
+		const id = previewId;
+		const projectId = project;
+		previewId = null;
+		if (id && projectId) {
+			void deleteJson(
+				`/quick_pp/workspace/projects/${encodeURIComponent(projectId)}/batch_evaluation/${encodeURIComponent(id)}`
+			).catch((err) => console.warn('Could not release batch preview:', err));
+		}
+	}
+
+	onDestroy(() => {
+		destroyed = true;
+		releasePreview();
+	});
+
+	async function selectDetail(result: Result) {
+		if (!project || !previewId || !result.metrics) return;
+		const generation = ++detailGeneration;
+		const projectId = project;
+		const id = previewId;
+		detailKey = key(result.well_name, result.zone);
+		detailProfiles = null;
+		detailError = null;
+		detailLoading = true;
+		try {
+			const query = new URLSearchParams({ well_name: result.well_name, zone: result.zone });
+			const response = await getJson<{ profiles: Record<Curve, Point[]> }>(
+				`/quick_pp/workspace/projects/${encodeURIComponent(projectId)}/batch_evaluation/${encodeURIComponent(id)}/profile?${query}`
+			);
+			if (generation === detailGeneration && !destroyed) detailProfiles = response.profiles;
+		} catch (e) {
+			if (generation === detailGeneration && !destroyed)
+				detailError = e instanceof Error ? e.message : String(e);
+		} finally {
+			if (generation === detailGeneration && !destroyed) detailLoading = false;
+		}
 	}
 
 	function makeRequest(): Request {
@@ -242,6 +298,8 @@
 	async function preview() {
 		if (!project || !wells.length || !zones.length) return;
 		const projectId = project;
+		releasePreview();
+		const generation = detailGeneration;
 		busy = true;
 		error = null;
 		message = null;
@@ -250,17 +308,24 @@
 		previewRequest = null;
 		try {
 			const request = makeRequest();
-			const response = await postJson<{ results: Result[] }>(
+			const response = await postJson<{ preview_id: string; results: Result[] }>(
 				`/quick_pp/workspace/projects/${encodeURIComponent(projectId)}/batch_evaluation/preview`,
 				request
 			);
-			if (project !== projectId) return;
+			if (project !== projectId || destroyed || generation !== detailGeneration) {
+				void deleteJson(
+					`/quick_pp/workspace/projects/${encodeURIComponent(projectId)}/batch_evaluation/${encodeURIComponent(response.preview_id)}`
+				).catch((err) => console.warn('Could not release batch preview:', err));
+				return;
+			}
 			previewRequest = request;
+			previewId = response.preview_id;
 			results = response.results;
 			selected = results
 				.filter((r) => r.status === 'ready')
 				.map((r) => key(r.well_name, r.zone));
-			detailKey = selected[0] ?? null;
+			const first = results.find((r) => r.status === 'ready');
+			if (first) void selectDetail(first);
 		} catch (e) {
 			if (project === projectId) error = e instanceof Error ? e.message : String(e);
 		} finally {
@@ -269,7 +334,7 @@
 	}
 
 	async function apply() {
-		if (!project || !previewRequest || !selected.length) return;
+		if (!project || !previewRequest || !previewId || !selected.length) return;
 		const projectId = project;
 		busy = true;
 		error = null;
@@ -288,7 +353,7 @@
 			}
 			const response = await postJson<{ results: Result[] }>(
 				`/quick_pp/workspace/projects/${encodeURIComponent(projectId)}/batch_evaluation/apply`,
-				{ evaluation: previewRequest, fingerprints }
+				{ preview_id: previewId, fingerprints }
 			);
 			if (
 				response.results.some(
@@ -321,224 +386,301 @@
 	}
 </script>
 
-<div class="h-full overflow-auto bg-[var(--bg-surface)] p-4 text-xs text-[var(--text-primary)]">
-	<h2 class="text-base font-semibold">Multi-Well Evaluation</h2>
-	<p class="mt-1 text-[var(--text-secondary)]">
-		Repeat the current single-well lithology, porosity, permeability and saturation settings
-		independently per well and zone. This is not a pooled calibration. Depth filters and brushed
-		selections are not applied.
-	</p>
-	<div class="mt-3 grid gap-3 md:grid-cols-2">
-		<fieldset class="rounded border border-[var(--border-hairline)] p-2">
-			<legend class="font-semibold">Wells ({wells.length})</legend>
-			<div class="mb-1 flex gap-2">
-				<button
-					type="button"
-					class="underline"
-					disabled={busy}
-					onclick={() => {
-						wells = projectData.wells.map((w) => w.name);
-						clearPreview();
-					}}>All</button
-				>
-				<button
-					type="button"
-					class="underline"
-					disabled={busy}
-					onclick={() => {
-						wells = [];
-						clearPreview();
-					}}>None</button
-				>
-			</div>
-			<div class="max-h-28 overflow-auto">
-				{#each projectData.wells as well}
-					<label class="mr-3 inline-flex gap-1"
-						><input
-							type="checkbox"
-							disabled={busy}
-							checked={wells.includes(well.name)}
-							onchange={() => {
-								wells = toggle(wells, well.name);
-								clearPreview();
-							}}
-						/>{well.name}</label
-					>
-				{/each}
-			</div>
-		</fieldset>
-		<fieldset class="rounded border border-[var(--border-hairline)] p-2">
-			<legend class="font-semibold">Zones ({zones.length})</legend>
-			<div class="max-h-28 overflow-auto">
-				{#each projectData.allZones as zone}
-					<label class="mr-3 inline-flex gap-1"
-						><input
-							type="checkbox"
-							disabled={busy}
-							checked={zones.includes(zone)}
-							onchange={() => {
-								zones = toggle(zones, zone);
-								clearPreview();
-							}}
-						/>{zone}</label
-					>
-				{:else}
-					<span>No zones available. Add formation tops or zone data first.</span>
-				{/each}
-			</div>
-		</fieldset>
-	</div>
-	<details class="mt-3 rounded border border-[var(--border-hairline)] p-2">
-		<summary class="cursor-pointer font-semibold">Current parameter template</summary>
-		<p class="my-1 text-[var(--text-secondary)]">
-			Edit these settings in the single-well modules before previewing. The preview captures a
-			fixed snapshot.
-		</p>
-		<pre class="max-h-44 overflow-auto">{JSON.stringify(
-				previewRequest?.parameter_snapshots ?? {
-					lithology: workbench.lithoParams,
-					thomas_stieber: workbench.tsParams,
-					permeability: workbench.permParams,
-					saturation: workbench.saturationParams
-				},
-				null,
-				2
-			)}</pre>
-	</details>
-	<div class="mt-3 flex flex-wrap items-center gap-2">
-		<button
-			type="button"
-			class="rounded bg-blue-600 px-3 py-1.5 font-semibold text-white disabled:opacity-40"
-			disabled={busy ||
-				projectData.isLoading ||
-				wellData.isLoading ||
-				!project ||
-				!wells.length ||
-				!zones.length}
-			onclick={preview}
+<PaneGroup
+	direction="horizontal"
+	autoSaveId="quick-pp-batch-evaluation-layout"
+	class="min-h-0 w-full flex-1"
+>
+	<Pane defaultSize={25} minSize={18} maxSize={40} class="h-full overflow-hidden">
+		<div
+			class="h-full overflow-auto bg-[var(--bg-surface)] p-3 text-xs text-[var(--text-primary)]"
 		>
-			{busy ? 'Working…' : 'Preview evaluation'}
-		</button>
-		<button
-			type="button"
-			class="rounded border border-emerald-600 px-3 py-1.5 font-semibold text-emerald-700 disabled:opacity-40"
-			disabled={busy || selected.length === 0}
-			onclick={apply}
-		>
-			Apply selected ({selected.length})
-		</button>
-		<span class="text-[var(--text-secondary)]"
-			>Only checked, successfully previewed well/zone results are saved.</span
-		>
-	</div>
-	{#if error}<p role="alert" class="mt-2 text-red-700">{error}</p>{/if}
-	{#if message}<p role="status" class="mt-2 text-amber-700">{message}</p>{/if}
-	{#if results.length}
-		<p class="mt-3 text-[var(--text-secondary)]">
-			Changes use paired valid samples only. PERM shows the median after/before ratio; other
-			cells show median paired differences. Click a well/zone to inspect depth samples.
-		</p>
-		<div class="mt-2 overflow-auto">
-			<table class="w-full border-collapse text-left">
-				<thead
-					><tr class="border-b border-[var(--border-hairline)]">
-						<th class="p-1">Apply</th><th class="p-1">Well / zone</th><th class="p-1"
-							>Status</th
-						>
-						{#each curves as curve}<th class="p-1"
-								>{curve} {curve === 'PERM' ? '×' : 'Δ'}</th
-							>{/each}
-					</tr></thead
-				>
-				<tbody>
-					{#each results as r}
-						<tr class="border-b border-[var(--border-hairline)]">
-							<td class="p-1"
-								><input
-									aria-label={`Apply ${r.well_name} ${r.zone}`}
-									type="checkbox"
-									disabled={r.status !== 'ready' || busy}
-									checked={selected.includes(key(r.well_name, r.zone))}
-									onchange={() =>
-										(selected = toggle(selected, key(r.well_name, r.zone)))}
-								/></td
-							>
-							<td class="p-1"
-								><button
-									type="button"
-									class="underline"
-									onclick={() => (detailKey = key(r.well_name, r.zone))}
-									>{r.well_name} / {r.zone}</button
-								></td
-							>
-							<td class="p-1" title={r.error ?? ''}
-								>{r.status}{r.error ? `: ${r.error}` : ''}</td
-							>
-							{#each curves as curve}
-								{@const metric = r.metrics?.[curve]}
-								{@const value = curve === 'PERM' ? metric?.ratio : metric?.delta}
-								<td
-									class="p-1 {value == null
-										? ''
-										: (curve === 'PERM' ? value >= 1 : value >= 0)
-											? 'bg-blue-50 text-blue-800'
-											: 'bg-amber-50 text-amber-800'}"
-									title={`Paired: ${metric?.paired ?? 0}; valid: ${metric?.valid ?? 0}; zone rows: ${r.rows ?? 0}`}
-								>
-									{format(value)}
-								</td>
-							{/each}
-						</tr>
-					{/each}
-				</tbody>
-			</table>
-		</div>
-	{/if}
-	{#if detail?.metrics}
-		<div class="mt-4 rounded border border-[var(--border-hairline)] p-2">
-			<div class="flex flex-wrap items-center gap-2">
-				<strong>{detail.well_name} / {detail.zone}</strong>
-				<select
-					aria-label="Detail curve"
-					bind:value={detailCurve}
-					class="rounded border border-[var(--border-hairline)]"
-				>
-					{#each curves as curve}<option value={curve}>{curve}</option>{/each}
-				</select>
-				<span
-					>Paired median: {format(detail.metrics[detailCurve].before)} → {format(
-						detail.metrics[detailCurve].after
-					)} ({detail.metrics[detailCurve].paired} paired / {detail.rows} rows). Preview median,
-					all valid: {format(detail.metrics[detailCurve].after_all)}</span
-				>
-			</div>
-			<p class="my-1 text-[var(--text-secondary)]">
-				Depth samples (MD, m; up to 200). Bars are scaled within this well/zone: grey = before,
-				blue = preview. {detailCurve === 'PERM'
-					? 'Permeability uses a logarithmic scale; non-positive values are omitted.'
-					: ''}
+			<h2 class="text-base font-semibold">Multi-Well Evaluation</h2>
+			<p class="mt-1 text-[var(--text-secondary)]">
+				Repeat the current single-well lithology, porosity, permeability and saturation
+				settings independently per well and zone. This is not a pooled calibration. Depth
+				filters and brushed selections are not applied.
 			</p>
-			<div class="max-h-48 overflow-auto">
-				{#each points as point}
-					{@const before = plotValue(point.before)}
-					{@const after = plotValue(point.after)}
-					<div class="grid grid-cols-[4.5rem_1fr_1fr] items-center gap-2">
-						<span>{format(point.DEPTH)}</span>
-						<div class="h-2 bg-slate-100">
-							<div
-								class="h-2 bg-slate-400"
-								style={`width: ${before == null ? 0 : Math.max(1, ((before - range.min) / range.span) * 100)}%`}
-							></div>
-						</div>
-						<div class="h-2 bg-slate-100">
-							<div
-								class="h-2 bg-blue-500"
-								style={`width: ${after == null ? 0 : Math.max(1, ((after - range.min) / range.span) * 100)}%`}
-							></div>
-						</div>
+			<div class="mt-3 grid gap-3">
+				<fieldset class="rounded border border-[var(--border-hairline)] p-2">
+					<legend class="font-semibold">Wells ({wells.length})</legend>
+					<div class="mb-1 flex gap-2">
+						<button
+							type="button"
+							class="underline"
+							disabled={busy}
+							onclick={() => {
+								wells = projectData.wells.map((w) => w.name);
+								clearPreview();
+							}}>All</button
+						>
+						<button
+							type="button"
+							class="underline"
+							disabled={busy}
+							onclick={() => {
+								wells = [];
+								clearPreview();
+							}}>None</button
+						>
 					</div>
-				{/each}
+					<div class="max-h-28 overflow-auto">
+						{#each projectData.wells as well}
+							<label class="mr-3 inline-flex gap-1"
+								><input
+									type="checkbox"
+									disabled={busy}
+									checked={wells.includes(well.name)}
+									onchange={() => {
+										wells = toggle(wells, well.name);
+										clearPreview();
+									}}
+								/>{well.name}</label
+							>
+						{/each}
+					</div>
+				</fieldset>
+				<fieldset class="rounded border border-[var(--border-hairline)] p-2">
+					<legend class="font-semibold">Zones ({zones.length})</legend>
+					<div class="max-h-28 overflow-auto">
+						{#each projectData.allZones as zone}
+							<label class="mr-3 inline-flex gap-1"
+								><input
+									type="checkbox"
+									disabled={busy}
+									checked={zones.includes(zone)}
+									onchange={() => {
+										zones = toggle(zones, zone);
+										clearPreview();
+									}}
+								/>{zone}</label
+							>
+						{:else}
+							<span>No zones available. Add formation tops or zone data first.</span>
+						{/each}
+					</div>
+				</fieldset>
 			</div>
+			<div class="mt-3 rounded border border-[var(--border-hairline)] p-2">
+				<strong>Parameter template{previewRequest ? ' (captured)' : ' (current)'}</strong>
+				<p class="mt-1 text-[var(--text-secondary)]">
+					Lithology: {String(
+						previewRequest?.lithology.model ?? workbench.lithoParams.model
+					)} · Porosity: {String(
+						previewRequest?.porosity.method ?? workbench.lithoParams.porosityMethod
+					)} · Permeability: {String(
+						previewRequest?.permeability.method ?? workbench.permParams.method
+					)} · Saturation: {String(
+						previewRequest?.saturation.method ?? workbench.saturationParams.method
+					)}
+				</p>
+			</div>
+			<details class="mt-2 rounded border border-[var(--border-hairline)] p-2">
+				<summary class="cursor-pointer font-semibold">Full parameter snapshot</summary>
+				<p class="my-1 text-[var(--text-secondary)]">
+					Edit these settings in the single-well modules before previewing. The preview
+					captures a fixed snapshot.
+				</p>
+				<pre class="max-h-44 overflow-auto">{JSON.stringify(
+						previewRequest?.parameter_snapshots ?? {
+							lithology: workbench.lithoParams,
+							thomas_stieber: workbench.tsParams,
+							permeability: workbench.permParams,
+							saturation: workbench.saturationParams
+						},
+						null,
+						2
+					)}</pre>
+			</details>
+			<div class="mt-3 flex flex-wrap items-center gap-2">
+				<button
+					type="button"
+					class="rounded bg-blue-600 px-3 py-1.5 font-semibold text-white disabled:opacity-40"
+					disabled={busy ||
+						projectData.isLoading ||
+						wellData.isLoading ||
+						!project ||
+						!wells.length ||
+						!zones.length}
+					onclick={preview}
+				>
+					{busy ? 'Working…' : 'Preview evaluation'}
+				</button>
+				<button
+					type="button"
+					class="rounded border border-emerald-600 px-3 py-1.5 font-semibold text-emerald-700 disabled:opacity-40"
+					disabled={busy || selected.length === 0}
+					onclick={apply}
+				>
+					Apply selected ({selected.length})
+				</button>
+				<span class="text-[var(--text-secondary)]"
+					>Apply saves checked previewed results without recalculation. Previews expire
+					after 30 minutes.</span
+				>
+			</div>
+			{#if error}<p role="alert" class="mt-2 text-red-700">{error}</p>{/if}
+			{#if message}<p role="status" class="mt-2 text-amber-700">{message}</p>{/if}
 		</div>
-	{/if}
-</div>
+	</Pane>
+	<PaneResizer
+		class="w-[3px] cursor-col-resize bg-[var(--border-hairline)] hover:bg-[var(--accent-primary)]"
+	/>
+	<Pane defaultSize={45} minSize={25} class="h-full overflow-hidden">
+		{#if detailProfiles && detail?.metrics && detail.rows}
+			<BatchEvaluationPlot
+				profiles={detailProfiles}
+				metrics={detail.metrics}
+				rows={detail.rows}
+				well={detail.well_name}
+				zone={detail.zone}
+			/>
+		{:else if detailLoading}
+			<div class="p-4 text-xs" role="status">Loading full-resolution zone profile…</div>
+		{:else if detailError}
+			<div class="p-4 text-xs text-red-700" role="alert">
+				{detailError}
+				<button
+					type="button"
+					class="underline"
+					onclick={() => detail && selectDetail(detail)}>Retry</button
+				>
+			</div>
+		{:else}
+			<div
+				class="flex h-full items-center justify-center bg-[var(--bg-surface)] p-6 text-center text-xs text-[var(--text-secondary)]"
+			>
+				Preview an evaluation, then select a successful well / zone in the results grid to
+				view its depth tracks.
+			</div>
+		{/if}
+	</Pane>
+	<PaneResizer
+		class="w-[3px] cursor-col-resize bg-[var(--border-hairline)] hover:bg-[var(--accent-primary)]"
+	/>
+	<Pane defaultSize={30} minSize={20} class="h-full overflow-hidden">
+		<div
+			class="flex h-full min-h-0 flex-col bg-[var(--bg-surface)] text-xs text-[var(--text-primary)]"
+		>
+			<div class="flex shrink-0 gap-2 border-b border-[var(--border-hairline)] p-2">
+				<button
+					type="button"
+					class:font-bold={gridTab === 'changes'}
+					aria-pressed={gridTab === 'changes'}
+					onclick={() => (gridTab = 'changes')}>Evaluation changes</button
+				>
+				<button
+					type="button"
+					class:font-bold={gridTab === 'summary'}
+					aria-pressed={gridTab === 'summary'}
+					onclick={() => (gridTab = 'summary')}>Reservoir summary</button
+				>
+			</div>
+			{#if gridTab === 'changes'}
+				<p class="shrink-0 p-2 text-[var(--text-secondary)]">
+					Paired valid samples: median differences (Δ), or median after/before ratio (PERM
+					×). Select a successful row to view tracks; check rows to apply. Hover a cell
+					for coverage.
+				</p>
+				{#if results.length}
+					<div class="min-h-0 flex-1 overflow-auto">
+						<table class="w-full border-collapse text-left">
+							<thead
+								><tr class="border-b border-[var(--border-hairline)]">
+									<th class="p-1">Apply</th><th class="p-1">Well / zone</th><th
+										class="p-1">Status</th
+									>
+									{#each curves as curve}<th class="p-1"
+											>{curve} {curve === 'PERM' ? '×' : 'Δ'}</th
+										>{/each}
+								</tr></thead
+							>
+							<tbody>
+								{#each results as r}
+									<tr
+										class="border-b border-[var(--border-hairline)] {detailKey ===
+										key(r.well_name, r.zone)
+											? 'bg-blue-50'
+											: ''}"
+									>
+										<td class="p-1"
+											><input
+												aria-label={`Apply ${r.well_name} ${r.zone}`}
+												type="checkbox"
+												disabled={r.status !== 'ready' || busy}
+												checked={selected.includes(
+													key(r.well_name, r.zone)
+												)}
+												onchange={() =>
+													(selected = toggle(
+														selected,
+														key(r.well_name, r.zone)
+													))}
+											/></td
+										>
+										<td class="p-1"
+											><button
+												type="button"
+												class="underline"
+												disabled={!r.metrics}
+												aria-pressed={detailKey ===
+													key(r.well_name, r.zone)}
+												onclick={() => selectDetail(r)}
+												>{r.well_name} / {r.zone}</button
+											></td
+										>
+										<td class="p-1">
+											{#if r.error}
+												<details>
+													<summary class="cursor-pointer text-red-700"
+														>{r.status}</summary
+													>
+													<span class="block min-w-36">{r.error}</span>
+												</details>
+											{:else}
+												{r.status}
+											{/if}
+										</td>
+										{#each curves as curve}
+											{@const metric = r.metrics?.[curve]}
+											{@const value =
+												curve === 'PERM' ? metric?.ratio : metric?.delta}
+											<td
+												class="p-1 {value == null
+													? ''
+													: (curve === 'PERM' ? value >= 1 : value >= 0)
+														? 'bg-blue-50 text-blue-800'
+														: 'bg-amber-50 text-amber-800'}"
+												title={`Paired: ${metric?.paired ?? 0}; preview valid: ${metric?.valid ?? 0}; zone rows: ${r.rows ?? 0}; paired median: ${format(metric?.before)} → ${format(metric?.after)}; all-valid preview median: ${format(metric?.after_all)}`}
+											>
+												{format(value)}
+											</td>
+										{/each}
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+				{:else}
+					<p class="p-2 text-[var(--text-secondary)]">No preview results yet.</p>
+				{/if}
+			{:else}
+				<p class="shrink-0 p-2 text-[var(--text-secondary)]">
+					In-session summary for active well {workbench.wellId ?? '—'}, calculated in the
+					single-well Reservoir Summary module. It is not a batch preview and may be stale
+					after curve changes.
+				</p>
+				{#if summaryAvailable && wellData.zonalSummary.length}
+					<div class="min-h-0 flex-1">
+						<CompactDataGrid columns={summaryColumns} rows={wellData.zonalSummary} />
+					</div>
+				{:else}
+					<p class="p-2 text-[var(--text-secondary)]">
+						No in-session summary for this well. Run Reservoir Summary in the
+						single-well workspace.
+					</p>
+				{/if}
+			{/if}
+		</div>
+	</Pane>
+</PaneGroup>

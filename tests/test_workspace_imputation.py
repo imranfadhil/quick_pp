@@ -114,3 +114,45 @@ def test_matrix_distinguishes_empty_bins_and_fully_missing_curves(wells):
     )
     assert result["samples"] == [1, 0, 2]
     assert result["matrix"][result["curves"].index("EMPTY")] == [1, None, 1]
+
+
+def test_linear_interpolation_uses_depth_and_does_not_extrapolate_or_cross_wells(wells):
+    frames, saved = wells
+    frames[0] = pd.DataFrame({
+        "WELL_NAME": ["A"] * 5,
+        "DEPTH": [10.0, 2.0, 0.0, 1.0, 12.0],
+        "GR": [100.0, np.nan, np.nan, 10.0, np.nan],
+    })
+    result = workspace.workspace_impute(
+        1, workspace.WorkspaceImputationRequest(curves=["GR"], method="linear")
+    )
+    np.testing.assert_allclose(saved["A"]["GR_IMP"], [100, 20, np.nan, 10, np.nan], equal_nan=True)
+    np.testing.assert_allclose(saved["B"]["GR_IMP"], [100, np.nan, np.nan], equal_nan=True)
+    assert result["summaries"][0]["remaining"] == 2
+    assert result["summaries"][1]["remaining"] == 2
+
+
+def test_linear_rejects_duplicate_depths_before_any_write(wells):
+    frames, saved = wells
+    frames[1]["DEPTH"] = [1.0, 1.0, 3.0]
+    with pytest.raises(HTTPException, match="Duplicate depths"):
+        workspace.workspace_impute(1, workspace.WorkspaceImputationRequest(curves=["GR"], method="linear"))
+    assert not saved
+
+
+def test_replacement_checks_all_wells_before_saving(wells, monkeypatch):
+    frames, saved = wells
+    frames[1] = frames[1].drop(columns="GR")
+    monkeypatch.setattr(workspace, "_get_merged_dataframe_sync", lambda _pid, name: frames[0])
+    with pytest.raises(HTTPException, match="GR does not exist in B"):
+        workspace.workspace_impute(
+            1, workspace.WorkspaceImputationRequest(curves=["GR"], method="mean", replace_original=True)
+        )
+    assert not saved
+
+
+def test_replacement_rejects_backup_curve_as_input(wells):
+    with pytest.raises(HTTPException, match="Backup curves"):
+        workspace.workspace_impute(
+            1, workspace.WorkspaceImputationRequest(curves=["GR_ORI"], method="mean", replace_original=True)
+        )

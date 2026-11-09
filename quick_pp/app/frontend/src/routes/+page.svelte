@@ -873,6 +873,9 @@
 			<button type="button" class="shrink-0 underline" onclick={() => (workbench.batchEvaluationAffectedProjects = workbench.batchEvaluationAffectedProjects.filter((id) => id !== workbench.projectId))}>Dismiss</button>
 		</div>
 	{/if}
+	{#if workbench.scope === 'multi-well' && workbench.multiWellStep === 'batch-evaluation'}
+		<MultiWellEvaluation />
+	{:else}
 	<PaneGroup direction="horizontal" autoSaveId="quick-pp-3pane-layout" class="min-h-0 w-full flex-1">
 		<!-- LEFT PANE (25% default width): Parameter Inspector -->
 		<Pane defaultSize={25} minSize={18} maxSize={42} class="h-full overflow-hidden">
@@ -941,10 +944,6 @@
 						<MultiWellRockTyping />
 					{:else if workbench.multiWellStep === 'perm-transform'}
 						<MultiWellPermTransform />
-					{:else if workbench.multiWellStep === 'batch-evaluation'}
-						<div class="p-3 text-xs text-[var(--text-secondary)]">
-							Select wells and zones, preview the shared interpretation, then review and apply the results in the evaluation panel.
-						</div>
 					{:else if workbench.multiWellStep === 'swirr-corr'}
 						<MultiWellSwirr />
 					{:else if workbench.multiWellStep === 'rt-classifier'}
@@ -968,11 +967,7 @@
 			class="w-[3px] cursor-col-resize bg-[var(--border-hairline)] transition-colors hover:bg-[var(--accent-primary)] active:bg-[var(--accent-primary)]"
 		/>
 
-		{#if workbench.scope === 'multi-well' && workbench.multiWellStep === 'batch-evaluation'}
-			<Pane defaultSize={75} minSize={45} class="h-full overflow-hidden">
-				<MultiWellEvaluation />
-			</Pane>
-		{:else if isReportMode}
+		{#if isReportMode}
 			<!-- REPORT WORKBENCH (75% default width): Live A4 Preview & Markdown Editor -->
 			<Pane defaultSize={75} minSize={45} class="h-full overflow-hidden">
 				<ReportPreviewCanvas />
@@ -1127,4 +1122,5 @@
 			</Pane>
 		{/if}
 	</PaneGroup>
+	{/if}
 </div>

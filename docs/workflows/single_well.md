@@ -10,7 +10,7 @@ The **Log / interval** unit selector (m or ft) affects the single-well log plot 
 
 Zone-filtered workspace calculations require resolved zone labels for the selected well, normally from its zone data or formation tops. If zone labels are unavailable, the calculation reports an error instead of evaluating the entire well.
 
-In Data & QAQC, **Missing Data Imputation** saves selected logs as new `_IMP` curves without changing the source logs. Choose mean, median, most frequent, forward/backward fill, KNN, or iterative imputation; multivariate methods require at least two curves. Directional fills follow increasing depth within the well and may leave end gaps unfilled. Active depth and zone filters apply; existing `_IMP` curves must be renamed or deleted before re-running. The right-pane **Missing Matrix** shows binned missing fractions by curve, with deeper depths at the top and grey bins indicating no samples.
+In Data & QAQC, **Missing Data Imputation** saves selected logs as new `_IMP` curves by default. Alternatively, replace the selected curves while preserving a full-well `_ORI` backup; existing backups are never overwritten. Choose mean, median, most frequent, forward/backward fill, depth-based linear interpolation, KNN, or iterative imputation; multivariate methods require at least two curves. Linear interpolation fills only gaps between observed samples, without extrapolating end gaps. Directional fills follow increasing depth and may also leave end gaps unfilled. Active depth and zone filters apply; existing `_IMP` curves must be renamed or deleted before re-running in new-curve mode. The right-pane **Missing Matrix** shows binned missing fractions by curve, with deeper depths at the top and grey bins indicating no samples.
 
 ---
 

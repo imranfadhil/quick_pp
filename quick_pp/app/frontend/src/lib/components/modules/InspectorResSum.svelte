@@ -45,6 +45,8 @@
 
 	async function executeResSum(persist: boolean = false) {
 		if (!workbench.projectId || !workbench.wellId) return;
+		const projectId = workbench.projectId;
+		const wellId = workbench.wellId;
 		const selectionIndices = wellData.getBrushedCalculationIndices();
 		if (selectionIndices && selectionIndices.size === 0) {
 			wellData.lastError = 'The selection contains no rows in the active depth/zone filter.';
@@ -75,6 +77,7 @@
 					save: persist && !selectionMode
 				}
 			);
+			if (workbench.projectId !== projectId || workbench.wellId !== wellId) return;
 
 			if (data.flags?.data) {
 				wellData.mergeComputedCurves(data.flags.data, undefined, selectionIndices);
@@ -97,6 +100,7 @@
 				wellData.markModuleComputed('ressum', data.uncertainty.cpi.data);
 			}
 			wellData.zonalSummary = data.summary || [];
+			wellData.zonalSummarySource = { projectId, wellId };
 			upscaledCellCount = data.upscaling?.n_cells ?? null;
 			blockedCells = data.upscaling?.blocked_cells ?? [];
 			const rawUncRows: Record<string, any>[] =
@@ -576,4 +580,3 @@
 		</button>
 	</div>
 </div>
-

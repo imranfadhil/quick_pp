@@ -290,6 +290,7 @@ class WellDataState {
 
 	// Reservoir summary table & metrics from latest run
 	zonalSummary = $state.raw<Record<string, any>[]>([]);
+	zonalSummarySource = $state<{ projectId: string; wellId: string } | null>(null);
 	poroCoreMetrics = $state<CoreComparisonMetrics | null>(null);
 	permCoreMetrics = $state<CoreComparisonMetrics | null>(null);
 
@@ -2529,6 +2530,7 @@ class WellDataState {
 
 			if (groupSet.has('ressum') || clearedSet.has('PHIT') || clearedSet.has('SWT')) {
 				this.zonalSummary = [];
+				this.zonalSummarySource = null;
 			}
 			if (groupSet.has('litho_poro') || clearedSet.has('PHIT')) {
 				this.poroCoreMetrics = null;

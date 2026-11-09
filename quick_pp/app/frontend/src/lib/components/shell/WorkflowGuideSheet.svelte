@@ -871,7 +871,8 @@
 						<h4 class="text-xs font-bold text-teal-950">Standalone: Multi-Well Evaluation</h4>
 						<button type="button" onclick={() => handleJumpToWorkbenchStep('multi-well', 'batch-evaluation')} class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 py-0.5 text-[10px] font-bold text-[var(--accent-primary)] hover:bg-[var(--accent-primary)] hover:text-white">Open Module</button>
 					</div>
-					<p>Preview a shared single-well lithology, porosity, permeability and saturation interpretation independently for selected well/zone pairs. Review paired changes and apply selected results; recompute dependent field interpretations afterward.</p>
+					<p>Choose wells and zones in the left pane, then preview and review paired changes in the right grid. Select a successful well/zone to load full-resolution existing and preview depth tracks in the center. Apply saves the previewed calculations without recalculating; previews expire after 30 minutes. Recompute dependent field interpretations afterward.</p>
+					<p>The separate Reservoir Summary tab shows only an in-session result for the active single well, not a batch preview; it may be stale after curve changes.</p>
 					<p>Crossplot Qv calibration and invaded-zone hydrocarbon correction require per-well validation and are not supported in this module.</p>
 				</section>
 			{/if}

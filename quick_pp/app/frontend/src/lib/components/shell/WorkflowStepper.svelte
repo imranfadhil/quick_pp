@@ -721,6 +721,7 @@
 			</div>
 		{/if}
 
+		{#if !(workbench.scope === 'multi-well' && workbench.multiWellStep === 'batch-evaluation')}
 		<div
 			class="flex h-6 items-center rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-0.5 text-[10px]"
 		>
@@ -743,5 +744,6 @@
 				</button>
 			{/if}
 		</div>
+		{/if}
 	</div>
 </nav>

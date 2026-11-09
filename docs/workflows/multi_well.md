@@ -2,7 +2,7 @@
 
 The Multi-Well workspace harmonizes multi-vintage logging suites across the entire field, establishes consistent stratigraphic baselines, models core-calibrated Petrophysical Rock Types and permeability transforms, calculates field-wide Saturation-Height Functions ($\text{SHF}$), and runs Monte Carlo volumetric uncertainty.
 
-In Field QA/QC, **Missing Data Imputation** uses selected wells and the active depth and zone filters. Mean, median, most frequent, KNN, and iterative models fit pooled samples; KNN scales curves before computing distances. Forward/backward fill follows increasing depth independently within each well. Results are saved as separate `_IMP` curves, leaving original logs unchanged. Existing outputs must be renamed or deleted before re-running, and curves with no observed values across the selected wells cannot be imputed. The right-pane **Missing Matrix** displays one selected well at a time, with deeper depths at the top and colors showing the missing fraction in each depth bin.
+In Field QA/QC, **Missing Data Imputation** uses selected wells and the active depth and zone filters. Mean, median, most frequent, KNN, and iterative models fit pooled samples; KNN scales curves before computing distances. Forward/backward fill and depth-based linear interpolation operate independently within each well; interpolation leaves end gaps missing. Results are saved as separate `_IMP` curves by default. Alternatively, replace existing curves while preserving a full-well `_ORI` backup; existing backups are never overwritten. Replacement requires the source curve to exist in every selected well. Existing `_IMP` outputs must be renamed or deleted before re-running in new-curve mode, and curves with no observed values across the selected wells cannot be imputed. The right-pane **Missing Matrix** displays one selected well at a time, with deeper depths at the top and colors showing the missing fraction in each depth bin.
 
 The workflow is structured into **7 Primary Sequential Steps** for end-to-end field evaluation, complemented by **5 Standalone Specialized Modules** (Multi-Well Evaluation, SCAL & Dynamic Relative Permeability, Formation Pressure & Contacts, Discrete Rock Type Classifier Trainer, and Conformal Physics-Informed ML Trainer).
 
@@ -348,14 +348,25 @@ This optional utility repeats the current single-well lithology, porosity, perme
 saturation settings independently for selected well/zone pairs. It is not a pooled field
 calibration or a required step of the field workflow. Set the desired parameters in the
 single-well modules, select wells and named zones, and preview before applying any results.
-The full captured parameter template is shown in the panel. The current depth filter and
+The left pane shows the selected wells, zones, and parameter template; expand the snapshot
+for full settings. The current depth filter and
 brushed interval are not used; each zone is resolved in each well.
 
 The preview reports failures per well/zone and compares paired valid values for VCLAY, PHIT,
-PERM and SWT. The comparison includes coverage and a depth-sample drill-down; PERM changes
-are shown as a median ratio. Only checked successful results are applied, with parameter
-snapshots saved per zone. The server recalculates and checks the input fingerprint before
-saving; if input data or parameters changed, preview again. Well/zone saves are independent,
+PERM and SWT. The right-hand evaluation grid includes coverage and failures; select a
+successful well/zone to load its full-resolution existing and preview curves in the center depth tracks.
+PHIT, PERM and SWT can be shown together or individually, and VCLAY individually. PERM
+uses a logarithmic track and changes are shown as a median ratio. Zoom and scroll the
+depth tracks to inspect details. The separate Reservoir Summary grid shows only an
+in-session summary previously calculated for the active single well, not batch-preview
+results; it can be stale and must be recomputed after curve changes.
+Only checked successful results are applied, with parameter
+snapshots saved per zone. Apply saves the previously calculated preview without recalculating,
+after checking the input fingerprint; if input data changed, preview again. Preview data is
+held temporarily in the backend process for 30 minutes and is released on leaving or changing
+scope. If it expires, the server restarts, or a request reaches a different worker, preview
+again. Deployments with multiple backend workers need sticky routing to the preview's worker.
+Well/zone saves are independent,
 so review each apply status. The results are calculated using the workspace's current merged
 well data, which can include unsaved single-well previews.
 

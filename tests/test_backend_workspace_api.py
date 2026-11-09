@@ -99,6 +99,7 @@ def client_and_project(monkeypatch):
     monkeypatch.setattr(ws_service, "get_db", lambda: DummyCtx(session))
     monkeypatch.setattr(rt_service, "get_db", lambda: DummyCtx(session))
     db_service.invalidate_well_cache()
+    ws_service._batch_previews.clear()
 
     client = TestClient(app)
     yield client, proj.project_id
@@ -197,23 +198,37 @@ def test_batch_preview_is_isolated_and_apply_checks_staleness(
     assert ready["rows"] == 5
     assert ready["metrics"]["PHIT"]["valid"] > 0
     assert all(r["status"] == "error" for r in results if r is not ready)
+    profile = client.get(
+        f"{endpoint}/{response.json()['preview_id']}/profile",
+        params={"well_name": "Well-A", "zone": "Zone-1"},
+    ).json()["profiles"]["PHIT"]
     pd.testing.assert_frame_equal(
         original, db_service._get_merged_dataframe_sync(pid, "Well-A")
     )
     apply_body = {
-        "evaluation": payload,
+        "preview_id": response.json()["preview_id"],
         "fingerprints": {"Well-A": {"Zone-1": "invalid"}},
     }
     stale = client.post(f"{endpoint}/apply", json=apply_body)
     assert stale.status_code == 200, stale.text
     assert stale.json()["results"][0]["status"] == "error"
     apply_body["fingerprints"]["Well-A"]["Zone-1"] = ready["fingerprint"]
+    monkeypatch.setattr(
+        ws_service, "_batch_evaluate_zone",
+        lambda *args: pytest.fail("Apply must not calculate again"),
+    )
     applied = client.post(f"{endpoint}/apply", json=apply_body)
     assert applied.status_code == 200, applied.text
     assert applied.json()["results"][0]["status"] == "saved", applied.text
+    repeated = client.post(f"{endpoint}/apply", json=apply_body).json()["results"][0]
+    assert repeated["status"] == "error"
+    assert "already saved" in repeated["error"]
     db_service.invalidate_well_cache()
     saved = db_service._get_merged_dataframe_sync(pid, "Well-A")
     assert saved.loc[saved["ZONES"] == "Zone-1", "PHIT"].notna().any()
+    expected = pd.DataFrame(profile).set_index("DEPTH")["after"]
+    actual = saved.set_index("DEPTH").loc[expected.index, "PHIT"]
+    np.testing.assert_allclose(actual, expected, equal_nan=True)
     assert saved.loc[saved["ZONES"] == "Zone-2", "PHIT"].isna().all()
     assert saved.loc[saved["ZONES"] == "Zone-1", "PHIT_SH"].notna().any()
     assert saved.loc[saved["ZONES"] == "Zone-1", "SWT_ARCHIE"].notna().any()
@@ -259,7 +274,8 @@ def test_batch_apply_multiple_zones_and_uses_new_porosity(
             {"DEPTH": prior["DEPTH"], "PHIT": [0.55] * 10, "PHIT_SH": [0.55] * 10}
         ),
     )
-    changed = client.post(f"{endpoint}/preview", json=payload).json()["results"]
+    changed_response = client.post(f"{endpoint}/preview", json=payload).json()
+    changed = changed_response["results"]
     for before, after in zip(results, changed, strict=False):
         assert before["metrics"]["PERM"]["after"] == pytest.approx(
             after["metrics"]["PERM"]["after"]
@@ -270,7 +286,7 @@ def test_batch_apply_multiple_zones_and_uses_new_porosity(
     results = changed
     fingerprints = {"Well-A": {r["zone"]: r["fingerprint"] for r in results}}
     applied = client.post(
-        f"{endpoint}/apply", json={"evaluation": payload, "fingerprints": fingerprints}
+        f"{endpoint}/apply", json={"preview_id": changed_response["preview_id"], "fingerprints": fingerprints}
     )
     assert applied.status_code == 200, applied.text
     assert [r["status"] for r in applied.json()["results"]] == ["saved", "saved"], (
@@ -317,6 +333,71 @@ def test_batch_preview_rejects_blank_zone(client_and_project):
     assert response.status_code == 422
 
 
+def test_batch_full_profile_is_loaded_on_demand_and_preview_expires(
+    client_and_project, monkeypatch
+):
+    client, pid = client_and_project
+    depths = np.arange(301, dtype=float) + 1000
+    merged = pd.DataFrame({
+        "DEPTH": depths, "ZONES": ["Zone-1"] * 300 + ["Zone-2"],
+        "GR": np.full(301, 60.0), "NPHI": np.full(301, 0.2),
+        "RHOB": np.full(301, 2.4), "RT": np.full(301, 10.0),
+        "PHIT": np.full(301, 0.2),
+    })
+    merged.loc[100, "PHIT"] = np.nan
+    monkeypatch.setattr(ws_service, "_get_merged_dataframe_sync", lambda *a, **k: merged.copy())
+    endpoint = f"/quick_pp/workspace/projects/{pid}/batch_evaluation"
+    payload = {
+        "well_names": ["Well-A"], "zones": ["Zone-1"],
+        "lithology": {}, "porosity": {"lithology_model": "ssc"},
+        "permeability": {}, "saturation": {},
+    }
+    response = client.post(f"{endpoint}/preview", json=payload)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["results"][0]["status"] == "ready", body
+    assert "profiles" not in body["results"][0]
+    profile_url = f"{endpoint}/{body['preview_id']}/profile"
+    profile = client.get(profile_url, params={"well_name": "Well-A", "zone": "Zone-1"})
+    assert profile.status_code == 200, profile.text
+    for points in profile.json()["profiles"].values():
+        assert [p["DEPTH"] for p in points] == depths[:300].tolist()
+    assert profile.json()["profiles"]["PHIT"][100]["before"] is None
+    assert client.get(profile_url, params={"well_name": "Well-A", "zone": "Zone-2"}).status_code == 404
+    assert client.get(profile_url.replace(f"projects/{pid}", f"projects/{pid + 1}"),
+                      params={"well_name": "Well-A", "zone": "Zone-1"}).status_code == 404
+    unknown = client.post(
+        f"{endpoint}/apply",
+        json={"preview_id": body["preview_id"], "fingerprints": {"Well-A": {"Zone-2": "x"}}},
+    ).json()["results"][0]
+    assert unknown["status"] == "error"
+    assert "not in this preview" in unknown["error"]
+    ws_service._batch_previews[body["preview_id"]].expires_at = 0
+    assert client.get(profile_url, params={"well_name": "Well-A", "zone": "Zone-1"}).status_code == 404
+    assert client.post(f"{endpoint}/apply", json={"preview_id": body["preview_id"], "fingerprints": {}}).status_code == 404
+
+
+def test_batch_preview_release_and_storage_limit(client_and_project, monkeypatch):
+    client, pid = client_and_project
+    endpoint = f"/quick_pp/workspace/projects/{pid}/batch_evaluation"
+    payload = {
+        "well_names": ["Well-A"], "zones": ["Zone-1"],
+        "lithology": {}, "porosity": {"lithology_model": "ssc"},
+        "permeability": {}, "saturation": {},
+    }
+    monkeypatch.setattr(ws_service, "_BATCH_PREVIEW_MAX_COUNT", 1)
+    first = client.post(f"{endpoint}/preview", json=payload)
+    assert first.status_code == 200, first.text
+    preview_id = first.json()["preview_id"]
+    assert client.post(f"{endpoint}/preview", json=payload).status_code == 503
+    assert client.delete(f"{endpoint}/{preview_id}").status_code == 200
+    assert client.get(
+        f"{endpoint}/{preview_id}/profile",
+        params={"well_name": "Well-A", "zone": "Zone-1"},
+    ).status_code == 404
+    assert client.post(f"{endpoint}/preview", json=payload).status_code == 200
+
+
 def test_batch_apply_detects_real_input_changes_and_preserves_other_zones(
     client_and_project, monkeypatch
 ):
@@ -335,18 +416,21 @@ def test_batch_apply_detects_real_input_changes_and_preserves_other_zones(
         "permeability": {},
         "saturation": {},
     }
-    preview = client.post(f"{endpoint}/preview", json=payload).json()["results"][0]
+    preview_response = client.post(f"{endpoint}/preview", json=payload).json()
+    preview = preview_response["results"][0]
     ws_service._save_curves_to_well(
         pid, "Well-A", pd.DataFrame({"DEPTH": [1000.0], "RHOB": [2.35]})
     )
     apply = {
-        "evaluation": payload,
+        "preview_id": preview_response["preview_id"],
         "fingerprints": {"Well-A": {"Zone-1": preview["fingerprint"]}},
     }
     stale = client.post(f"{endpoint}/apply", json=apply).json()["results"][0]
     assert stale["status"] == "error"
     assert "preview again" in stale["error"]
-    fresh = client.post(f"{endpoint}/preview", json=payload).json()["results"][0]
+    fresh_response = client.post(f"{endpoint}/preview", json=payload).json()
+    fresh = fresh_response["results"][0]
+    apply["preview_id"] = fresh_response["preview_id"]
     apply["fingerprints"]["Well-A"]["Zone-1"] = fresh["fingerprint"]
     assert (
         client.post(f"{endpoint}/apply", json=apply).json()["results"][0]["status"]
@@ -389,7 +473,8 @@ def test_batch_apply_rolls_back_curves_if_parameter_save_fails(
         "saturation": {},
         "parameter_snapshots": {"perm": {"method": "choo"}},
     }
-    preview = client.post(f"{endpoint}/preview", json=payload).json()["results"][0]
+    preview_response = client.post(f"{endpoint}/preview", json=payload).json()
+    preview = preview_response["results"][0]
     assert preview["status"] == "ready", preview
 
     def fail_params(*args, **kwargs):
@@ -399,7 +484,7 @@ def test_batch_apply_rolls_back_curves_if_parameter_save_fails(
     response = client.post(
         f"{endpoint}/apply",
         json={
-            "evaluation": payload,
+            "preview_id": preview_response["preview_id"],
             "fingerprints": {"Well-A": {"Zone-1": preview["fingerprint"]}},
         },
     )
@@ -452,6 +537,38 @@ def test_imputation_persists_only_filtered_depths(client_and_project, monkeypatc
     merged = db_service._get_merged_dataframe_sync(pid, "Well-A")
     assert merged.loc[~merged["DEPTH"].between(1002, 1006), "CPORE_IMP"].isna().all()
     assert merged.loc[merged["DEPTH"].between(1002, 1006), "CPORE_IMP"].notna().all()
+
+
+def test_imputation_replacement_preserves_full_original_backup(client_and_project, monkeypatch):
+    client, pid = client_and_project
+    monkeypatch.setattr(ws_service, "is_demo_mode", lambda: False)
+    endpoint = f"/quick_pp/workspace/projects/{pid}/qaqc/impute"
+    original = db_service._get_merged_dataframe_sync(pid, "Well-A")["CPORE"].copy()
+    request = {
+        "well_names": ["Well-A"], "curves": ["CPORE"], "method": "linear",
+        "min_depth": 1002, "max_depth": 1006, "replace_original": True,
+    }
+    response = client.post(endpoint, json=request)
+    assert response.status_code == 200, response.text
+    assert response.json()["summaries"][0]["target_curve"] == "CPORE"
+    db_service.invalidate_well_cache()
+    merged = db_service._get_merged_dataframe_sync(pid, "Well-A")
+    np.testing.assert_allclose(merged["CPORE_ORI"], original, equal_nan=True)
+    np.testing.assert_allclose(
+        merged.loc[merged["DEPTH"].between(1002, 1006), "CPORE"],
+        [0.19, 0.18, 0.17, 0.16, 0.15],
+    )
+    np.testing.assert_allclose(
+        merged.loc[~merged["DEPTH"].between(1002, 1006), "CPORE"],
+        original.loc[~merged["DEPTH"].between(1002, 1006)],
+        equal_nan=True,
+    )
+    request.update(method="mean", min_depth=1000, max_depth=1009)
+    response = client.post(endpoint, json=request)
+    assert response.status_code == 200, response.text
+    db_service.invalidate_well_cache()
+    merged = db_service._get_merged_dataframe_sync(pid, "Well-A")
+    np.testing.assert_allclose(merged["CPORE_ORI"], original, equal_nan=True)
 
 
 def test_merged_well_data_columnar_and_cache(client_and_project):
