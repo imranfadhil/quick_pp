@@ -306,6 +306,8 @@ flowchart TD
   Diamond markers are illustrative configured mineral response endpoints, not
   calibrated field boundaries. Selected Th and K curves are shared with the
   derived-CGR controls.
+  PEF plots initially display 0–20 b/e and report the number of paired samples
+  above that range; zoom out to inspect them. Values are not clipped or modified.
   The plots do not alter the GR-based shale calculation.
 
 ---

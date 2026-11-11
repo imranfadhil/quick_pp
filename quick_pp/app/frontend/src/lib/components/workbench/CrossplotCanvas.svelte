@@ -12,7 +12,7 @@
 	} from '$lib/utils/petrophysicsColors';
 	import { fmtDepth, fmtNum } from '$lib/utils/formatters';
 	import { crossplotGroups, crossplotLabel, resolveCrossplot } from '$lib/utils/crossplots';
-	import { spectralCrossplotPoints } from '$lib/utils/spectralCrossplot';
+	import { spectralCrossplotPoints, spectralPlotNote, spectralYAxisRange } from '$lib/utils/spectralCrossplot';
 	import { curveDepthSeries } from '$lib/utils/curveDepth';
 	import { normalizedScalSaturation, poreThroatDistribution } from '$lib/utils/poreThroat';
 	import {
@@ -60,6 +60,15 @@
 	let effectiveMode = $derived(workbench.effectiveCrossplot);
 	let autoMode = $derived(resolveCrossplot(workbench.crossplotContext, 'auto'));
 	let plotGroups = $derived(crossplotGroups(workbench.crossplotContext));
+	let spectralNote = $derived.by(() => {
+		if (effectiveMode !== 'th-k' && effectiveMode !== 'pef-k' && effectiveMode !== 'pef-th-k') return null;
+		const points = spectralCrossplotPoints(effectiveMode, {
+			...wellData.curves,
+			POTA: wellData.curves[workbench.lithoParams.potassiumCurve] ?? [],
+			THOR: wellData.curves[workbench.lithoParams.thoriumCurve] ?? []
+		}, wellData.visibleIndices);
+		return spectralPlotNote(effectiveMode, points.y);
+	});
 
 	function plotLabel(id: NonNullable<typeof effectiveMode>) {
 		return crossplotLabel(id, workbench.scope === 'multi-well' ? projectData.drtMethod : 'fzi');
@@ -288,6 +297,7 @@
 		};
 
 		if (effectiveMode === 'th-k' || effectiveMode === 'pef-k' || effectiveMode === 'pef-th-k') {
+			baseLayout.margin.t = 70;
 			const points = spectralCrossplotPoints(effectiveMode, {
 				...wellData.curves,
 				POTA: wellData.curves[workbench.lithoParams.potassiumCurve] ?? [],
@@ -333,13 +343,8 @@
 				text: effectiveMode === 'th-k' ? 'Thorium (ppm)' : 'Photoelectric factor (b/e)'
 			};
 			if (effectiveMode === 'pef-th-k') baseLayout.xaxis.type = 'log';
-			if (effectiveMode === 'pef-th-k') {
-				baseLayout.annotations = [{
-					x: 0, y: 1.08, xref: 'paper', yref: 'paper', showarrow: false,
-					text: 'Th/K is unstable at low K; zero and negative ratios are excluded',
-					font: { size: 10, color: '#64748B' }
-				}];
-			}
+			const yRange = spectralYAxisRange(effectiveMode);
+			if (yRange) baseLayout.yaxis.range = yRange;
 			if (effectiveMode === 'th-k') {
 				const maxK = points.x.reduce((max, value) => Math.max(max, value), 5);
 				const maxTh = points.y.reduce((max, value) => Math.max(max, value), 25);
@@ -357,11 +362,6 @@
 					});
 				}
 				baseLayout.shapes = shapes;
-				baseLayout.annotations = [{
-					x: 0, y: 1.08, xref: 'paper', yref: 'paper', showarrow: false,
-					text: 'Dotted lines: Th/K; ratios are unstable at low K',
-					font: { size: 10, color: '#64748B' }
-				}];
 			}
 			return { traces, layout: baseLayout };
 		}
@@ -5807,6 +5807,9 @@
 		</div>
 	{/if}
 
+	{#if spectralNote}
+		<p class="shrink-0 px-2 py-1 text-[10px] leading-snug text-[var(--text-secondary)]">{spectralNote}</p>
+	{/if}
 	<div class="relative min-h-0 flex-1 overflow-hidden">
 		<div bind:this={plotEl} class="absolute inset-0 h-full w-full"></div>
 		{#if (effectiveMode === 'th-k' || effectiveMode === 'pef-k' || effectiveMode === 'pef-th-k') && spectralReferenceError}

@@ -236,7 +236,9 @@ def test_sonic_save_clears_previously_saved_porosity_at_missing_samples(client_a
     response = client.post(f"{base}/porosity", json={"method": "sonic_wyllie", "lithology_model": "ssc", "save": True})
     assert response.status_code == 200, response.text
     from sqlalchemy import select
-    from quick_pp.database.models import Curve, CurveData, Well as WellModel
+
+    from quick_pp.database.models import Curve, CurveData
+    from quick_pp.database.models import Well as WellModel
 
     with ws_service.get_db() as session:
         depths = session.execute(

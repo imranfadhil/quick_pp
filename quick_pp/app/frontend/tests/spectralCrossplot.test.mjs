@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { spectralCrossplotPoints } from '../src/lib/utils/spectralCrossplot.ts';
+import { SPECTRAL_PEF_MAX, spectralCrossplotPoints, spectralPlotNote, spectralYAxisRange } from '../src/lib/utils/spectralCrossplot.ts';
 
 const curves = {
 	DEPT: [100, 101, 102, 103, 104, 105],
@@ -36,4 +36,19 @@ test('potassium already in percent remains unchanged even below 0.5%', () => {
 	assert.deepEqual(spectralCrossplotPoints('th-k', lowK, [0, 1]).x, [0.02, 0.4]);
 	assert.deepEqual(spectralCrossplotPoints('pef-k', lowK, [0, 1]).x, [0.02, 0.4]);
 	assert.deepEqual(spectralCrossplotPoints('pef-th-k', lowK, [0, 1]).x, [400, 5]);
+});
+
+test('PEF range warning counts only paired values above 20 without changing the data', () => {
+	const values = { POTA: [1, 2, 0, null], THOR: [2, 3, 5, 1], PEF: [20, 120, 25, 30] };
+	const pefK = spectralCrossplotPoints('pef-k', values, [0, 1, 2, 3]);
+	const ratio = spectralCrossplotPoints('pef-th-k', values, [0, 1, 2, 3]);
+	assert.equal(SPECTRAL_PEF_MAX, 20);
+	assert.deepEqual(spectralYAxisRange('pef-k'), [0, 20]);
+	assert.deepEqual(spectralYAxisRange('pef-th-k'), [0, 20]);
+	assert.equal(spectralYAxisRange('th-k'), undefined);
+	assert.deepEqual(pefK.y, [20, 120, 25]);
+	assert.match(spectralPlotNote('pef-k', pefK.y), /2 samples above range/);
+	assert.deepEqual(ratio.y, [20, 120]);
+	assert.match(spectralPlotNote('pef-th-k', ratio.y), /1 sample above range/);
+	assert.match(spectralPlotNote('th-k', []), /Dotted lines/);
 });

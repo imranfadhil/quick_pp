@@ -1,5 +1,22 @@
 export type SpectralPlot = 'th-k' | 'pef-k' | 'pef-th-k';
 
+export const SPECTRAL_PEF_MAX = 20;
+
+export function spectralYAxisRange(mode: SpectralPlot): [number, number] | undefined {
+	return mode === 'th-k' ? undefined : [0, SPECTRAL_PEF_MAX];
+}
+
+export function spectralPlotNote(mode: SpectralPlot, yValues: readonly number[]): string {
+	if (mode === 'th-k') return 'Dotted lines: Th/K; ratios are unstable at low K.';
+	const aboveRange = yValues.filter((value) => value > SPECTRAL_PEF_MAX).length;
+	const rangeNote = `PEF initially shown from 0 to ${SPECTRAL_PEF_MAX} b/e` +
+		(aboveRange ? `; ${aboveRange} sample${aboveRange === 1 ? '' : 's'} above range` : '') +
+		'. Zoom out to inspect values above the range.';
+	return mode === 'pef-th-k'
+		? `Th/K is unstable at low K; non-positive K and Th are excluded. ${rangeNote}`
+		: rangeNote;
+}
+
 export function spectralCrossplotPoints(
 	mode: SpectralPlot,
 	curves: Record<string, (number | null)[]>,
