@@ -1640,6 +1640,61 @@ class ProjectDataState {
 		return Math.min(sMax, Math.max(sMin, Number.isFinite(raw) ? raw : sMin));
 	}
 
+	classifyRockType(
+		cpore: number | null | undefined,
+		cperm: number | null | undefined
+	): number | null {
+		const phi = Number(cpore);
+		const k = Number(cperm);
+		if (!Number.isFinite(phi) || !Number.isFinite(k) || phi <= 0 || phi >= 1 || k <= 0) {
+			return null;
+		}
+		let indVal = 0;
+		let higherIsBetter = true;
+		if (this.drtMethod === 'winland') {
+			indVal = Math.pow(10, 0.732 + 0.588 * Math.log10(k) - 0.864 * Math.log10(phi * 100));
+			higherIsBetter = true;
+		} else if (this.drtMethod === 'lucia') {
+			const phiEff = Math.min(0.99, Math.max(0.04, phi));
+			const logPhi = Math.log10(phiEff);
+			const logK = Math.log10(Math.max(1e-6, k));
+			const logRfn = (9.7892 + 8.6711 * logPhi - logK) / (12.0838 + 8.2965 * logPhi);
+			indVal = Math.min(10.0, Math.max(0.1, Math.pow(10, logRfn)));
+			higherIsBetter = false;
+		} else {
+			// FZI
+			const rqi = 0.0314 * Math.sqrt(k / phi);
+			const phiz = phi / (1.0 - phi);
+			indVal = phiz > 1e-6 ? rqi / phiz : 0;
+			higherIsBetter = true;
+		}
+		const cutoffs = this.activeDrtCutoffs || [0.5, 1.2, 2.5, 5.0];
+		const nCut = cutoffs.length;
+		if (nCut === 0) return 1;
+		let rt = 1;
+		if (higherIsBetter) {
+			rt = nCut + 1;
+			for (let i = 0; i < nCut; i++) {
+				if (indVal < cutoffs[i]) {
+					rt = nCut + 1 - i;
+					break;
+				}
+				if (i === nCut - 1) {
+					rt = 1;
+				}
+			}
+		} else {
+			rt = nCut + 1;
+			for (let i = 0; i < nCut; i++) {
+				if (indVal < cutoffs[i]) {
+					rt = i + 1;
+					break;
+				}
+			}
+		}
+		return rt;
+	}
+
 	normalizeScalPlugId(id: string | undefined | null, well?: string, sample?: string): string {
 		const raw = String(id || '').trim();
 		if (raw.includes('::')) return raw;
@@ -1781,10 +1836,15 @@ class ProjectDataState {
 			}
 			const isExcl = exclSet.has(normPid) || exclSet.has(p.plug_id);
 			const inFilter = this.isScalItemInActiveFilter(p.well, p.depth, resolvedZone);
+			const dynRt =
+				p.cpore && p.cperm
+					? (this.classifyRockType(p.cpore, p.cperm) ?? p.rt ?? 1)
+					: (p.rt ?? 1);
 			return {
 				...p,
 				plug_id: normPid,
 				zone: resolvedZone,
+				rt: dynRt,
 				max_pc: Number(maxPc.toFixed(2)),
 				sw_at_max_pc: Number(minSw.toFixed(4)),
 				extracted_swirr: Number(extSwirr.toFixed(4)),
@@ -2049,7 +2109,10 @@ class ProjectDataState {
 			const sCurve = p.sw_curve || [];
 			const phi = Math.max(1e-4, p.cpore || 0.15);
 			const k = Math.max(1e-4, p.cperm || 10.0);
-			const rf = p.rt ?? 1;
+			const rf =
+				p.cpore && p.cperm
+					? (this.classifyRockType(p.cpore, p.cperm) ?? p.rt ?? 1)
+					: (p.rt ?? 1);
 			const plugId = this.normalizeScalPlugId(p.plug_id, p.well, p.sample);
 			const legacyPlugId = `${p.well}:${p.sample}`;
 			const isPlugExcluded =

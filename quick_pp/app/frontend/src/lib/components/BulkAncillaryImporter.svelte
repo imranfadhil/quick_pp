@@ -133,6 +133,8 @@
       { key: 'WELL_NAME', label: 'WELL_NAME — Well Name / UWI' },
       { key: 'SAMPLE_NAME', label: 'SAMPLE_NAME — Plug / Sample ID' },
       { key: 'DEPTH', label: 'DEPTH — Sample Depth' },
+      { key: 'CPORE', label: 'CPORE — Core Porosity (v/v or %)' },
+      { key: 'CPERM', label: 'CPERM — Core Permeability (mD)' },
       { key: 'PC', label: 'PC — Capillary Pressure (single or Pc.1..N) *', required: true },
       { key: 'SW', label: 'SW — Water Saturation (single or Sw.1..N) *', required: true },
       { key: 'EXPERIMENT_TYPE', label: 'EXPERIMENT_TYPE — Method (MICP/Centrifuge)' },

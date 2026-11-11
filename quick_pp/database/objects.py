@@ -1,4 +1,5 @@
 import io
+import math
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor
@@ -3150,27 +3151,38 @@ class Well(object):
             if sname in grouped and abs(grouped[sname]["depth"] - depth_val) >= 1e-2:
                 sname = f"{sname}@{depth_val:.2f}m"
 
+            def _extract_prop(r: dict, keys: tuple):
+                for k in keys:
+                    v = r.get(k)
+                    if v is not None and str(v).strip() != "":
+                        try:
+                            fv = float(v)
+                            if math.isfinite(fv):
+                                return fv
+                        except (TypeError, ValueError):
+                            pass
+                return None
+
+            por_val = _extract_prop(row, ("porosity", "cpore", "CPORE", "POR", "por"))
+            if por_val is not None and por_val > 1.0:
+                por_val = por_val / 100.0
+            perm_val = _extract_prop(row, ("permeability", "cperm", "CPERM", "PERM", "perm"))
+
             entry = grouped.setdefault(
                 sname,
                 {
                     "depth": depth_val,
                     "raw_depth": row.get("raw_depth"),
-                    "porosity": row.get("porosity", row.get("cpore")),
-                    "permeability": row.get("permeability", row.get("cperm")),
+                    "porosity": por_val,
+                    "permeability": perm_val,
                     "pc_data": [],
                     "description": row.get("description"),
                 },
             )
-            if (
-                entry.get("porosity") is None
-                and row.get("porosity", row.get("cpore")) is not None
-            ):
-                entry["porosity"] = row.get("porosity", row.get("cpore"))
-            if (
-                entry.get("permeability") is None
-                and row.get("permeability", row.get("cperm")) is not None
-            ):
-                entry["permeability"] = row.get("permeability", row.get("cperm"))
+            if entry.get("porosity") is None and por_val is not None:
+                entry["porosity"] = por_val
+            if entry.get("permeability") is None and perm_val is not None:
+                entry["permeability"] = perm_val
             if entry.get("raw_depth") is None and row.get("raw_depth") is not None:
                 entry["raw_depth"] = row.get("raw_depth")
             # Support both nested `pc_data` and flat `(pc, sw)` row formats
@@ -3283,21 +3295,71 @@ class Well(object):
         self.db_session.flush()
 
     def get_scal_pc_data(self) -> List[Dict[str, Any]]:
-        """Retrieves all SCAL capillary pressure pairs for the well as a flat list of dicts."""
+        """Retrieves all SCAL capillary pressure pairs for the well as a flat list of dicts, including CPORE & CPERM."""
         stmt = (
             select(ORMCoreSample)
             .where(ORMCoreSample.well_id == self.well_id)
-            .options(selectinload(ORMCoreSample.capillary_pressure_data))
+            .options(
+                selectinload(ORMCoreSample.capillary_pressure_data),
+                selectinload(ORMCoreSample.measurements),
+            )
             .order_by(ORMCoreSample.depth)
         )
         samples = self.db_session.scalars(stmt).all()
+        # Build fallback lookup from companion RCA samples by name or depth if measurements are on another sample
+        rca_por_by_name: Dict[str, float] = {}
+        rca_perm_by_name: Dict[str, float] = {}
+        rca_por_by_depth: Dict[float, float] = {}
+        rca_perm_by_depth: Dict[float, float] = {}
+        for s in samples:
+            sn_key = str(s.sample_name or "").strip()
+            sd_key = round(float(s.depth), 2)
+            for m in (s.measurements or []):
+                pname = str(m.property_name).upper()
+                try:
+                    val = float(m.value)
+                    if pname in ("CPORE", "POR", "POROSITY") and val > 0:
+                        if val > 1.0:
+                            val = val / 100.0
+                        if sn_key:
+                            rca_por_by_name[sn_key] = val
+                        rca_por_by_depth[sd_key] = val
+                    elif pname in ("CPERM", "PERM", "PERMEABILITY") and val > 0:
+                        if sn_key:
+                            rca_perm_by_name[sn_key] = val
+                        rca_perm_by_depth[sd_key] = val
+                except (TypeError, ValueError):
+                    pass
+
         rows: List[Dict[str, Any]] = []
         for sample in samples:
+            poro_val = None
+            perm_val = None
+            for m in (sample.measurements or []):
+                pname = str(m.property_name).upper()
+                try:
+                    val = float(m.value)
+                    if pname in ("CPORE", "POR", "POROSITY"):
+                        poro_val = val / 100.0 if val > 1.0 else val
+                    elif pname in ("CPERM", "PERM", "PERMEABILITY"):
+                        perm_val = val
+                except (TypeError, ValueError):
+                    pass
+
+            sn = str(sample.sample_name or "").strip()
+            sd = round(float(sample.depth), 2)
+            if poro_val is None:
+                poro_val = rca_por_by_name.get(sn) or rca_por_by_depth.get(sd)
+            if perm_val is None:
+                perm_val = rca_perm_by_name.get(sn) or rca_perm_by_depth.get(sd)
+
             for p in sample.capillary_pressure_data:
                 rows.append(
                     {
                         "sample_name": sample.sample_name,
                         "depth": float(sample.depth),
+                        "porosity": poro_val,
+                        "permeability": perm_val,
                         "pc": float(p.pressure),
                         "sw": float(p.saturation),
                         "experiment_type": p.experiment_type or "micp",

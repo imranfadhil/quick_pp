@@ -22,6 +22,8 @@
 	let newVal2 = $state<number>(100);
 	let newScalPc = $state<number>(15);
 	let newScalSw = $state<number>(0.35);
+	let newScalCpore = $state<number | null>(null);
+	let newScalCperm = $state<number | null>(null);
 	let newPerfBottom = $state<number>(1005);
 	let newPerfDesc = $state('');
 	// Formation pressure test quick-entry drafts (optional fields may be left blank)
@@ -51,15 +53,37 @@
 		{ key: 'sample_name', label: 'Sample', editable: true },
 		{ key: 'depth', label: 'Depth', unit: 'm', numeric: true, decimals: 2, editable: true },
 		{ key: 'porosity', label: 'CPORE', unit: 'v/v', numeric: true, decimals: 3, editable: true },
-		{ key: 'permeability', label: 'CPERM', unit: 'mD', numeric: true, decimals: 2, editable: true }
+		{ key: 'permeability', label: 'CPERM', unit: 'mD', numeric: true, decimals: 2, editable: true },
+		{ key: 'rock_type', label: 'Rock Type', editable: false }
 	];
 
 	const SCAL_PC_COLS: GridColumn[] = [
 		{ key: 'sample_name', label: 'Sample', editable: true },
 		{ key: 'depth', label: 'Depth', unit: 'm', numeric: true, decimals: 2, editable: true },
+		{ key: 'porosity', label: 'CPORE', unit: 'v/v', numeric: true, decimals: 3, editable: true },
+		{ key: 'permeability', label: 'CPERM', unit: 'mD', numeric: true, decimals: 2, editable: true },
+		{ key: 'rock_type', label: 'Rock Type', editable: false },
 		{ key: 'pc', label: 'Pc', unit: 'psi', numeric: true, decimals: 2, editable: true },
 		{ key: 'sw', label: 'Sw', unit: 'v/v', numeric: true, decimals: 3, editable: true }
 	];
+
+	// Reactively annotate rock_type whenever DRT cutoffs, method, or core/scal data change
+	$effect(() => {
+		const _m = projectData.drtMethod;
+		const _c = projectData.activeDrtCutoffs;
+		if (wellData.coreSamples && wellData.coreSamples.length > 0) {
+			for (const r of wellData.coreSamples) {
+				const rt = projectData.classifyRockType(r.porosity, r.permeability);
+				if (r.rock_type !== rt) r.rock_type = rt;
+			}
+		}
+		if (wellData.scalPc && wellData.scalPc.length > 0) {
+			for (const r of wellData.scalPc) {
+				const rt = projectData.classifyRockType(r.porosity, r.permeability);
+				if (r.rock_type !== rt) r.rock_type = rt;
+			}
+		}
+	});
 
 	const PRESSURE_COLS: GridColumn[] = [
 		{ key: 'depth', label: 'Depth', unit: 'm', numeric: true, decimals: 1, editable: true },
@@ -140,24 +164,43 @@
 			newName = '';
 			newPerfDesc = '';
 		} else if (activeTab === 'core') {
+			let por = Number(newVal1);
+			if (Number.isFinite(por) && por > 1.0) por /= 100.0;
+			const perm = Number(newVal2);
 			wellData.coreSamples = [
 				...wellData.coreSamples,
 				{
 					sample_name: newName.trim() || `S-${wellData.coreSamples.length + 1}`,
 					depth: Number(newDepth),
-					porosity: Number(newVal1),
-					permeability: Number(newVal2)
+					porosity: Number.isFinite(por) ? por : null,
+					permeability: Number.isFinite(perm) ? perm : null,
+					rock_type: projectData.classifyRockType(por, perm)
 				}
 			];
 			newName = '';
 		} else if (activeTab === 'scal') {
-			// Keep sample_name & depth sticky so user can enter multiple (Pc, Sw) pairs for the same plug
+			// Keep sample_name, depth, cpore, cperm sticky so user can enter multiple (Pc, Sw) pairs for the same plug
+			const lastScal = wellData.scalPc.length > 0 ? wellData.scalPc[wellData.scalPc.length - 1] : null;
 			const sampleName =
 				newName.trim() ||
-				(wellData.scalPc.length > 0
-					? String(wellData.scalPc[wellData.scalPc.length - 1].sample_name)
-					: 'S-1');
+				(lastScal ? String(lastScal.sample_name) : 'S-1');
 			newName = sampleName;
+			let effPor: number | null = null;
+			if (newScalCpore !== null && Number.isFinite(Number(newScalCpore))) {
+				effPor = Number(newScalCpore);
+			} else if (lastScal?.porosity !== null && lastScal?.porosity !== undefined) {
+				effPor = Number(lastScal.porosity);
+			}
+			if (effPor !== null && Number.isFinite(effPor) && effPor > 1.0) {
+				effPor /= 100.0;
+			}
+			let effPerm: number | null = null;
+			if (newScalCperm !== null && Number.isFinite(Number(newScalCperm))) {
+				effPerm = Number(newScalCperm);
+			} else if (lastScal?.permeability !== null && lastScal?.permeability !== undefined) {
+				effPerm = Number(lastScal.permeability);
+			}
+			const rt = projectData.classifyRockType(effPor, effPerm);
 			wellData.scalPc = [
 				...wellData.scalPc,
 				{
@@ -165,6 +208,9 @@
 					depth: Number(newDepth),
 					pc: Number(newScalPc),
 					sw: Number(newScalSw),
+					porosity: effPor,
+					permeability: effPerm,
+					rock_type: rt,
 					experiment_type: 'micp',
 					cycle: 'drainage'
 				}
@@ -270,27 +316,51 @@
 			wellData.perforations = [...wellData.perforations, ...mapped].sort((a, b) => a.top - b.top);
 		} else if (activeTab === 'core') {
 			const mapped = pastedRows
-				.map((r, i) => ({
-					sample_name: String(r.sample_name || `S-${wellData.coreSamples.length + i + 1}`).trim(),
-					depth: Number(r.depth ?? 0),
-					porosity: r.porosity !== null && r.porosity !== undefined ? Number(r.porosity) : null,
-					permeability:
+				.map((r, i) => {
+					let por = r.porosity !== null && r.porosity !== undefined ? Number(r.porosity) : null;
+					if (por !== null && Number.isFinite(por) && por > 1.0) por /= 100.0;
+					const perm =
 						r.permeability !== null && r.permeability !== undefined
 							? Number(r.permeability)
-							: null
-				}))
+							: null;
+					return {
+						sample_name: String(r.sample_name || `S-${wellData.coreSamples.length + i + 1}`).trim(),
+						depth: Number(r.depth ?? 0),
+						porosity: por,
+						permeability: perm,
+						rock_type: projectData.classifyRockType(por, perm)
+					};
+				})
 				.filter((s) => Number.isFinite(s.depth));
 			wellData.coreSamples = [...wellData.coreSamples, ...mapped];
 		} else if (activeTab === 'scal') {
 			const mapped = pastedRows
-				.map((r, i) => ({
-					sample_name: String(r.sample_name || `S-${wellData.scalPc.length + i + 1}`).trim(),
-					depth: Number(r.depth ?? 0),
-					pc: Number(r.pc ?? 0),
-					sw: Number(r.sw ?? 0),
-					experiment_type: r.experiment_type || 'micp',
-					cycle: r.cycle || 'drainage'
-				}))
+				.map((r, i) => {
+					let por = r.porosity ?? r.cpore ?? r.CPORE ?? r.POR ?? r.por ?? null;
+					if (por !== null && por !== undefined && Number.isFinite(Number(por))) {
+						por = Number(por);
+						if (por > 1.0) por /= 100.0;
+					} else {
+						por = null;
+					}
+					let perm = r.permeability ?? r.cperm ?? r.CPERM ?? r.PERM ?? r.perm ?? null;
+					if (perm !== null && perm !== undefined && Number.isFinite(Number(perm))) {
+						perm = Number(perm);
+					} else {
+						perm = null;
+					}
+					return {
+						sample_name: String(r.sample_name || `S-${wellData.scalPc.length + i + 1}`).trim(),
+						depth: Number(r.depth ?? 0),
+						pc: Number(r.pc ?? 0),
+						sw: Number(r.sw ?? 0),
+						porosity: por,
+						permeability: perm,
+						rock_type: projectData.classifyRockType(por, perm),
+						experiment_type: r.experiment_type || 'micp',
+						cycle: r.cycle || 'drainage'
+					};
+				})
 				.filter((s) => Number.isFinite(s.pc) && Number.isFinite(s.sw));
 			wellData.scalPc = [...wellData.scalPc, ...mapped];
 		} else if (activeTab === 'pressure') {
@@ -362,6 +432,12 @@
 					void projectData.loadStickPlot(true);
 				}
 			} else if (activeTab === 'core') {
+				for (const r of wellData.coreSamples) {
+					if (r.porosity !== null && r.porosity !== undefined && Number(r.porosity) > 1.0) {
+						r.porosity = Number(r.porosity) / 100.0;
+					}
+					r.rock_type = projectData.classifyRockType(r.porosity, r.permeability);
+				}
 				wellData.syncCoreCurvesFromSamples();
 				await saveAncillaryItems(
 					workbench.projectId,
@@ -371,20 +447,43 @@
 					wellData.coreSamples
 				);
 			} else if (activeTab === 'scal') {
-				// Propagate shared depth for same sample_name if user edited depth on one row
+				// Propagate shared depth, porosity, and permeability for same sample_name if user edited one row
 				const depthBySample = new Map<string, number>();
+				const cporeBySample = new Map<string, number | null>();
+				const cpermBySample = new Map<string, number | null>();
 				for (const r of wellData.scalPc) {
-					if (r.sample_name && Number.isFinite(Number(r.depth))) {
-						depthBySample.set(String(r.sample_name), Number(r.depth));
+					const sname = String(r.sample_name || '').trim();
+					if (sname) {
+						if (Number.isFinite(Number(r.depth))) depthBySample.set(sname, Number(r.depth));
+						if (r.porosity !== null && r.porosity !== undefined && Number.isFinite(Number(r.porosity))) {
+							let p = Number(r.porosity);
+							if (p > 1.0) p /= 100.0;
+							cporeBySample.set(sname, p);
+						}
+						if (r.permeability !== null && r.permeability !== undefined && Number.isFinite(Number(r.permeability))) {
+							cpermBySample.set(sname, Number(r.permeability));
+						}
 					}
 				}
 				const normalizedScal = wellData.scalPc.map((r, i) => {
 					const sname = String(r.sample_name || `S-${i + 1}`).trim();
+					let por =
+						r.porosity !== null && r.porosity !== undefined && Number.isFinite(Number(r.porosity))
+							? Number(r.porosity)
+							: (cporeBySample.get(sname) ?? null);
+					if (por !== null && por > 1.0) por /= 100.0;
+					const perm =
+						r.permeability !== null && r.permeability !== undefined && Number.isFinite(Number(r.permeability))
+							? Number(r.permeability)
+							: (cpermBySample.get(sname) ?? null);
 					return {
 						sample_name: sname,
 						depth: Number(r.depth ?? depthBySample.get(sname) ?? 0),
 						pc: Number(r.pc ?? 0),
 						sw: Number(r.sw ?? 0),
+						porosity: por,
+						permeability: perm,
+						rock_type: projectData.classifyRockType(por, perm),
 						experiment_type: r.experiment_type || 'micp',
 						cycle: r.cycle || 'drainage'
 					};
@@ -434,6 +533,48 @@
 		} finally {
 			isSaving = false;
 		}
+	}
+
+	async function handleScalCellChange(rowIndex: number, key: string, _newValue: any) {
+		const row = wellData.scalPc[rowIndex];
+		if (row && ['porosity', 'permeability', 'depth', 'sample_name'].includes(key)) {
+			const sname = String(row.sample_name || '').trim();
+			if (sname) {
+				const por =
+					row.porosity !== null && row.porosity !== undefined && Number.isFinite(Number(row.porosity))
+						? Number(row.porosity)
+						: null;
+				const normPor = por !== null ? (por > 1.0 ? por / 100.0 : por) : null;
+				const perm =
+					row.permeability !== null &&
+					row.permeability !== undefined &&
+					Number.isFinite(Number(row.permeability))
+						? Number(row.permeability)
+						: null;
+				const depth = Number.isFinite(Number(row.depth)) ? Number(row.depth) : null;
+
+				for (const r of wellData.scalPc) {
+					if (String(r.sample_name || '').trim() === sname) {
+						if (key === 'porosity') r.porosity = normPor;
+						if (key === 'permeability') r.permeability = perm;
+						if (key === 'depth' && depth !== null) r.depth = depth;
+						r.rock_type = projectData.classifyRockType(r.porosity, r.permeability);
+					}
+				}
+			}
+		}
+		await saveCurrentTab();
+	}
+
+	async function handleCoreCellChange(rowIndex: number, _key: string, _newValue: any) {
+		const row = wellData.coreSamples[rowIndex];
+		if (row) {
+			if (row.porosity !== null && row.porosity !== undefined && Number(row.porosity) > 1.0) {
+				row.porosity = Number(row.porosity) / 100.0;
+			}
+			row.rock_type = projectData.classifyRockType(row.porosity, row.permeability);
+		}
+		await saveCurrentTab();
 	}
 </script>
 
@@ -569,21 +710,40 @@
 			/>
 			<input
 				type="number"
+				step="0.001"
+				min="0"
+				max="1"
+				placeholder="CPORE"
+				bind:value={newScalCpore}
+				title="Core Porosity CPORE (v/v or %)"
+				class="mono-num h-6 w-14 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+			/>
+			<input
+				type="number"
+				step="0.1"
+				min="0"
+				placeholder="CPERM"
+				bind:value={newScalCperm}
+				title="Core Permeability CPERM (mD)"
+				class="mono-num h-6 w-14 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+			/>
+			<input
+				type="number"
 				step="0.5"
-				placeholder="Pc (psi)"
+				placeholder="Pc"
 				bind:value={newScalPc}
 				title="Capillary Pressure Pc (psi)"
-				class="mono-num h-6 w-14 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+				class="mono-num h-6 w-12 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
 			/>
 			<input
 				type="number"
 				step="0.01"
 				min="0"
 				max="1"
-				placeholder="Sw (v/v)"
+				placeholder="Sw"
 				bind:value={newScalSw}
 				title="Water Saturation Sw (v/v)"
-				class="mono-num h-6 w-14 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+				class="mono-num h-6 w-12 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
 			/>
 		{:else if activeTab === 'pressure'}
 			<input
@@ -707,7 +867,7 @@
 				bind:rows={wellData.coreSamples}
 				editable={true}
 				emptyMessage="No RCA core plugs (CPORE, CPERM). Add above or paste from Excel."
-				oncellchange={() => saveCurrentTab()}
+				oncellchange={handleCoreCellChange}
 				onpasteRows={handlePasteRows}
 				ondeleteRow={handleDeleteRow}
 				ondeleteRows={handleDeleteRows}
@@ -718,7 +878,7 @@
 				bind:rows={wellData.scalPc}
 				editable={true}
 				emptyMessage="No SCAL capillary pressure (Pc, Sw) pairs. Add multiple pairs per sample/depth above or paste from Excel."
-				oncellchange={() => saveCurrentTab()}
+				oncellchange={handleScalCellChange}
 				onpasteRows={handlePasteRows}
 				ondeleteRow={handleDeleteRow}
 				ondeleteRows={handleDeleteRows}

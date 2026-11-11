@@ -1417,10 +1417,38 @@ class WellDataState {
 				raw_depth: Number(s.raw_depth ?? s.depth ?? s.DEPTH)
 			}));
 			this.originalCoreSamples = this.coreSamples.map((s: any) => ({ ...s }));
-			this.originalScalPc = ((data as any).scal_pc || []).map((s: any) => ({
-				...s,
-				raw_depth: Number(s.raw_depth ?? s.depth ?? s.DEPTH)
-			}));
+
+			const corePoroBySample = new Map<string, number>();
+			const corePermBySample = new Map<string, number>();
+			const corePoroByDepth = new Map<number, number>();
+			const corePermByDepth = new Map<number, number>();
+			for (const cs of this.coreSamples) {
+				const sn = String(cs.sample_name || '').trim();
+				const cd = Number(cs.depth ?? cs.raw_depth);
+				const cp = Number(cs.porosity ?? cs.CPORE ?? cs.porosity_amb);
+				const ck = Number(cs.permeability ?? cs.CPERM ?? cs.perm_air);
+				if (sn && Number.isFinite(cp) && cp > 0) corePoroBySample.set(sn, cp > 1.0 ? cp / 100 : cp);
+				if (sn && Number.isFinite(ck) && ck > 0) corePermBySample.set(sn, ck);
+				if (Number.isFinite(cd) && Number.isFinite(cp) && cp > 0) corePoroByDepth.set(Math.round(cd * 100) / 100, cp > 1.0 ? cp / 100 : cp);
+				if (Number.isFinite(cd) && Number.isFinite(ck) && ck > 0) corePermByDepth.set(Math.round(cd * 100) / 100, ck);
+			}
+
+			this.scalPc = ((data as any).scal_pc || []).map((s: any) => {
+				const sn = String(s.sample_name || '').trim();
+				const sd = Number(s.depth ?? s.raw_depth);
+				const sdKey = Math.round(sd * 100) / 100;
+				const rawP = s.porosity ?? s.cpore ?? s.CPORE ?? corePoroBySample.get(sn) ?? corePoroByDepth.get(sdKey);
+				const rawK = s.permeability ?? s.cperm ?? s.CPERM ?? corePermBySample.get(sn) ?? corePermByDepth.get(sdKey);
+				const pNum = Number(rawP);
+				const kNum = Number(rawK);
+				return {
+					...s,
+					raw_depth: Number(s.raw_depth ?? s.depth ?? s.DEPTH),
+					porosity: Number.isFinite(pNum) && pNum > 0 ? (pNum > 1.0 ? pNum / 100 : pNum) : null,
+					permeability: Number.isFinite(kNum) && kNum > 0 ? kNum : null
+				};
+			});
+			this.originalScalPc = this.scalPc.map((s: any) => ({ ...s }));
 			const initCfg = (data.config || {}) as Record<string, any>;
 			this.coreShiftMode = initCfg.core_shift_mode === 'tie-points' ? 'tie-points' : 'affine';
 			this.coreShiftDelta =
@@ -3731,6 +3759,33 @@ class WellDataState {
 					newCpermAir[lo] = kAirVal;
 					hasAir = true;
 				}
+			}
+		}
+
+		// Also populate from scalPc where coreSamples didn't cover
+		for (const s of this.scalPc) {
+			const sd = Number(s.depth ?? s.DEPTH);
+			if (!Number.isFinite(sd)) continue;
+			const pRaw = Number(s.porosity ?? s.CPORE ?? s.cpore);
+			const kRaw = Number(s.permeability ?? s.CPERM ?? s.cperm);
+			const pVal =
+				Number.isFinite(pRaw) && pRaw > 0 ? (pRaw > 1.0 ? pRaw / 100.0 : pRaw) : null;
+			const kVal = Number.isFinite(kRaw) && kRaw > 0 ? kRaw : null;
+			if (pVal === null && kVal === null) continue;
+
+			let lo = 0;
+			let hi = dept.length - 1;
+			while (lo < hi) {
+				const mid = (lo + hi) >> 1;
+				if (dept[mid] < sd) lo = mid + 1;
+				else hi = mid;
+			}
+			if (lo > 0 && Math.abs(dept[lo - 1] - sd) < Math.abs(dept[lo] - sd)) {
+				lo = lo - 1;
+			}
+			if (Math.abs(dept[lo] - sd) <= 0.5) {
+				if (pVal !== null && Number.isNaN(newCpore[lo])) newCpore[lo] = pVal;
+				if (kVal !== null && Number.isNaN(newCperm[lo])) newCperm[lo] = kVal;
 			}
 		}
 
