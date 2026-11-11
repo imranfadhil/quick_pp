@@ -647,13 +647,13 @@ class WorkspaceHCCorrectionRequest(WorkspaceFilterBase):
         False,
         description="Use apparent electron density when deriving correction angles",
     )
-    temp_grad: float = Field(30.0, ge=5.0, le=100.0)
-    surf_temp: float = Field(25.0, ge=0.0, le=60.0)
-    pres_grad: float = Field(10.2, ge=5.0, le=25.0)
-    surf_pres: float = Field(0.1013, ge=0.0, le=5.0)
+    temp_grad: float = Field(30.0, ge=5.0, le=100.0, description="Temperature gradient (°C/km)")
+    surf_temp: float = Field(25.0, ge=0.0, le=60.0, description="Surface temperature (°C)")
+    pres_grad: float = Field(10.2, ge=5.0, le=25.0, description="Pressure gradient (MPa/km)")
+    surf_pres: float = Field(0.1013, ge=0.0, le=5.0, description="Absolute surface pressure (MPa)")
     gas_gravity: float = Field(0.65, ge=0.55, le=1.5)
     oil_api: float = Field(35.0, ge=5.0, le=70.0)
-    gor: float = Field(100.0, ge=0.0, le=5000.0)
+    gor: float = Field(100.0, ge=0.0, le=5000.0, description="Solution GOR (Sm³/Sm³)")
     salinity_ppm: float = Field(30000.0, ge=0.0, le=350000.0)
     buffer: float = Field(
         0.0,
@@ -1876,7 +1876,13 @@ def workspace_well_bundle(
 def workspace_hc_correction(
     project_id: int, well_name: str, req: WorkspaceHCCorrectionRequest
 ) -> Dict[str, Any]:
-    """Compute NPHI_HC and RHOB_HC aligned with DEPTH and optionally save to the database."""
+    """Compute depth-aligned HC corrections, optionally saving them.
+
+    Dynamic inputs use meters, °C, °C/km, MPa absolute, MPa/km, and
+    Sm³/Sm³ for depth, temperature, pressure, and solution GOR respectively.
+    TEMP and PRES curve samples, when present, are interpreted as °C and MPa
+    absolute; returned TEMP_FL and PRES_FL curves use the same units.
+    """
     try:
         df = _get_filtered_well_df(
             project_id, well_name, req.min_depth, req.max_depth, req.zones

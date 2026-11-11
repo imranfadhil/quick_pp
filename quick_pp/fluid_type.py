@@ -41,9 +41,27 @@ def estimate_fluid_properties(
 ) -> dict[str, np.ndarray]:
     """Estimate in-situ brine, oil, and gas properties along a depth profile.
 
-    Pressure and temperature curves take precedence over their respective
-    synthesized profiles. Temperature is in degrees Celsius, pressure in MPa,
-    depth in meters, and salinity in ppm by weight.
+    Args:
+        tvd: True vertical depth in meters.
+        temp_grad: Temperature gradient in degrees Celsius per kilometer.
+        surf_temp: Surface temperature in degrees Celsius.
+        pres_grad: Pressure gradient in MPa per kilometer.
+        surf_pres: Absolute surface pressure in MPa.
+        gas_gravity: Gas specific gravity relative to air (dimensionless).
+        oil_api: Oil gravity in degrees API.
+        gor: Solution gas-oil ratio in standard cubic meters per stock-tank
+            cubic meter (Sm³/Sm³).
+        salinity_ppm: Brine salinity in ppm by weight.
+        temp_curve: Optional temperature curve in degrees Celsius.
+        pres_curve: Optional absolute pressure curve in MPa.
+
+    Returns:
+        Depth-aligned fluid properties. TEMP_FL is in degrees Celsius, PRES_FL
+        is in MPa absolute, densities are in g/cc, and hydrogen indices and
+        Z_FACTOR are dimensionless.
+
+    Finite pressure and temperature curve samples take precedence over their
+    synthesized profiles.
     """
     numeric_parameters = {
         "temp_grad": temp_grad,

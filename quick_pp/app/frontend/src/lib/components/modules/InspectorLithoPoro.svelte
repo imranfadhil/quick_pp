@@ -9,6 +9,15 @@
 	import { workbench, computeSiltIntersection } from '$lib/state/workbench.svelte';
 	import { fmtNum } from '$lib/utils/formatters';
 	import {
+		gorMetricToScfStb,
+		gorScfStbToMetric,
+		pressureGradientMpaKmToPsiFt,
+		pressureGradientPsiFtToMpaKm,
+		pressureMpaToPsi,
+		pressurePsiToMpa,
+		saturationTemperatureToMetric
+	} from '$lib/utils/fluidUnits';
+	import {
 		ALL_LITHOLOGY_CURVES,
 		LITHOLOGY_TRACK_SPECS,
 		MINERAL_TO_CURVE_MNEMONIC
@@ -120,11 +129,45 @@
 	}
 
 	function syncFluidPtFromSaturation() {
-		workbench.lithoParams.fluidTempGrad = workbench.saturationParams.tempGradient;
-		workbench.lithoParams.fluidSurfTemp = workbench.saturationParams.surfaceTemp;
+		const temperature = saturationTemperatureToMetric(
+			workbench.saturationParams.tempGradient,
+			workbench.saturationParams.surfaceTemp,
+			workbench.saturationParams.measSystem
+		);
+		workbench.lithoParams.fluidTempGrad = temperature.gradient;
+		workbench.lithoParams.fluidSurfTemp = temperature.surface;
 		workbench.lithoParams.fluidSalinityPpm = workbench.saturationParams.waterSalinity;
 		executeLithoPoro(false);
 	}
+
+	function fluidUnitBinding(
+		key: 'fluidPresGrad' | 'fluidSurfPres' | 'fluidGor',
+		toDisplay: (value: number) => number,
+		toMetric: (value: number) => number,
+		decimals: number,
+		min: number,
+		max: number
+	) {
+		const get = () => Number(toDisplay(workbench.lithoParams[key]).toFixed(decimals));
+		return {
+			get,
+			set: (value: number) => {
+				if (value !== get()) {
+					workbench.lithoParams[key] = Math.max(min, Math.min(max, toMetric(value)));
+				}
+			}
+		};
+	}
+
+	const fluidPressureGradient = fluidUnitBinding(
+		'fluidPresGrad', pressureGradientMpaKmToPsiFt, pressureGradientPsiFtToMpaKm, 4, 5, 25
+	);
+	const fluidSurfacePressure = fluidUnitBinding(
+		'fluidSurfPres', pressureMpaToPsi, pressurePsiToMpa, 2, 0, 5
+	);
+	const fluidSolutionGor = fluidUnitBinding(
+		'fluidGor', gorMetricToScfStb, gorScfStbToMetric, 1, 0, 5000
+	);
 
 	function medianVisibleCurve(mnemonic: string): number | null {
 		const curve = wellData.curves[mnemonic];
@@ -979,20 +1022,22 @@
 					/>
 					<NumericScrubber
 						label="Pressure Gradient"
-						bind:value={workbench.lithoParams.fluidPresGrad}
-						unit="MPa/km"
-						min={5}
-						max={25}
-						step={0.1}
+						bind:value={fluidPressureGradient.get, fluidPressureGradient.set}
+						unit="psi/ft"
+						min={pressureGradientMpaKmToPsiFt(5)}
+						max={pressureGradientMpaKmToPsiFt(25)}
+						step={0.001}
+						decimals={4}
 						onrun={() => executeLithoPoro(false)}
 					/>
 					<NumericScrubber
 						label="Surface Pressure"
-						bind:value={workbench.lithoParams.fluidSurfPres}
-						unit="MPa"
+						bind:value={fluidSurfacePressure.get, fluidSurfacePressure.set}
+						unit="psia"
 						min={0}
-						max={5}
-						step={0.01}
+						max={pressureMpaToPsi(5)}
+						step={0.1}
+						decimals={2}
 						onrun={() => executeLithoPoro(false)}
 					/>
 					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 py-1 text-[10px] font-semibold uppercase text-[var(--text-secondary)]">
@@ -1018,11 +1063,12 @@
 					/>
 					<NumericScrubber
 						label="Solution GOR"
-						bind:value={workbench.lithoParams.fluidGor}
-						unit="Sm³/Sm³"
+						bind:value={fluidSolutionGor.get, fluidSolutionGor.set}
+						unit="scf/STB"
 						min={0}
-						max={5000}
+						max={gorMetricToScfStb(5000)}
 						step={10}
+						decimals={1}
 						onrun={() => executeLithoPoro(false)}
 					/>
 					<NumericScrubber
