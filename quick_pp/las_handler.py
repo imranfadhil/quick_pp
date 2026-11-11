@@ -2065,11 +2065,14 @@ def merge_well_curves_with_dedup(
         - `appended_curves`: List of curve names added (including suffixed ones)
         - `skipped_curves`: List of incoming curve names skipped because they were identical
         - `renamed_curves`: Dict mapping `{original_incoming_name: suffixed_name}`
+        - `resolved_curves`: Dict mapping each incoming curve to its final stored name,
+          including the matching existing curve when a duplicate is skipped.
     """
     summary: Dict[str, Any] = {
         "appended_curves": [],
         "skipped_curves": [],
         "renamed_curves": {},
+        "resolved_curves": {},
     }
     if incoming_df is None or incoming_df.empty:
         return (
@@ -2181,6 +2184,7 @@ def merge_well_curves_with_dedup(
             base_indexed[base_col_name] = inc_series
             existing_upper_map[col_up] = base_col_name
             summary["appended_curves"].append(base_col_name)
+            summary["resolved_curves"][raw_col_name] = base_col_name
         else:
             # Inspect against existing curve of same name (and any existing suffixed variants CURVE_1, CURVE_2, ...)
             candidate_cols = [existing_upper_map[col_up]]
@@ -2189,12 +2193,14 @@ def merge_well_curves_with_dedup(
                 if suffix_pat.match(k_up) and actual_col not in candidate_cols:
                     candidate_cols.append(actual_col)
 
-            is_identical = any(
-                _curves_are_identical(base_indexed[cand], inc_series)
-                for cand in candidate_cols
+            identical = next(
+                (cand for cand in candidate_cols
+                 if _curves_are_identical(base_indexed[cand], inc_series)),
+                None,
             )
-            if is_identical:
+            if identical is not None:
                 summary["skipped_curves"].append(base_col_name)
+                summary["resolved_curves"][raw_col_name] = identical
             else:
                 suffix_num = 1
                 while f"{col_up}_{suffix_num}" in existing_upper_map:
@@ -2204,6 +2210,7 @@ def merge_well_curves_with_dedup(
                 existing_upper_map[suffixed_name.upper()] = suffixed_name
                 summary["renamed_curves"][base_col_name] = suffixed_name
                 summary["appended_curves"].append(suffixed_name)
+                summary["resolved_curves"][raw_col_name] = suffixed_name
                 if incoming_units is not None:
                     u_val = incoming_units.get(raw_col_name) or incoming_units.get(
                         base_col_name
@@ -2226,8 +2233,12 @@ def standardize_curve_units(
     curve_units: Optional[Dict[str, str]] = None,
     target_depth_uom: str = "m",
     custom_mnemonic_map: Optional[Dict[str, str]] = None,
+    curve_lineage: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[pd.DataFrame, Dict[str, str], Dict[str, Dict[str, Any]]]:
     """Apply mnemonic aliasing and automated petrophysical unit conversions.
+
+    When `curve_lineage` is provided, populate it with source-to-output mappings
+    and retain unconverted copies of renamed non-index curves.
 
     Standardizes:
     - `DEPTH`, `TVD`, `TVDSS`: `FT`/`F` -> `M` (`* 0.3048`), `0.1 IN` -> `M` (`* 0.00254`), `IN` -> `M` (`* 0.0254`)
@@ -2247,6 +2258,7 @@ def standardize_curve_units(
     new_col_names: List[str] = []
     seen_series_by_base: Dict[str, List[Tuple[str, pd.Series]]] = {}
     keep_col_indices: List[int] = []
+    lineage_sources: List[Tuple[int, str, str, str]] = []
 
     for col_idx, orig_col in enumerate(out_df.columns):
         orig_str = str(orig_col)
@@ -2262,6 +2274,7 @@ def standardize_curve_units(
                 new_col_names.append(base_target)
                 std_units[base_target] = u_str
                 keep_col_indices.append(col_idx)
+                lineage_sources.append((col_idx, orig_str, base_target, u_str))
             continue
 
         if target_up not in seen_series_by_base:
@@ -2269,9 +2282,16 @@ def standardize_curve_units(
             new_col_names.append(base_target)
             std_units[base_target] = u_str
             keep_col_indices.append(col_idx)
+            lineage_sources.append((col_idx, orig_str, base_target, u_str))
         else:
             # Check if identical to an already-seen column with the same base mnemonic in this file
-            if any(_curves_are_identical(prev_s, s_col) for _, prev_s in seen_series_by_base[target_up]):
+            identical = next(
+                (name for name, prev_s in seen_series_by_base[target_up]
+                 if _curves_are_identical(prev_s, s_col)),
+                None,
+            )
+            if identical is not None:
+                lineage_sources.append((col_idx, orig_str, identical, u_str))
                 continue
             suffix_idx = len(seen_series_by_base[target_up])
             existing_names_up = {n.upper() for n in new_col_names}
@@ -2282,6 +2302,7 @@ def standardize_curve_units(
             new_col_names.append(suffixed_target)
             std_units[suffixed_target] = u_str
             keep_col_indices.append(col_idx)
+            lineage_sources.append((col_idx, orig_str, suffixed_target, u_str))
 
     out_df = out_df.iloc[:, keep_col_indices].copy()
     out_df.columns = new_col_names
@@ -2410,6 +2431,29 @@ def standardize_curve_units(
             continue
         if pd.api.types.is_numeric_dtype(out_df[col]):
             out_df[col] = out_df[col].astype(np.float32)
+
+    if curve_lineage is not None:
+        used_names = {str(c).upper() for c in out_df.columns}
+        for col_idx, original, target, unit in lineage_sources:
+            raw_name = None
+            if original.strip().upper() != target.upper() and target.upper() not in ("DEPTH", "DEPT", "WELL_NAME", "UWI"):
+                base = re.sub(r":(\d+)$", r"_\1", original.strip().upper())
+                if base in used_names or base in ("DEPTH", "DEPT", "WELL_NAME", "UWI"):
+                    base = f"RAW_{base}"
+                raw_name = base
+                suffix = 1
+                while raw_name.upper() in used_names:
+                    raw_name = f"{base}_{suffix}"
+                    suffix += 1
+                out_df[raw_name] = df.iloc[:, col_idx].to_numpy()
+                std_units[raw_name] = unit
+                used_names.add(raw_name.upper())
+            curve_lineage.append({
+                "source_mnemonic": original,
+                "source_unit": unit,
+                "stored_curve": target,
+                "raw_curve": raw_name,
+            })
 
     return out_df, std_units, conversions
 

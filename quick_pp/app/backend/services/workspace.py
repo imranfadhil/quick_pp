@@ -1583,6 +1583,8 @@ def workspace_well_bundle(
         well_header: Dict[str, Any] = dict(
             extract_las_metadata(base_hdr_source, fallback_well_name=well_name)
         )
+        if isinstance(base_hdr_source.get("curve_lineage"), list):
+            well_header["curve_lineage"] = base_hdr_source["curve_lineage"]
         well_header["well_name"] = well_name
         if db_uwi and (
             not well_header.get("uwi") or well_header.get("uwi") == "UNKNOWN_WELL"

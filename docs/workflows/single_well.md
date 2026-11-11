@@ -4,6 +4,8 @@ The Single-Well space delivers deterministic, optimization-driven, and core-cali
 
 When importing LAS logs, check the depth curve's **Source Unit** in the uploader. Feet are converted to meters by multiplying the depth values by 0.3048; edit the source unit if the LAS curve header is incorrect. Previously imported wells are not automatically corrected, and importing into an existing well merges data rather than replacing it.
 
+For LAS imports through **Review / Commit**, renamed log curves retain a separate copy of their source values and unit alongside the standardized curve. Name collisions receive a `RAW_` prefix or a numeric suffix. The import summary and Data & QAQC well header show each source file, mnemonic, stored curve, and raw copy; these records describe the import, not subsequent edits. Depth remains the shared, converted index rather than a separate raw curve. Optional grid regularization also applies to the raw copies. Existing imports are not backfilled.
+
 The same log uploader also accepts DLIS and LIS79 (`.lis`) files. LIS Enhanced LIS/LIS84 variants are not supported by the current parser.
 
 The **Log / interval** unit selector (m or ft) affects the single-well log plot and readouts, working interval and top-bar depth filter, and shared tables whose values are in meters. Table edits, pasted values, and ancillary quick-entry depths are converted back to meters for processing. The preference is saved in the browser; it does not change stored data. Other plots, reports, and exports retain their existing units.

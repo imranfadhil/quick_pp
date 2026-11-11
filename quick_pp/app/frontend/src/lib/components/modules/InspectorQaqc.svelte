@@ -1018,6 +1018,21 @@
 					</div>
 				</div>
 
+				{#if Array.isArray(hdr.curve_lineage) && hdr.curve_lineage.length > 0}
+					<details class="mt-1.5 text-[10px] text-[var(--text-secondary)]">
+						<summary class="cursor-pointer font-semibold hover:text-[var(--text-primary)]">
+							Imported LAS curve lineage ({hdr.curve_lineage.length})
+						</summary>
+						<div class="mt-1 max-h-40 space-y-0.5 overflow-y-auto rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
+							{#each hdr.curve_lineage as entry}
+								<div>
+									{entry.filename}: {entry.source_mnemonic}{entry.source_unit ? ` (${entry.source_unit})` : ''}
+									→ {entry.stored_curve}{entry.raw_curve ? ` (raw: ${entry.raw_curve})` : ''}
+								</div>
+							{/each}
+						</div>
+					</details>
+				{/if}
 				{#if (hdr.raw_well_header && Object.keys(hdr.raw_well_header).length > 0) || (hdr.raw_parameters && Object.keys(hdr.raw_parameters).length > 0)}
 					<details class="mt-1.5 text-[10px] text-[var(--text-secondary)]">
 						<summary class="cursor-pointer font-semibold hover:text-[var(--text-primary)]">
