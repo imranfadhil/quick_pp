@@ -608,7 +608,7 @@ class WorkbenchState {
 		kind: 'math' | 'splice';
 	} | null>(null);
 	scalSubMode = $state<'static' | 'relperm'>('static');
-	swirrCrossplotTab = $state<'swirr-corr' | 'pc-qc' | 'scal-fit' | 'relperm'>('swirr-corr');
+	swirrCrossplotTab = $state<'swirr-corr' | 'pc-qc' | 'scal-fit' | 'pore-throat' | 'relperm'>('swirr-corr');
 	coreQcView = $state<'dual' | 'poro' | 'perm' | 'depth-error'>('dual');
 	vshQcView = $state<'dual' | 'gr-fit' | 'depth-error'>('dual');
 	vshCalibScope = $state<'shale_sand' | 'shale_only' | 'all' | 'brushed'>('shale_sand');

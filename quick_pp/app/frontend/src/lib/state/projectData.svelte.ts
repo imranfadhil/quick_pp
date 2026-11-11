@@ -4,6 +4,7 @@ import { appStatus } from './status.svelte';
 import { wellData } from './wellData.svelte';
 import { workbench, type MultiWellVolumetricResult } from './workbench.svelte';
 import { assignKnown, clone } from './moduleParams.svelte';
+import { normalizedScalSaturation } from '$lib/utils/poreThroat';
 import {
 	isProjectParamModuleKey,
 	PROJECT_PARAM_MODULE_KEYS,
@@ -2131,10 +2132,7 @@ class ProjectDataState {
 				const pc = Number(pCurve[i]);
 				const sw = Number(sCurve[i]);
 				if (!Number.isFinite(pc) || !Number.isFinite(sw) || pc <= 0 || sw <= 0) continue;
-				const swn = Math.min(
-					0.99,
-					Math.max(0.005, (sw - swirrNorm) / Math.max(0.05, 1.0 - swirrNorm))
-				);
+				const swn = normalizedScalSaturation(sw, swirrNorm);
 				const j = (0.2166 * pc * Math.sqrt(k / phi)) / iftCos;
 				const h = pc / gradPsi;
 				const bvw = phi * sw;

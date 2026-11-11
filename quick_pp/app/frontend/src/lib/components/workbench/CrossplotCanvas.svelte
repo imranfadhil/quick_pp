@@ -13,6 +13,7 @@
 	import { fmtDepth, fmtNum } from '$lib/utils/formatters';
 	import { crossplotGroups, crossplotLabel, resolveCrossplot } from '$lib/utils/crossplots';
 	import { curveDepthSeries } from '$lib/utils/curveDepth';
+	import { normalizedScalSaturation, poreThroatDistribution } from '$lib/utils/poreThroat';
 	import {
 		estimateBqvReferenceRw,
 		fillMissingCurve,
@@ -4054,7 +4055,7 @@
 			if (!sr || !sr.plugs || sr.plugs.length === 0) {
 				baseLayout.dragmode = 'zoom';
 				baseLayout.xaxis.title = {
-					text: 'No SCAL plugs loaded — click "Auto-Fit SCAL Swirr" in the left panel'
+					text: 'No SCAL plugs loaded — click "Reset Auto-Fit" in the left panel'
 				};
 				baseLayout.yaxis.title = { text: 'Irreducible Water Saturation Swirr (v/v)' };
 				return { traces, layout: baseLayout };
@@ -4083,6 +4084,84 @@
 				'#7C3AED',
 				'#0284C7'
 			];
+
+			if (tab === 'pore-throat') {
+				const sp = projectData.shfParams;
+				const curves = filteredPlugs.flatMap((plug, index) => {
+					const phi = Math.max(1e-4, plug.cpore || 0.15);
+					const perm = Math.max(1e-4, plug.cperm || 10);
+					const rt = plug.rt ?? 1;
+					const fitRt = plug.cpore && plug.cperm
+						? (projectData.classifyRockType(plug.cpore, plug.cperm) ?? rt)
+						: rt;
+					const sw = plug.sw_curve ?? [];
+					const swMin = sw.length ? Math.min(...sw) : (plug.sw_at_max_pc ?? 0.12);
+					const swirr = sp.swirrSource === 'poro_perm'
+						? Math.min(0.85, Math.max(0.01, projectData.evalSwirrValue(phi, perm, fitRt)))
+						: Math.min(0.85, Math.max(0.01, swMin * 0.96));
+					const points = poreThroatDistribution(
+						plug.pc_curve ?? [],
+						sw.map((value) => Number.isFinite(value) ? normalizedScalSaturation(value, swirr) : NaN),
+						sp.ift,
+						sp.theta
+					);
+					return points.length ? [{ plug, index, rt, points }] : [];
+				});
+				const rockTypes = [...new Set(curves.map((curve) => curve.rt))].sort((a, b) => a - b);
+				const columns = Math.min(3, rockTypes.length);
+				const rows = Math.ceil(rockTypes.length / columns);
+				baseLayout.annotations = [];
+				baseLayout.dragmode = 'zoom';
+				rockTypes.forEach((rt, index) => {
+					const column = index % columns;
+					const row = Math.floor(index / columns);
+					const xDomain = [column / columns + 0.04 / columns, (column + 1) / columns - 0.04 / columns];
+					const yDomain = [1 - (row + 1) / rows + 0.12 / rows, 1 - row / rows - 0.12 / rows];
+					const suffix = index === 0 ? '' : String(index + 1);
+					baseLayout[`xaxis${suffix}`] = {
+						...baseLayout.xaxis, domain: xDomain, anchor: `y${suffix}`,
+						title: { text: 'Log₁₀ radius (µm)' }
+					};
+					baseLayout[`yaxis${suffix}`] = {
+						...baseLayout.yaxis, domain: yDomain, anchor: `x${suffix}`,
+						title: { text: 'dSwn / dLog₁₀R' }
+					};
+					baseLayout.annotations.push({
+						text: `PRT ${rt}`, x: (xDomain[0] + xDomain[1]) / 2,
+						y: yDomain[1] + 0.04 / rows, xref: 'paper', yref: 'paper',
+						showarrow: false, font: { size: 12, color: '#334155' }
+					});
+				});
+				curves.forEach(({ plug, index, rt, points }) => {
+					const axisIndex = rockTypes.indexOf(rt);
+					const suffix = axisIndex === 0 ? '' : String(axisIndex + 1);
+					const id = projectData.normalizeScalPlugId(plug.plug_id, plug.well, plug.sample);
+					const focused = focusedPlugId === id;
+					const color = projectData.scalGroupMode === 'sample'
+						? SAMPLE_PALETTE_PLUGS[index % SAMPLE_PALETTE_PLUGS.length]
+						: getRockTypeColor(rt);
+					traces.push({
+						type: 'scatter', mode: 'lines+markers',
+						name: `${plug.sample} (${plug.well}) [PRT ${rt}]`,
+						xaxis: `x${suffix}`, yaxis: `y${suffix}`,
+						x: points.map((point) => point.logRadius),
+						y: points.map((point) => point.distribution),
+						fill: 'tozeroy', fillcolor: color,
+						line: { color, width: focused ? 2.5 : 1.5, dash: plug.included ? 'solid' : 'dot' },
+						marker: { color, size: focused ? 6 : 4 },
+						opacity: focusedPlugId && !focused ? 0.15 : plug.included ? 0.7 : 0.3,
+						hovertemplate: `<b>${plug.well} · Sample ${plug.sample}</b> (PRT ${rt})<br>` +
+							`Log₁₀ radius: %{x:.3f} | dSwn/dLog₁₀R: %{y:.3f}<extra></extra>`
+					});
+				});
+				if (!curves.length) {
+					baseLayout.annotations.push({
+						text: 'No valid pore-throat curves. Check filters, IFT, contact angle, and at least two distinct positive Pc points per sample.',
+						x: 0.5, y: 0.5, xref: 'paper', yref: 'paper', showarrow: false
+					});
+				}
+				return { traces, layout: baseLayout };
+			}
 
 			if (tab === 'pc-qc') {
 				const seenRt = new Set<number>();
@@ -4669,6 +4748,7 @@
 			void workbench.scalParams.mu_o;
 		} else if (mode === 'swirr-fit') {
 			void projectData.swirrResult;
+			void projectData.selectedWellNames;
 			void projectData.swirrConfig.equationType;
 			void projectData.swirrConfig.fitScope;
 			void projectData.swirrConfig.extractionMode;
@@ -4703,6 +4783,12 @@
 			void projectData.scalFilterRockType;
 			void projectData.shfParams.swirrSource;
 			void projectData.shfParams.jSatMode;
+			void projectData.shfParams.ift;
+			void projectData.shfParams.theta;
+			void projectData.drtMethod;
+			void projectData.fziCutoffs;
+			void projectData.winlandCutoffs;
+			void projectData.luciaCutoffs;
 		} else {
 			void wellData.curves;
 			void projectData.selectedWellNames;
@@ -5046,7 +5132,7 @@
 
 		{#if effectiveMode === 'swirr-fit'}
 			<div class="flex items-center gap-1">
-				{#each [['swirr-corr', 'Swirr vs. √(k/φ)'], ['pc-qc', 'Pc vs. Sw (Plug QC)'], ['scal-fit', 'J / Pc Curve Fit'], ['relperm', 'Rel-Perm & fw']] as [tKey, tLbl]}
+				{#each [['swirr-corr', 'Swirr vs. √(k/φ)'], ['pc-qc', 'Pc vs. Sw (Plug QC)'], ['scal-fit', 'J / Pc Curve Fit'], ['pore-throat', 'Pore Throat by PRT'], ['relperm', 'Rel-Perm & fw']] as [tKey, tLbl]}
 					<button
 						type="button"
 						onclick={() => {
@@ -5054,6 +5140,7 @@
 								| 'swirr-corr'
 								| 'pc-qc'
 								| 'scal-fit'
+								| 'pore-throat'
 								| 'relperm';
 							workbench.scalSubMode = tKey === 'relperm' ? 'relperm' : 'static';
 						}}
@@ -5366,6 +5453,7 @@
 					{/each}
 				</div>
 
+				{#if workbench.swirrCrossplotTab !== 'pore-throat' || effectiveMode !== 'swirr-fit'}
 				<button
 					type="button"
 					onclick={() => (projectData.scalConnectPlugs = !projectData.scalConnectPlugs)}
@@ -5387,8 +5475,9 @@
 				>
 					Labels
 				</button>
+				{/if}
 
-				{#if ((effectiveMode === 'swirr-fit' && workbench.swirrCrossplotTab === 'scal-fit') || (effectiveMode === 'shf' && shfView === 'scal_fit')) && (projectData.shfParams.jSatMode ?? 'swn') === 'swn'}
+				{#if (effectiveMode === 'swirr-fit' && workbench.swirrCrossplotTab === 'pore-throat') || (((effectiveMode === 'swirr-fit' && workbench.swirrCrossplotTab === 'scal-fit') || (effectiveMode === 'shf' && shfView === 'scal_fit')) && (projectData.shfParams.jSatMode ?? 'swn') === 'swn')}
 					<div
 						class="inline-flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]"
 						title="Choose how Swn is normalized: per-plug Lab Terminal Sw (each sample uses its own lab min Sw) or Poro-Perm Correlation Swirr(φ,k)"
@@ -5465,6 +5554,14 @@
 					</span>
 				{/if}
 			</div>
+		</div>
+	{/if}
+
+	{#if effectiveMode === 'swirr-fit' && workbench.swirrCrossplotTab === 'pore-throat'}
+		<div class="shrink-0 border-b border-[var(--border-hairline)] bg-slate-50 px-2 py-1 text-[10px] text-slate-700">
+			Washburn: IFT {fmtNum(projectData.shfParams.ift, 1)} dyn/cm, θ {fmtNum(projectData.shfParams.theta, 1)}°.
+			Uses reservoir Pc and normalized Swn; plugs not included in the Swirr fit remain visible as dotted curves.
+			Set IFT and θ in SCAL J / Pc Curve Fit; use Reset Auto-Fit after changing them to reload converted Pc and reset the Swirr fit.
 		</div>
 	{/if}
 
