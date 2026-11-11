@@ -25,6 +25,7 @@
 	import { fmtDepth, fmtNum } from '$lib/utils/formatters';
 	import { depthDisplay } from '$lib/state/depthDisplay.svelte';
 	import { depthFromMeters, depthToMeters } from '$lib/utils/depthUnits';
+	import { selectSpliceInterval, type SpliceInterval } from '$lib/utils/spliceIntervals';
 
 	const REQUIRED_STANDARD = ['GR', 'RT', 'NPHI', 'RHOB', 'CALI', 'DTC', 'PEF'];
 	const EVALUATED_CURVES = ALL_CALCULATED_CURVE_MNEMONICS;
@@ -52,12 +53,18 @@
 
 	// Curve Splicing (Merge Multiple Log Runs) state
 	let spliceRuns = $state<string[]>(['', '']);
+	let spliceIntervals = $state<Record<string, SpliceInterval>>({});
 	let spliceOverlapMode = $state<CurveSpliceOverlapMode>('blend');
 	let spliceDepth = $state<number>(1500);
 	let spliceAutoLevel = $state<boolean>(false);
 	let spliceInterpGaps = $state<boolean>(false);
 	let spliceMaxGapM = $state<number>(2.0);
 	let spliceTargetName = $state<string>('');
+
+	$effect(() => {
+		wellData.wellLoadGeneration;
+		spliceIntervals = {};
+	});
 
 	$effect(() => {
 		workbench.qaqcEditorMode = editorMode;
@@ -186,8 +193,24 @@
 			};
 		}
 
-		const arrA = wellData.curves[validCols[0]] ?? [];
-		const arrB = wellData.curves[validCols[1]] ?? [];
+		const target = (spliceTargetName.trim() || validCols[0]).toUpperCase().replace(/\s+/g, '_');
+		const selectedRuns = validCols.map((c) => {
+			const values = c === target
+				? ((!c.endsWith('_ORI') ? wellData.curves[`${c}_ORI`] : undefined) ?? wellData.originalCurves[c] ?? wellData.curves[c])
+				: wellData.curves[c];
+			const selected = selectSpliceInterval(dept, values ?? [], spliceIntervals[c]);
+			let top = Infinity;
+			let bottom = -Infinity;
+			for (let i = 0; i < dept.length; i++) {
+				if (Number.isFinite(selected[i])) {
+					top = Math.min(top, dept[i]);
+					bottom = Math.max(bottom, dept[i]);
+				}
+			}
+			return { values: selected, top, bottom };
+		});
+		const arrA = selectedRuns[0].values;
+		const arrB = selectedRuns[1].values;
 		let ovTop = Infinity;
 		let ovBot = -Infinity;
 		let ovCount = 0;
@@ -207,28 +230,23 @@
 
 		let combTop = Infinity;
 		let combBot = -Infinity;
-		for (const c of validCols) {
-			const st = wellData.stats[c];
-			if (st?.top !== null && st?.top !== undefined && st.top < combTop) combTop = st.top;
-			if (st?.bottom !== null && st?.bottom !== undefined && st.bottom > combBot) combBot = st.bottom;
+		for (const run of selectedRuns) {
+			if (run.top < combTop) combTop = run.top;
+			if (run.bottom > combBot) combBot = run.bottom;
 		}
 
-		const stA = wellData.stats[validCols[0]];
-		const stB = wellData.stats[validCols[1]];
+		const stA = selectedRuns[0];
+		const stB = selectedRuns[1];
 		let gapTop: number | null = null;
 		let gapBottom: number | null = null;
 		let gapSpan: number | null = null;
 
 		if (
 			ovCount === 0 &&
-			stA?.top !== null &&
-			stA?.top !== undefined &&
-			stA?.bottom !== null &&
-			stA?.bottom !== undefined &&
-			stB?.top !== null &&
-			stB?.top !== undefined &&
-			stB?.bottom !== null &&
-			stB?.bottom !== undefined
+			Number.isFinite(stA.top) &&
+			Number.isFinite(stA.bottom) &&
+			Number.isFinite(stB.top) &&
+			Number.isFinite(stB.bottom)
 		) {
 			const shallowBot = Math.min(stA.bottom, stB.bottom);
 			const deepTop = Math.max(stA.top, stB.top);
@@ -280,6 +298,17 @@
 		spliceRuns = next;
 	}
 
+	function updateSpliceInterval(curve: string, bound: 'top' | 'bottom', input: HTMLInputElement) {
+		spliceIntervals = {
+			...spliceIntervals,
+			[curve]: {
+				top: spliceIntervals[curve]?.top ?? null,
+				bottom: spliceIntervals[curve]?.bottom ?? null,
+				[bound]: input.value === '' ? null : input.valueAsNumber
+			}
+		};
+	}
+
 	function addSpliceRun(curveName?: string) {
 		const used = new Set(spliceRuns);
 		const candidate =
@@ -326,6 +355,7 @@
 		try {
 			await wellData.spliceCurves({
 				sourceCurves: validCols,
+				sourceIntervals: spliceIntervals,
 				targetCurve: target,
 				overlapMode: spliceOverlapMode,
 				spliceDepth: spliceOverlapMode === 'splice_depth' ? spliceDepth : null,
@@ -1801,6 +1831,9 @@
 						</div>
 
 						<div class="space-y-1.5">
+							<p class="text-[9.5px] text-[var(--text-muted)]">
+								Set inclusive depth limits in metres for each run. Leave blank for the full interval.
+							</p>
 							{#each spliceRuns as runCol, idx (idx)}
 								{@const runSt = wellData.stats[runCol]}
 								<div class="flex items-center gap-1">
@@ -1853,10 +1886,37 @@
 										</span>
 									</div>
 								{/if}
+								<div class="grid grid-cols-2 gap-2 pl-12">
+									<label class="flex items-center gap-1 text-[9.5px] text-[var(--text-muted)]">
+										Top
+										<input
+											type="number"
+											step="any"
+											aria-label={`Run ${idx + 1} top depth (m)`}
+											placeholder="Full"
+											value={spliceIntervals[runCol]?.top ?? ''}
+											oninput={(e) => updateSpliceInterval(runCol, 'top', e.currentTarget)}
+											class="mono-num h-6 min-w-0 flex-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-[10px]"
+										/>
+									</label>
+									<label class="flex items-center gap-1 text-[9.5px] text-[var(--text-muted)]">
+										Bottom
+										<input
+											type="number"
+											step="any"
+											aria-label={`Run ${idx + 1} bottom depth (m)`}
+											placeholder="Full"
+											value={spliceIntervals[runCol]?.bottom ?? ''}
+											oninput={(e) => updateSpliceInterval(runCol, 'bottom', e.currentTarget)}
+											class="mono-num h-6 min-w-0 flex-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-[10px]"
+										/>
+									</label>
+								</div>
 							{/each}
 						</div>
 
 						<!-- Overlap / Gap Diagnostics Banner -->
+						<p class="mt-1 text-[9.5px] text-[var(--text-muted)]">Diagnostics compare the selected intervals of the first two runs.</p>
 						<div class="mt-2 rounded-xs border border-slate-200 bg-[var(--bg-surface)] px-2 py-1 text-[10px]">
 							{#if spliceDiagnostics.hasOverlap}
 								<div class="flex items-center justify-between text-blue-800">

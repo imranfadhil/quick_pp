@@ -140,9 +140,15 @@ flowchart TD
   their configured raw or hydrocarbon-corrected inputs until explicitly selected.
 
 * **Curve editing and splicing:** In Curve Editor & Management, select **View log vs depth in
-  right pane** to compare the selected curve with its original backup or edit source. In splice
-  mode the selected runs are shown alongside the applied splice result; apply the splice to
-  update the result. The plot follows the active depth and zone filters and preserves gaps.
+  right pane** to compare the selected curve with its original backup or edit source. In **Splice
+  Runs**, optionally enter a top and/or bottom depth in metres for each run; blank limits use the
+  full run and both limits include their boundary samples. For example, set Run 1's bottom to the
+  end of its good data and Run 2's top to the start of its good data. The overlap mode resolves
+  samples covered by both intervals; uncovered depths stay empty unless gap interpolation is
+  enabled. Auto-level uses only overlap within the selected intervals. Diagnostics compare the
+  first two runs. Click **Apply Splice** after changing the settings to update the preview, then
+  **Save** to persist it. The selected runs are shown alongside the applied splice result.
+  The plot follows the active depth and zone filters and preserves gaps.
   Use the plot selector to return to the histogram or another view. Log-versus-depth plots lock
   the horizontal scale; the mouse wheel zooms depth, while selection tools remain available.
 

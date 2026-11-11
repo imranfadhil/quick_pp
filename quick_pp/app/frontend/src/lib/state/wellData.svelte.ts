@@ -3,6 +3,11 @@ import type { CoreComparisonMetrics, CurveSummaryStats } from '$lib/api/schema';
 import { appStatus } from './status.svelte';
 import { workbench } from './workbench.svelte';
 import {
+	selectSpliceInterval,
+	validateSpliceInterval,
+	type SpliceInterval
+} from '$lib/utils/spliceIntervals';
+import {
 	isParamModuleKey,
 	moduleParams,
 	snapshotModuleParams,
@@ -2731,6 +2736,7 @@ class WellDataState {
 	 */
 	async spliceCurves(opts: {
 		sourceCurves: string[];
+		sourceIntervals?: Record<string, SpliceInterval>;
 		targetCurve: string;
 		overlapMode?: CurveSpliceOverlapMode;
 		spliceDepth?: number | null;
@@ -2765,16 +2771,19 @@ class WellDataState {
 				this.originalCurves[dst] ?? [...existingDst])
 			: null;
 
+		for (const source of validSources) {
+			const values = source === dst && origDstArr ? origDstArr : this.curves[source];
+			validateSpliceInterval(source, deptArr, values, opts.sourceIntervals?.[source]);
+		}
+
 		if (existingDst && origDstArr && !this.originalCurves[dst]) {
 			this.originalCurves = { ...this.originalCurves, [dst]: [...origDstArr] };
 		}
 
 		// Use un-spliced base snapshot when dst is one of the source curves so repeated previews are idempotent
 		const getRunArray = (col: string): number[] => {
-			if (col === dst && origDstArr) {
-				return [...origDstArr];
-			}
-			return [...(this.curves[col] ?? [])];
+			const values = col === dst && origDstArr ? origDstArr : (this.curves[col] ?? []);
+			return selectSpliceInterval(deptArr, values, opts.sourceIntervals?.[col]);
 		};
 
 		const ovMode: CurveSpliceOverlapMode = opts.overlapMode ?? 'blend';
