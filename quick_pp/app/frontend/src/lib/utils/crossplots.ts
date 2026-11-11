@@ -14,7 +14,10 @@ export type CrossplotId =
 	| 'shf'
 	| 'relperm'
 	| 'core-qc'
-	| 'vsh-qc';
+	| 'vsh-qc'
+	| 'th-k'
+	| 'pef-k'
+	| 'pef-th-k';
 
 export type CrossplotContext =
 	| { scope: 'single-well'; step: SingleWellStep }
@@ -56,6 +59,21 @@ export const CROSSPLOTS: readonly CrossplotDefinition[] = [
 	{
 		id: 'vsh-qc',
 		label: 'Vsh Calibration (VSH_GR × VSH_DN)',
+		single: { group: 'Step 3 · Lithology & Porosity', steps: ['litho-poro'] }
+	},
+	{
+		id: 'th-k',
+		label: 'Thorium vs. Potassium',
+		single: { group: 'Step 3 · Lithology & Porosity', steps: ['litho-poro'] }
+	},
+	{
+		id: 'pef-k',
+		label: 'PEF vs. Potassium',
+		single: { group: 'Step 3 · Lithology & Porosity', steps: ['litho-poro'] }
+	},
+	{
+		id: 'pef-th-k',
+		label: 'PEF vs. Th/K',
 		single: { group: 'Step 3 · Lithology & Porosity', steps: ['litho-poro'] }
 	},
 	{

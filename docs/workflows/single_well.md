@@ -232,6 +232,13 @@ flowchart TD
 * **Input Curves:** `GR`, `RHOB`, `NPHI`, `PEF`, `DTC`  
 * **Output Curves:** `VSH`, `VSAND`, `VSILT`, `VCLAY`, `VCALC`, `VDOLO`, `PHIT`, `PHIE`
 
+* **Spectral crossplots:** The right pane also offers thorium vs potassium, PEF vs potassium,
+  and PEF vs Th/K. These use `THOR` in ppm, `POTA` in percent and `PEF` in b/e;
+  verify the input units before interpreting them. The Th/K plot uses a logarithmic
+  ratio axis and excludes non-positive K or Th. Ratios are unstable at low K.
+  Th/K guide lines and the scatter are interpretive aids, not mineral classifications.
+  The plots do not alter the GR-based shale calculation.
+
 ---
 
 ### Step 4: Permeability Estimation (`InspectorPerm`) {#sw-step-4-perm}

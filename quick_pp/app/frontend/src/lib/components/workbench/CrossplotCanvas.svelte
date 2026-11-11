@@ -12,6 +12,7 @@
 	} from '$lib/utils/petrophysicsColors';
 	import { fmtDepth, fmtNum } from '$lib/utils/formatters';
 	import { crossplotGroups, crossplotLabel, resolveCrossplot } from '$lib/utils/crossplots';
+	import { spectralCrossplotPoints } from '$lib/utils/spectralCrossplot';
 	import { curveDepthSeries } from '$lib/utils/curveDepth';
 	import { normalizedScalSaturation, poreThroatDistribution } from '$lib/utils/poreThroat';
 	import {
@@ -94,6 +95,12 @@
 				return wellData.vshComparison.rows.length
 					? null
 					: 'No Vsh calibration data in the current selection. Check GR, NPHI and RHOB curves and filters.';
+			case 'th-k':
+			case 'pef-k':
+			case 'pef-th-k':
+				return hasTrace((name) => name === 'Spectral log samples')
+					? null
+					: 'No valid paired spectral log values in the selection. Check POTA (%), THOR (ppm), PEF and the depth filters; Th/K requires positive K and Th.';
 			default:
 				return null;
 		}
@@ -263,6 +270,65 @@
 				titlefont: { family: 'Inter', size: 11, color: '#0F172A' }
 			}
 		};
+
+		if (effectiveMode === 'th-k' || effectiveMode === 'pef-k' || effectiveMode === 'pef-th-k') {
+			const points = spectralCrossplotPoints(effectiveMode, wellData.curves, indices);
+			traces.push({
+				type: 'scatter',
+				mode: 'markers',
+				name: 'Spectral log samples',
+				x: points.x,
+				y: points.y,
+				customdata: points.customdata,
+				text: points.depths.map((depth) => depth === null ? 'Depth unavailable' : `Depth: ${fmtNum(depth, 2)} m`),
+				marker: {
+					size: 5.5,
+					color: points.depths,
+					colorscale: 'Viridis',
+					opacity: 0.82,
+					colorbar: { title: { text: 'Depth (m)' }, thickness: 10 }
+				},
+				hovertemplate: '%{text}<br>X: %{x:.3g}<br>Y: %{y:.3g}<extra></extra>'
+			});
+			baseLayout.xaxis.title = {
+				text: effectiveMode === 'pef-th-k' ? 'Th/K (ppm / %)' : 'Potassium (%)'
+			};
+			baseLayout.yaxis.title = {
+				text: effectiveMode === 'th-k' ? 'Thorium (ppm)' : 'Photoelectric factor (b/e)'
+			};
+			if (effectiveMode === 'pef-th-k') baseLayout.xaxis.type = 'log';
+			if (effectiveMode === 'pef-th-k') {
+				baseLayout.annotations = [{
+					x: 0, y: 1.08, xref: 'paper', yref: 'paper', showarrow: false,
+					text: 'Th/K is unstable at low K; zero and negative ratios are excluded',
+					font: { size: 10, color: '#64748B' }
+				}];
+			}
+			if (effectiveMode === 'th-k') {
+				const maxK = points.x.reduce((max, value) => Math.max(max, value), 5);
+				const maxTh = points.y.reduce((max, value) => Math.max(max, value), 25);
+				for (const ratio of [0.3, 0.6, 2, 3.5, 12, 25]) {
+					const xEnd = Math.min(maxK, maxTh / ratio);
+					shapes.push({
+						type: 'line', x0: 0, y0: 0, x1: xEnd, y1: xEnd * ratio,
+						line: { color: '#94A3B8', width: 1, dash: 'dot' }
+					});
+					traces.push({
+						type: 'scatter', mode: 'text', x: [xEnd], y: [xEnd * ratio],
+						text: [`${ratio}`], textposition: 'top left',
+						textfont: { size: 9, color: '#64748B' }, hoverinfo: 'skip',
+						showlegend: false
+					});
+				}
+				baseLayout.shapes = shapes;
+				baseLayout.annotations = [{
+					x: 0, y: 1.08, xref: 'paper', yref: 'paper', showarrow: false,
+					text: 'Dotted lines: Th/K; ratios are unstable at low K',
+					font: { size: 10, color: '#64748B' }
+				}];
+			}
+			return { traces, layout: baseLayout };
+		}
 
 		if (effectiveMode === 'curve-depth') {
 			const selected = workbench.selectedQaqcCurve;
@@ -4630,7 +4696,13 @@
 		void workbench.depthFilter;
 		void workbench.brushedDepthIndices;
 
-		if (mode === 'core-qc') {
+		if (mode === 'th-k' || mode === 'pef-k' || mode === 'pef-th-k') {
+			void wellData.curves['POTA'];
+			void wellData.curves['THOR'];
+			void wellData.curves['PEF'];
+			void wellData.curves['DEPT'];
+			void wellData.curves['DEPTH'];
+		} else if (mode === 'core-qc') {
 			void wellData.coreComparison;
 			void workbench.coreQcView;
 		} else if (mode === 'vsh-qc') {
