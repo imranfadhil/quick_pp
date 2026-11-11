@@ -1040,14 +1040,7 @@
 					}
 				}
 				if (potaData.length > 0) {
-					// If POTA is stored as decimal fraction (e.g. 0.02 for 2%), normalize to percentage
-					const maxPota = potaData.reduce<number>(
-						(m, v) => (v !== null && v > m ? v : m),
-						0
-					);
-					const potaScaleToPct = maxPota > 0 && maxPota <= 0.5 ? 100.0 : 1.0;
-					const potaPct = potaData.map((v) => (v !== null ? v * potaScaleToPct : null));
-					const potaDec = decimateSvg(potaPct);
+					const potaDec = decimateSvg(potaData);
 					traces.push({
 						type: 'scatter',
 						mode: 'lines',

@@ -298,7 +298,9 @@ flowchart TD
 
 * **Spectral crossplots:** The right pane also offers thorium vs potassium, PEF vs potassium,
   and PEF vs Th/K. These use `THOR` in ppm, `POTA` in percent and `PEF` in b/e;
-  verify the input units before interpreting them. The Th/K plot uses a logarithmic
+  verify the input units before interpreting them. Potassium values are used as
+  stored, including values below 0.5%; no magnitude-based conversion is applied.
+  Curves stored as fractions must be converted to percent before use. The Th/K plot uses a logarithmic
   ratio axis and excludes non-positive K or Th. Ratios are unstable at low K.
   Th/K guide lines and the scatter are interpretive aids, not mineral classifications.
   Diamond markers are illustrative configured mineral response endpoints, not

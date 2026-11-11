@@ -4128,11 +4128,18 @@ class WellDataState {
 			}
 		}
 
-		// Normalize POTA to percent (%) if stored as decimal fraction (max <= 0.5 v/v)
-		if (out['POTA'] !== null && out['POTA'] !== undefined) {
-			const potaArr = this.curves['POTA'] ?? this.curves['POTA.'];
-			if (potaArr && !potaArr.some((v) => Number.isFinite(v) && v > 0.5)) {
-				out['POTA'] = out['POTA'] * 100.0;
+		for (const [curve, aliases] of Object.entries({
+			POTA: ['POTA.', 'HFKO', 'HFKO.', 'POT', 'POT.', 'K', 'K.', 'POTA_NORM'],
+			THOR: ['THOR.', 'HTHO', 'HTHO.', 'TH', 'TH.', 'THO'],
+			URAN: ['URAN.', 'HURA', 'HURA.', 'U', 'U.', 'URA']
+		})) {
+			if (out[curve] !== null && out[curve] !== undefined) continue;
+			for (const alias of aliases) {
+				const value = this.curves[alias]?.[lo];
+				if (typeof value === 'number' && Number.isFinite(value)) {
+					out[curve] = value;
+					break;
+				}
 			}
 		}
 

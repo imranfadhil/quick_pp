@@ -30,3 +30,10 @@ test('missing depth is not mislabeled as an actual depth', () => {
 	const result = spectralCrossplotPoints('th-k', { POTA: [1], THOR: [2] }, [0]);
 	assert.deepEqual(result.depths, [null]);
 });
+
+test('potassium already in percent remains unchanged even below 0.5%', () => {
+	const lowK = { POTA: [0.02, 0.4], THOR: [8, 2], PEF: [3, 4] };
+	assert.deepEqual(spectralCrossplotPoints('th-k', lowK, [0, 1]).x, [0.02, 0.4]);
+	assert.deepEqual(spectralCrossplotPoints('pef-k', lowK, [0, 1]).x, [0.02, 0.4]);
+	assert.deepEqual(spectralCrossplotPoints('pef-th-k', lowK, [0, 1]).x, [400, 5]);
+});
