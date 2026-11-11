@@ -681,7 +681,7 @@ class WorkbenchState {
 	}
 
 	// Single-well left pane section collapse / expand / focus controls
-	sectionFocusMode = $state<boolean>(false);
+	sectionFocusMode = $state<boolean>(true);
 	focusedSectionTitle = $state<string | null>(null);
 	sectionBulkAction = $state<{
 		type: 'expand-all' | 'collapse-all' | 'focus';

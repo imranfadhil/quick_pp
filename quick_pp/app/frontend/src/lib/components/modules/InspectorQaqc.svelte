@@ -32,6 +32,26 @@
 
 	let curveList = $derived(wellData.availableCurves);
 
+	// Raw = as-loaded logs (incl. *_ORI backups); Edited = raw curves overwritten in place
+	// (have a *_ORI backup); Computed = derived petrophysical curves.
+	let curveGroups = $derived.by(() => {
+		const calc = new Set(wellData.calculatedCurvesPresent);
+		const raw: string[] = [];
+		const edited: string[] = [];
+		const computed: string[] = [];
+		for (const c of curveList) {
+			if (calc.has(c)) computed.push(c);
+			else if (!c.endsWith('_ORI') && wellData.curves[`${c}_ORI`]) edited.push(c);
+			else raw.push(c);
+		}
+		return { raw, edited, computed };
+	});
+	let statGroups = $derived([
+		{ key: 'raw', label: 'Raw', hint: 'Curves as loaded (including _ORI backups)', curves: curveGroups.raw },
+		{ key: 'edited', label: 'Edited', hint: 'Curves modified in place (original kept as _ORI)', curves: curveGroups.edited },
+		{ key: 'computed', label: 'Computed', hint: 'Derived petrophysical curves', curves: curveGroups.computed }
+	]);
+
 	// Keep selectedQaqcCurve valid when well changes
 	$effect(() => {
 		if (curveList.length > 0 && !curveList.includes(workbench.selectedQaqcCurve)) {
@@ -2198,6 +2218,98 @@
 			{/if}
 		</ParameterSection>
 
+		<ParameterSection
+			title="Curve Statistical Distributions (Click to Select)"
+			badge={`${curveGroups.raw.length} raw · ${curveGroups.edited.length} edited · ${curveGroups.computed.length} computed`}
+		>
+			<div class="overflow-x-auto border border-[var(--border-hairline)]">
+				<table class="w-full border-collapse text-left text-[11px]">
+					<thead class="bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
+						<tr class="h-6 border-b border-[var(--border-hairline)]">
+							<th class="px-1.5 font-semibold">Curve</th>
+							<th class="px-1.5 text-right font-semibold" title="Shallowest valid depth (m)">Top</th>
+							<th class="px-1.5 text-right font-semibold" title="Deepest valid depth (m)">Bottom</th>
+							<th class="px-1.5 text-right font-semibold">Min</th>
+							<th class="px-1.5 text-right font-semibold">Max</th>
+							<th class="px-1.5 text-right font-semibold">Mean</th>
+							<th class="px-1.5 text-right font-semibold" title="Standard Deviation">Std</th>
+						</tr>
+					</thead>
+					{#each statGroups as grp (grp.key)}
+						{#if grp.curves.length > 0}
+							<tbody class="divide-y divide-[var(--border-hairline)]">
+								<tr class="h-5 bg-[var(--bg-subtle)]">
+									<td
+										colspan="7"
+										class="px-1.5 text-[10px] font-bold tracking-wide text-[var(--text-secondary)] uppercase"
+										title={grp.hint}
+									>
+										{grp.label} ({grp.curves.length})
+									</td>
+								</tr>
+								{#each grp.curves as c (c)}
+									{@const st = wellData.activeStats[c] ?? wellData.stats[c]}
+									{@const isSelected = workbench.selectedQaqcCurve === c}
+									{@const inSplice = editorMode === 'splice' && spliceRuns.includes(c)}
+									<tr
+										onclick={() => (workbench.selectedQaqcCurve = c)}
+										title={`${c}: ${fmtNum(st?.top, 1)}–${fmtNum(st?.bottom, 1)} m (${st?.count ?? 0} valid samples)`}
+										class="h-6 cursor-pointer transition-colors hover:bg-[var(--bg-subtle)] {isSelected
+											? 'bg-blue-50/90 font-semibold'
+											: inSplice
+												? 'bg-indigo-50/50'
+												: ''}"
+									>
+										<td class="mono-num px-1.5 font-semibold text-[var(--text-primary)] whitespace-nowrap">
+											<div class="flex items-center justify-between gap-1">
+												<span>
+													{c}
+													{#if getCurveUnit(c)}
+														<span class="text-[9px] font-normal text-[var(--text-muted)]">
+															({getCurveUnit(c)})
+														</span>
+													{/if}
+												</span>
+												{#if editorMode === 'splice'}
+													{#if inSplice}
+														<span class="rounded-xs bg-blue-100 px-1 text-[8.5px] font-bold text-blue-800">
+															R{spliceRuns.indexOf(c) + 1}
+														</span>
+													{:else}
+														<button
+															type="button"
+															onclick={(e) => {
+																e.stopPropagation();
+																addSpliceRun(c);
+															}}
+															title="Add {c} to splice runs"
+															class="rounded-xs border border-blue-200 bg-blue-50 px-1 text-[8.5px] font-semibold text-blue-700 hover:bg-blue-100"
+														>
+															+Splice
+														</button>
+													{/if}
+												{/if}
+											</div>
+										</td>
+										<td class="mono-num px-1.5 text-right text-[var(--text-secondary)]">
+											{fmtNum(st?.top, 1)}
+										</td>
+										<td class="mono-num px-1.5 text-right text-[var(--text-secondary)]">
+											{fmtNum(st?.bottom, 1)}
+										</td>
+										<td class="mono-num px-1.5 text-right">{fmtNum(st?.min, 2)}</td>
+										<td class="mono-num px-1.5 text-right">{fmtNum(st?.max, 2)}</td>
+										<td class="mono-num px-1.5 text-right">{fmtNum(st?.mean, 2)}</td>
+										<td class="mono-num px-1.5 text-right">{fmtNum(st?.std, 2)}</td>
+									</tr>
+								{/each}
+							</tbody>
+						{/if}
+					{/each}
+				</table>
+			</div>
+		</ParameterSection>
+
 		<ImputationControls />
 
 		<ParameterSection
@@ -2551,82 +2663,6 @@
 				>
 					{wellData.isSaving ? 'Saving...' : 'Save'}
 				</button>
-			</div>
-		</ParameterSection>
-
-		<ParameterSection title="Curve Statistical Distributions (Click to Select)">
-			<div class="overflow-x-auto border border-[var(--border-hairline)]">
-				<table class="w-full border-collapse text-left text-[11px]">
-					<thead class="bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
-						<tr class="h-6 border-b border-[var(--border-hairline)]">
-							<th class="px-1.5 font-semibold">Curve</th>
-							<th class="px-1.5 text-right font-semibold" title="Shallowest valid depth (m)">Top</th>
-							<th class="px-1.5 text-right font-semibold" title="Deepest valid depth (m)">Bottom</th>
-							<th class="px-1.5 text-right font-semibold">Min</th>
-							<th class="px-1.5 text-right font-semibold">Max</th>
-							<th class="px-1.5 text-right font-semibold">Mean</th>
-							<th class="px-1.5 text-right font-semibold" title="Standard Deviation">Std</th>
-						</tr>
-					</thead>
-					<tbody class="divide-y divide-[var(--border-hairline)]">
-						{#each curveList as c (c)}
-							{@const st = wellData.activeStats[c] ?? wellData.stats[c]}
-							{@const isSelected = workbench.selectedQaqcCurve === c}
-							{@const inSplice = editorMode === 'splice' && spliceRuns.includes(c)}
-							<tr
-								onclick={() => (workbench.selectedQaqcCurve = c)}
-								title={`${c}: ${fmtNum(st?.top, 1)}–${fmtNum(st?.bottom, 1)} m (${st?.count ?? 0} valid samples)`}
-								class="h-6 cursor-pointer transition-colors hover:bg-[var(--bg-subtle)] {isSelected
-									? 'bg-blue-50/90 font-semibold'
-									: inSplice
-										? 'bg-indigo-50/50'
-										: ''}"
-							>
-								<td class="mono-num px-1.5 font-semibold text-[var(--text-primary)] whitespace-nowrap">
-									<div class="flex items-center justify-between gap-1">
-										<span>
-											{c}
-											{#if getCurveUnit(c)}
-												<span class="text-[9px] font-normal text-[var(--text-muted)]">
-													({getCurveUnit(c)})
-												</span>
-											{/if}
-										</span>
-										{#if editorMode === 'splice'}
-											{#if inSplice}
-												<span class="rounded-xs bg-blue-100 px-1 text-[8.5px] font-bold text-blue-800">
-													R{spliceRuns.indexOf(c) + 1}
-												</span>
-											{:else}
-												<button
-													type="button"
-													onclick={(e) => {
-														e.stopPropagation();
-														addSpliceRun(c);
-													}}
-													title="Add {c} to splice runs"
-													class="rounded-xs border border-blue-200 bg-blue-50 px-1 text-[8.5px] font-semibold text-blue-700 hover:bg-blue-100"
-												>
-													+Splice
-												</button>
-											{/if}
-										{/if}
-									</div>
-								</td>
-								<td class="mono-num px-1.5 text-right text-[var(--text-secondary)]">
-									{fmtNum(st?.top, 1)}
-								</td>
-								<td class="mono-num px-1.5 text-right text-[var(--text-secondary)]">
-									{fmtNum(st?.bottom, 1)}
-								</td>
-								<td class="mono-num px-1.5 text-right">{fmtNum(st?.min, 2)}</td>
-								<td class="mono-num px-1.5 text-right">{fmtNum(st?.max, 2)}</td>
-								<td class="mono-num px-1.5 text-right">{fmtNum(st?.mean, 2)}</td>
-								<td class="mono-num px-1.5 text-right">{fmtNum(st?.std, 2)}</td>
-							</tr>
-						{/each}
-					</tbody>
-				</table>
 			</div>
 		</ParameterSection>
 

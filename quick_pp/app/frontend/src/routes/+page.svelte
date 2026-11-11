@@ -907,12 +907,12 @@
 							<button
 								type="button"
 								onclick={() => workbench.toggleFocusMode()}
-								title="Focus mode: only open the selected section and automatically close others"
+								title="Show One: only keep the selected section open and automatically close others"
 								class="h-5 rounded-xs border px-1.5 font-medium transition-colors {workbench.sectionFocusMode
 									? 'border-[var(--accent-primary)] bg-blue-600 font-semibold text-white'
 									: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100 hover:text-[var(--text-primary)]'}"
 							>
-								Focus
+								Show One
 							</button>
 						</div>
 					</div>
