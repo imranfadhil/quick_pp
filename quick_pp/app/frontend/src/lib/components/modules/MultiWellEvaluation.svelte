@@ -173,6 +173,9 @@
 		if (lp.model === 'vsh_bulk') {
 			throw new Error('Bulk-shale evaluation is currently supported only in the single-well workflow.');
 		}
+		if (!['den', 'neu_den'].includes(lp.porosityMethod)) {
+			throw new Error('Sonic and averaging porosity methods are currently supported only in the single-well workflow.');
+		}
 		if (lp.logCorrectionMode === 'hc' && lp.hcCorrectionMethod === 'invaded_zone_standard') {
 			throw new Error(
 				'Invaded-zone correction requires per-well mud-filtrate metadata and is not supported in batch evaluation.'

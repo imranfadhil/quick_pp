@@ -7,6 +7,9 @@
 
 * **Lithology Model:** `{{ litho_params.model_name }}`
 * **Porosity Model:** `{{ poro_params.method_name }}`{% if litho_params.model_key == 'vsh_bulk' %} with an assumed ineffective fraction of shale porosity{% elif poro_params.use_hc_corrected %} with light-hydrocarbon invasion fluid correction and clay-bound water ($CBW$) partitioning{% else %} with clay-bound water ($CBW$) partitioning{% endif %}.
+{% if poro_params.method_key in ('sonic_wyllie', 'sonic_hunt_raymer') %}
+* **Sonic inputs:** Fluid transit time {{ poro_params.sonic_fluid_dt if poro_params.sonic_fluid_dt is not none else 'Not recorded' }} µs/ft; matrix transit time is weighted by the lithology-derived mineral fractions.
+{% endif %}
 * **Core-to-Log Calibration Scope:** Total RCA core plugs loaded $= {{ poro_params.total_core_count }}$; valid target-zone plugs (`{{ target_zones|join(', ') }}`) with overlapping depth-matched log porosity used in regression $= {{ poro_params.core_count }}$.
 
 {% if litho_params.model_key == 'multi_mineral' %}

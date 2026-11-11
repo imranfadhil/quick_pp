@@ -136,6 +136,183 @@ def test_bulk_shale_save_removes_invalid_prior_values(client_and_project):
     assert rows
 
 
+@pytest.mark.parametrize(
+    "method",
+    ["sonic_wyllie", "sonic_hunt_raymer", "avg_weighted", "avg_arithmetic", "avg_gaymard"],
+)
+def test_workspace_porosity_methods_use_lithology_and_fluid(client_and_project, method):
+    client, pid = client_and_project
+    base = f"/quick_pp/workspace/projects/{pid}/wells/Well-A"
+    lith = client.post(f"{base}/lithology", json={"model": "ssc"})
+    assert lith.status_code == 200, lith.text
+    response = client.post(
+        f"{base}/porosity",
+        json={"method": method, "lithology_model": "ssc", "fluid_point": [1.0, 1.1], "sonic_fluid_dt": 210},
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()["data"]
+    lith_data = lith.json()["data"]
+    vols = np.array([lith_data[c][0] for c in ("VSAND", "VSILT", "VCLAY")])
+    vols /= vols.sum()
+    if method.startswith("sonic_"):
+        dt_ma = np.dot(vols, [52.9, 52.9, 120.0])
+        if method == "sonic_wyllie":
+            expected = (62.0 - dt_ma) / (210.0 - dt_ma)
+        else:
+            c = dt_ma / (2 * 210.0) - 1
+            expected = -c - np.sqrt(c * c + dt_ma / 62.0 - 1)
+    else:
+        phid = result["PHID"][0]
+        assert phid == pytest.approx((result["RHOM"][0] - 2.25) / (result["RHOM"][0] - 1.1))
+        expected = {
+            "avg_weighted": (2 * phid + 0.12) / 3,
+            "avg_arithmetic": (phid + 0.12) / 2,
+            "avg_gaymard": np.sqrt((phid**2 + 0.12**2) / 2),
+        }[method]
+    assert result["PHIT"][0] == pytest.approx(np.clip(expected, 0, 1), abs=1e-6)
+
+
+def test_sonic_missing_samples_stay_null_and_missing_curve_is_rejected(client_and_project, monkeypatch):
+    client, pid = client_and_project
+    base = f"/quick_pp/workspace/projects/{pid}/wells/Well-A"
+    assert client.post(f"{base}/lithology", json={"model": "ssc"}).status_code == 200
+    original = ws_service._get_filtered_well_df
+
+    def missing_sample(*args, **kwargs):
+        df = original(*args, **kwargs).copy()
+        df.loc[df.index[1], "DTC"] = np.nan
+        return df
+
+    monkeypatch.setattr(ws_service, "_get_filtered_well_df", missing_sample)
+    result = client.post(f"{base}/porosity", json={"method": "sonic_wyllie", "lithology_model": "ssc"})
+    assert result.status_code == 200, result.text
+    assert result.json()["data"]["PHIT"][1] is None
+
+    def missing_curve(*args, **kwargs):
+        return original(*args, **kwargs).drop(columns="DTC")
+
+    monkeypatch.setattr(ws_service, "_get_filtered_well_df", missing_curve)
+    result = client.post(f"{base}/porosity", json={"method": "sonic_wyllie", "lithology_model": "ssc"})
+    assert result.status_code == 400
+    assert "requires a DTC or DT curve" in result.json()["detail"]
+
+
+def test_sonic_uses_extended_mineral_and_rejects_invalid_fluid_dt(client_and_project, monkeypatch):
+    client, pid = client_and_project
+    base = f"/quick_pp/workspace/projects/{pid}/wells/Well-A"
+    original = ws_service._get_filtered_well_df
+
+    def illite_lithology(*args, **kwargs):
+        df = original(*args, **kwargs).copy()
+        for column in ws_service.ALL_LITHOLOGY_VOL_COLS:
+            df[column] = 0.0
+        df["VILLI"] = 1.0
+        df["DTC"] = 130.0
+        return df
+
+    monkeypatch.setattr(ws_service, "_get_filtered_well_df", illite_lithology)
+    payload = {"method": "sonic_wyllie", "lithology_model": "multi_mineral", "sonic_fluid_dt": 210}
+    result = client.post(f"{base}/porosity", json=payload)
+    assert result.status_code == 200, result.text
+    assert result.json()["data"]["PHIT"][0] == pytest.approx((130 - 110) / (210 - 110))
+    result = client.post(f"{base}/porosity", json={**payload, "sonic_fluid_dt": 100})
+    assert result.status_code == 400
+    assert "No valid sonic porosity results" in result.json()["detail"]
+
+
+def test_sonic_save_clears_previously_saved_porosity_at_missing_samples(client_and_project, monkeypatch):
+    client, pid = client_and_project
+    base = f"/quick_pp/workspace/projects/{pid}/wells/Well-A"
+    assert client.post(f"{base}/lithology", json={"model": "ssc", "save": True}).status_code == 200
+    assert client.post(f"{base}/porosity", json={"method": "den", "lithology_model": "ssc", "save": True}).status_code == 200
+    original = ws_service._get_filtered_well_df
+
+    def missing_sample(*args, **kwargs):
+        df = original(*args, **kwargs).copy()
+        df.loc[df.index[1], "DTC"] = np.nan
+        return df
+
+    monkeypatch.setattr(ws_service, "_get_filtered_well_df", missing_sample)
+    response = client.post(f"{base}/porosity", json={"method": "sonic_wyllie", "lithology_model": "ssc", "save": True})
+    assert response.status_code == 200, response.text
+    from sqlalchemy import select
+    from quick_pp.database.models import Curve, CurveData, Well as WellModel
+
+    with ws_service.get_db() as session:
+        depths = session.execute(
+            select(CurveData.depth)
+            .join(Curve, CurveData.curve_id == Curve.curve_id)
+            .join(WellModel, Curve.well_id == WellModel.well_id)
+            .where(WellModel.project_id == pid, WellModel.name == "Well-A", Curve.mnemonic == "PHIT")
+        ).scalars().all()
+    assert 1001.0 not in depths
+    assert 1000.0 in depths
+
+
+@pytest.mark.parametrize("method", ["sonic_wyllie", "avg_arithmetic"])
+def test_new_porosity_methods_honor_gr_badhole_treatment(client_and_project, monkeypatch, method):
+    client, pid = client_and_project
+    base = f"/quick_pp/workspace/projects/{pid}/wells/Well-A"
+    original = ws_service._get_filtered_well_df
+
+    def with_badhole(*args, **kwargs):
+        df = original(*args, **kwargs).copy()
+        df["BADHOLE"] = 0
+        df.loc[df.index[0], "BADHOLE"] = 1
+        return df
+
+    monkeypatch.setattr(ws_service, "_get_filtered_well_df", with_badhole)
+    response = client.post(
+        f"{base}/porosity",
+        json={"method": method, "lithology_model": "vsh_gr", "badhole_treatment": "vsh_gr", "gr_clean": 20, "gr_clay": 120},
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    if method == "sonic_wyllie":
+        dt_ma = 0.9 * 52.9 + 0.1 * 120.0
+        expected = (62.0 - dt_ma) / (190.0 - dt_ma)
+    else:
+        expected = (data["PHID"][0] + 0.12) / 2
+    assert data["PHIT"][0] == pytest.approx(expected)
+
+
+def test_porosity_comparison_is_isolated_and_matches_active_method(client_and_project):
+    client, pid = client_and_project
+    base = f"/quick_pp/workspace/projects/{pid}/wells/Well-A"
+    assert client.post(f"{base}/lithology", json={"model": "ssc"}).status_code == 200
+    payload = {"method": "avg_weighted", "lithology_model": "ssc", "sonic_fluid_dt": 210}
+    active = client.post(f"{base}/porosity", json=payload)
+    assert active.status_code == 200, active.text
+    before = ws_service._get_filtered_well_df(pid, "Well-A").copy()
+    before_config = dict(ws_service._ephemeral_well_configs.get((pid, "Well-A"), {}))
+    comparison = client.post(f"{base}/porosity_comparison", json=payload)
+    assert comparison.status_code == 200, comparison.text
+    body = comparison.json()
+    assert len(body["curves"]) == 7
+    assert body["curves"]["avg_weighted"] == pytest.approx(active.json()["data"]["PHIT"])
+    pd.testing.assert_frame_equal(before, ws_service._get_filtered_well_df(pid, "Well-A"))
+    assert before_config == ws_service._ephemeral_well_configs.get((pid, "Well-A"), {})
+    assert client.post(f"{base}/porosity_comparison", json={**payload, "save": True}).status_code == 400
+    assert client.post(f"{base}/porosity_comparison", json={**payload, "lithology_model": "vsh_bulk"}).status_code == 400
+
+
+def test_porosity_comparison_reports_unavailable_sonic_methods(client_and_project, monkeypatch):
+    client, pid = client_and_project
+    original = ws_service._get_filtered_well_df
+    monkeypatch.setattr(
+        ws_service, "_get_filtered_well_df",
+        lambda *args, **kwargs: original(*args, **kwargs).drop(columns="DTC", errors="ignore"),
+    )
+    response = client.post(
+        f"/quick_pp/workspace/projects/{pid}/wells/Well-A/porosity_comparison",
+        json={"lithology_model": "ssc"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert len(body["curves"]) == 5
+    assert set(body["errors"]) == {"sonic_wyllie", "sonic_hunt_raymer"}
+
+
 def test_project_summary_endpoint(client_and_project):
     client, pid = client_and_project
     r = client.get(f"/quick_pp/database/projects/{pid}/summary")

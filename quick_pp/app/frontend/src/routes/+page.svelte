@@ -7,6 +7,7 @@
 	import LogTrackCanvas from '$lib/components/workbench/LogTrackCanvas.svelte';
 	import StickPlotCanvas from '$lib/components/workbench/StickPlotCanvas.svelte';
 	import CrossplotCanvas from '$lib/components/workbench/CrossplotCanvas.svelte';
+	import PorosityComparisonCanvas from '$lib/components/workbench/PorosityComparisonCanvas.svelte';
 	import MissingDataMatrix from '$lib/components/workbench/MissingDataMatrix.svelte';
 	import CompactDataGrid, {
 		type GridColumn
@@ -996,6 +997,8 @@
 					<VolumetricsRightPanel />
 				{:else if workbench.rightPaneTab === 'missing'}
 					<MissingDataMatrix />
+				{:else if workbench.rightPaneTab === 'poro-comparison' && workbench.scope === 'single-well'}
+					<PorosityComparisonCanvas />
 				{:else if workbench.rightPaneTab === 'crossplot'}
 					{#if isFptMode}
 						<FptPlotCanvas initialMode="excess" />

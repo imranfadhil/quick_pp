@@ -266,7 +266,6 @@
 					<span>{step.label}</span>
 				</button>
 			{/each}
-
 			<!-- Standalone Module Divider + Core & Pc Prep -->
 			<div class="mx-1.5 h-4 w-[1px] shrink-0 bg-[var(--border-hairline)]"></div>
 			<span
@@ -741,6 +740,12 @@
 				<button type="button" onclick={() => (workbench.rightPaneTab = 'missing')}
 					class="h-5 shrink-0 whitespace-nowrap rounded-xs px-1.5 font-medium {workbench.rightPaneTab === 'missing' ? 'bg-[var(--bg-surface)] text-[var(--text-primary)] shadow-2xs' : 'text-[var(--text-muted)]'}">
 					Missing Matrix
+				</button>
+			{/if}
+			{#if workbench.scope === 'single-well' && workbench.singleWellStep === 'litho-poro'}
+				<button type="button" onclick={() => (workbench.rightPaneTab = 'poro-comparison')}
+					class="h-5 shrink-0 whitespace-nowrap rounded-xs px-1.5 font-medium {workbench.rightPaneTab === 'poro-comparison' ? 'bg-[var(--bg-surface)] text-[var(--text-primary)] shadow-2xs' : 'text-[var(--text-muted)]'}">
+					Porosity Compare
 				</button>
 			{/if}
 		</div>

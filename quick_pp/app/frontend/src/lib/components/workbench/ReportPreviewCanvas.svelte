@@ -261,6 +261,7 @@
 							? bulkShaleParameters(workbench.lithoParams) : undefined,
 						litho_minerals: workbench.lithoParams.minerals,
 						porosity_method_key: workbench.lithoParams.porosityMethod,
+						sonic_fluid_dt: workbench.lithoParams.sonicFluidDt,
 						use_hc_corrected: workbench.lithoParams.useHcCorrected,
 						gr_clean: workbench.lithoParams.grClean,
 						gr_clay: workbench.lithoParams.grClay,

@@ -106,7 +106,8 @@ export interface LithoEndpointParams {
 	shaleSolidDensity: number;
 	shalePorosity: number;
 	shaleIneffectiveFraction: number;
-	porosityMethod: 'neu_den' | 'den';
+	porosityMethod: 'neu_den' | 'den' | 'sonic_wyllie' | 'sonic_hunt_raymer' | 'avg_weighted' | 'avg_arithmetic' | 'avg_gaymard';
+	sonicFluidDt: number;
 	logCorrectionMode: 'none' | 'hc' | 'den';
 	useHcCorrected: boolean;
 	enableHcCorrection: boolean;
@@ -585,14 +586,14 @@ class WorkbenchState {
 	targetScrollDepth = $state<number | null>(null);
 
 	// Right pane view mode
-	rightPaneTab = $state<'crossplot' | 'grid' | 'split' | 'missing'>('split');
+	rightPaneTab = $state<'crossplot' | 'grid' | 'split' | 'missing' | 'poro-comparison'>('split');
 	missingMatrixRevision = $state(0);
 	/** Sub-tab within the right bottom data dock: 'data' (Step Data / QC) or 'params' (Parameters & Fits). */
 	rightGridSubTab = $state<'data' | 'params'>('data');
 
 	openParametersTab() {
 		this.rightGridSubTab = 'params';
-		if (this.rightPaneTab === 'crossplot' || this.rightPaneTab === 'missing') {
+		if (this.rightPaneTab === 'crossplot' || this.rightPaneTab === 'missing' || this.rightPaneTab === 'poro-comparison') {
 			this.rightPaneTab = 'split';
 		}
 	}
@@ -718,6 +719,7 @@ class WorkbenchState {
 		shalePorosity: 0.2,
 		shaleIneffectiveFraction: 1,
 		porosityMethod: 'den',
+		sonicFluidDt: 190,
 		logCorrectionMode: 'none',
 		useHcCorrected: false,
 		enableHcCorrection: false,

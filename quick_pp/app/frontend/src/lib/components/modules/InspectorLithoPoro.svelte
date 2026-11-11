@@ -8,7 +8,7 @@
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench, computeSiltIntersection } from '$lib/state/workbench.svelte';
 	import { fmtNum } from '$lib/utils/formatters';
-	import { bulkShaleParameters } from '$lib/utils/bulkShale';
+	import { applyBulkShaleCompatibility, bulkShaleConflicts, bulkShaleParameters } from '$lib/utils/bulkShale';
 	import {
 		gorMetricToScfStb,
 		gorScfStbToMetric,
@@ -297,6 +297,15 @@
 
 	let lithoPoroRunId = 0;
 	let bulkInvalidCount = $state<number | null>(null);
+	let bulkConflicts = $derived(
+		bulkShaleConflicts(workbench.lithoParams, workbench.tsParams.enabled)
+	);
+
+	function applyBulkCompatibleSettings() {
+		applyBulkShaleCompatibility(workbench.lithoParams);
+		clearThomasStieber();
+		executeLithoPoro(false);
+	}
 
 	async function executeLithoPoro(persist: boolean = false) {
 		if (!workbench.projectId || !workbench.wellId) return;
@@ -316,9 +325,9 @@
 				wellData.isCalculating = false;
 				return;
 			}
-			if (lp.porosityMethod !== 'den' || lp.logCorrectionMode !== 'none' ||
-				!['none', 'ignore'].includes(lp.badholeTreatment) || workbench.tsParams.enabled) {
-				wellData.lastError = 'Bulk shale requires density porosity, no log correction, badhole action Use Normally or Ignore, and Thomas-Stieber disabled.';
+			const conflicts = bulkShaleConflicts(lp, workbench.tsParams.enabled);
+			if (conflicts.length) {
+				wellData.lastError = `Bulk shale cannot run: ${conflicts.join(' ')}`;
 				wellData.isCalculating = false;
 				return;
 			}
@@ -453,7 +462,7 @@
 						gr_clean: lp.grClean,
 						gr_clay: lp.grClay,
 						minerals: lp.minerals,
-						porosity_method: lp.porosityMethod === 'den' ? 'density' : 'neutron_density',
+						porosity_method: lp.porosityMethod,
 						...bulkArgs,
 						...coalArgs,
 						...filterArgs
@@ -480,6 +489,7 @@
 					},
 					body: {
 						method: lp.porosityMethod,
+						sonic_fluid_dt: lp.sonicFluidDt,
 						lithology_model: lp.model,
 						use_hc_corrected: useCorrected,
 						dry_sand_point: [lp.drySandNphi, lp.drySandRhob],
@@ -561,6 +571,10 @@
 
 	async function executeThomasStieber(persist: boolean = false, chained: boolean = false) {
 		if (!workbench.projectId || !workbench.wellId) return;
+		if (workbench.lithoParams.model === 'vsh_bulk') {
+			wellData.lastError = 'Thomas-Stieber is not supported with the bulk-shale model.';
+			return;
+		}
 		const selectionIndices = wellData.getBrushedCalculationIndices();
 		if (selectionIndices && selectionIndices.size === 0) {
 			wellData.lastError = 'The selection contains no rows in the active depth/zone filter.';
@@ -718,8 +732,37 @@
 				>
 					<option value="den">Density (ρma from Litho)</option>
 					<option value="neu_den">NPHI-RHOB Xplot</option>
+					<option value="sonic_wyllie">Sonic Wyllie</option>
+					<option value="sonic_hunt_raymer">Sonic Hunt-Raymer</option>
+					<option value="avg_weighted">N-D Weighted</option>
+					<option value="avg_arithmetic">N-D Arithmetic</option>
+					<option value="avg_gaymard">N-D RMS (Gaymard/gas)</option>
 				</select>
 			</div>
+			{#if workbench.lithoParams.porosityMethod.startsWith('sonic_')}
+				<NumericScrubber label="Fluid sonic transit time" bind:value={workbench.lithoParams.sonicFluidDt} unit="µs/ft" min={1} max={1000} step={1} onrun={() => executeLithoPoro(false)} />
+				<p class="text-[10px] text-[var(--text-secondary)]">Matrix transit time is weighted by lithology; DTC or DT is required.</p>
+			{/if}
+			{#if workbench.lithoParams.model === 'vsh_bulk' && bulkConflicts.length}
+				<div class="mt-1.5 rounded-sm border border-amber-300 bg-amber-50 p-2 text-[10px] text-amber-950" role="status">
+					<strong>Bulk shale needs compatible settings:</strong>
+					<ul class="list-disc pl-4">
+						{#each bulkConflicts as conflict}<li>{conflict}</li>{/each}
+					</ul>
+					<p class="mt-1">
+						The button below selects Density and turns off log correction and Thomas-Stieber.
+						{#if !['none', 'ignore'].includes(workbench.lithoParams.badholeTreatment)}
+							It also changes Badhole Action to Ignore / Nullify, excluding flagged samples.
+						{:else}
+							Your current badhole action will be retained.
+						{/if}
+					</p>
+					<button type="button" onclick={applyBulkCompatibleSettings}
+						class="mt-1 rounded-sm border border-amber-700 bg-white px-2 py-1 font-semibold hover:bg-amber-100">
+						Apply compatible settings &amp; calculate
+					</button>
+				</div>
+			{/if}
 		</ParameterSection>
 
 		{#if workbench.lithoParams.model === 'vsh_bulk'}
@@ -1637,7 +1680,7 @@
 			<div class="mt-1.5 flex items-center gap-1.5">
 				<button
 					type="button"
-					disabled={wellData.isCalculating}
+					disabled={wellData.isCalculating || workbench.lithoParams.model === 'vsh_bulk'}
 					onclick={() => executeThomasStieber(false)}
 					class="h-7 flex-1 rounded-sm border border-teal-700 bg-teal-700 px-2 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-50"
 				>

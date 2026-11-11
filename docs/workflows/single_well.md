@@ -225,14 +225,44 @@ flowchart TD
       
       $$\text{Density Porosity: } \phi_{D} = \frac{\rho_{\text{ma}} - \rho_b}{\rho_{\text{ma}} - \rho_{\text{fl}}}$$
       
-      $$\text{Sonic Porosity (Wyllie): } \phi_S = \frac{\Delta t - \Delta t_{\text{ma}}}{\Delta t_{\text{fl}} - \Delta t_{\text{ma}}} \cdot \frac{1}{B_{cp}}$$
+      $$\text{Sonic Porosity (Wyllie): } \phi_S = \frac{\Delta t - \Delta t_{\text{ma}}}{\Delta t_{\text{fl}} - \Delta t_{\text{ma}}}$$
       
-      $$\text{Raymer-Hunt-Gardner (RHG): } \phi_{\text{RHG}} = C_{\text{RHG}} \cdot \frac{\Delta t - \Delta t_{\text{ma}}}{\Delta t}$$
+      $$\text{Hunt-Raymer: } \phi_S = -c - \sqrt{c^2 + \frac{\Delta t_{\text{ma}}}{\Delta t} - 1}, \quad c = \frac{\Delta t_{\text{ma}}}{2\Delta t_{\text{fl}}} - 1$$
       
       $$\phi_e = \phi_t - V_{\text{clay}} \cdot \phi_{\text{clay}} \quad \text{or} \quad \phi_e = \phi_t (1 - V_{\text{sh}})$$
 
 * **Input Curves:** `GR`, `RHOB`, `NPHI`, `PEF`, `DTC`  
 * **Output Curves:** `VSH`, `VSAND`, `VSILT`, `VCLAY`, `VCALC`, `VDOLO`, `PHIT`, `PHIE`
+
+* **Porosity method:** Alongside density and the neutron-density crossplot, choose
+  Wyllie or Hunt-Raymer sonic porosity, or a neutron-density weighted
+  $(2\phi_D+\phi_N)/3$, arithmetic $(\phi_D+\phi_N)/2$, or RMS
+  $\sqrt{(\phi_D^2+\phi_N^2)/2}$ average. The library's Gaymard and gas
+  averaging options use the same RMS formula. Averages use the selected fluid
+  density and lithology-derived matrix density; they are empirical corrections,
+  not substitutes for calibration to local lithology and core.
+  Sonic methods require `DTC` (or `DT`) as well as the neutron and density logs
+  required by the lithology workflow. Matrix transit time is the matrix-volume
+  weighted sum of configured mineral DTC values; silt uses quartz. The fluid
+  transit time is adjustable (default 190 µs/ft). Samples with missing or
+  non-positive sonic transit time, fluid transit time not exceeding matrix transit
+  time, or an invalid Hunt-Raymer result are null. Badhole interpolation may
+  interpolate flagged samples; coal and GR-based badhole handling retain their
+  existing special treatment. Effective porosity uses the existing shale correction.
+  The bulk-shale model remains density-only; the new methods are not available
+  in batch evaluation.
+
+* **Porosity comparison:** After calculating lithology, select **Porosity Compare**
+  above the right pane and calculate the comparison. Toggle the methods to overlay
+  their total-porosity curves with core markers; the active method is emphasized.
+  Calculations use the current parameters and most recently calculated lithology and
+  corrected logs, but never overwrite the working or saved PHIT. Recalculate
+  lithology and the comparison after editing log inputs. RMSE and bias are computed
+  from depth-matched core porosity and each method's valid results, excluding flagged
+  coal and badhole samples. Core is matched to a log sample within 0.5 m, and markers
+  appear at the matched log depth. Different log/core scales, depth alignment and
+  laboratory conditions can affect the comparison. Depth and zone filters apply;
+  brushed calculation selections and bulk shale are not supported.
 
 * **Bulk shale from GR / CGR (opt-in):** The legacy `Vsh from GR` model remains
   unchanged. The separate bulk-shale model interprets the calibrated linear
@@ -257,7 +287,11 @@ flowchart TD
 
   This model currently requires Density porosity, no log correction, Thomas-Stieber
   disabled, and either Use Normally or Ignore badhole treatment. Use a depth/zone
-  filter rather than a brushed selection. It is not available in batch evaluation.
+  filter rather than a brushed selection. If inherited settings conflict, the model
+  panel lists them and offers **Apply compatible settings & calculate**. This switches
+  an unsupported badhole action to Ignore / Nullify (excluding flagged samples);
+  an existing Use Normally or Ignore choice is retained. Review the settings before saving.
+  It is not available in batch evaluation.
   Thomas-Stieber permeability/saturation and reservoir-summary upscaling or
   uncertainty are also unavailable with this model.
   The model does not infer a quantitative shale correction from Th/K or PEF.

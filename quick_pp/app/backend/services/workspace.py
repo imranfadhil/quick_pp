@@ -77,7 +77,10 @@ from quick_pp.porosity import (
     density_porosity,
     estimate_shale_porosity,
     neu_den_xplot_poro,
+    porosity_correction_averaging,
     rho_matrix,
+    sonic_porosity_hunt_raymer,
+    sonic_porosity_wyllie,
 )
 from quick_pp.qaqc import (
     apply_environmental_corrections,
@@ -170,6 +173,17 @@ ALL_LITHOLOGY_VOL_COLS: Tuple[str, ...] = (
     "VHALI",
     "VPYRI",
     "VCOAL",
+    "VILLI",
+    "VSMEC",
+    "VCHLO",
+    "VGLAUC",
+    "VMUSC",
+    "VBIOT",
+    "VKFELD",
+    "VALBI",
+    "VSIDE",
+    "VANKE",
+    "VKERO",
 )
 
 
@@ -787,7 +801,20 @@ class WorkspaceLithologyRequest(WorkspaceFilterBase, BulkShaleParameters):
 
 
 class WorkspacePorosityRequest(WorkspaceFilterBase, BulkShaleParameters):
-    method: str = Field("den", description="'den' or 'neu_den'")
+    method: Literal[
+        "den", "neu_den", "sonic_wyllie", "sonic_hunt_raymer",
+        "avg_weighted", "avg_arithmetic", "avg_gaymard",
+    ] = Field("den", description="Total porosity calculation method")
+    sonic_fluid_dt: float = Field(190.0, gt=0, allow_inf_nan=False, description="Fluid sonic transit time (us/ft)")
+
+    @field_validator("method", mode="before")
+    @classmethod
+    def normalize_method(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            value = value.strip().lower()
+            return {"density": "den", "neutron_density": "neu_den", "xplot": "neu_den"}.get(value, value)
+        return value
+
     lithology_model: Optional[str] = Field(
         None,
         description="Active lithology model ('ssc', 'multi_mineral', 'vsh_gr') so porosity uses matching mineral volumes",
@@ -2793,6 +2820,8 @@ def _batch_evaluate_zone(
             "Crossplot Qv calibration must be validated per well "
             "and is not supported in batch evaluation"
         )
+    if req.porosity.method not in ("den", "neu_den"):
+        raise ValueError("Sonic and averaging porosity methods are supported only in single-well evaluation")
     use_corrected = req.hc_correction is not None or req.den_correction is not None
     if (
         req.lithology.use_hc_corrected != use_corrected
@@ -4028,20 +4057,7 @@ def workspace_porosity(
         elif lith_model == "vsh_gr":
             candidate_min_cols = ("VSAND", "VCLAY", "VCOAL")
         else:
-            candidate_min_cols = (
-                "VSAND",
-                "VSILT",
-                "VCLAY",
-                "VCALC",
-                "VDOLO",
-                "VKAOL",
-                "VFELD",
-                "VANHY",
-                "VGYPS",
-                "VHALI",
-                "VPYRI",
-                "VCOAL",
-            )
+            candidate_min_cols = tuple(c for c in ALL_LITHOLOGY_VOL_COLS if c != "VSHALE")
         mineral_vol_cols = [c for c in candidate_min_cols if c in df.columns]
 
         n_valid = int(valid_mask.sum())
@@ -4106,6 +4122,45 @@ def workspace_porosity(
                 ),
                 dtype=float,
             )
+        elif req.method.startswith("avg_"):
+            phit_v = np.asarray(
+                porosity_correction_averaging(
+                    nphi_v, rhob_v, rho_ma, method=req.method[4:],
+                    rho_fluid=req.fluid_point[1],
+                ),
+                dtype=float,
+            )
+        elif req.method.startswith("sonic_"):
+            dt_col = next((c for c in ("DTC", "DT") if c in df.columns), None)
+            if dt_col is None:
+                raise ValueError("Sonic porosity requires a DTC or DT curve")
+            dt_v = pd.to_numeric(df.loc[valid_mask, dt_col], errors="coerce").to_numpy(dtype=float)
+            if not np.any(np.isfinite(dt_v) & (dt_v > 0)):
+                raise ValueError("No valid sonic transit times found in the selected interval")
+            mineral_dt = {
+                volume.lower(): Config.MINERALS_LOG_VALUE[mineral]["DTC"]
+                for mineral, volume in Config.MINERALS_NAME_MAPPING.items()
+            }
+            mineral_dt["vsilt"] = Config.MINERALS_LOG_VALUE["QUARTZ"]["DTC"]
+            dt_ma = sum(vol * mineral_dt[name] for name, vol in norm_kwargs.items())
+            valid_sonic = (
+                np.isfinite(dt_v) & (dt_v > 0) & np.isfinite(dt_ma)
+                & (dt_ma > 0) & (req.sonic_fluid_dt > dt_ma)
+            )
+            phit_v = np.full(n_valid, np.nan)
+            sonic_fn = (
+                sonic_porosity_wyllie if req.method == "sonic_wyllie"
+                else sonic_porosity_hunt_raymer
+            )
+            if np.any(valid_sonic):
+                with np.errstate(invalid="ignore", divide="ignore"):
+                    phit_v[valid_sonic] = sonic_fn(
+                        dt_v[valid_sonic], dt_ma[valid_sonic], req.sonic_fluid_dt
+                    )
+            if not np.any(np.isfinite(phit_v)):
+                raise ValueError(
+                    "No valid sonic porosity results; check the sonic log, mineral transit times, and fluid transit time"
+                )
         else:
             phit_v = phid_v
 
@@ -4274,11 +4329,37 @@ def workspace_porosity(
                         0.0,
                         0.45,
                     )
-                    vclay_bh_bulk = vsh_v * np.clip(1.0 - phid_bh, 0.0, 1.0)
+                    phit_bh = phid_bh
+                    if req.method.startswith("avg_"):
+                        phit_bh = np.clip(
+                            porosity_correction_averaging(
+                                nphi_bh, rhob_rec, rho_ma_bh,
+                                method=req.method[4:], rho_fluid=rho_fl,
+                            ),
+                            0.0, 1.0,
+                        )
+                    elif req.method.startswith("sonic_"):
+                        bh_dt = pd.to_numeric(df.loc[bh_gr, dt_col], errors="coerce").to_numpy(dtype=float)
+                        bh_dt_ma = (
+                            (1.0 - vsh_v) * Config.MINERALS_LOG_VALUE["QUARTZ"]["DTC"]
+                            + vsh_v * Config.MINERALS_LOG_VALUE["SHALE"]["DTC"]
+                        )
+                        bh_valid = (
+                            np.isfinite(bh_dt) & (bh_dt > 0)
+                            & (req.sonic_fluid_dt > bh_dt_ma)
+                        )
+                        phit_bh = np.full(len(vsh_v), np.nan)
+                        if np.any(bh_valid):
+                            with np.errstate(invalid="ignore", divide="ignore"):
+                                phit_bh[bh_valid] = np.clip(
+                                    sonic_fn(bh_dt[bh_valid], bh_dt_ma[bh_valid], req.sonic_fluid_dt),
+                                    0.0, 1.0,
+                                )
+                    vclay_bh_bulk = vsh_v * np.clip(1.0 - phit_bh, 0.0, 1.0)
                     phie_bh = np.clip(
-                        phid_bh - vclay_bh_bulk * phit_sh_bh, 0.0, phid_bh
+                        phit_bh - vclay_bh_bulk * phit_sh_bh, 0.0, phit_bh
                     )
-                    phit_s.loc[bh_gr] = phid_bh
+                    phit_s.loc[bh_gr] = phit_bh
                     phid_s.loc[bh_gr] = phid_bh
                     phit_sh_s.loc[bh_gr] = phit_sh_bh
                     phie_s.loc[bh_gr] = phie_bh
@@ -4286,9 +4367,11 @@ def workspace_porosity(
             elif bh_mode == "interpolate":
                 for s_ref in (phit_s, phie_s, phid_s, phit_sh_s):
                     s_ref.loc[active_badhole] = np.nan
-                    s_ref[:] = s_ref.interpolate(
-                        method="linear", limit_direction="both"
-                    ).clip(0.0, 1.0)
+                    interpolated = s_ref.interpolate(method="linear", limit_direction="both").clip(0.0, 1.0)
+                    if req.method.startswith("sonic_"):
+                        s_ref.loc[active_badhole] = interpolated.loc[active_badhole]
+                    else:
+                        s_ref[:] = interpolated
             elif bh_mode in ("ignore", "null", "nan"):
                 phit_s.loc[active_badhole] = np.nan
                 phie_s.loc[active_badhole] = np.nan
@@ -4405,7 +4488,9 @@ def workspace_porosity(
         saved_rows = 0
         if req.save:
             save_df = out_df.loc[save_row_mask, save_poro_cols]
-            saved_rows = _save_curves_to_well(project_id, well_name, save_df)
+            saved_rows = _save_curves_to_well(
+                project_id, well_name, save_df, clear_nulls=req.method.startswith("sonic_")
+            )
         else:
             _update_in_memory_well_cache(
                 project_id, well_name, out_df.loc[save_row_mask, save_poro_cols]
@@ -4416,6 +4501,7 @@ def workspace_porosity(
             well_name,
             {
                 "porosity_method_key": req.method.lower(),
+                "sonic_fluid_dt": req.sonic_fluid_dt,
                 "litho_model_key": lith_model if lith_model else None,
                 "use_hc_corrected": req.use_hc_corrected,
                 "gr_clean": req.gr_clean,
@@ -4452,6 +4538,53 @@ def workspace_porosity(
         raise HTTPException(
             status_code=500, detail=f"Porosity calculation failed: {e}"
         ) from e
+
+
+@router.post(
+    "/wells/{well_name}/porosity_comparison",
+    summary="Compare porosity methods without modifying well data",
+)
+def workspace_porosity_comparison(
+    project_id: int, well_name: str, req: WorkspacePorosityRequest
+) -> Dict[str, Any]:
+    if req.lithology_model == "vsh_bulk":
+        raise HTTPException(status_code=400, detail="Porosity comparison is not available for bulk shale")
+    if req.save:
+        raise HTTPException(status_code=400, detail="Porosity comparison cannot save curves")
+    try:
+        baseline = _get_filtered_well_df(
+            project_id, well_name, req.min_depth, req.max_depth, req.zones
+        )
+        if baseline["DEPTH"].duplicated().any():
+            raise ValueError("Duplicate depths prevent reliable porosity comparison")
+        methods = (
+            "den", "neu_den", "sonic_wyllie", "sonic_hunt_raymer",
+            "avg_weighted", "avg_arithmetic", "avg_gaymard",
+        )
+        curves: Dict[str, Any] = {}
+        errors: Dict[str, str] = {}
+        for method in methods:
+            isolated = _IsolatedEvaluation(project_id, well_name, baseline.copy())
+            token = _isolated_evaluation.set(isolated)
+            try:
+                result = workspace_porosity(
+                    project_id, well_name,
+                    req.model_copy(update={"method": method, "save": False}),
+                )
+                curves[method] = result["data"]["PHIT"]
+            except HTTPException as exc:
+                if exc.status_code != 400:
+                    raise
+                errors[method] = str(exc.detail)
+            finally:
+                _isolated_evaluation.reset(token)
+        return {
+            "depth": _sanitize_for_json(baseline["DEPTH"].tolist()),
+            "curves": curves,
+            "errors": errors,
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _merge_request_fallback_curves(

@@ -100,7 +100,9 @@ def effective_porosity(phit, phi_shale, vshale):
         f"Calculating effective porosity with mean shale porosity: {float(np.nanmean(phi_shale)):.3f}"
     )
     phie = phit - (vshale * phi_shale)
-    logger.debug(f"Effective porosity range: {np.nanmin(phie):.3f} - {np.nanmax(phie):.3f}")
+    logger.debug(
+        f"Effective porosity range: {np.nanmin(phie):.3f} - {np.nanmax(phie):.3f}"
+    )
     return phie
 
 
@@ -442,7 +444,9 @@ def neu_den_xplot_poro(
     return phit
 
 
-def porosity_correction_averaging(nphi, rhob, rho_ma=2.65, method="weighted"):
+def porosity_correction_averaging(
+    nphi, rhob, rho_ma: float | np.ndarray = 2.65, method="weighted", rho_fluid=1.0
+):
     """Correct porosity using averaging method.
     Weighted average: (2 * dphi + nphi) / 3
     Arithmetic average: (dphi + nphi) / 2
@@ -452,9 +456,10 @@ def porosity_correction_averaging(nphi, rhob, rho_ma=2.65, method="weighted"):
     Args:
         nphi (np.ndarray or float): Neutron porosity.
         rhob (np.ndarray or float): Bulk density log.
-        rho_ma (float, optional): Matrix density. Defaults to 2.65.
+        rho_ma (np.ndarray or float, optional): Matrix density. Defaults to 2.65.
         method (str, optional): Averaging method selection from 'weighted', 'arithmetic' or 'gaymard'.
          Defaults to 'weighted'.
+        rho_fluid (float, optional): Fluid density in g/cc. Defaults to 1.0.
 
     Returns:
         np.ndarray or float: Corrected porosity.
@@ -464,7 +469,7 @@ def porosity_correction_averaging(nphi, rhob, rho_ma=2.65, method="weighted"):
         "method must be either \
         'weighted', 'arithmetic', 'gaymard' or 'gas"
     )
-    dphi = density_porosity(rhob, rho_ma, 1.0)
+    dphi = density_porosity(rhob, rho_ma, rho_fluid)
     if method == "weighted":
         phi_corr = (2 * dphi + nphi) / 3
     elif method == "arithmetic":
@@ -529,7 +534,6 @@ def nmr_porosity(t2_dist, t2_bins, t2_cutoff=33):
     return phit, phie
 
 
-
 def calc_secondary_porosity(phit, phis):
     """Calculate secondary (vuggy/fracture) porosity and interparticle porosity from total and sonic porosity.
 
@@ -546,7 +550,9 @@ def calc_secondary_porosity(phit, phis):
     Returns:
         tuple: (phi_sec, phi_ip) as numpy arrays.
     """
-    logger.debug("Calculating secondary and interparticle porosity from total and sonic porosity")
+    logger.debug(
+        "Calculating secondary and interparticle porosity from total and sonic porosity"
+    )
     phit_arr = np.asarray(phit, dtype=float)
     phis_arr = np.asarray(phis, dtype=float)
     both_valid = np.isfinite(phit_arr) & np.isfinite(phis_arr) & (phit_arr > 0)
@@ -564,41 +570,3 @@ def calc_secondary_porosity(phit, phis):
 
 
 secondary_porosity = calc_secondary_porosity
-
-
-
-def calc_secondary_porosity(phit, phis):
-    """Calculate secondary (vuggy/fracture) porosity and interparticle porosity from total and sonic porosity.
-
-    Based on Lucia (1995, 1999) carbonate rock fabric petrophysics:
-        phi_sec = max(0, phi_T - phi_sonic)
-        phi_ip = clip(phi_T - phi_sec, 0.001, phi_T)
-
-    Where `phis` is NaN, `phi_sec` is NaN and `phi_ip` falls back to `phit`.
-
-    Args:
-        phit (np.ndarray or float): Total porosity in fraction (v/v).
-        phis (np.ndarray or float): Sonic (matrix/interparticle) porosity in fraction (v/v).
-
-    Returns:
-        tuple: (phi_sec, phi_ip) as numpy arrays.
-    """
-    logger.debug("Calculating secondary and interparticle porosity from total and sonic porosity")
-    phit_arr = np.asarray(phit, dtype=float)
-    phis_arr = np.asarray(phis, dtype=float)
-    both_valid = np.isfinite(phit_arr) & np.isfinite(phis_arr) & (phit_arr > 0)
-    phi_sec = np.full_like(phit_arr, np.nan, dtype=float)
-    phi_ip = np.where(np.isfinite(phit_arr), np.clip(phit_arr, 0.001, 0.99), np.nan)
-    if both_valid.any():
-        sec_vals = np.maximum(
-            0.0, phit_arr[both_valid] - np.clip(phis_arr[both_valid], 0.0, 0.99)
-        )
-        phi_sec[both_valid] = sec_vals
-        phi_ip[both_valid] = np.clip(
-            phit_arr[both_valid] - sec_vals, 0.001, phit_arr[both_valid]
-        )
-    return phi_sec, phi_ip
-
-
-secondary_porosity = calc_secondary_porosity
-

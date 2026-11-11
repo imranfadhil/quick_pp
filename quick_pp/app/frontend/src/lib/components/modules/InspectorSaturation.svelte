@@ -5,6 +5,7 @@
 	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
+	import { thomasStieberAvailable } from '$lib/utils/bulkShale';
 	import {
 		fillMissingCurve,
 		estimateBqvReferenceRw,
@@ -82,6 +83,7 @@
 		const rawVclay = wellData.curves['VCLAY'] ?? wellData.curves['VSHALE'] ?? [];
 		const phitSand = wellData.curves['PHIT_SAND'];
 		const useTs =
+			workbench.lithoParams.model !== 'vsh_bulk' &&
 			workbench.tsParams.useInSaturation &&
 			Boolean(phitSand?.some((value) => Number.isFinite(value)));
 		const fit = fitBqvCrossplot(
@@ -146,9 +148,9 @@
 
 	let hasTsAvailable = $derived.by(() => {
 		const ps = wellData.curves['PHIT_SAND'];
-		return Boolean(
+		return thomasStieberAvailable(workbench.lithoParams.model, Boolean(
 			workbench.tsParams.enabled || (ps && ps.some((v) => Number.isFinite(v)))
-		);
+		));
 	});
 
 	async function executeSaturation(persist: boolean = false) {

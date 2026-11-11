@@ -44,6 +44,7 @@ export const SINGLE_WELL_REGIONAL_DEFAULTS: Record<ParamModuleKey, Record<string
 			shalePorosity: 0.2,
 			shaleIneffectiveFraction: 1,
 			porosityMethod: 'den',
+			sonicFluidDt: 190,
 			logCorrectionMode: 'none',
 			grClean: 20.0,
 			grClay: 120.0,
@@ -308,9 +309,12 @@ function legacyWellEntry(
 			porosityMethod:
 				cfg.porosity_method_key === 'den' || cfg.porosity_method_key === 'density'
 					? 'den'
-					: cfg.porosity_method_key
+					: ['sonic_wyllie', 'sonic_hunt_raymer', 'avg_weighted', 'avg_arithmetic', 'avg_gaymard'].includes(cfg.porosity_method_key)
+						? cfg.porosity_method_key
+						: cfg.porosity_method_key
 						? 'neu_den'
 						: undefined,
+			sonicFluidDt: num(cfg.sonic_fluid_dt),
 			grClean: num(cfg.gr_clean),
 			grClay: num(cfg.gr_clay),
 			gammaSource: cfg.bulk_shale?.gamma_source,

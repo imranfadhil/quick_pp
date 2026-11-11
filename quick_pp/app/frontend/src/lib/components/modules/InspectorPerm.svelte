@@ -6,6 +6,7 @@
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
 	import { fmtNum } from '$lib/utils/formatters';
+	import { thomasStieberAvailable } from '$lib/utils/bulkShale';
 
 	// Model parameters live in shared workbench state so they survive module switches and can be
 	// restored per zone / depth interval from saved well config.
@@ -13,9 +14,9 @@
 
 	let hasTsAvailable = $derived.by(() => {
 		const ps = wellData.curves['PHIT_SAND'];
-		return Boolean(
+		return thomasStieberAvailable(workbench.lithoParams.model, Boolean(
 			workbench.tsParams.enabled || (ps && ps.some((v) => Number.isFinite(v)))
-		);
+		));
 	});
 
 	async function executePerm(persist: boolean = false) {

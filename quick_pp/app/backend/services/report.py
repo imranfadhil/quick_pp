@@ -1759,6 +1759,14 @@ def build_report_context(
         poro_method_display = (
             "Neutron-Density Crossplot Total & Clay-Corrected Effective Porosity"
         )
+    elif raw_poro_key in ("sonic_wyllie", "sonic_hunt_raymer", "avg_weighted", "avg_arithmetic", "avg_gaymard"):
+        poro_method_display = {
+            "sonic_wyllie": "Wyllie Sonic Porosity",
+            "sonic_hunt_raymer": "Hunt-Raymer Sonic Porosity",
+            "avg_weighted": "Weighted Neutron-Density Porosity",
+            "avg_arithmetic": "Arithmetic Neutron-Density Porosity",
+            "avg_gaymard": "RMS (Gaymard/Gas) Neutron-Density Porosity",
+        }[raw_poro_key]
     else:
         poro_method_display = (
             "Clay-Corrected Matrix Density Total & Effective Porosity"
@@ -1929,6 +1937,7 @@ def build_report_context(
     poro_params = {
         "method_key": raw_poro_key,
         "method_name": poro_method_display,
+        "sonic_fluid_dt": merged_configs.get("sonic_fluid_dt"),
         "use_hc_corrected": bool(merged_configs.get("use_hc_corrected", False)),
         "rho_ma": round(rho_ma_cfg, 2),
         "rhoma_mean": rhoma_mean,
