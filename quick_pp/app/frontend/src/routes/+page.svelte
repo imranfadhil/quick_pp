@@ -8,6 +8,7 @@
 	import StickPlotCanvas from '$lib/components/workbench/StickPlotCanvas.svelte';
 	import CrossplotCanvas from '$lib/components/workbench/CrossplotCanvas.svelte';
 	import PorosityComparisonCanvas from '$lib/components/workbench/PorosityComparisonCanvas.svelte';
+	import PermeabilityComparisonCanvas from '$lib/components/workbench/PermeabilityComparisonCanvas.svelte';
 	import MissingDataMatrix from '$lib/components/workbench/MissingDataMatrix.svelte';
 	import CompactDataGrid, {
 		type GridColumn
@@ -999,6 +1000,8 @@
 					<MissingDataMatrix />
 				{:else if workbench.rightPaneTab === 'poro-comparison' && workbench.scope === 'single-well'}
 					<PorosityComparisonCanvas />
+				{:else if workbench.rightPaneTab === 'perm-comparison' && workbench.scope === 'single-well'}
+					<PermeabilityComparisonCanvas />
 				{:else if workbench.rightPaneTab === 'crossplot'}
 					{#if isFptMode}
 						<FptPlotCanvas initialMode="excess" />

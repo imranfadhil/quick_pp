@@ -337,6 +337,20 @@ flowchart TD
 * **Input Curves:** `PHIE`, `PHIT`, `VCLAY`, `VSILT`, `SWIRR`  
 * **Output Curves:** `PERM`, `PERM_CHOO`, `PERM_COATES`, `RQI`, `FZI`
 
+* **Permeability comparison:** Select **Permeability Compare** above the right
+  pane and calculate the comparison to overlay Choo, Kozeny-Carman, Timur,
+  Tixier and Coates-Dumanoir curves against `CPERM` on a logarithmic
+  permeability axis. Toggle methods and use the emphasized active method as a
+  reference. The comparison uses the current model parameters, porosity and
+  lithology inputs, including Thomas-Stieber inputs when enabled, without
+  changing working or saved `PERM`. Only positive values are displayed or
+  included in the matched-core metrics. RMSE and bias are in log10 permeability
+  units; bias is log10(PERM) − log10(CPERM). Coal and badhole samples are
+  excluded from metrics. Core is matched to the nearest log sample within
+  0.5 m, with markers at matched log depths. Depth and zone filters apply;
+  brushed calculation selections are not supported. Core/log scale, depth
+  alignment and measurement conditions can influence the comparison.
+
 ---
 
 ### Step 5: Fluid Saturation Evaluation (`InspectorSaturation`) {#sw-step-5-saturation}

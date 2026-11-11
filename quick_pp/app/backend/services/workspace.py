@@ -4885,6 +4885,47 @@ def workspace_permeability(
 
 
 @router.post(
+    "/wells/{well_name}/permeability_comparison",
+    summary="Compare permeability methods without modifying well data",
+)
+def workspace_permeability_comparison(
+    project_id: int, well_name: str, req: WorkspacePermeabilityRequest
+) -> Dict[str, Any]:
+    if req.save:
+        raise HTTPException(status_code=400, detail="Permeability comparison cannot save curves")
+    try:
+        baseline = _get_filtered_well_df(
+            project_id, well_name, req.min_depth, req.max_depth, req.zones
+        )
+        if baseline["DEPTH"].duplicated().any():
+            raise ValueError("Duplicate depths prevent reliable permeability comparison")
+        curves: Dict[str, Any] = {}
+        errors: Dict[str, str] = {}
+        for method in ("choo", "kozeny_carman", "timur", "tixier", "coates"):
+            isolated = _IsolatedEvaluation(project_id, well_name, baseline.copy())
+            token = _isolated_evaluation.set(isolated)
+            try:
+                result = workspace_permeability(
+                    project_id, well_name,
+                    req.model_copy(update={"method": method, "save": False}),
+                )
+                curves[method] = result["data"]["PERM"]
+            except HTTPException as exc:
+                if exc.status_code != 400:
+                    raise
+                errors[method] = str(exc.detail)
+            finally:
+                _isolated_evaluation.reset(token)
+        return {
+            "depth": _sanitize_for_json(baseline["DEPTH"].tolist()),
+            "curves": curves,
+            "errors": errors,
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
     "/wells/{well_name}/saturation",
     summary="Compute depth-aligned Archie and shaly-sand water saturation models on server",
 )

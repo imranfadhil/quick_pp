@@ -313,6 +313,52 @@ def test_porosity_comparison_reports_unavailable_sonic_methods(client_and_projec
     assert set(body["errors"]) == {"sonic_wyllie", "sonic_hunt_raymer"}
 
 
+@pytest.mark.parametrize("use_ts", [False, True])
+def test_permeability_comparison_is_isolated_and_matches_active_method(client_and_project, use_ts):
+    client, pid = client_and_project
+    base = f"/quick_pp/workspace/projects/{pid}/wells/Well-A"
+    payload = {
+        "method": "choo", "m": 2.2, "A": 800000, "B": 2.5, "C": 1.5,
+        "s": 0.02, "swirr": 0.25, "use_thomas_stieber": use_ts,
+        "depths": list(np.linspace(1000, 1009, 10)),
+        "phit": [0.2] * 10, "vclay": [0.1] * 10, "vsilt": [0.05] * 10,
+        "phit_sand": [0.3] * 10, "vsh_lam": [0.2] * 10, "vsh_dis": [0.04] * 10,
+    }
+    active = client.post(f"{base}/permeability", json=payload)
+    assert active.status_code == 200, active.text
+    before = ws_service._get_filtered_well_df(pid, "Well-A").copy()
+    before_config = dict(ws_service._ephemeral_well_configs.get((pid, "Well-A"), {}))
+    comparison = client.post(f"{base}/permeability_comparison", json=payload)
+    assert comparison.status_code == 200, comparison.text
+    body = comparison.json()
+    assert set(body["curves"]) == {"choo", "kozeny_carman", "timur", "tixier", "coates"}
+    assert body["curves"]["choo"] == pytest.approx(active.json()["data"]["PERM"])
+    pd.testing.assert_frame_equal(before, ws_service._get_filtered_well_df(pid, "Well-A"))
+    assert before_config == ws_service._ephemeral_well_configs.get((pid, "Well-A"), {})
+    for method in ("kozeny_carman", "timur", "tixier", "coates"):
+        independent = client.post(f"{base}/permeability", json={**payload, "method": method})
+        assert independent.status_code == 200, independent.text
+        assert body["curves"][method] == pytest.approx(independent.json()["data"]["PERM"])
+    assert client.post(f"{base}/permeability_comparison", json={**payload, "save": True}).status_code == 400
+
+
+def test_permeability_comparison_reports_per_method_errors(client_and_project, monkeypatch):
+    client, pid = client_and_project
+    original = ws_service._get_filtered_well_df
+
+    def no_lithology(*args, **kwargs):
+        df = original(*args, **kwargs).copy()
+        df["PHIT"] = 0.2
+        return df.drop(columns=["NPHI", "RHOB", "VCLAY", "VSILT", "VSHALE"], errors="ignore")
+
+    monkeypatch.setattr(ws_service, "_get_filtered_well_df", no_lithology)
+    response = client.post(f"/quick_pp/workspace/projects/{pid}/wells/Well-A/permeability_comparison", json={})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert set(body["curves"]) == {"kozeny_carman", "timur", "tixier", "coates"}
+    assert "VCLAY" in body["errors"]["choo"]
+
+
 def test_project_summary_endpoint(client_and_project):
     client, pid = client_and_project
     r = client.get(f"/quick_pp/database/projects/{pid}/summary")
