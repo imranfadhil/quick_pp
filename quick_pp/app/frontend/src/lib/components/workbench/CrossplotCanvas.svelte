@@ -25,6 +25,7 @@
 	} from '$lib/utils/saturation';
 	import CoreDepthShiftPanel from '$lib/components/workbench/CoreDepthShiftPanel.svelte';
 	import VshCalibrationPanel from '$lib/components/workbench/VshCalibrationPanel.svelte';
+	import { getJson } from '$lib/api/client';
 
 	let plotEl = $state<HTMLDivElement | null>(null);
 	let PlotlyLib: any = $state(null);
@@ -40,6 +41,21 @@
 	let showCoreShiftDrawer = $state<boolean>(false);
 	let showVshCalibDrawer = $state<boolean>(false);
 	let emptyPlotMessage = $state<string | null>(null);
+	let spectralReferences = $state<Record<string, { POTA: number; THOR: number; PEF: number }>>({});
+	let spectralReferenceError = $state<string | null>(null);
+
+	$effect(() => {
+		const projectId = workbench.projectId;
+		if (!browser || !projectId) return;
+		let cancelled = false;
+		spectralReferenceError = null;
+		getJson<Record<string, { POTA: number; THOR: number; PEF: number }>>(
+			`/quick_pp/workspace/projects/${encodeURIComponent(projectId)}/spectral_mineral_references`
+		).then((data) => { if (!cancelled) spectralReferences = data; }).catch((error: unknown) => {
+			if (!cancelled) spectralReferenceError = error instanceof Error ? error.message : String(error);
+		});
+		return () => { cancelled = true; };
+	});
 
 	let effectiveMode = $derived(workbench.effectiveCrossplot);
 	let autoMode = $derived(resolveCrossplot(workbench.crossplotContext, 'auto'));
@@ -272,7 +288,11 @@
 		};
 
 		if (effectiveMode === 'th-k' || effectiveMode === 'pef-k' || effectiveMode === 'pef-th-k') {
-			const points = spectralCrossplotPoints(effectiveMode, wellData.curves, indices);
+			const points = spectralCrossplotPoints(effectiveMode, {
+				...wellData.curves,
+				POTA: wellData.curves[workbench.lithoParams.potassiumCurve] ?? [],
+				THOR: wellData.curves[workbench.lithoParams.thoriumCurve] ?? []
+			}, indices);
 			traces.push({
 				type: 'scatter',
 				mode: 'markers',
@@ -289,6 +309,22 @@
 					colorbar: { title: { text: 'Depth (m)' }, thickness: 10 }
 				},
 				hovertemplate: '%{text}<br>X: %{x:.3g}<br>Y: %{y:.3g}<extra></extra>'
+			});
+			const refX: number[] = [];
+			const refY: number[] = [];
+			const refNames: string[] = [];
+			for (const [name, ref] of Object.entries(spectralReferences)) {
+				const x = effectiveMode === 'pef-th-k' ? ref.THOR / ref.POTA : ref.POTA;
+				const y = effectiveMode === 'th-k' ? ref.THOR : ref.PEF;
+				if (!Number.isFinite(x) || !Number.isFinite(y) || (effectiveMode === 'pef-th-k' && x <= 0)) continue;
+				refX.push(x); refY.push(y); refNames.push(name);
+			}
+			if (refX.length) traces.push({
+				type: 'scatter', mode: 'markers+text', name: 'Illustrative mineral endpoints',
+				x: refX, y: refY, text: refNames, textposition: 'top center',
+				textfont: { size: 9, color: '#334155' },
+				marker: { size: 9, color: '#FFFFFF', symbol: 'diamond', line: { color: '#334155', width: 1.5 } },
+				hovertemplate: '%{text}<br>X: %{x:.3g}<br>Y: %{y:.3g}<extra>Configured endpoint; not a classification</extra>'
 			});
 			baseLayout.xaxis.title = {
 				text: effectiveMode === 'pef-th-k' ? 'Th/K (ppm / %)' : 'Potassium (%)'
@@ -4697,9 +4733,14 @@
 		void workbench.brushedDepthIndices;
 
 		if (mode === 'th-k' || mode === 'pef-k' || mode === 'pef-th-k') {
+			void spectralReferences;
 			void wellData.curves['POTA'];
 			void wellData.curves['THOR'];
 			void wellData.curves['PEF'];
+			void wellData.curves[workbench.lithoParams.potassiumCurve];
+			void wellData.curves[workbench.lithoParams.thoriumCurve];
+			void workbench.lithoParams.potassiumCurve;
+			void workbench.lithoParams.thoriumCurve;
 			void wellData.curves['DEPT'];
 			void wellData.curves['DEPTH'];
 		} else if (mode === 'core-qc') {
@@ -5768,6 +5809,9 @@
 
 	<div class="relative min-h-0 flex-1 overflow-hidden">
 		<div bind:this={plotEl} class="absolute inset-0 h-full w-full"></div>
+		{#if (effectiveMode === 'th-k' || effectiveMode === 'pef-k' || effectiveMode === 'pef-th-k') && spectralReferenceError}
+			<div role="status" class="absolute bottom-1 left-2 rounded-xs bg-amber-50 px-2 py-1 text-[10px] text-amber-900">Mineral references unavailable: {spectralReferenceError}</div>
+		{/if}
 		{#if effectiveMode !== null && emptyPlotMessage}
 			<div role="status" class="pointer-events-none absolute inset-x-2 top-1 rounded-xs border border-amber-200 bg-amber-50/95 px-2 py-1 text-center text-[10px] text-amber-900">
 				{emptyPlotMessage}

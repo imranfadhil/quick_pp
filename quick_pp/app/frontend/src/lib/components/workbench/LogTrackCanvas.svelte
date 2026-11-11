@@ -384,7 +384,7 @@
 				continue;
 			}
 			if (
-				activeModel === 'vsh_gr' &&
+				(activeModel === 'vsh_gr' || activeModel === 'vsh_bulk') &&
 				!hasCarbonateCols &&
 				!hasComplexCols &&
 				!['VCLAY', 'VSAND', ...(coalEnabled ? ['VCOAL'] : [])].includes(spec.mnemonic)

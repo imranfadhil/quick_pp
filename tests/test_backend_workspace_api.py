@@ -106,6 +106,36 @@ def client_and_project(monkeypatch):
     session.close()
 
 
+def test_bulk_shale_save_removes_invalid_prior_values(client_and_project):
+    client, pid = client_and_project
+    path = f"/quick_pp/workspace/projects/{pid}/wells/Well-A/lithology"
+    payload = {
+        "model": "vsh_bulk", "badhole_treatment": "none", "save": True,
+        "gamma_clean": 0.0, "gamma_shale": 1000.0,
+    }
+    initial = client.post(path, json=payload)
+    assert initial.status_code == 200, initial.text
+    assert initial.json()["data"]["PHIT"][-1] is not None
+    replacement = client.post(path, json={**payload, "gamma_shale": 110.0})
+    assert replacement.status_code == 200, replacement.text
+    assert replacement.json()["data"]["PHIT"][-1] is None
+
+    from sqlalchemy import select
+
+    from quick_pp.database.models import Curve, CurveData
+    from quick_pp.database.models import Well as WellModel
+
+    with ws_service.get_db() as session:
+        rows = session.execute(
+            select(CurveData.depth)
+            .join(Curve, CurveData.curve_id == Curve.curve_id)
+            .join(WellModel, Curve.well_id == WellModel.well_id)
+            .where(WellModel.project_id == pid, WellModel.name == "Well-A", Curve.mnemonic == "PHIT")
+        ).scalars().all()
+    assert 1009.0 not in rows
+    assert rows
+
+
 def test_project_summary_endpoint(client_and_project):
     client, pid = client_and_project
     r = client.get(f"/quick_pp/database/projects/{pid}/summary")

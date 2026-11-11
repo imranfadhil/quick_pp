@@ -489,6 +489,15 @@ def build_report_context(
         w_cfg = w_meta.get("well_config") or {}
         if w_cfg:
             merged_configs.update(w_cfg)
+        requested_model = model_params or {}
+        well_litho_model = str(
+            requested_model.get("litho_model_key")
+            or requested_model.get("litho_model")
+            or w_cfg.get("litho_model_key")
+            or w_cfg.get("litho_model")
+            or ""
+        ).strip().lower()
+        is_bulk_shale = well_litho_model == "vsh_bulk"
 
         w_df = raw_df.copy()
         if "ZONES" not in w_df.columns or not w_df["ZONES"].notna().any():
@@ -610,7 +619,23 @@ def build_report_context(
         )
         if has_real_logs:
             w_df = _ensure_evaluated_curves(w_df, w_name)
+            if is_bulk_shale:
+                # Never substitute legacy estimates for absent bulk-model results.
+                for curve in ("VCLAY", "PHIT", "PHIE"):
+                    w_df[curve] = raw_df[curve] if curve in raw_df.columns else np.nan
             unfiltered_dfs.append(w_df)
+
+        if is_bulk_shale:
+            w_df["_REPORT_VSHALE"] = _col_series(w_df, "VSHALE", np.nan)
+            if w_df["_REPORT_VSHALE"].isna().any():
+                anomaly_flags.append({
+                    "category": "Missing bulk shale",
+                    "target": w_name,
+                    "message": "Bulk VSHALE is missing at one or more samples; those samples are excluded from shale-cutoff calculations.",
+                    "mitigation": "Save a calibrated bulk-shale evaluation before generating the report.",
+                })
+        else:
+            w_df["_REPORT_VSHALE"] = _col_series(w_df, "VCLAY", np.nan).fillna(0.20)
 
         d_s = pd.to_numeric(w_df["DEPTH"], errors="coerce").dropna()
         d_min = float(d_s.min()) if not d_s.empty else 0.0
@@ -737,7 +762,7 @@ def build_report_context(
             )
             has_real_zones = bool(real_zone_mask.any())
 
-            eval_mask = phi_eval.notna() & sw_eval.notna()
+            eval_mask = phi_eval.notna() & sw_eval.notna() & w_df["_REPORT_VSHALE"].notna()
             if has_real_zones:
                 eval_mask &= real_zone_mask
 
@@ -750,9 +775,7 @@ def build_report_context(
                 depth=pd.to_numeric(eval_df["DEPTH"], errors="coerce").to_numpy(
                     dtype=float
                 ),
-                vshale=pd.to_numeric(eval_df["VCLAY"], errors="coerce")
-                .fillna(0.20)
-                .to_numpy(dtype=float),
+                vshale=pd.to_numeric(eval_df["_REPORT_VSHALE"], errors="coerce").to_numpy(dtype=float),
                 phit=pd.to_numeric(eval_df[phi_col_name], errors="coerce").to_numpy(
                     dtype=float
                 ),
@@ -1441,7 +1464,7 @@ def build_report_context(
             tz_df_fwl, "PHIE" if "PHIE" in tz_df_fwl.columns else "PHIT", np.nan
         )
         sw_fwl = _col_series(tz_df_fwl, "SWT", np.nan)
-        vsh_fwl = _col_series(tz_df_fwl, "VCLAY", np.nan).fillna(0.20)
+        vsh_fwl = _col_series(tz_df_fwl, "_REPORT_VSHALE", np.nan)
 
         res_mask_fwl = (
             depth_ref_s.notna()
@@ -1518,7 +1541,7 @@ def build_report_context(
             else np.array([])
         )
         vsh_z = (
-            _col_series(z_df, "VCLAY", np.nan).fillna(0.20).to_numpy(dtype=float)
+            _col_series(z_df, "_REPORT_VSHALE", np.nan).to_numpy(dtype=float)
             if not z_df.empty
             else np.array([])
         )
@@ -1527,7 +1550,7 @@ def build_report_context(
             if not z_df.empty
             else np.array([])
         )
-        valid_z = np.isfinite(phi_z) & np.isfinite(sw_z) & (phi_z > 0.0)
+        valid_z = np.isfinite(phi_z) & np.isfinite(sw_z) & np.isfinite(vsh_z) & (phi_z > 0.0)
         phi_z = phi_z[valid_z]
         vsh_z = vsh_z[valid_z]
         sw_z = sw_z[valid_z]
@@ -1687,6 +1710,8 @@ def build_report_context(
         resolved_litho_key = "ssc"
     elif raw_litho_key in ("vsh_gr", "gr", "gamma_ray"):
         resolved_litho_key = "vsh_gr"
+    elif raw_litho_key == "vsh_bulk":
+        resolved_litho_key = "vsh_bulk"
     elif has_carb_evap:
         resolved_litho_key = "multi_mineral"
     elif has_ssc_cols:
@@ -1718,6 +1743,8 @@ def build_report_context(
         litho_model_display = f"Multi-Mineral Optimization Solver ({min_str})"
     elif resolved_litho_key == "vsh_gr":
         litho_model_display = "Gamma Ray Shale Volume Index (Vsh,GR) Model"
+    elif resolved_litho_key == "vsh_bulk":
+        litho_model_display = "Bulk Shale from GR / CGR Density-Balance Model"
     else:
         litho_model_display = "Modified Kuttan Sand-Silt-Clay (SSC) Ternary Model"
 
@@ -1726,7 +1753,9 @@ def build_report_context(
         or merged_configs.get("porosity_method")
         or "den"
     ).strip().lower()
-    if raw_poro_key in ("neu_den", "neutron_density", "xplot"):
+    if resolved_litho_key == "vsh_bulk":
+        poro_method_display = "Bulk Shale Density-Balance Porosity"
+    elif raw_poro_key in ("neu_den", "neutron_density", "xplot"):
         poro_method_display = (
             "Neutron-Density Crossplot Total & Clay-Corrected Effective Porosity"
         )
@@ -1810,6 +1839,7 @@ def build_report_context(
         "dry_silt_point": dry_silt_pt,
         "silt_line_angle": silt_angle_cfg,
         "fluid_point": fluid_pt,
+        "bulk_shale": merged_configs.get("bulk_shale") or {},
     }
     scal_cfg = (
         merged_configs.get("scal_params")

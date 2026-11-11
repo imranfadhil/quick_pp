@@ -232,11 +232,42 @@ flowchart TD
 * **Input Curves:** `GR`, `RHOB`, `NPHI`, `PEF`, `DTC`  
 * **Output Curves:** `VSH`, `VSAND`, `VSILT`, `VCLAY`, `VCALC`, `VDOLO`, `PHIT`, `PHIE`
 
+* **Bulk shale from GR / CGR (opt-in):** The legacy `Vsh from GR` model remains
+  unchanged. The separate bulk-shale model interprets the calibrated linear
+  gamma index as bulk `VSHALE`. It accepts GR, an explicitly selected CGR curve,
+  or estimated `CGR_SYN = a_Th × THOR + a_K × POTA`; select the input curves and
+  verify their units (ppm and percent) and coefficients against the tool calibration.
+  The provisional coefficients (4 gAPI/ppm and 16 gAPI/%) are not universal.
+  GR and CGR endpoints are separate and must be calibrated for the selected response.
+  Confirm that the GR curve is total GR: imported aliases can already refer to CGR.
+
+  The model treats `VCLAY = VSHALE × (1 − shale porosity)` as **shale solids**,
+  a proxy for clay, not a mineralogical clay estimate. `VSAND` is clean solids.
+  With clean and shale solid densities and fluid density, it solves the bulk
+  density balance for clean pore volume; `PHIT` includes shale porosity and
+  `PHIE` subtracts the user-selected ineffective fraction of that shale pore volume.
+  `RHOM` is the calculated average solid matrix density. The model rejects
+  physically inconsistent density mixtures rather than clipping them; such samples
+  are null. These endmembers and the ineffective fraction are provisional and
+  should be checked against core and local geology. Downstream clay-dependent
+  models use the shale-solids proxy; Simandoux, Indonesian, and single-well
+  reservoir-summary shale cutoffs use bulk `VSHALE` when this model is active.
+
+  This model currently requires Density porosity, no log correction, Thomas-Stieber
+  disabled, and either Use Normally or Ignore badhole treatment. Use a depth/zone
+  filter rather than a brushed selection. It is not available in batch evaluation.
+  Thomas-Stieber permeability/saturation and reservoir-summary upscaling or
+  uncertainty are also unavailable with this model.
+  The model does not infer a quantitative shale correction from Th/K or PEF.
+
 * **Spectral crossplots:** The right pane also offers thorium vs potassium, PEF vs potassium,
   and PEF vs Th/K. These use `THOR` in ppm, `POTA` in percent and `PEF` in b/e;
   verify the input units before interpreting them. The Th/K plot uses a logarithmic
   ratio axis and excludes non-positive K or Th. Ratios are unstable at low K.
   Th/K guide lines and the scatter are interpretive aids, not mineral classifications.
+  Diamond markers are illustrative configured mineral response endpoints, not
+  calibrated field boundaries. Selected Th and K curves are shared with the
+  derived-CGR controls.
   The plots do not alter the GR-based shale calculation.
 
 ---

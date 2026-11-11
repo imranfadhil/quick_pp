@@ -532,6 +532,7 @@ class Project(object):
         data: pd.DataFrame,
         group_by: str = "WELL_NAME",
         well_configs: Optional[dict] = None,
+        clear_nulls: bool = False,
     ):
         """Updates data for multiple wells in the project from a single DataFrame.
 
@@ -544,6 +545,7 @@ class Project(object):
             group_by (str): The column name to group the DataFrame by. Defaults to "WELL_NAME".
             well_configs (Optional[dict]): A dictionary where keys are well names and values
                                            are configuration dictionaries to apply.
+            clear_nulls (bool): Remove existing values at explicitly supplied null depths.
         """
         logger.info(
             f"Updating project data with {len(data)} records, grouped by {group_by}"
@@ -571,7 +573,7 @@ class Project(object):
 
             if orm_well:
                 well_obj = Well(self.db_session, well_id=orm_well.well_id)
-                well_obj.update_data(well_data)
+                well_obj.update_data(well_data, clear_nulls=clear_nulls)
                 if well_configs is not None:
                     well_obj.update_config(well_configs.get(well_name, {}))
                 # Don't call save() here - will flush once at the end
@@ -1494,7 +1496,7 @@ class Well(object):
         )
         return merge_summary
 
-    def update_data(self, data: pd.DataFrame):
+    def update_data(self, data: pd.DataFrame, clear_nulls: bool = False):
         """Updates or inserts curve data for the well from a DataFrame ("upsert").
 
         This method performs an "upsert" (update or insert) operation. For each
@@ -1508,6 +1510,7 @@ class Well(object):
         Args:
             data (pd.DataFrame): DataFrame containing the data to update. Must include
                                  a 'DEPTH' column to be used as the index.
+            clear_nulls (bool): Remove existing values at explicitly supplied null depths.
         """
         logger.debug(f"Updating well data for '{self.name}': {len(data)} records")
         data = data.set_index("DEPTH")
@@ -1565,7 +1568,11 @@ class Well(object):
                         )
                 else:
                     # Collect depths for this curve that need deletion
-                    depths_to_update = data.index[data[mnemonic].notna()].tolist()
+                    depths_to_update = (
+                        data.index.tolist()
+                        if clear_nulls
+                        else data.index[data[mnemonic].notna()].tolist()
+                    )
                     if depths_to_update:
                         all_depths_to_delete[orm_curve.curve_id] = depths_to_update
 

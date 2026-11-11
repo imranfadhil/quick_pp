@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { bulkShaleParameters } from '$lib/utils/bulkShale';
 	import { API_BASE, generateProjectReport, getJson, postJson } from '$lib/api/client';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
@@ -177,6 +178,8 @@
 				max_depth: workbench.depthFilter ? workbench.depthFilter.max : undefined,
 				model_params: {
 					litho_model_key: workbench.lithoParams.model,
+					bulk_shale: workbench.lithoParams.model === 'vsh_bulk'
+						? bulkShaleParameters(workbench.lithoParams) : undefined,
 					litho_minerals: workbench.lithoParams.minerals,
 					porosity_method_key: workbench.lithoParams.porosityMethod,
 					use_hc_corrected: workbench.lithoParams.useHcCorrected,

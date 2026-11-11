@@ -187,6 +187,8 @@
 					},
 					body: {
 						method: sp.method,
+						lithology_model: workbench.lithoParams.model,
+						vshale: cleanArr(wellData.curves['VSHALE'] ?? []),
 						rw_mode: sp.rwMode,
 						meas_system: sp.measSystem,
 						water_salinity: sp.waterSalinity,

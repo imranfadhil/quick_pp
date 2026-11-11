@@ -30,6 +30,19 @@ export const SINGLE_WELL_REGIONAL_DEFAULTS: Record<ParamModuleKey, Record<string
 	'litho-poro': {
 		litho: {
 			model: 'ssc',
+			gammaSource: 'gr',
+			gammaCurve: 'CGR',
+			thoriumCurve: 'THOR',
+			potassiumCurve: 'POTA',
+			gammaClean: 20,
+			gammaShale: 120,
+			bulkGrClean: 20,
+			bulkGrShale: 120,
+			cgrThCoefficient: 4,
+			cgrKCoefficient: 16,
+			shaleSolidDensity: 2.7,
+			shalePorosity: 0.2,
+			shaleIneffectiveFraction: 1,
 			porosityMethod: 'den',
 			logCorrectionMode: 'none',
 			grClean: 20.0,
@@ -289,7 +302,7 @@ function legacyWellEntry(
 		const [cN, cR] = pt(cfg.dry_clay_point);
 		const [fN, fR] = pt(cfg.fluid_point);
 		const litho = strip({
-			model: ['ssc', 'multi_mineral', 'vsh_gr'].includes(cfg.litho_model_key)
+			model: ['ssc', 'multi_mineral', 'vsh_gr', 'vsh_bulk'].includes(cfg.litho_model_key)
 				? cfg.litho_model_key
 				: undefined,
 			porosityMethod:
@@ -300,6 +313,19 @@ function legacyWellEntry(
 						: undefined,
 			grClean: num(cfg.gr_clean),
 			grClay: num(cfg.gr_clay),
+			gammaSource: cfg.bulk_shale?.gamma_source,
+			gammaCurve: cfg.bulk_shale?.gamma_curve,
+			thoriumCurve: cfg.bulk_shale?.thorium_curve,
+			potassiumCurve: cfg.bulk_shale?.potassium_curve,
+			gammaClean: cfg.bulk_shale?.gamma_source !== 'gr' ? num(cfg.bulk_shale?.gamma_clean) : undefined,
+			gammaShale: cfg.bulk_shale?.gamma_source !== 'gr' ? num(cfg.bulk_shale?.gamma_shale) : undefined,
+			bulkGrClean: cfg.bulk_shale?.gamma_source === 'gr' ? num(cfg.bulk_shale?.gamma_clean) : undefined,
+			bulkGrShale: cfg.bulk_shale?.gamma_source === 'gr' ? num(cfg.bulk_shale?.gamma_shale) : undefined,
+			cgrThCoefficient: num(cfg.bulk_shale?.cgr_th_coefficient),
+			cgrKCoefficient: num(cfg.bulk_shale?.cgr_k_coefficient),
+			shaleSolidDensity: num(cfg.bulk_shale?.shale_solid_density),
+			shalePorosity: num(cfg.bulk_shale?.shale_porosity),
+			shaleIneffectiveFraction: num(cfg.bulk_shale?.shale_ineffective_fraction),
 			drySandNphi: sN,
 			drySandRhob: sR,
 			dryClayNphi: cN,

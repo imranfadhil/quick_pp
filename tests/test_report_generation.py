@@ -172,6 +172,47 @@ def test_headless_plot_exporters(tmp_path: Path, synthetic_well_df: pd.DataFrame
     assert p6_sparse.exists() and p10_sparse.exists()
 
 
+def test_bulk_shale_report_uses_correct_model_and_parameters(synthetic_well_df: pd.DataFrame):
+    from jinja2 import Environment, FileSystemLoader
+
+    from quick_pp.app.backend.services.report import (
+        build_report_context,
+        calc_reservoir_summary,
+    )
+
+    summary = {"project_id": 99, "name": "Synthetic", "wells": [{"name": "WELL-A"}]}
+    synthetic_well_df["VSHALE"] = 0.8
+    synthetic_well_df.loc[synthetic_well_df.index[0], "VSHALE"] = np.nan
+    bulk = {
+        "gamma_source": "derived_cgr", "thorium_curve": "THOR", "potassium_curve": "POTA",
+        "gamma_clean": 12, "gamma_shale": 90, "cgr_th_coefficient": 4,
+        "cgr_k_coefficient": 16, "shale_solid_density": 2.7,
+        "shale_porosity": .2, "shale_ineffective_fraction": .6,
+    }
+    with (
+        patch("quick_pp.app.backend.services.report.db_objects.Project.load", side_effect=ValueError("Mocked project")),
+        patch("quick_pp.app.backend.services.report.get_project_summary", return_value=summary),
+        patch("quick_pp.app.backend.services.report._get_merged_dataframe_sync", return_value=synthetic_well_df),
+        patch("quick_pp.app.backend.services.report.calc_reservoir_summary", wraps=calc_reservoir_summary) as summary_calc,
+    ):
+        ctx = build_report_context(
+            99, well_names=["WELL-A"], model_params={"litho_model_key": "vsh_bulk", "bulk_shale": bulk}
+        )
+    assert ctx["litho_params"]["model_key"] == "vsh_bulk"
+    assert ctx["litho_params"]["bulk_shale"] == bulk
+    assert ctx["poro_params"]["method_name"] == "Bulk Shale Density-Balance Porosity"
+    assert summary_calc.called
+    assert len(summary_calc.call_args.kwargs["vshale"]) == len(synthetic_well_df) - 1
+    np.testing.assert_allclose(summary_calc.call_args.kwargs["vshale"], 0.8)
+    directory = Path(__file__).resolve().parents[1] / "quick_pp" / "app" / "backend" / "template" / "reports" / "sections"
+    template = Environment(loader=FileSystemLoader(directory)).get_template("04_lithology_porosity.md.j2")
+    rendered = template.render(**ctx, report_type="SINGLE_WELL_CPI", include_ai_commentary=False, assets={})
+    assert "derived_cgr" in rendered
+    assert "shale-solids proxy" in rendered
+    assert "Ineffective shale pore fraction" in rendered
+    assert "Clean GR Endpoint" not in rendered
+
+
 def test_end_to_end_report_service_and_mcp_tools(synthetic_well_df: pd.DataFrame):
     mock_summary = {
         "project_id": 99,

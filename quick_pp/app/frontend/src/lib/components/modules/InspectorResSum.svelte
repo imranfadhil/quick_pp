@@ -59,6 +59,7 @@
 			const data = await postJson<any>(
 				`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/wells/${encodeURIComponent(workbench.wellId)}/reservoir_summary`,
 				{
+					lithology_model: workbench.lithoParams.model,
 					cut_offs: {
 						VSHALE: rp.vshMax,
 						PHIT: rp.phitMin,

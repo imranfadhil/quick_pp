@@ -47,6 +47,7 @@
 					},
 					body: {
 						method: pp.method,
+						lithology_model: workbench.lithoParams.model,
 						m: pp.m,
 						A: pp.A,
 						B: pp.B,

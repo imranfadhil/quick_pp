@@ -92,7 +92,20 @@ export interface BadholeFlaggingParams {
 }
 
 export interface LithoEndpointParams {
-	model: 'ssc' | 'multi_mineral' | 'vsh_gr';
+	model: 'ssc' | 'multi_mineral' | 'vsh_gr' | 'vsh_bulk';
+	gammaSource: 'gr' | 'cgr' | 'derived_cgr';
+	gammaCurve: string;
+	thoriumCurve: string;
+	potassiumCurve: string;
+	gammaClean: number;
+	gammaShale: number;
+	bulkGrClean: number;
+	bulkGrShale: number;
+	cgrThCoefficient: number;
+	cgrKCoefficient: number;
+	shaleSolidDensity: number;
+	shalePorosity: number;
+	shaleIneffectiveFraction: number;
 	porosityMethod: 'neu_den' | 'den';
 	logCorrectionMode: 'none' | 'hc' | 'den';
 	useHcCorrected: boolean;
@@ -691,6 +704,19 @@ class WorkbenchState {
 	// Shared interactive parameters between Left Pane Inspectors & Right Pane Crossplot
 	lithoParams = $state<LithoEndpointParams>({
 		model: 'ssc',
+		gammaSource: 'gr',
+		gammaCurve: 'CGR',
+		thoriumCurve: 'THOR',
+		potassiumCurve: 'POTA',
+		gammaClean: 20,
+		gammaShale: 120,
+		bulkGrClean: 20,
+		bulkGrShale: 120,
+		cgrThCoefficient: 4,
+		cgrKCoefficient: 16,
+		shaleSolidDensity: 2.7,
+		shalePorosity: 0.2,
+		shaleIneffectiveFraction: 1,
 		porosityMethod: 'den',
 		logCorrectionMode: 'none',
 		useHcCorrected: false,
