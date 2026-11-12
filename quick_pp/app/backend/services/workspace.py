@@ -136,6 +136,20 @@ from quick_pp.utils import nd_triangle_coords
 
 DRY_SILT_RHOB = float(Config.SSC_ENDPOINTS["DRY_SILT_POINT"][1])
 
+# Canonical multi-mineral inversion logs, in solver preference order. Any subset may be
+# requested via WorkspaceLithologyRequest.input_logs; the default keeps the historical
+# behaviour of using every curve present in the well.
+MULTI_MINERAL_DEFAULT_INPUT_LOGS: Tuple[str, ...] = (
+    "GR",
+    "NPHI",
+    "RHOB",
+    "PEF",
+    "DTC",
+    "POTA",
+    "THOR",
+    "URAN",
+)
+
 router = APIRouter(
     prefix="/workspace/projects/{project_id}",
     tags=["Workspace Compute"],
@@ -439,33 +453,92 @@ def _curve_summary_stats(
     }
 
 
+_ENHANCED_LOG_ALIASES = {"GR": "GR_ENH", "NPHI": "NPHI_ENH", "RHOB": "RHOB_ENH"}
+_HC_LOG_ALIASES = {"NPHI": "NPHI_HC", "RHOB": "RHOB_HC"}
+
+
+def _resolve_log_column(
+    df: pd.DataFrame,
+    name: str,
+    use_hc_corrected: bool = False,
+    use_enhanced: bool = False,
+) -> Optional[str]:
+    """Resolve the physical column backing a canonical log mnemonic.
+
+    Prefers the resolution-enhanced curve, then the hydrocarbon-corrected curve, then
+    the raw mnemonic. Returns None when no matching column is present.
+    """
+    name = name.upper()
+    if use_enhanced:
+        enhanced = _ENHANCED_LOG_ALIASES.get(name)
+        if enhanced and enhanced in df.columns and df[enhanced].notna().any():
+            return enhanced
+    if use_hc_corrected:
+        corrected = _HC_LOG_ALIASES.get(name)
+        if corrected and corrected in df.columns and df[corrected].notna().any():
+            return corrected
+    return name if name in df.columns else None
+
+
 def _select_nphi_rhob(
     df: pd.DataFrame,
     use_hc_corrected: bool = False,
     use_enhanced: bool = False,
 ) -> Tuple[pd.Series, pd.Series]:
     """Select NPHI and RHOB series (using NPHI_HC/RHOB_HC or NPHI_ENH/RHOB_ENH if requested and available)."""
-    nphi_col = "NPHI"
-    rhob_col = "RHOB"
-    if use_enhanced and "NPHI_ENH" in df.columns and df["NPHI_ENH"].notna().any():
-        nphi_col = "NPHI_ENH"
-    elif (
-        use_hc_corrected and "NPHI_HC" in df.columns and df["NPHI_HC"].notna().any()
-    ):
-        nphi_col = "NPHI_HC"
-    if use_enhanced and "RHOB_ENH" in df.columns and df["RHOB_ENH"].notna().any():
-        rhob_col = "RHOB_ENH"
-    elif (
-        use_hc_corrected and "RHOB_HC" in df.columns and df["RHOB_HC"].notna().any()
-    ):
-        rhob_col = "RHOB_HC"
-    if nphi_col not in df.columns or rhob_col not in df.columns:
+    nphi_col = _resolve_log_column(
+        df, "NPHI", use_hc_corrected=use_hc_corrected, use_enhanced=use_enhanced
+    )
+    rhob_col = _resolve_log_column(
+        df, "RHOB", use_hc_corrected=use_hc_corrected, use_enhanced=use_enhanced
+    )
+    if nphi_col is None or rhob_col is None:
         raise ValueError(
             f"Required curves NPHI and RHOB not found in well data. Available: {list(df.columns)}"
         )
     return pd.to_numeric(df[nphi_col], errors="coerce"), pd.to_numeric(
         df[rhob_col], errors="coerce"
     )
+
+
+def _resolve_multi_mineral_input_logs(
+    df: pd.DataFrame,
+    requested: List[str],
+    use_hc_corrected: bool = False,
+    use_enhanced: bool = False,
+) -> Tuple[Dict[str, pd.Series], pd.Series]:
+    """Resolve user-selected multi-mineral inversion logs and the valid-row mask.
+
+    Returns a mapping of canonical log mnemonic -> numeric Series plus a boolean mask of
+    rows carrying enough finite measurements to constrain the inversion. A row is valid
+    when it has at least ``min(3, n_selected)`` finite measurements, so a two-curve
+    selection still solves while the historical three-measurement floor is preserved
+    whenever three or more curves are used. Raises ValueError when a requested curve is
+    absent from the well or fewer than two curves are supplied.
+    """
+    logs: Dict[str, pd.Series] = {}
+    missing: List[str] = []
+    for name in requested:
+        column = _resolve_log_column(
+            df, name, use_hc_corrected=use_hc_corrected, use_enhanced=use_enhanced
+        )
+        if column is None:
+            missing.append(name)
+            continue
+        logs[name] = pd.to_numeric(df[column], errors="coerce")
+    if missing:
+        raise ValueError(
+            "Selected input log(s) not found in well data: "
+            f"{', '.join(sorted(set(missing)))}. Available: {list(df.columns)}"
+        )
+    if len(logs) < 2:
+        raise ValueError(
+            "At least two input logs are required for multi-mineral inversion; "
+            f"got {', '.join(logs) or 'none'}."
+        )
+    finite_counts = sum(series.notna() for series in logs.values())
+    valid_mask = finite_counts >= min(3, len(logs))
+    return logs, valid_mask
 
 
 def _compute_coal_mask(
@@ -807,6 +880,14 @@ class WorkspaceLithologyRequest(WorkspaceFilterBase, GammaParameters):
     silt_line_angle: float = Field(119.0)
     minerals: List[str] = Field(
         default_factory=lambda: ["QUARTZ", "CALCITE", "DOLOMITE", "SHALE"]
+    )
+    input_logs: Optional[List[str]] = Field(
+        None,
+        description=(
+            "Log curves fed to the multi-mineral inversion (e.g. ['PEF', 'THOR', 'POTA']). "
+            "Defaults to every available curve among GR, NPHI, RHOB, PEF, DTC, POTA, THOR, URAN. "
+            "Use this to exclude logs affected by heavy minerals or hot sand (e.g. drop GR/NPHI/RHOB)."
+        ),
     )
     porosity_method: str = Field("density")
     gr_clean: Optional[float] = Field(None, description="Clean sand GR endpoint (API)")
@@ -3488,6 +3569,7 @@ def workspace_lithology(
         out_df = pd.DataFrame({"DEPTH": df["DEPTH"]})
         crossplot_meta: Dict[str, Any] = {}
         save_cols: List[str] = []
+        requested_logs: List[str] = []
 
         if model == "ssc":
             nphi, rhob = _select_nphi_rhob(
@@ -3560,38 +3642,37 @@ def workspace_lithology(
             }
 
         elif model == "multi_mineral":
-            nphi, rhob = _select_nphi_rhob(
+            requested_logs = [
+                str(name).strip().upper() for name in (req.input_logs or []) if name
+            ]
+            if not requested_logs:
+                requested_logs = [
+                    name
+                    for name in MULTI_MINERAL_DEFAULT_INPUT_LOGS
+                    if _resolve_log_column(
+                        df,
+                        name,
+                        use_hc_corrected=req.use_hc_corrected,
+                        use_enhanced=req.use_enhanced_logs,
+                    )
+                    is not None
+                ]
+            if not requested_logs:
+                raise ValueError(
+                    "No usable input logs found for multi-mineral inversion. "
+                    f"Available: {list(df.columns)}"
+                )
+
+            input_logs, valid_mask = _resolve_multi_mineral_input_logs(
                 df,
+                requested_logs,
                 use_hc_corrected=req.use_hc_corrected,
                 use_enhanced=req.use_enhanced_logs,
             )
-            gr_col = (
-                "GR_ENH"
-                if req.use_enhanced_logs
-                and "GR_ENH" in df.columns
-                and df["GR_ENH"].notna().any()
-                else "GR"
-            )
-            gr = (
-                pd.to_numeric(df[gr_col], errors="coerce")
-                if gr_col in df.columns
-                else pd.Series(np.nan, index=df.index, dtype=float)
-            )
-            pef = (
-                pd.to_numeric(df["PEF"], errors="coerce")
-                if "PEF" in df.columns
-                else pd.Series(np.nan, index=df.index, dtype=float)
-            )
-            dtc = (
-                pd.to_numeric(df["DTC"], errors="coerce")
-                if "DTC" in df.columns
-                else pd.Series(np.nan, index=df.index, dtype=float)
-            )
-
-            valid_mask = nphi.notna() & rhob.notna()
             if not valid_mask.any():
                 raise ValueError(
-                    "No valid NPHI and RHOB pairs found for multi-mineral inversion"
+                    "No depth rows carry enough valid measurements for multi-mineral "
+                    f"inversion using logs: {', '.join(requested_logs)}"
                 )
 
             selected_minerals = [m.upper() for m in (req.minerals or []) if m]
@@ -3620,11 +3701,10 @@ def workspace_lithology(
                 mm_model.responses["SHALE"]["GR"] = float(req.gr_clay)
 
             res_df = mm_model.estimate_lithology(
-                gr=gr[valid_mask].to_numpy(dtype=float),
-                nphi=nphi[valid_mask].to_numpy(dtype=float),
-                rhob=rhob[valid_mask].to_numpy(dtype=float),
-                pef=pef[valid_mask].to_numpy(dtype=float),
-                dtc=dtc[valid_mask].to_numpy(dtype=float),
+                logs={
+                    name: series[valid_mask].to_numpy(dtype=float)
+                    for name, series in input_logs.items()
+                },
                 auto_scale=req.auto_scale,
             )
 
@@ -3932,6 +4012,9 @@ def workspace_lithology(
                     [m.upper() for m in (req.minerals or []) if m]
                     if model == "multi_mineral"
                     else None
+                ),
+                "litho_input_logs": (
+                    requested_logs if model == "multi_mineral" else None
                 ),
                 "porosity_method_key": req.porosity_method,
                 "use_hc_corrected": req.use_hc_corrected,

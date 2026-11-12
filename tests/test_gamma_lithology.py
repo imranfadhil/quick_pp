@@ -20,6 +20,7 @@ def client_and_state(monkeypatch):
                 "POTA": [0.5, 1.5, 2.0],
                 "RHOB": [2.32, 2.325, 2.36],
                 "NPHI": [0.2, 0.2, 0.2],
+                "PEF": [2.5, np.nan, 3.0],
                 "BADHOLE": [0.0, 0.0, 0.0],
             }
         )
@@ -166,3 +167,89 @@ def test_multi_mineral_reports_matrix_relative_volumes(client_and_state, monkeyp
     )
     assert poro.status_code == 200, poro.text
     pd.testing.assert_frame_equal(state["df"][["VSAND", "VCLAY"]], original)
+
+
+def test_multi_mineral_uses_only_selected_input_logs(client_and_state, monkeypatch):
+    """Explicit input_logs must be the only curves handed to the inversion."""
+    client, _ = client_and_state
+    captured = {}
+
+    def capture(*args, **kwargs):
+        captured.update(kwargs)
+        n_rows = len(next(iter(kwargs["logs"].values())))
+        return pd.DataFrame(
+            {
+                "VSAND": [0.5] * n_rows,
+                "PHIT_CONSTRUCTED": [0.2] * n_rows,
+            }
+        )
+
+    monkeypatch.setattr(workspace.MultiMineral, "estimate_lithology", capture)
+    root = "/quick_pp/workspace/projects/1/wells/W"
+    response = client.post(
+        root + "/lithology",
+        json={"model": "multi_mineral", "input_logs": ["PEF", "THOR", "POTA"]},
+    )
+    assert response.status_code == 200, response.text
+    assert set(captured["logs"]) == {"PEF", "THOR", "POTA"}
+    # Row 1 has a null PEF, so only the two fully-measured rows are inverted.
+    assert captured["logs"]["THOR"] == pytest.approx([1.0, 7.0])
+    assert captured["logs"]["POTA"] == pytest.approx([0.5, 2.0])
+
+
+def test_multi_mineral_defaults_to_all_available_logs(client_and_state, monkeypatch):
+    """Omitting input_logs keeps the historical behaviour of using every loaded curve."""
+    client, _ = client_and_state
+    captured = {}
+
+    def capture(*args, **kwargs):
+        captured.update(kwargs)
+        n_rows = len(next(iter(kwargs["logs"].values())))
+        return pd.DataFrame(
+            {
+                "VSAND": [0.5] * n_rows,
+                "PHIT_CONSTRUCTED": [0.2] * n_rows,
+            }
+        )
+
+    monkeypatch.setattr(workspace.MultiMineral, "estimate_lithology", capture)
+    root = "/quick_pp/workspace/projects/1/wells/W"
+    response = client.post(root + "/lithology", json={"model": "multi_mineral"})
+    assert response.status_code == 200, response.text
+    assert set(captured["logs"]) == {"GR", "NPHI", "RHOB", "PEF", "THOR", "POTA"}
+
+
+def test_multi_mineral_rejects_unknown_input_log(client_and_state):
+    client, _ = client_and_state
+    root = "/quick_pp/workspace/projects/1/wells/W"
+    response = client.post(
+        root + "/lithology",
+        json={"model": "multi_mineral", "input_logs": ["PEF", "MISSING"]},
+    )
+    assert response.status_code == 400
+    assert "MISSING" in response.json()["detail"]
+
+
+def test_multi_mineral_rejects_insufficient_input_logs(client_and_state):
+    """A single selected curve cannot constrain the inversion."""
+    client, _ = client_and_state
+    root = "/quick_pp/workspace/projects/1/wells/W"
+    response = client.post(
+        root + "/lithology", json={"model": "multi_mineral", "input_logs": ["PEF"]}
+    )
+    assert response.status_code == 400
+    assert "At least two input logs" in response.json()["detail"]
+
+
+def test_multi_mineral_rejects_rows_without_enough_measurements(client_and_state):
+    """Rows lacking enough finite measurements must not be inverted."""
+    client, state = client_and_state
+    state["df"]["PEF"] = np.nan
+    state["df"]["THOR"] = np.nan
+    root = "/quick_pp/workspace/projects/1/wells/W"
+    response = client.post(
+        root + "/lithology",
+        json={"model": "multi_mineral", "input_logs": ["PEF", "THOR", "POTA"]},
+    )
+    assert response.status_code == 400
+    assert "enough valid measurements" in response.json()["detail"]

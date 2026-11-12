@@ -67,6 +67,7 @@ export const SINGLE_WELL_REGIONAL_DEFAULTS: Record<ParamModuleKey, Record<string
 			dryClayRhob: 2.78,
 			fluidNphi: 1.0,
 			fluidRhob: 1.0,
+			inputLogs: [],
 			badholeTreatment: 'interpolate'
 		},
 		ts: {
@@ -386,6 +387,7 @@ function legacyWellEntry(
 			fluidNphi: fN,
 			fluidRhob: fR,
 			minerals: Array.isArray(cfg.litho_minerals) ? cfg.litho_minerals : undefined,
+			inputLogs: Array.isArray(cfg.litho_input_logs) ? cfg.litho_input_logs : undefined,
 			badholeTreatment: cfg.badhole_treatment
 		});
 		return { params: { litho }, selection: wellSel, label: 'Whole well (legacy)', saved_at: '' };

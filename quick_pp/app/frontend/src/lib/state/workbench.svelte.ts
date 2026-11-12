@@ -148,6 +148,8 @@ export interface LithoEndpointParams {
 	grClean: number;
 	grClay: number;
 	minerals: string[];
+	/** Log curves fed to the multi-mineral inversion; empty means "all available". */
+	inputLogs: string[];
 	enableCoalFlagging: boolean;
 	coalRhobMax: number;
 	coalNphiMin: number;
@@ -778,6 +780,7 @@ class WorkbenchState {
 		grClean: 15.0,
 		grClay: 115.0,
 		minerals: ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE'],
+		inputLogs: [],
 		enableCoalFlagging: true,
 		coalRhobMax: 2.0,
 		coalNphiMin: 0.3,

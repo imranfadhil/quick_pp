@@ -260,6 +260,7 @@
 						gamma: workbench.lithoParams.model === 'vsh_gr'
 							? gammaParameters(workbench.lithoParams) : undefined,
 						litho_minerals: workbench.lithoParams.minerals,
+						litho_input_logs: workbench.lithoParams.inputLogs,
 						porosity_method_key: workbench.lithoParams.porosityMethod,
 						sonic_fluid_dt: workbench.lithoParams.sonicFluidDt,
 						use_hc_corrected: workbench.lithoParams.useHcCorrected,

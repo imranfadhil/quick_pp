@@ -345,6 +345,14 @@ class RunMultiMineralArgs(BaseModel):
         default_factory=lambda: ["QUARTZ", "CALCITE", "DOLOMITE", "SHALE"],
         description="Minerals to solve for when model='multi_mineral'",
     )
+    input_logs: Optional[List[str]] = Field(
+        None,
+        description=(
+            "Log curves fed to the multi-mineral inversion (e.g. ['PEF', 'THOR', 'POTA']). "
+            "Omit to use every available curve among GR, NPHI, RHOB, PEF, DTC, POTA, THOR, URAN. "
+            "Exclude logs affected by heavy minerals or hot sand (e.g. drop GR/NPHI/RHOB)."
+        ),
+    )
     use_hc_corrected: bool = Field(
         True, description="Use NPHI_HC and RHOB_HC if available"
     )
@@ -846,6 +854,7 @@ def tool_run_multi_mineral(
     well_name: str,
     model: str = "multi_mineral",
     minerals: Optional[List[str]] = None,
+    input_logs: Optional[List[str]] = None,
     use_hc_corrected: bool = True,
     min_depth: Optional[float] = None,
     max_depth: Optional[float] = None,
@@ -857,6 +866,7 @@ def tool_run_multi_mineral(
     lith_req = WorkspaceLithologyRequest(
         model=model,
         minerals=mineral_list,
+        input_logs=input_logs,
         use_hc_corrected=use_hc_corrected,
         min_depth=min_depth,
         max_depth=max_depth,
@@ -927,6 +937,7 @@ def tool_run_multi_mineral(
         "minerals": mineral_list
         if model == "multi_mineral"
         else ["VSAND", "VSILT", "VCLAY"],
+        "input_logs": input_logs if model == "multi_mineral" else None,
         "saved": save,
         "saved_rows": lith_res.get("saved_rows", 0),
         "solver_diagnostics": diagnostics,

@@ -58,6 +58,19 @@
 			])
 		);
 
+	// Canonical multi-mineral inversion logs. An empty selection means "use every curve
+	// present in the well", preserving the historical default behaviour.
+	const AVAILABLE_INPUT_LOGS = [
+		{ mnemonic: 'GR', label: 'Gamma Ray' },
+		{ mnemonic: 'NPHI', label: 'Neutron Porosity' },
+		{ mnemonic: 'RHOB', label: 'Bulk Density' },
+		{ mnemonic: 'PEF', label: 'Photoelectric Factor' },
+		{ mnemonic: 'DTC', label: 'Sonic (DTC)' },
+		{ mnemonic: 'POTA', label: 'Potassium' },
+		{ mnemonic: 'THOR', label: 'Thorium' },
+		{ mnemonic: 'URAN', label: 'Uranium' }
+	];
+
 	interface MlModelSuiteOption {
 		key: string;
 		label: string;
@@ -270,6 +283,26 @@
 		}
 	}
 
+	/** Mirrors the backend alias resolution: raw, hydrocarbon-corrected, or enhanced curve. */
+	function inputLogLoaded(mnemonic: string): boolean {
+		const keys = Object.keys(wellData.curves);
+		return [mnemonic, `${mnemonic}_HC`, `${mnemonic}_ENH`].some((k) => keys.includes(k));
+	}
+
+	/** Logs actually sent to the inversion: the explicit selection, or all loaded curves. */
+	const effectiveInputLogs = $derived.by(() => {
+		const selected = workbench.lithoParams.inputLogs;
+		if (selected.length > 0) return selected;
+		return AVAILABLE_INPUT_LOGS.map((l) => l.mnemonic).filter(inputLogLoaded);
+	});
+
+	function toggleInputLog(mnemonic: string) {
+		const current = workbench.lithoParams.inputLogs;
+		workbench.lithoParams.inputLogs = current.includes(mnemonic)
+			? current.filter((x) => x !== mnemonic)
+			: [...current, mnemonic];
+	}
+
 	function collectZeroedUnselectedMineralCurves(): Record<string, number[]> {
 		const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
 		if (dept.length === 0) return {};
@@ -446,6 +479,7 @@
 						gr_clean: lp.grClean,
 						gr_clay: lp.grClay,
 						minerals: lp.minerals,
+						input_logs: lp.model === 'multi_mineral' ? lp.inputLogs : undefined,
 						porosity_method: lp.porosityMethod,
 						...gammaArgs,
 						...coalArgs,
@@ -764,6 +798,57 @@
 							<span class="truncate">{minName}</span>
 						</label>
 					{/each}
+				</div>
+
+				<div class="mb-1.5 flex items-center justify-between text-[11px] font-medium text-[var(--text-secondary)]">
+					<span>Input Logs:</span>
+					<span class="mono-num text-[10px] text-[var(--text-muted)]">
+						{workbench.lithoParams.inputLogs.length === 0
+							? `auto (${effectiveInputLogs.length})`
+							: `${workbench.lithoParams.inputLogs.length} selected`}
+					</span>
+				</div>
+				<div class="mb-1 grid grid-cols-2 gap-1">
+					{#each AVAILABLE_INPUT_LOGS as log}
+						{@const loaded = inputLogLoaded(log.mnemonic)}
+						{@const isSelected = workbench.lithoParams.inputLogs.includes(log.mnemonic)}
+						<label
+							class="flex items-center gap-1.5 rounded-xs border px-1.5 py-1 text-xs transition-colors {loaded
+								? 'cursor-pointer'
+								: 'cursor-not-allowed opacity-40'} {isSelected
+								? 'border-[var(--border-hairline)] bg-[var(--bg-app)] font-medium text-[var(--text-primary)]'
+								: 'border-transparent text-[var(--text-muted)] opacity-75 hover:opacity-100'}"
+							title={loaded ? log.label : `${log.label} (not loaded)`}
+						>
+							<input
+								type="checkbox"
+								checked={isSelected}
+								disabled={!loaded}
+								onchange={() => {
+									toggleInputLog(log.mnemonic);
+								}}
+								class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+							/>
+							<span class="truncate">{log.mnemonic}</span>
+						</label>
+					{/each}
+				</div>
+				<div class="mb-2 flex items-center justify-between gap-2">
+					<p class="text-[10px] text-[var(--text-secondary)]">
+						Leave all unchecked to auto-use every loaded curve. Exclude logs distorted by heavy minerals or hot sand.
+					</p>
+					{#if workbench.lithoParams.inputLogs.length > 0}
+						<button
+							type="button"
+							class="shrink-0 rounded-xs border border-[var(--border-hairline)] px-1.5 py-0.5 text-[10px] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+							onclick={() => {
+								workbench.lithoParams.inputLogs = [];
+								executeLithoPoro(false);
+							}}
+						>
+							Auto
+						</button>
+					{/if}
 				</div>
 			{/if}
 

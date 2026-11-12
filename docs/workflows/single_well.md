@@ -233,8 +233,17 @@ flowchart TD
       
       $$\phi_e = \phi_t - V_{\text{clay}} \cdot \phi_{\text{clay}} \quad \text{or} \quad \phi_e = \phi_t (1 - V_{\text{sh}})$$
 
-* **Input Curves:** `GR`, `RHOB`, `NPHI`, `PEF`, `DTC`  
+* **Input Curves:** `GR`, `RHOB`, `NPHI`, `PEF`, `DTC`, `POTA`, `THOR`, `URAN`  
 * **Output Curves:** `VSH`, `VSAND`, `VSILT`, `VCLAY`, `VCALC`, `VDOLO`, `PHIT`, `PHIE`
+
+* **Selectable input logs:** The multi-mineral inversion accepts any subset of the
+  available curves via `input_logs` (UI: *Input Logs* checkboxes). Leaving the selection
+  empty auto-uses every loaded curve among `GR`, `NPHI`, `RHOB`, `PEF`, `DTC`, `POTA`,
+  `THOR`, `URAN`. Exclude curves distorted by the mineralogy — for example drop `GR`,
+  `NPHI`, and `RHOB` in heavy-mineral or hot-sand intervals and invert on `PEF`, `THOR`,
+  and `POTA` instead. At least two curves are required, and each depth row must carry
+  enough finite measurements to constrain the solve. The selection is persisted as
+  `litho_input_logs` in the well config and reported in the generated report.
 
 * **Porosity method:** Alongside density and the neutron-density crossplot, choose
   Wyllie or Hunt-Raymer sonic porosity, or a neutron-density weighted

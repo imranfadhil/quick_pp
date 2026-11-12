@@ -218,6 +218,7 @@
 				cgr_k_coefficient: lp.cgrKCoefficient,
 				model: lp.model,
 				minerals: [...lp.minerals],
+				input_logs: lp.model === 'multi_mineral' ? [...lp.inputLogs] : undefined,
 				porosity_method: lp.porosityMethod === 'den' ? 'density' : 'neutron_density'
 			},
 			porosity: { ...common, method: lp.porosityMethod, lithology_model: lp.model },

@@ -1740,7 +1740,15 @@ def build_report_context(
             if cfg_mins
             else "Quartz, Calcite, Dolomite, Shale"
         )
+        cfg_logs = merged_configs.get("litho_input_logs")
+        log_str = (
+            ", ".join(str(name).upper() for name in cfg_logs)
+            if isinstance(cfg_logs, list) and cfg_logs
+            else None
+        )
         litho_model_display = f"Multi-Mineral Optimization Solver ({min_str})"
+        if log_str:
+            litho_model_display += f" — input logs: {log_str}"
     elif resolved_litho_key == "vsh_gr":
         litho_model_display = "Gamma Ray Shale Volume Index (Vsh,GR) Model"
     elif resolved_litho_key == "vsh_bulk":
