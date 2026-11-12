@@ -36,6 +36,7 @@ export const SINGLE_WELL_REGIONAL_DEFAULTS: Record<ParamModuleKey, Record<string
 			potassiumCurve: 'POTA',
 			gammaClean: 20,
 			gammaShale: 120,
+			gammaEndpoints: {},
 			bulkGrClean: 20,
 			bulkGrShale: 120,
 			cgrThCoefficient: 4,
@@ -241,6 +242,14 @@ const REGISTRY: Record<ParamModuleKey, ParamAccessor> = {
 		get: () => ({ litho: clone(workbench.lithoParams), ts: clone(workbench.tsParams) }),
 		set: (p) => {
 			assignKnown(workbench.lithoParams, p?.litho);
+			if (p?.litho && !p.litho.gammaEndpoints) workbench.lithoParams.gammaEndpoints = {};
+			if (workbench.lithoParams.model === 'vsh_bulk') {
+				workbench.lithoParams.model = 'vsh_gr';
+				if (workbench.lithoParams.gammaSource === 'gr') {
+					workbench.lithoParams.grClean = workbench.lithoParams.bulkGrClean;
+					workbench.lithoParams.grClay = workbench.lithoParams.bulkGrShale;
+				}
+			}
 			assignKnown(workbench.tsParams, p?.ts);
 		}
 	},
@@ -304,7 +313,7 @@ function legacyWellEntry(
 		const [fN, fR] = pt(cfg.fluid_point);
 		const litho = strip({
 			model: ['ssc', 'multi_mineral', 'vsh_gr', 'vsh_bulk'].includes(cfg.litho_model_key)
-				? cfg.litho_model_key
+				? (cfg.litho_model_key === 'vsh_bulk' ? 'vsh_gr' : cfg.litho_model_key)
 				: undefined,
 			porosityMethod:
 				cfg.porosity_method_key === 'den' || cfg.porosity_method_key === 'density'
@@ -315,21 +324,16 @@ function legacyWellEntry(
 						? 'neu_den'
 						: undefined,
 			sonicFluidDt: num(cfg.sonic_fluid_dt),
-			grClean: num(cfg.gr_clean),
-			grClay: num(cfg.gr_clay),
-			gammaSource: cfg.bulk_shale?.gamma_source,
-			gammaCurve: cfg.bulk_shale?.gamma_curve,
-			thoriumCurve: cfg.bulk_shale?.thorium_curve,
-			potassiumCurve: cfg.bulk_shale?.potassium_curve,
-			gammaClean: cfg.bulk_shale?.gamma_source !== 'gr' ? num(cfg.bulk_shale?.gamma_clean) : undefined,
-			gammaShale: cfg.bulk_shale?.gamma_source !== 'gr' ? num(cfg.bulk_shale?.gamma_shale) : undefined,
-			bulkGrClean: cfg.bulk_shale?.gamma_source === 'gr' ? num(cfg.bulk_shale?.gamma_clean) : undefined,
-			bulkGrShale: cfg.bulk_shale?.gamma_source === 'gr' ? num(cfg.bulk_shale?.gamma_shale) : undefined,
-			cgrThCoefficient: num(cfg.bulk_shale?.cgr_th_coefficient),
-			cgrKCoefficient: num(cfg.bulk_shale?.cgr_k_coefficient),
-			shaleSolidDensity: num(cfg.bulk_shale?.shale_solid_density),
-			shalePorosity: num(cfg.bulk_shale?.shale_porosity),
-			shaleIneffectiveFraction: num(cfg.bulk_shale?.shale_ineffective_fraction),
+			grClean: num(cfg.gr_clean ?? (cfg.litho_model_key === 'vsh_bulk' && cfg.bulk_shale?.gamma_source === 'gr' ? cfg.bulk_shale?.gamma_clean : undefined)),
+			grClay: num(cfg.gr_clay ?? (cfg.litho_model_key === 'vsh_bulk' && cfg.bulk_shale?.gamma_source === 'gr' ? cfg.bulk_shale?.gamma_shale : undefined)),
+			gammaSource: (cfg.gamma ?? cfg.bulk_shale)?.gamma_source,
+			gammaCurve: (cfg.gamma ?? cfg.bulk_shale)?.gamma_curve,
+			thoriumCurve: (cfg.gamma ?? cfg.bulk_shale)?.thorium_curve,
+			potassiumCurve: (cfg.gamma ?? cfg.bulk_shale)?.potassium_curve,
+			gammaClean: num((cfg.gamma ?? cfg.bulk_shale)?.gamma_clean),
+			gammaShale: num((cfg.gamma ?? cfg.bulk_shale)?.gamma_shale),
+			cgrThCoefficient: num((cfg.gamma ?? cfg.bulk_shale)?.cgr_th_coefficient),
+			cgrKCoefficient: num((cfg.gamma ?? cfg.bulk_shale)?.cgr_k_coefficient),
 			drySandNphi: sN,
 			drySandRhob: sR,
 			dryClayNphi: cN,

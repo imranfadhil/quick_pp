@@ -5,7 +5,7 @@
 	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
-	import { thomasStieberAvailable } from '$lib/utils/bulkShale';
+	import { thomasStieberAvailable } from '$lib/utils/lithology';
 	import {
 		fillMissingCurve,
 		estimateBqvReferenceRw,

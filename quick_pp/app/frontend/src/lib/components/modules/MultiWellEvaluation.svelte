@@ -208,6 +208,14 @@
 			zones: [...zones],
 			lithology: {
 				...common,
+				gamma_source: lp.gammaSource,
+				gamma_curve: lp.gammaCurve,
+				thorium_curve: lp.thoriumCurve,
+				potassium_curve: lp.potassiumCurve,
+				gamma_clean: lp.gammaClean,
+				gamma_shale: lp.gammaShale,
+				cgr_th_coefficient: lp.cgrThCoefficient,
+				cgr_k_coefficient: lp.cgrKCoefficient,
 				model: lp.model,
 				minerals: [...lp.minerals],
 				porosity_method: lp.porosityMethod === 'den' ? 'density' : 'neutron_density'

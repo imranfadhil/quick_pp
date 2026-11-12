@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { bulkShaleParameters } from '$lib/utils/bulkShale';
+	import { gammaParameters } from '$lib/utils/lithology';
 	import { API_BASE, generateProjectReport, postJson } from '$lib/api/client';
 	import { projectData } from '$lib/state/projectData.svelte';
 	import { appStatus } from '$lib/state/status.svelte';
@@ -257,8 +257,8 @@
 					max_depth: workbench.depthFilter ? workbench.depthFilter.max : undefined,
 					model_params: {
 						litho_model_key: workbench.lithoParams.model,
-						bulk_shale: workbench.lithoParams.model === 'vsh_bulk'
-							? bulkShaleParameters(workbench.lithoParams) : undefined,
+						gamma: workbench.lithoParams.model === 'vsh_gr'
+							? gammaParameters(workbench.lithoParams) : undefined,
 						litho_minerals: workbench.lithoParams.minerals,
 						porosity_method_key: workbench.lithoParams.porosityMethod,
 						sonic_fluid_dt: workbench.lithoParams.sonicFluidDt,

@@ -13,14 +13,15 @@
 * **Core-to-Log Calibration Scope:** Total RCA core plugs loaded $= {{ poro_params.total_core_count }}$; valid target-zone plugs (`{{ target_zones|join(', ') }}`) with overlapping depth-matched log porosity used in regression $= {{ poro_params.core_count }}$.
 
 {% if litho_params.model_key == 'multi_mineral' %}
-$$\sum_i V_{min,i} + \phi_t = 1, \quad \rho_{ma} = \frac{\sum_i V_{min,i} \cdot \rho_i}{\sum_i V_{min,i}}, \quad \phi_D = \frac{\rho_{ma} - \rho_b}{\rho_{ma} - \rho_{fl}}, \quad \phi_e = \phi_t - V_{sh} \cdot \phi_{sh}$$
+The inversion solves mineral and fluid volumes together; reported mineral fractions are normalized to the mineral total.
+$$\sum_i V_{min,i} = 1, \quad \rho_{ma} = \sum_i V_{min,i} \cdot \rho_i, \quad \phi_D = \frac{\rho_{ma} - \rho_b}{\rho_{ma} - \rho_{fl}}$$
 {% elif litho_params.model_key == 'vsh_gr' %}
 $$I_{GR} = \frac{GR - GR_{clean}}{GR_{shale} - GR_{clean}}, \quad \phi_D = \frac{\rho_{ma} - \rho_b}{\rho_{ma} - \rho_{fl}}, \quad \phi_e = \phi_t - V_{sh} \cdot \phi_{sh}$$
 {% elif litho_params.model_key == 'vsh_bulk' %}
 $$V_{sh} = \operatorname{clip}\left(\frac{\gamma-\gamma_{clean}}{\gamma_{shale}-\gamma_{clean}},0,1\right), \quad V_{clay,proxy} = V_{sh}(1-\phi_{sh}), \quad \phi_e = \phi_t - f_{ineffective}V_{sh}\phi_{sh}$$
 `VSHALE` is bulk shale; `VCLAY` is a shale-solids proxy, not a measured clay mineral volume.
 {% else %}
-$$V_{sand} + V_{silt} + V_{clay} + \phi_t = 1, \quad \phi_D = \frac{\rho_{ma} - \rho_b}{\rho_{ma} - \rho_{fl}}, \quad \phi_e = \phi_t - V_{clay} \cdot \phi_{sh}$$
+$$V_{sand} + V_{silt} + V_{clay} = 1, \quad \phi_D = \frac{\rho_{ma} - \rho_b}{\rho_{ma} - \rho_{fl}}, \quad \phi_e = \phi_t - V_{clay,bulk} \cdot \phi_{sh}$$
 {% endif %}
 
 | Parameter | Symbol | Value | Unit | Basis / Reference |
@@ -48,6 +49,18 @@ $$V_{sand} + V_{silt} + V_{clay} + \phi_t = 1, \quad \phi_D = \frac{\rho_{ma} - 
 | Dry Clay Neutron | $NPHI_{clay}$ | {{ litho_params.nphi_clay }} | $\text{v/v}$ | Neutron-Density Crossplot Clay Point |
 | Clean GR Endpoint | $GR_{clean}$ | {{ litho_params.gr_clean }} | $\text{gAPI}$ | P5 Clean Reservoir Baseline |
 | Shale GR Endpoint | $GR_{shale}$ | {{ litho_params.gr_shale }} | $\text{gAPI}$ | P95 Intra-Reservoir Shale Baseline |
+{% if litho_params.model_key == 'vsh_gr' and litho_params.gamma %}
+| Gamma source | $\gamma$ | {{ litho_params.gamma.get('gamma_source', 'gr') }} | — | Calibrate for the selected response |
+{% if litho_params.gamma.get('gamma_source') == 'cgr' %}
+| Gamma curve | — | {{ litho_params.gamma.get('gamma_curve') }} | — | Selected curve |
+{% elif litho_params.gamma.get('gamma_source') == 'derived_cgr' %}
+| Derived CGR inputs | — | {{ litho_params.gamma.get('thorium_curve') }} / {{ litho_params.gamma.get('potassium_curve') }} | ppm / % | Th / K |
+| CGR coefficients | $a_{Th}$ / $a_K$ | {{ litho_params.gamma.get('cgr_th_coefficient') }} / {{ litho_params.gamma.get('cgr_k_coefficient') }} | gAPI/ppm / gAPI/% | Verify tool calibration |
+{% endif %}
+{% if litho_params.gamma.get('gamma_source') != 'gr' %}
+| Clean / shale gamma endpoints | — | {{ litho_params.gamma.get('gamma_clean') }} / {{ litho_params.gamma.get('gamma_shale') }} | gAPI | Selected gamma response |
+{% endif %}
+{% endif %}
 {% endif %}
 | Total Core Plugs Loaded | $N_{core,total}$ | {{ poro_params.total_core_count }} | plugs | Full-Wellbore RCA Inventory (Table 2.1) |
 | Target-Zone Calibration Plugs | $N_{core,target}$ | {{ poro_params.core_count }} | plugs | Valid Overlapping Plugs (`{{ target_zones|join(', ') }}`) |

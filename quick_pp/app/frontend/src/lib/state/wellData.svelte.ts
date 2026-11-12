@@ -2,6 +2,7 @@ import { api, postJson, saveAncillaryItems } from '$lib/api/client';
 import type { CoreComparisonMetrics, CurveSummaryStats } from '$lib/api/schema';
 import { appStatus } from './status.svelte';
 import { workbench } from './workbench.svelte';
+import { calibrateGamma, gammaEndpoints, gammaKey, gammaLabel, selectedGamma, setGammaEndpoints } from '$lib/utils/lithology';
 import {
 	selectSpliceInterval,
 	validateSpliceInterval,
@@ -804,8 +805,8 @@ class WellDataState {
 	// and across CPORE/CPERM core depth shifts because it only reads fine-grained curve selectors).
 	private vshDnBaseRows = $derived.by(() => {
 		const dept = this.deptCurve;
-		const grArr = this.grCurve;
 		const lp = workbench.lithoParams;
+		const grArr = selectedGamma(lp, this.curves);
 		const useHc = lp.logCorrectionMode === 'hc' && (lp.enableHcCorrection || lp.useHcCorrected);
 		const nphiHc = this.nphiHcCurve;
 		const rhobHc = this.rhobHcCurve;
@@ -962,8 +963,7 @@ class WellDataState {
 	vshComparison = $derived.by(() => {
 		const baseRows = this.vshDnBaseRows;
 		const lp = workbench.lithoParams;
-		const grClean = lp.grClean;
-		const grClay = lp.grClay;
+		const { clean: grClean, shale: grClay } = gammaEndpoints(lp);
 		const grSpan = Math.abs(grClay - grClean) > 1e-4 ? grClay - grClean : 100.0;
 		const scope = workbench.vshCalibScope;
 		const brushed = scope === 'brushed' ? workbench.brushedDepthIndices : null;
@@ -3855,14 +3855,18 @@ class WellDataState {
 	 */
 	applyLiveVshGr() {
 		const dept = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
-		const grArr = this.curves['GR'] ?? [];
-		if (dept.length === 0 || grArr.length === 0) return;
-
 		const lp = workbench.lithoParams;
-		const span = Math.abs(lp.grClay - lp.grClean) > 1e-4 ? lp.grClay - lp.grClean : 100.0;
-		const vshGrArr = grArr.map((g) =>
-			Number.isFinite(g) ? Math.max(0.0, Math.min(1.0, (g - lp.grClean) / span)) : Number.NaN
-		);
+		const grArr = selectedGamma(lp, this.curves);
+		if (dept.length === 0) return;
+
+		const { clean, shale } = gammaEndpoints(lp);
+		const span = Math.abs(shale - clean) > 1e-4 ? shale - clean : 100.0;
+		const vshGrArr = dept.map((_, i) => {
+			const g = grArr[i];
+			return (
+			Number.isFinite(g) ? Math.max(0.0, Math.min(1.0, (g - clean) / span)) : Number.NaN
+			);
+		});
 
 		const vshDnArr = this.curves['VSH_DN']
 			? [...this.curves['VSH_DN']]
@@ -3894,7 +3898,24 @@ class WellDataState {
 
 		if (goodRows.length < 3) {
 			appStatus.info(
-				'Not enough valid GR & NPHI-RHOB points to calibrate',
+				`Not enough valid ${gammaLabel(workbench.lithoParams)} & NPHI-RHOB points to calibrate`,
+				workbench.wellId ?? undefined
+			);
+			return;
+		}
+
+		if (gammaKey(workbench.lithoParams) !== 'gr') {
+			const holdClean = scope === 'shale_only' || (scope === 'shale_sand' && sandRows.length < 3);
+			const groups = holdClean
+				? [{ points: shaleRows.length >= 3 ? shaleRows : goodRows, weight: 1 }]
+				: scope === 'shale_sand' && shaleRows.length >= 3 && sandRows.length >= 3
+					? [{ points: shaleRows, weight: 0.5 }, { points: sandRows, weight: 0.5 }]
+					: [{ points: scope === 'brushed' && brushedRows.length >= 3 ? brushedRows : goodRows, weight: 1 }];
+			const fitted = calibrateGamma(groups, gammaEndpoints(workbench.lithoParams), holdClean);
+			setGammaEndpoints(workbench.lithoParams, fitted.clean, fitted.shale);
+			this.applyLiveVshGr();
+			appStatus.success(
+				`Calibrated ${gammaLabel(workbench.lithoParams)}: clean = ${fitted.clean} gAPI, shale = ${fitted.shale} gAPI (RMSE = ${this.vshComparison.active.rmse ?? '—'})`,
 				workbench.wellId ?? undefined
 			);
 			return;
@@ -3917,8 +3938,7 @@ class WellDataState {
 			return sq / pts.length;
 		};
 
-		let bestClean = workbench.lithoParams.grClean;
-		let bestClay = workbench.lithoParams.grClay;
+		let { clean: bestClean, shale: bestClay } = gammaEndpoints(workbench.lithoParams);
 
 		if (scope === 'shale_only' || (scope === 'shale_sand' && sandRows.length < 3)) {
 			// Calibrate GR_clay on Clean Shale while holding GR_clean anchored
@@ -4035,12 +4055,11 @@ class WellDataState {
 			}
 		}
 
-		workbench.lithoParams.grClean = Number(bestClean.toFixed(1));
-		workbench.lithoParams.grClay = Number(bestClay.toFixed(1));
+		setGammaEndpoints(workbench.lithoParams, Number(bestClean.toFixed(1)), Number(bestClay.toFixed(1)));
 		this.applyLiveVshGr();
 
 		appStatus.success(
-			`Calibrated VSH_GR → VSH_DN: GR Clean = ${workbench.lithoParams.grClean.toFixed(1)} gAPI, GR Shale = ${workbench.lithoParams.grClay.toFixed(1)} gAPI (RMSE = ${this.vshComparison.active.rmse ?? '—'})`,
+			`Calibrated ${gammaLabel(workbench.lithoParams)} → VSH_DN: clean = ${bestClean.toFixed(1)} gAPI, shale = ${bestClay.toFixed(1)} gAPI (RMSE = ${this.vshComparison.active.rmse ?? '—'})`,
 			workbench.wellId ?? undefined
 		);
 	}

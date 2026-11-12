@@ -106,19 +106,20 @@ def client_and_project(monkeypatch):
     session.close()
 
 
-def test_bulk_shale_save_removes_invalid_prior_values(client_and_project):
+def test_porosity_save_preserves_lithology(client_and_project):
     client, pid = client_and_project
     path = f"/quick_pp/workspace/projects/{pid}/wells/Well-A/lithology"
     payload = {
-        "model": "vsh_bulk", "badhole_treatment": "none", "save": True,
-        "gamma_clean": 0.0, "gamma_shale": 1000.0,
+        "model": "vsh_gr", "badhole_treatment": "none", "save": True,
+        "gr_clean": 20.0, "gr_clay": 120.0,
     }
     initial = client.post(path, json=payload)
     assert initial.status_code == 200, initial.text
-    assert initial.json()["data"]["PHIT"][-1] is not None
-    replacement = client.post(path, json={**payload, "gamma_shale": 110.0})
-    assert replacement.status_code == 200, replacement.text
-    assert replacement.json()["data"]["PHIT"][-1] is None
+    expected = initial.json()["data"]["VCLAY"]
+    porosity = client.post(path.replace("lithology", "porosity"), json={
+        "lithology_model": "vsh_gr", "method": "den", "save": True,
+    })
+    assert porosity.status_code == 200, porosity.text
 
     from sqlalchemy import select
 
@@ -127,13 +128,13 @@ def test_bulk_shale_save_removes_invalid_prior_values(client_and_project):
 
     with ws_service.get_db() as session:
         rows = session.execute(
-            select(CurveData.depth)
+            select(CurveData.depth, CurveData.value_numeric)
             .join(Curve, CurveData.curve_id == Curve.curve_id)
             .join(WellModel, Curve.well_id == WellModel.well_id)
-            .where(WellModel.project_id == pid, WellModel.name == "Well-A", Curve.mnemonic == "PHIT")
-        ).scalars().all()
-    assert 1009.0 not in rows
-    assert rows
+            .where(WellModel.project_id == pid, WellModel.name == "Well-A", Curve.mnemonic == "VCLAY")
+            .order_by(CurveData.depth)
+        ).all()
+    assert [row.value_numeric for row in rows] == pytest.approx(expected)
 
 
 @pytest.mark.parametrize(

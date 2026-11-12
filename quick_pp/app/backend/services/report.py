@@ -1848,6 +1848,7 @@ def build_report_context(
         "silt_line_angle": silt_angle_cfg,
         "fluid_point": fluid_pt,
         "bulk_shale": merged_configs.get("bulk_shale") or {},
+        "gamma": merged_configs.get("gamma") or {},
     }
     scal_cfg = (
         merged_configs.get("scal_params")

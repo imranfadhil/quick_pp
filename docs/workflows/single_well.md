@@ -249,8 +249,7 @@ flowchart TD
   time, or an invalid Hunt-Raymer result are null. Badhole interpolation may
   interpolate flagged samples; coal and GR-based badhole handling retain their
   existing special treatment. Effective porosity uses the existing shale correction.
-  The bulk-shale model remains density-only; the new methods are not available
-  in batch evaluation.
+  The new methods are not available in batch evaluation.
 
 * **Porosity comparison:** Run Lithology & Porosity, then select **Porosity Methods
   vs Depth + Core** from the Crossplot dropdown. Toggle the methods to overlay
@@ -263,39 +262,26 @@ flowchart TD
   coal and badhole samples. Core is matched to a log sample within 0.5 m, and markers
   appear at the matched log depth. Different log/core scales, depth alignment and
   laboratory conditions can affect the comparison. Depth and zone filters apply;
-  brushed calculation selections and bulk shale are not supported.
+  brushed calculation selections are not supported.
 
-* **Bulk shale from GR / CGR (opt-in):** The legacy `Vsh from GR` model remains
-  unchanged. The separate bulk-shale model interprets the calibrated linear
-  gamma index as bulk `VSHALE`. It accepts GR, an explicitly selected CGR curve,
-  or estimated `CGR_SYN = a_Th × THOR + a_K × POTA`; select the input curves and
-  verify their units (ppm and percent) and coefficients against the tool calibration.
-  The provisional coefficients (4 gAPI/ppm and 16 gAPI/%) are not universal.
-  GR and CGR endpoints are separate and must be calibrated for the selected response.
-  Confirm that the GR curve is total GR: imported aliases can already refer to CGR.
+* **Vsh from gamma:** Select GR, an available gamma curve such as SGR or CGR,
+  or estimated `CGR_SYN = a_Th × THOR + a_K × POTA`. Verify thorium and potassium
+  units (ppm and percent) and coefficients against the tool calibration. The
+  provisional coefficients (4 gAPI/ppm and 16 gAPI/%) are not universal.
+  Calibrate endpoints independently for each response; imported GR aliases may
+  already refer to CGR. The gamma index is a shale proxy, not a mineralogical
+  clay measurement.
+  Select the response in **Vshale Calibration** and adjust its clean and shale
+  sliders there. The calibration comparison, auto-calibration, and P10/P90 reset
+  use the selected response. GR-based log correction and badhole fallback retain
+  their separate GR endpoints.
 
-  The model treats `VCLAY = VSHALE × (1 − shale porosity)` as **shale solids**,
-  a proxy for clay, not a mineralogical clay estimate. `VSAND` is clean solids.
-  With clean and shale solid densities and fluid density, it solves the bulk
-  density balance for clean pore volume; `PHIT` includes shale porosity and
-  `PHIE` subtracts the user-selected ineffective fraction of that shale pore volume.
-  `RHOM` is the calculated average solid matrix density. The model rejects
-  physically inconsistent density mixtures rather than clipping them; such samples
-  are null. These endmembers and the ineffective fraction are provisional and
-  should be checked against core and local geology. Downstream clay-dependent
-  models use the shale-solids proxy; Simandoux, Indonesian, and single-well
-  reservoir-summary shale cutoffs use bulk `VSHALE` when this model is active.
-
-  This model currently requires Density porosity, no log correction, Thomas-Stieber
-  disabled, and either Use Normally or Ignore badhole treatment. Use a depth/zone
-  filter rather than a brushed selection. If inherited settings conflict, the model
-  panel lists them and offers **Apply compatible settings & calculate**. This switches
-  an unsupported badhole action to Ignore / Nullify (excluding flagged samples);
-  an existing Use Normally or Ignore choice is retained. Review the settings before saving.
-  It is not available in batch evaluation.
-  Thomas-Stieber permeability/saturation and reservoir-summary upscaling or
-  uncertainty are also unavailable with this model.
-  The model does not infer a quantitative shale correction from Th/K or PEF.
+  Saved lithology fractions are matrix-relative and are not scaled by PHIT.
+  Multi-mineral inversion still jointly solves mineral and fluid volumes, then
+  reports mineral fractions relative to their sum. PHIT is computed separately;
+  the well plot scales mineral fractions to `1 − PHIT` for visualization only.
+  Recalculate previously saved lithology before comparing results or applying
+  cutoffs, because earlier versions saved PHIT-scaled volumes.
 
 * **Spectral crossplots:** The right pane also offers thorium vs potassium, PEF vs potassium,
   and PEF vs Th/K. These use `THOR` in ppm, `POTA` in percent and `PEF` in b/e;

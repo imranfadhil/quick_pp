@@ -213,6 +213,31 @@ def test_bulk_shale_report_uses_correct_model_and_parameters(synthetic_well_df: 
     assert "Clean GR Endpoint" not in rendered
 
 
+def test_gamma_source_is_reported_for_vsh_gr(synthetic_well_df: pd.DataFrame):
+    from jinja2 import Environment, FileSystemLoader
+
+    from quick_pp.app.backend.services.report import build_report_context
+
+    gamma = {
+        "gamma_source": "derived_cgr", "thorium_curve": "THOR",
+        "potassium_curve": "POTA", "gamma_clean": 12, "gamma_shale": 90,
+        "cgr_th_coefficient": 4, "cgr_k_coefficient": 16,
+    }
+    summary = {"project_id": 99, "name": "Synthetic", "wells": [{"name": "WELL-A"}]}
+    with (
+        patch("quick_pp.app.backend.services.report.db_objects.Project.load", side_effect=ValueError("Mocked project")),
+        patch("quick_pp.app.backend.services.report.get_project_summary", return_value=summary),
+        patch("quick_pp.app.backend.services.report._get_merged_dataframe_sync", return_value=synthetic_well_df),
+    ):
+        ctx = build_report_context(99, well_names=["WELL-A"], model_params={"litho_model_key": "vsh_gr", "gamma": gamma})
+    assert ctx["litho_params"]["gamma"] == gamma
+    directory = Path(__file__).resolve().parents[1] / "quick_pp" / "app" / "backend" / "template" / "reports" / "sections"
+    template = Environment(loader=FileSystemLoader(directory)).get_template("04_lithology_porosity.md.j2")
+    rendered = template.render(**ctx, report_type="SINGLE_WELL_CPI", include_ai_commentary=False, assets={})
+    assert "derived_cgr" in rendered
+    assert "THOR / POTA" in rendered
+
+
 def test_end_to_end_report_service_and_mcp_tools(synthetic_well_df: pd.DataFrame):
     mock_summary = {
         "project_id": 99,

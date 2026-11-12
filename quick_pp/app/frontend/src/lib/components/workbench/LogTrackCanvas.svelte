@@ -18,6 +18,7 @@
 	} from '$lib/utils/petrophysicsColors';
 	import { fmtNum, fmtPerm } from '$lib/utils/formatters';
 	import { depthAxisTicks, depthFromMeters } from '$lib/utils/depthUnits';
+	import { scaleLithologyForPlot } from '$lib/utils/lithologyPlot';
 	import {
 		buildMobilityPoints,
 		buildMobilityTrace,
@@ -1555,7 +1556,8 @@
 		const isMultiMineral = workbench.lithoParams.model === 'multi_mineral';
 		const lithoToPlot = activeLithoSpecs;
 		if (lithoToPlot.length > 0) {
-			const decLithArrs = lithoToPlot.map(({ arr }) => decimateSvg(arr));
+			const rawLithArrs = lithoToPlot.map(({ arr }) => decimateSvg(arr));
+			const decLithArrs = scaleLithologyForPlot(rawLithArrs, decimateSvg(phit));
 			const hasLithAt = (idx: number) =>
 				idx >= 0 &&
 				idx < svgDepth.length &&
@@ -1603,6 +1605,7 @@
 				);
 
 				const decArr = decLithArrs[m];
+				const rawArr = rawLithArrs[m];
 				const rawStrokeVals = svgDepth.map((_, i) => {
 					const v = decArr[i];
 					return v !== null && Number.isFinite(v) && v > 0 ? v : 0;
@@ -1630,7 +1633,7 @@
 					mode: 'lines',
 					name: spec.mnemonic,
 					x: svgDepth.map((_, i) => (hasLithAt(i) ? nextStrokeCum[i] : null)),
-					customdata: rawStrokeVals,
+					customdata: rawArr,
 					y: svgDepth,
 					xaxis: 'x4',
 					yaxis: 'y',

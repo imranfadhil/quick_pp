@@ -99,6 +99,7 @@ export interface LithoEndpointParams {
 	potassiumCurve: string;
 	gammaClean: number;
 	gammaShale: number;
+	gammaEndpoints: Record<string, { clean: number; shale: number }>;
 	bulkGrClean: number;
 	bulkGrShale: number;
 	cgrThCoefficient: number;
@@ -711,6 +712,7 @@ class WorkbenchState {
 		potassiumCurve: 'POTA',
 		gammaClean: 20,
 		gammaShale: 120,
+		gammaEndpoints: {},
 		bulkGrClean: 20,
 		bulkGrShale: 120,
 		cgrThCoefficient: 4,

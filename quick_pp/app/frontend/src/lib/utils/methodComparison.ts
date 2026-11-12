@@ -1,7 +1,7 @@
 import { postJson } from '$lib/api/client';
 import { wellData } from '$lib/state/wellData.svelte';
 import { workbench } from '$lib/state/workbench.svelte';
-import { thomasStieberAvailable } from '$lib/utils/bulkShale';
+import { thomasStieberAvailable } from '$lib/utils/lithology';
 
 export interface MethodComparison {
 	depth: number[];

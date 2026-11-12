@@ -14,6 +14,7 @@
 	import { crossplotGroups, crossplotLabel, resolveCrossplot } from '$lib/utils/crossplots';
 	import { spectralCrossplotPoints, spectralPlotNote, spectralYAxisRange } from '$lib/utils/spectralCrossplot';
 	import { curveDepthSeries } from '$lib/utils/curveDepth';
+	import { gammaEndpoints, gammaLabel } from '$lib/utils/lithology';
 	import { normalizedScalSaturation, poreThroatDistribution } from '$lib/utils/poreThroat';
 	import {
 		estimateBqvReferenceRw,
@@ -3622,6 +3623,8 @@
 			const vc = wellData.vshComparison;
 			const subView = workbench.vshQcView;
 			const lp = workbench.lithoParams;
+			const { clean: gammaClean, shale: gammaShale } = gammaEndpoints(lp);
+			const sourceLabel = gammaLabel(lp);
 			const allRows = vc.rows;
 			const sandRows = allRows.filter((r) => r.REGIME === 'clean_sand');
 			const shaleRows = allRows.filter((r) => r.REGIME === 'clean_shale');
@@ -3722,7 +3725,7 @@
 						text: g.rows.map(
 							(r) =>
 								`Depth: ${fmtNum(r.DEPTH, 2)}m (${r.ZONE}) · ${r.REGIME_LABEL}<br>` +
-								`GR: ${fmtNum(r.GR, 1)} gAPI | VSH_DN: ${fmtNum(r.VSH_DN, 3)} | VSH_GR: ${fmtNum(r.VSH_GR, 3)}<br>` +
+								`${sourceLabel}: ${fmtNum(r.GR, 1)} gAPI | VSH_DN: ${fmtNum(r.VSH_DN, 3)} | VSH_GR: ${fmtNum(r.VSH_GR, 3)}<br>` +
 								`ΔVsh (GR−DN): ${r.ERR_VSH >= 0 ? '+' : ''}${fmtNum(r.ERR_VSH, 3)} v/v`
 						),
 						hovertemplate: '%{text}<extra></extra>',
@@ -3738,9 +3741,9 @@
 
 			const buildGrCalibrationTraces = (xAxis: string, yAxis: string) => {
 				const maxGr = Math.max(
-					180,
-					lp.grClay + 25,
-					...(allRows.length > 0 ? allRows.map((r) => r.GR) : [150])
+					sourceLabel === 'GR' ? 180 : 1,
+					sourceLabel === 'GR' ? gammaShale + 25 : gammaShale * 1.15,
+					allRows.reduce((max, row) => Math.max(max, row.GR), 0)
 				);
 
 				for (const [name, subset, col, sym, sz, op] of [
@@ -3762,7 +3765,7 @@
 						text: subset.map(
 							(r) =>
 								`Depth: ${fmtNum(r.DEPTH, 2)}m (${r.ZONE}) · ${r.REGIME_LABEL}<br>` +
-								`GR: ${fmtNum(r.GR, 1)} gAPI | VSH_DN: ${fmtNum(r.VSH_DN, 3)} | VSH_GR: ${fmtNum(r.VSH_GR, 3)}`
+								`${sourceLabel}: ${fmtNum(r.GR, 1)} gAPI | VSH_DN: ${fmtNum(r.VSH_DN, 3)} | VSH_GR: ${fmtNum(r.VSH_GR, 3)}`
 						),
 						hovertemplate: '%{text}<extra></extra>',
 						marker: { size: sz, symbol: sym, color: col, opacity: op }
@@ -3774,7 +3777,7 @@
 					type: 'scatter',
 					mode: 'lines',
 					name: 'VSH_GR Calibration Line',
-					x: [0, lp.grClean, lp.grClay, maxGr],
+					x: [0, gammaClean, gammaShale, maxGr],
 					y: [0, 0, 1, 1],
 					xaxis: xAxis,
 					yaxis: yAxis,
@@ -3784,14 +3787,14 @@
 				traces.push({
 					type: 'scatter',
 					mode: 'markers+text',
-					name: 'GR Endpoints',
-					x: [lp.grClean, lp.grClay],
+					name: `${sourceLabel} Endpoints`,
+					x: [gammaClean, gammaShale],
 					y: [0, 1],
 					xaxis: xAxis,
 					yaxis: yAxis,
 					text: [
-						`GR Clean (${lp.grClean.toFixed(0)})`,
-						`GR Shale (${lp.grClay.toFixed(0)})`
+						`${sourceLabel} Clean (${gammaClean.toFixed(0)})`,
+						`${sourceLabel} Shale (${gammaShale.toFixed(0)})`
 					],
 					textposition: ['top right', 'bottom left'],
 					textfont: { family: 'Inter', size: 10, color: '#1E3A8A' },
@@ -3894,7 +3897,7 @@
 				traces.push({
 					type: 'scatter',
 					mode: 'lines',
-					name: 'VSH_GR (Calibrated GR)',
+					name: `VSH_GR (Calibrated ${sourceLabel})`,
 					x: vshGrLineX,
 					y: lineY,
 					xaxis: xAxis,
@@ -4025,7 +4028,7 @@
 
 				baseLayout.xaxis.domain = [0, 0.47];
 				baseLayout.xaxis.range = [0, Number((maxGr * 1.05).toFixed(0))];
-				baseLayout.xaxis.title = { text: 'Gamma Ray GR (gAPI)' };
+				baseLayout.xaxis.title = { text: `${sourceLabel} (gAPI)` };
 				baseLayout.yaxis.range = [-0.03, 1.05];
 				baseLayout.yaxis.title = { text: 'VSH_DN & Calibration Curve (v/v)' };
 
@@ -5397,14 +5400,14 @@
 				{/each}
 				<button
 					type="button"
-					title="Open GRClean / GRClay Calibration Drawer"
+					title="Open gamma calibration drawer"
 					onclick={() => (showVshCalibDrawer = !showVshCalibDrawer)}
 					class="h-5 shrink-0 rounded-xs border px-1.5 text-[10px] font-semibold whitespace-nowrap transition-colors {showVshCalibDrawer
 						? 'border-emerald-600 bg-emerald-50 text-emerald-900'
 						: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-primary)] hover:bg-slate-100'}"
 				>
-					Calibrate GR ({fmtNum(workbench.lithoParams.grClean, 0)}–{fmtNum(
-						workbench.lithoParams.grClay,
+					Calibrate {gammaLabel(workbench.lithoParams)} ({fmtNum(gammaEndpoints(workbench.lithoParams).clean, 0)}–{fmtNum(
+						gammaEndpoints(workbench.lithoParams).shale,
 						0
 					)})
 				</button>

@@ -5,11 +5,12 @@
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
 	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
 	import VshCalibrationPanel from '$lib/components/workbench/VshCalibrationPanel.svelte';
+	import GammaSource from '$lib/components/workbench/GammaSource.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench, computeSiltIntersection } from '$lib/state/workbench.svelte';
 	import { fmtNum } from '$lib/utils/formatters';
 	import { calculateMethodComparison } from '$lib/utils/methodComparison';
-	import { applyBulkShaleCompatibility, bulkShaleConflicts, bulkShaleParameters } from '$lib/utils/bulkShale';
+	import { gammaParameters } from '$lib/utils/lithology';
 	import {
 		gorMetricToScfStb,
 		gorScfStbToMetric,
@@ -297,17 +298,6 @@
 	}
 
 	let lithoPoroRunId = 0;
-	let bulkInvalidCount = $state<number | null>(null);
-	let bulkConflicts = $derived(
-		bulkShaleConflicts(workbench.lithoParams, workbench.tsParams.enabled)
-	);
-
-	function applyBulkCompatibleSettings() {
-		applyBulkShaleCompatibility(workbench.lithoParams);
-		clearThomasStieber();
-		executeLithoPoro(false);
-	}
-
 	async function executeLithoPoro(persist: boolean = false) {
 		if (!workbench.projectId || !workbench.wellId) return;
 		const selectionIndices = wellData.getBrushedCalculationIndices();
@@ -323,19 +313,6 @@
 		wellData.isCalculating = true;
 		wellData.lastError = null;
 		const lp = workbench.lithoParams;
-		if (lp.model === 'vsh_bulk') {
-			if (selectionMode) {
-				wellData.lastError = 'Bulk shale does not support brushed-interval calculations; clear the selection and use depth or zone filters.';
-				wellData.isCalculating = false;
-				return;
-			}
-			const conflicts = bulkShaleConflicts(lp, workbench.tsParams.enabled);
-			if (conflicts.length) {
-				wellData.lastError = `Bulk shale cannot run: ${conflicts.join(' ')}`;
-				wellData.isCalculating = false;
-				return;
-			}
-		}
 		const useCorrected = lp.logCorrectionMode !== 'none';
 		lp.enableHcCorrection = useCorrected;
 		lp.useHcCorrected = useCorrected;
@@ -358,7 +335,7 @@
 			coal_trend_factor: lp.coalTrendFactor,
 			badhole_treatment: lp.badholeTreatment
 		};
-		const bulkArgs = bulkShaleParameters(lp);
+		const gammaArgs = gammaParameters(lp);
 
 		try {
 			// 1. Mutually exclusive NPHI/RHOB Log Correction: HC Correction OR Density Correction
@@ -467,7 +444,7 @@
 						gr_clay: lp.grClay,
 						minerals: lp.minerals,
 						porosity_method: lp.porosityMethod,
-						...bulkArgs,
+						...gammaArgs,
 						...coalArgs,
 						...filterArgs
 					} as any
@@ -476,10 +453,6 @@
 			if (runId !== lithoPoroRunId) return;
 			if (lithErr) throw new Error(String((lithErr as any)?.detail ?? 'Lithology failed'));
 			if (lithData) {
-				if (lp.model === 'vsh_bulk' && 'invalid_mixture_count' in lithData &&
-					typeof lithData.invalid_mixture_count === 'number') {
-					bulkInvalidCount = lithData.invalid_mixture_count;
-				}
 				if (lithData.data) Object.assign(batchedCurves, lithData.data);
 				if (lithData.stats) Object.assign(batchedStats, lithData.stats);
 			}
@@ -503,7 +476,7 @@
 						silt_line_angle: lp.siltLineAngle,
 						gr_clean: lp.grClean,
 						gr_clay: lp.grClay,
-						...bulkArgs,
+						...gammaArgs,
 						...coalArgs,
 						...filterArgs
 					} as any
@@ -549,7 +522,7 @@
 				wellData.markModuleComputed('litho-poro', batchedCurves);
 			}
 
-			if (!selectionMode && lp.model !== 'vsh_bulk') {
+			if (!selectionMode) {
 				try {
 					const comparison = await calculateMethodComparison('porosity');
 					if (runId !== lithoPoroRunId || wellGeneration !== wellData.wellLoadGeneration) return;
@@ -566,9 +539,6 @@
 				if (selectionMode) {
 					await wellData.saveModuleComputed('litho-poro', 'Litho & Poro Saved ✓');
 				} else {
-					if (lp.model === 'vsh_bulk') {
-						await wellData.persistModuleParams(['litho-poro'], ['litho-poro']);
-					}
 					wellData.lastSavedMessage = 'Litho & Poro Saved ✓';
 				}
 			}
@@ -588,10 +558,6 @@
 
 	async function executeThomasStieber(persist: boolean = false, chained: boolean = false) {
 		if (!workbench.projectId || !workbench.wellId) return;
-		if (workbench.lithoParams.model === 'vsh_bulk') {
-			wellData.lastError = 'Thomas-Stieber is not supported with the bulk-shale model.';
-			return;
-		}
 		const selectionIndices = wellData.getBrushedCalculationIndices();
 		if (selectionIndices && selectionIndices.size === 0) {
 			wellData.lastError = 'The selection contains no rows in the active depth/zone filter.';
@@ -658,10 +624,6 @@
 	}
 
 	async function saveLithoPoro() {
-		if (workbench.lithoParams.model === 'vsh_bulk') {
-			await executeLithoPoro(true);
-			return;
-		}
 		await wellData.saveModuleComputed('litho-poro', 'Litho & Poro Saved ✓');
 	}
 
@@ -736,7 +698,6 @@
 					<option value="ssc">Sand-Silt-Clay</option>
 					<option value="multi_mineral">Multi-Mineral</option>
 					<option value="vsh_gr">Vsh from GR</option>
-					<option value="vsh_bulk">Bulk shale from GR / CGR</option>
 				</select>
 			</div>
 
@@ -760,101 +721,7 @@
 				<NumericScrubber label="Fluid sonic transit time" bind:value={workbench.lithoParams.sonicFluidDt} unit="µs/ft" min={1} max={1000} step={1} onrun={() => executeLithoPoro(false)} />
 				<p class="text-[10px] text-[var(--text-secondary)]">Matrix transit time is weighted by lithology; DTC or DT is required.</p>
 			{/if}
-			{#if workbench.lithoParams.model === 'vsh_bulk' && bulkConflicts.length}
-				<div class="mt-1.5 rounded-sm border border-amber-300 bg-amber-50 p-2 text-[10px] text-amber-950" role="status">
-					<strong>Bulk shale needs compatible settings:</strong>
-					<ul class="list-disc pl-4">
-						{#each bulkConflicts as conflict}<li>{conflict}</li>{/each}
-					</ul>
-					<p class="mt-1">
-						The button below selects Density and turns off log correction and Thomas-Stieber.
-						{#if !['none', 'ignore'].includes(workbench.lithoParams.badholeTreatment)}
-							It also changes Badhole Action to Ignore / Nullify, excluding flagged samples.
-						{:else}
-							Your current badhole action will be retained.
-						{/if}
-					</p>
-					<button type="button" onclick={applyBulkCompatibleSettings}
-						class="mt-1 rounded-sm border border-amber-700 bg-white px-2 py-1 font-semibold hover:bg-amber-100">
-						Apply compatible settings &amp; calculate
-					</button>
-				</div>
-			{/if}
 		</ParameterSection>
-
-		{#if workbench.lithoParams.model === 'vsh_bulk'}
-			<ParameterSection title="Bulk Shale &amp; Spectral Gamma" badge="Calibrate endpoints">
-				<p class="mb-2 text-[10px] text-[var(--text-secondary)]">
-					Requires Density porosity, no log correction, no Thomas-Stieber, and badhole action
-					Use Normally or Ignore. VSHALE is bulk shale; VCLAY is shale solids used as a clay
-					proxy, not measured clay. Shale porosity and densities are provisional.
-					Saving this model recalculates lithology and porosity; save pending upstream steps separately.
-				</p>
-				<div class="grid grid-cols-[1fr_148px] items-center gap-x-2 py-0.5">
-					<span class="text-xs font-medium">Gamma source</span>
-					<select bind:value={workbench.lithoParams.gammaSource} onchange={() => executeLithoPoro(false)}
-						class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-xs">
-						<option value="gr">GR</option>
-						<option value="cgr">Selected CGR curve</option>
-						<option value="derived_cgr">Derived CGR (Th + K)</option>
-					</select>
-				</div>
-				{#if workbench.lithoParams.gammaSource === 'cgr'}
-					<div class="grid grid-cols-[1fr_148px] items-center gap-x-2 py-0.5">
-						<span class="text-xs font-medium">CGR curve</span>
-						<select bind:value={workbench.lithoParams.gammaCurve} onchange={() => executeLithoPoro(false)}
-							class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-xs">
-							{#if !Object.keys(wellData.curves).includes(workbench.lithoParams.gammaCurve)}
-								<option value={workbench.lithoParams.gammaCurve}>{workbench.lithoParams.gammaCurve} (not loaded)</option>
-							{/if}
-							{#each Object.keys(wellData.curves).sort() as curve}
-								<option value={curve}>{curve}</option>
-							{/each}
-						</select>
-					</div>
-				{:else if workbench.lithoParams.gammaSource === 'derived_cgr'}
-					<p class="text-[10px] text-[var(--text-secondary)]">CGR_SYN = Th (ppm) × Th coefficient + K (%) × K coefficient. Verify units and coefficients for the tool before use.</p>
-					{#each ['thoriumCurve', 'potassiumCurve'] as key}
-						{@const selected = key === 'thoriumCurve' ? workbench.lithoParams.thoriumCurve : workbench.lithoParams.potassiumCurve}
-						<div class="grid grid-cols-[1fr_148px] items-center gap-x-2 py-0.5">
-							<span class="text-xs font-medium">{key === 'thoriumCurve' ? 'Thorium (ppm)' : 'Potassium (%)'}</span>
-							<select
-								value={key === 'thoriumCurve' ? workbench.lithoParams.thoriumCurve : workbench.lithoParams.potassiumCurve}
-								onchange={(event) => {
-									if (key === 'thoriumCurve') workbench.lithoParams.thoriumCurve = event.currentTarget.value;
-									else workbench.lithoParams.potassiumCurve = event.currentTarget.value;
-									executeLithoPoro(false);
-								}}
-								class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-xs">
-								{#if !Object.keys(wellData.curves).includes(selected)}<option value={selected}>{selected} (not loaded)</option>{/if}
-								{#each Object.keys(wellData.curves).sort() as curve}<option value={curve}>{curve}</option>{/each}
-							</select>
-						</div>
-					{/each}
-					<NumericScrubber label="Th coefficient" bind:value={workbench.lithoParams.cgrThCoefficient} unit="gAPI/ppm" min={0.01} max={100} step={0.1} onrun={() => executeLithoPoro(false)} />
-					<NumericScrubber label="K coefficient" bind:value={workbench.lithoParams.cgrKCoefficient} unit="gAPI/%" min={0.01} max={100} step={0.1} onrun={() => executeLithoPoro(false)} />
-				{/if}
-				{#if workbench.lithoParams.gammaSource === 'gr'}
-					<NumericScrubber label="GR clean (bulk)" bind:value={workbench.lithoParams.bulkGrClean} unit="gAPI" min={0} max={250} step={1} onrun={() => executeLithoPoro(false)} />
-					<NumericScrubber label="GR shale (bulk)" bind:value={workbench.lithoParams.bulkGrShale} unit="gAPI" min={0} max={500} step={1} onrun={() => executeLithoPoro(false)} />
-				{:else}
-					<NumericScrubber label="CGR clean (bulk)" bind:value={workbench.lithoParams.gammaClean} unit="gAPI" min={0} max={250} step={1} onrun={() => executeLithoPoro(false)} />
-					<NumericScrubber label="CGR shale (bulk)" bind:value={workbench.lithoParams.gammaShale} unit="gAPI" min={0} max={500} step={1} onrun={() => executeLithoPoro(false)} />
-				{/if}
-				<NumericScrubber label="Shale solids density" bind:value={workbench.lithoParams.shaleSolidDensity} unit="g/cc" min={1.1} max={3.5} step={0.01} onrun={() => executeLithoPoro(false)} />
-				<NumericScrubber label="Shale porosity" bind:value={workbench.lithoParams.shalePorosity} unit="v/v" min={0} max={0.99} step={0.01} onrun={() => executeLithoPoro(false)} />
-				<NumericScrubber label="Ineffective shale pore fraction" bind:value={workbench.lithoParams.shaleIneffectiveFraction} unit="v/v" min={0} max={1} step={0.01} onrun={() => executeLithoPoro(false)} />
-				<p class="mt-1 text-[10px] text-[var(--text-secondary)]">Clean solids density and fluid density use the NPHI/RHOB endpoints below. GR and CGR require independently calibrated endpoints.</p>
-				<div class="mt-1 text-[10px] text-[var(--text-secondary)]">
-					Median RHOM: {fmtNum(wellData.stats['RHOM']?.p50, 3)} g/cc ·
-					PHID: {fmtNum(wellData.stats['PHID']?.p50, 3)} ·
-					PHIT: {fmtNum(wellData.stats['PHIT']?.p50, 3)}
-				</div>
-				{#if bulkInvalidCount !== null && bulkInvalidCount > 0}
-					<p class="mt-1 text-[10px] text-amber-700">{bulkInvalidCount} samples have missing inputs or physically inconsistent density mixtures and were left null.</p>
-				{/if}
-			</ParameterSection>
-		{/if}
 
 		<ParameterSection title="Endpoint Parameters (NPHI / RHOB / Vsh)" badge="Live Crossplot & Tracks">
 			{#if workbench.lithoParams.model === 'multi_mineral'}
@@ -894,6 +761,9 @@
 				</div>
 			{/if}
 
+			{#if workbench.lithoParams.model === 'vsh_gr' && workbench.lithoParams.gammaSource !== 'gr'}
+				<p class="text-[10px] text-[var(--text-secondary)]">GR endpoints below are used for GR-based log corrections and badhole fallback, not the selected gamma calibration.</p>
+			{/if}
 			<NumericScrubber
 				label="GR Clean (Vsh=0)"
 				bind:value={workbench.lithoParams.grClean}
@@ -980,12 +850,21 @@
 			/>
 		</ParameterSection>
 
-		{#if workbench.lithoParams.model !== 'vsh_bulk' && wellData.vshComparison.allGood.count > 0}
+		{#if workbench.lithoParams.model === 'vsh_gr' || (workbench.lithoParams.model !== 'vsh_bulk' && wellData.vshComparison.allGood.count > 0)}
 			{@const vStat = wellData.vshComparison.active}
 			<ParameterSection
 				title="Vshale Calibration (VSH_GR × VSH_DN)"
 				badge={vStat.rmse !== null ? `RMSE=${fmtNum(vStat.rmse, 3)} · n=${vStat.count}` : `n=${vStat.count}`}
 			>
+				{#if workbench.lithoParams.model === 'vsh_gr'}
+					<GammaSource onchange={() => {
+						wellData.applyLiveVshGr();
+						executeLithoPoro(false);
+					}} />
+				{/if}
+				{#if wellData.vshComparison.allGood.count === 0}
+					<p class="mb-1 text-[10px] text-amber-700">No paired gamma and NPHI/RHOB samples are available for calibration.</p>
+				{/if}
 				<div class="grid grid-cols-4 gap-1 text-center">
 					<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1">
 						<div class="text-[9.5px] text-[var(--text-muted)]">RMSE</div>
