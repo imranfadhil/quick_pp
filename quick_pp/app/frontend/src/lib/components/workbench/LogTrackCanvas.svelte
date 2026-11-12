@@ -184,6 +184,15 @@
 		);
 	});
 
+	const ENHANCED_CURVES = ['GR_ENH', 'NPHI_ENH', 'RHOB_ENH'] as const;
+	let hasEnhancedLogs = $derived.by(() =>
+		ENHANCED_CURVES.some((mnemonic) =>
+			wellData.curves[mnemonic]?.some((value) => Number.isFinite(value))
+		)
+	);
+	let showEnhancedOverlay = $state(true);
+	let enhancedOverlayActive = $derived(hasEnhancedLogs && showEnhancedOverlay);
+
 	let tsOverlayActive = $derived(workbench.tsParams.enabled && showTsOverlay && hasTsComputed);
 	let mobilityData = $derived.by(() =>
 		buildMobilityPoints(wellData.pressureTests, (depth) => wellData.isDepthInActiveFilter(depth))
@@ -1031,6 +1040,20 @@
 					hovertemplate: 'GR_ENV_CORR: %{x:.1f} gAPI<extra></extra>'
 				});
 			}
+			const grEnh = pick('GR_ENH');
+			if (enhancedOverlayActive && grEnh.some((v) => v !== null)) {
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'GR_ENH',
+					x: decimateSvg(grEnh),
+					y: svgDepth,
+					xaxis: 'x',
+					yaxis: 'y',
+					line: { color: '#16A34A', width: 1.1 },
+					hovertemplate: 'GR_ENH: %{x:.1f} gAPI<extra></extra>'
+				});
+			}
 		}
 
 		// Track 1 Spectral GR overlay (POTA: 0-10%, THOR: 0-50 ppm, URAN: 0-20 ppm, CGR: 0-200 gAPI)
@@ -1491,6 +1514,20 @@
 				hovertemplate: 'NPHI_ENV_CORR: %{x:.3f} v/v<extra></extra>'
 			});
 		}
+		const nphiEnh = pick('NPHI_ENH');
+		if (enhancedOverlayActive && nphiEnh.some((v) => v !== null)) {
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'NPHI_ENH',
+				x: decimateSvg(nphiEnh),
+				y: svgDepth,
+				xaxis: 'x3',
+				yaxis: 'y',
+				line: { color: '#2563EB', width: 1.1 },
+				hovertemplate: 'NPHI_ENH: %{x:.3f} v/v<extra></extra>'
+			});
+		}
 		if (rhob.length) {
 			traces.push({
 				type: 'scatter',
@@ -1520,6 +1557,24 @@
 				yaxis: 'y',
 				line: { color: PETRO_COLORS.rhob, width: 1.7, dash: 'dash' },
 				hovertemplate: 'RHOB_ENV_CORR: %{customdata:.3f} g/cc<extra></extra>'
+			});
+		}
+		const rhobEnh = pick('RHOB_ENH');
+		if (enhancedOverlayActive && rhobEnh.some((v) => v !== null)) {
+			const rhobEnhDec = decimateSvg(rhobEnh);
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'RHOB_ENH',
+				x: rhobEnhDec.map((r) =>
+					r !== null ? 0.45 - ((r - 1.95) / (2.95 - 1.95)) * 0.6 : null
+				),
+				customdata: rhobEnhDec,
+				y: svgDepth,
+				xaxis: 'x3',
+				yaxis: 'y',
+				line: { color: '#DC2626', width: 1.1 },
+				hovertemplate: 'RHOB_ENH: %{customdata:.3f} g/cc<extra></extra>'
 			});
 		}
 		if (showDtc && dtc.some((v) => v !== null && v > 0)) {
@@ -3152,6 +3207,19 @@
 						class="h-3 w-3 rounded-xs border-teal-300 text-teal-700 focus:ring-0"
 					/>
 					<span>TS Overlay</span>
+				</label>
+			{/if}
+			{#if hasEnhancedLogs}
+				<label
+					class="flex cursor-pointer items-center gap-1 rounded-xs border border-indigo-200 bg-indigo-50/70 px-1.5 py-0.5 text-[10.5px] font-medium text-indigo-900"
+					title="Show or hide the resolution-enhanced GR, NPHI, and RHOB overlays"
+				>
+					<input
+						type="checkbox"
+						bind:checked={showEnhancedOverlay}
+						class="h-3 w-3 rounded-xs border-indigo-300 text-indigo-700 focus:ring-0"
+					/>
+					<span>Enhanced Logs</span>
 				</label>
 			{/if}
 			{#if hasDtc}

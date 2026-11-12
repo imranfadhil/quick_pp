@@ -122,6 +122,7 @@ nav:
   - API Reference:
       - Package Overview: api/overview.md
       - QA/QC & Normalization (qaqc): api/qaqc.md
+      - Raw Log Resolution Enhancement (conditioning): api/conditioning.md
       - Lithology Inversion (lithology): api/lithology.md
       - Porosity (porosity): api/porosity.md
       - Saturation & FWL Optimizer (saturation): api/saturation.md

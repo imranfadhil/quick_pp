@@ -78,7 +78,14 @@ export const CALCULATED_CURVE_GROUPS: Record<
 			'HC_FLAG',
 			'SHC_INV',
 			'RHOB_DEN_CORR',
-			'DEN_CORR_FLAG'
+			'DEN_CORR_FLAG',
+			'GR_ENH',
+			'NPHI_ENH',
+			'RHOB_ENH',
+			'GR_RECON',
+			'NPHI_RECON',
+			'RHOB_RECON',
+			'DECONV_WEIGHT'
 		]
 	},
 	litho_poro: {

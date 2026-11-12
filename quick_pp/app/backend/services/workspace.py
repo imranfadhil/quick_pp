@@ -42,6 +42,7 @@ from quick_pp.app.backend.services.rock_typing import _compute_fzi_data_sync
 from quick_pp.app.backend.utils.auth import is_demo_mode
 from quick_pp.app.backend.utils.db import get_db
 from quick_pp.config import Config
+from quick_pp.conditioning import DEFAULT_NOISE_CAP_MULT, harmonize_nuclear_logs
 from quick_pp.core_analysis import (
     auto_cuddy_params,
     auto_j_params,
@@ -439,23 +440,25 @@ def _curve_summary_stats(
 
 
 def _select_nphi_rhob(
-    df: pd.DataFrame, use_hc_corrected: bool = False
+    df: pd.DataFrame,
+    use_hc_corrected: bool = False,
+    use_enhanced: bool = False,
 ) -> Tuple[pd.Series, pd.Series]:
-    """Select NPHI and RHOB series (using NPHI_HC/RHOB_HC if requested and available)."""
-    nphi_col = (
-        "NPHI_HC"
-        if (
-            use_hc_corrected and "NPHI_HC" in df.columns and df["NPHI_HC"].notna().any()
-        )
-        else "NPHI"
-    )
-    rhob_col = (
-        "RHOB_HC"
-        if (
-            use_hc_corrected and "RHOB_HC" in df.columns and df["RHOB_HC"].notna().any()
-        )
-        else "RHOB"
-    )
+    """Select NPHI and RHOB series (using NPHI_HC/RHOB_HC or NPHI_ENH/RHOB_ENH if requested and available)."""
+    nphi_col = "NPHI"
+    rhob_col = "RHOB"
+    if use_enhanced and "NPHI_ENH" in df.columns and df["NPHI_ENH"].notna().any():
+        nphi_col = "NPHI_ENH"
+    elif (
+        use_hc_corrected and "NPHI_HC" in df.columns and df["NPHI_HC"].notna().any()
+    ):
+        nphi_col = "NPHI_HC"
+    if use_enhanced and "RHOB_ENH" in df.columns and df["RHOB_ENH"].notna().any():
+        rhob_col = "RHOB_ENH"
+    elif (
+        use_hc_corrected and "RHOB_HC" in df.columns and df["RHOB_HC"].notna().any()
+    ):
+        rhob_col = "RHOB_HC"
     if nphi_col not in df.columns or rhob_col not in df.columns:
         raise ValueError(
             f"Required curves NPHI and RHOB not found in well data. Available: {list(df.columns)}"
@@ -879,6 +882,10 @@ class WorkspaceThomasStieberRequest(WorkspaceFilterBase):
     use_hc_corrected: bool = Field(
         True, description="Use NPHI_HC and RHOB_HC curves if present"
     )
+    use_enhanced_logs: bool = Field(
+        False,
+        description="Use resolution-enhanced NPHI_ENH/RHOB_ENH/GR_ENH curves when present",
+    )
     use_existing_phit_vsh: bool = Field(
         True,
         description="Use existing evaluated PHIT and VCLAY/VSHALE curves if present",
@@ -905,6 +912,57 @@ class WorkspaceThomasStieberRequest(WorkspaceFilterBase):
     estimate_structural_shale: bool = Field(
         True,
         description="Classify grain-replacing (structural) shale above the laminated line and emit VSH_STR / PHIT_TS / PHIE_TS / PHISAND_TS",
+    )
+
+
+class WorkspaceResolutionEnhancementRequest(WorkspaceFilterBase):
+    """1D constrained deconvolution and inter-sensor resolution harmonization settings."""
+
+    mode: Literal["enhance_all", "match_finest"] = Field(
+        "enhance_all",
+        description="'enhance_all' sharpens every curve onto the Nyquist floor; 'match_finest' matches the finest intrinsic tool resolution",
+    )
+    method: Literal["constrained_huber", "wiener"] = Field(
+        "constrained_huber",
+        description="'constrained_huber' (production, edge-preserving) or 'wiener' (fast preview)",
+    )
+    target_fwhm_m: Optional[float] = Field(
+        None, gt=0, description="Explicit target vertical resolution (m); overrides mode"
+    )
+    curves: Optional[List[str]] = Field(
+        None, description="Restrict processing to these mnemonics (default GR, NPHI, RHOB)"
+    )
+    nyquist_factor: float = Field(
+        2.0, gt=0, description="Multiplier applied to the depth step for the target-resolution floor"
+    )
+    lambda_reg: Optional[float] = Field(
+        None, ge=0, description="Explicit Huber regularization weight; auto-tuned per curve when omitted"
+    )
+    lambda_vol: float = Field(
+        0.05, ge=0, description="Rolling bulk-volume conservation tether weight"
+    )
+    morozov_tau: float = Field(
+        1.05, gt=0, description="Morozov discrepancy target multiplier"
+    )
+    huber_delta_mult: float = Field(
+        2.0, gt=0, description="Huber threshold multiplier applied to the noise estimate"
+    )
+    volume_window_m: float = Field(
+        3.0, gt=0, description="Rolling bulk-volume averaging window (m)"
+    )
+    noise_cap_mult: Optional[float] = Field(
+        DEFAULT_NOISE_CAP_MULT,
+        gt=0,
+        description=(
+            "Cap on the MAD noise estimate as a multiple of the tool noise floor; "
+            "omit or null to disable the cap"
+        ),
+    )
+    resample_nonuniform: bool = Field(
+        True, description="Linearly resample onto a uniform grid when the depth step is not uniform"
+    )
+    check_alignment: bool = Field(
+        True, description="Run the inter-log micro-depth alignment diagnostic on the outputs"
     )
 
 
@@ -2909,6 +2967,13 @@ def _batch_evaluate_zone(
         "RSAND_TS",
         "NPHI_HC",
         "RHOB_HC",
+        "GR_ENH",
+        "NPHI_ENH",
+        "RHOB_ENH",
+        "GR_RECON",
+        "NPHI_RECON",
+        "RHOB_RECON",
+        "DECONV_WEIGHT",
     ]
     isolated.data = isolated.data.drop(columns=stale_cols, errors="ignore")
     token = _isolated_evaluation.set(isolated)
@@ -3887,6 +3952,7 @@ def workspace_thomas_stieber(
 
         has_existing = (
             req.use_existing_phit_vsh
+            and not req.use_enhanced_logs
             and "PHIT" in df.columns
             and ("VCLAY" in df.columns or "VSHALE" in df.columns)
         )
@@ -3908,7 +3974,11 @@ def workspace_thomas_stieber(
         )
 
         if not has_existing or not (phit_s.notna() & vclay_bulk_s.notna()).any():
-            nphi, rhob = _select_nphi_rhob(df, use_hc_corrected=req.use_hc_corrected)
+            nphi, rhob = _select_nphi_rhob(
+                df,
+                use_hc_corrected=req.use_hc_corrected,
+                use_enhanced=req.use_enhanced_logs,
+            )
             valid_nd = nphi.notna() & rhob.notna()
             if not valid_nd.any():
                 raise ValueError(
@@ -4139,6 +4209,83 @@ def workspace_thomas_stieber(
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Thomas-Stieber calculation failed: {e}"
+        ) from e
+
+
+@router.post(
+    "/wells/{well_name}/resolution_enhancement",
+    summary="Enhance and resolution-match GR, NPHI, and RHOB via 1D constrained deconvolution",
+)
+def workspace_resolution_enhancement(
+    project_id: int, well_name: str, req: WorkspaceResolutionEnhancementRequest
+) -> Dict[str, Any]:
+    """Run 1D constrained deconvolution and inter-sensor resolution harmonization on nuclear logs.
+
+    Emits ``<CURVE>_ENH`` (enhanced), ``<CURVE>_RECON`` (forward-convolved parity), and
+    ``DECONV_WEIGHT`` (composite borehole reliability weight) columns. Raw curves are untouched.
+    """
+    try:
+        df = _get_filtered_well_df(
+            project_id, well_name, req.min_depth, req.max_depth, req.zones
+        )
+        if "DEPTH" not in df.columns:
+            raise ValueError("DEPTH column not found in well data")
+
+        result = harmonize_nuclear_logs(
+            df,
+            depth_col="DEPTH",
+            mode=req.mode,
+            method=req.method,
+            target_fwhm_m=req.target_fwhm_m,
+            curves=[c.strip().upper() for c in req.curves] if req.curves else None,
+            nyquist_factor=req.nyquist_factor,
+            lambda_reg=req.lambda_reg,
+            lambda_vol=req.lambda_vol,
+            morozov_tau=req.morozov_tau,
+            huber_delta_mult=req.huber_delta_mult,
+            volume_window_m=req.volume_window_m,
+            noise_cap_mult=req.noise_cap_mult,
+            resample_nonuniform=req.resample_nonuniform,
+            check_alignment=req.check_alignment,
+        )
+
+        out_df = result.df
+        enh_cols = [
+            c
+            for c in out_df.columns
+            if c.endswith("_ENH") or c.endswith("_RECON") or c == "DECONV_WEIGHT"
+        ]
+        save_cols = ["DEPTH"] + enh_cols
+        saved_rows = 0
+        if req.save and enh_cols:
+            saved_rows = _save_curves_to_well(project_id, well_name, out_df[save_cols])
+        elif enh_cols:
+            _update_in_memory_well_cache(project_id, well_name, out_df[save_cols])
+
+        stats = {col: _curve_summary_stats(out_df[col]) for col in enh_cols}
+        return {
+            "well_name": well_name,
+            "mode": req.mode,
+            "method": req.method,
+            "target_fwhm_m": round(result.target_fwhm_m, 4),
+            "depth_step_m": round(result.depth_step_m, 4),
+            "depth_uom": result.depth_uom,
+            "enhanced_curves": enh_cols,
+            "diagnostics": {
+                name: diag.as_dict() for name, diag in result.diagnostics.items()
+            },
+            "alignment_lags_samples": result.alignment_lags_samples,
+            "warnings": result.warnings,
+            "saved": req.save,
+            "saved_rows": saved_rows,
+            "stats": stats,
+            **dataframe_to_columnar(out_df[save_cols]),
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Resolution enhancement failed: {e}"
         ) from e
 
 

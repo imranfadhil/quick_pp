@@ -602,7 +602,14 @@ export const STANDARD_CURVE_META: Record<string, CurveMeta> = {
 	FZI: { mnemonic: 'FZI', label: 'Flow Zone Indicator', unit: 'μm', min: 0.01, max: 50, color: '#0284C7', logScale: true },
 	R35: { mnemonic: 'R35', label: 'Winland Pore Throat Radius R35', unit: 'μm', min: 0.01, max: 100, color: '#0D9488', logScale: true },
 	RFN: { mnemonic: 'RFN', label: 'Lucia Rock Fabric Number', unit: 'RFN', min: 0.5, max: 4.0, color: '#D97706' },
-	VDL: { mnemonic: 'VDL', label: 'Velocity Deviation Log', unit: 'm/s', min: -1500, max: 1500, color: '#7C3AED' }
+	VDL: { mnemonic: 'VDL', label: 'Velocity Deviation Log', unit: 'm/s', min: -1500, max: 1500, color: '#7C3AED' },
+	GR_ENH: { mnemonic: 'GR_ENH', label: 'GR (Resolution Enhanced)', unit: 'API', min: 0, max: 200, color: '#16A34A' },
+	NPHI_ENH: { mnemonic: 'NPHI_ENH', label: 'NPHI (Resolution Enhanced)', unit: 'v/v', min: 0.45, max: -0.15, color: '#2563EB', reversed: true },
+	RHOB_ENH: { mnemonic: 'RHOB_ENH', label: 'RHOB (Resolution Enhanced)', unit: 'g/cc', min: 1.95, max: 2.95, color: '#DC2626', reversed: true },
+	GR_RECON: { mnemonic: 'GR_RECON', label: 'GR Forward Reconstruction', unit: 'API', min: 0, max: 200, color: '#86EFAC' },
+	NPHI_RECON: { mnemonic: 'NPHI_RECON', label: 'NPHI Forward Reconstruction', unit: 'v/v', min: 0.45, max: -0.15, color: '#93C5FD', reversed: true },
+	RHOB_RECON: { mnemonic: 'RHOB_RECON', label: 'RHOB Forward Reconstruction', unit: 'g/cc', min: 1.95, max: 2.95, color: '#FCA5A5', reversed: true },
+	DECONV_WEIGHT: { mnemonic: 'DECONV_WEIGHT', label: 'Deconvolution Reliability Weight', unit: 'frac', min: 0, max: 1, color: '#7C3AED' }
 };
 
 export function getCurveUnit(mnemonic: string): string {

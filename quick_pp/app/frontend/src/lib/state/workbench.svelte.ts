@@ -166,6 +166,16 @@ export interface ThomasStieberParams {
 	rvShale: number;
 	rhShale: number;
 	theta: number;
+	useEnhancedLogs: boolean;
+	enhanceMode: 'enhance_all' | 'match_finest';
+	enhanceMethod: 'constrained_huber' | 'wiener';
+	enhanceTargetFwhm: number | null;
+	enhanceNyquistFactor: number;
+	enhanceLambdaVol: number;
+	enhanceMorozovTau: number;
+	enhanceHuberDeltaMult: number;
+	enhanceVolumeWindow: number;
+	enhanceNoiseCapMult: number;
 }
 
 export interface SaturationModelParams {
@@ -778,7 +788,17 @@ class WorkbenchState {
 		rsand: 20.0,
 		rvShale: 4.0,
 		rhShale: 1.5,
-		theta: 0.0
+		theta: 0.0,
+		useEnhancedLogs: false,
+		enhanceMode: 'enhance_all',
+		enhanceMethod: 'constrained_huber',
+		enhanceTargetFwhm: null,
+		enhanceNyquistFactor: 2.0,
+		enhanceLambdaVol: 0.05,
+		enhanceMorozovTau: 1.05,
+		enhanceHuberDeltaMult: 2.0,
+		enhanceVolumeWindow: 3.0,
+		enhanceNoiseCapMult: 3.0
 	});
 
 	badholeParams = $state<BadholeFlaggingParams>({
