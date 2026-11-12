@@ -6,6 +6,8 @@ export type CrossplotId =
 	| 'phi-k'
 	| 'pickett'
 	| 'sw-comparison'
+	| 'porosity-comparison'
+	| 'permeability-comparison'
 	| 'bqv'
 	| 'histogram'
 	| 'curve-depth'
@@ -62,6 +64,11 @@ export const CROSSPLOTS: readonly CrossplotDefinition[] = [
 		single: { group: 'Step 3 · Lithology & Porosity', steps: ['litho-poro'] }
 	},
 	{
+		id: 'porosity-comparison',
+		label: 'Porosity Methods vs Depth + Core',
+		single: { group: 'Step 3 · Lithology & Porosity', steps: ['litho-poro'] }
+	},
+	{
 		id: 'th-k',
 		label: 'Thorium vs. Potassium',
 		single: { group: 'Step 3 · Lithology & Porosity', steps: ['litho-poro'] }
@@ -95,6 +102,11 @@ export const CROSSPLOTS: readonly CrossplotDefinition[] = [
 		id: 'sw-comparison',
 		label: 'Saturation vs Depth + VSHALE',
 		single: { group: 'Step 5 · Saturation', steps: ['saturation'], autoFor: ['saturation'] }
+	},
+	{
+		id: 'permeability-comparison',
+		label: 'Permeability Methods vs Depth + Core',
+		single: { group: 'Step 4 · Permeability', steps: ['perm'] }
 	},
 	{
 		id: 'pickett',

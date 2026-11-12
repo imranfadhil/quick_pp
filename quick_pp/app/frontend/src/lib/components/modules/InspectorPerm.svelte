@@ -7,6 +7,7 @@
 	import { workbench } from '$lib/state/workbench.svelte';
 	import { fmtNum } from '$lib/utils/formatters';
 	import { thomasStieberAvailable } from '$lib/utils/bulkShale';
+	import { calculateMethodComparison } from '$lib/utils/methodComparison';
 
 	// Model parameters live in shared workbench state so they survive module switches and can be
 	// restored per zone / depth interval from saved well config.
@@ -27,6 +28,9 @@
 			return;
 		}
 		const selectionMode = selectionIndices !== null;
+		const wellGeneration = wellData.wellLoadGeneration;
+		wellData.permeabilityComparison = null;
+		wellData.permeabilityComparisonError = null;
 		wellData.isCalculating = true;
 		wellData.lastError = null;
 		const deptArr = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
@@ -76,6 +80,18 @@
 			wellData.mergeComputedCurves(data.data, data.stats, selectionIndices);
 			wellData.markModuleComputed('perm', data.data);
 			wellData.permCoreMetrics = data.core_metrics;
+			if (!selectionMode) {
+				try {
+					const comparison = await calculateMethodComparison('permeability');
+					if (wellGeneration !== wellData.wellLoadGeneration) return;
+					wellData.permeabilityComparison = comparison.data;
+					wellData.permeabilityComparisonKey = comparison.key;
+				} catch (e: unknown) {
+					if (wellGeneration !== wellData.wellLoadGeneration) return;
+					wellData.permeabilityComparisonError = `Permeability comparison failed: ${e instanceof Error ? e.message : String(e)}`;
+					wellData.lastError = wellData.permeabilityComparisonError;
+				}
+			}
 			if (persist) {
 				if (selectionMode) {
 					await wellData.saveModuleComputed('perm', 'Permeability Saved ✓');

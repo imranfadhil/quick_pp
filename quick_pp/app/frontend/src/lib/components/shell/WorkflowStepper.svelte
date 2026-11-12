@@ -742,18 +742,6 @@
 					Missing Matrix
 				</button>
 			{/if}
-			{#if workbench.scope === 'single-well' && workbench.singleWellStep === 'litho-poro'}
-				<button type="button" onclick={() => (workbench.rightPaneTab = 'poro-comparison')}
-					class="h-5 shrink-0 whitespace-nowrap rounded-xs px-1.5 font-medium {workbench.rightPaneTab === 'poro-comparison' ? 'bg-[var(--bg-surface)] text-[var(--text-primary)] shadow-2xs' : 'text-[var(--text-muted)]'}">
-					Porosity Compare
-				</button>
-			{/if}
-			{#if workbench.scope === 'single-well' && workbench.singleWellStep === 'perm'}
-				<button type="button" onclick={() => (workbench.rightPaneTab = 'perm-comparison')}
-					class="h-5 shrink-0 whitespace-nowrap rounded-xs px-1.5 font-medium {workbench.rightPaneTab === 'perm-comparison' ? 'bg-[var(--bg-surface)] text-[var(--text-primary)] shadow-2xs' : 'text-[var(--text-muted)]'}">
-					Permeability Compare
-				</button>
-			{/if}
 		</div>
 		{/if}
 	</div>

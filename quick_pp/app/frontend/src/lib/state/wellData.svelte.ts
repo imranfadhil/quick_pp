@@ -250,6 +250,12 @@ function computeSummaryStats(arr: number[], deptArr?: number[]): CurveSummarySta
 }
 
 class WellDataState {
+	porosityComparison = $state.raw<import('$lib/utils/methodComparison').MethodComparison | null>(null);
+	permeabilityComparison = $state.raw<import('$lib/utils/methodComparison').MethodComparison | null>(null);
+	porosityComparisonKey = $state('');
+	permeabilityComparisonKey = $state('');
+	porosityComparisonError = $state<string | null>(null);
+	permeabilityComparisonError = $state<string | null>(null);
 	isLoading = $state<boolean>(false);
 	isCalculating = $state<boolean>(false);
 	isSaving = $state<boolean>(false);
@@ -1116,6 +1122,10 @@ class WellDataState {
 	async loadWellBundle(projectId: string | number, wellName: string) {
 		if (!projectId || !wellName) return;
 		const gen = ++this.wellLoadGeneration;
+		this.porosityComparison = null;
+		this.permeabilityComparison = null;
+		this.porosityComparisonError = null;
+		this.permeabilityComparisonError = null;
 		this.cancelPendingWellLoadTask();
 		this.isLoading = true;
 		this.lastError = null;
@@ -2567,9 +2577,13 @@ class WellDataState {
 			}
 			if (groupSet.has('litho_poro') || clearedSet.has('PHIT')) {
 				this.poroCoreMetrics = null;
+				this.porosityComparison = null;
+				this.porosityComparisonError = null;
 			}
 			if (groupSet.has('perm') || clearedSet.has('PERM')) {
 				this.permCoreMetrics = null;
+				this.permeabilityComparison = null;
+				this.permeabilityComparisonError = null;
 			}
 
 			if (clearedSet.has(workbench.selectedQaqcCurve)) {

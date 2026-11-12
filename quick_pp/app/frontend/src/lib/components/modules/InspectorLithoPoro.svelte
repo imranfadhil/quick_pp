@@ -8,6 +8,7 @@
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench, computeSiltIntersection } from '$lib/state/workbench.svelte';
 	import { fmtNum } from '$lib/utils/formatters';
+	import { calculateMethodComparison } from '$lib/utils/methodComparison';
 	import { applyBulkShaleCompatibility, bulkShaleConflicts, bulkShaleParameters } from '$lib/utils/bulkShale';
 	import {
 		gorMetricToScfStb,
@@ -316,6 +317,9 @@
 		}
 		const selectionMode = selectionIndices !== null;
 		const runId = ++lithoPoroRunId;
+		const wellGeneration = wellData.wellLoadGeneration;
+		wellData.porosityComparison = null;
+		wellData.porosityComparisonError = null;
 		wellData.isCalculating = true;
 		wellData.lastError = null;
 		const lp = workbench.lithoParams;
@@ -543,6 +547,19 @@
 			if (Object.keys(batchedCurves).length > 0) {
 				wellData.mergeComputedCurves(batchedCurves, batchedStats, selectionIndices);
 				wellData.markModuleComputed('litho-poro', batchedCurves);
+			}
+
+			if (!selectionMode && lp.model !== 'vsh_bulk') {
+				try {
+					const comparison = await calculateMethodComparison('porosity');
+					if (runId !== lithoPoroRunId || wellGeneration !== wellData.wellLoadGeneration) return;
+					wellData.porosityComparison = comparison.data;
+					wellData.porosityComparisonKey = comparison.key;
+				} catch (e: unknown) {
+					if (runId !== lithoPoroRunId || wellGeneration !== wellData.wellLoadGeneration) return;
+					wellData.porosityComparisonError = `Porosity comparison failed: ${e instanceof Error ? e.message : String(e)}`;
+					wellData.lastError = wellData.porosityComparisonError;
+				}
 			}
 
 			if (persist) {

@@ -252,12 +252,13 @@ flowchart TD
   The bulk-shale model remains density-only; the new methods are not available
   in batch evaluation.
 
-* **Porosity comparison:** After calculating lithology, select **Porosity Compare**
-  above the right pane and calculate the comparison. Toggle the methods to overlay
+* **Porosity comparison:** Run Lithology & Porosity, then select **Porosity Methods
+  vs Depth + Core** from the Crossplot dropdown. Toggle the methods to overlay
   their total-porosity curves with core markers; the active method is emphasized.
   Calculations use the current parameters and most recently calculated lithology and
-  corrected logs, but never overwrite the working or saved PHIT. Recalculate
-  lithology and the comparison after editing log inputs. RMSE and bias are computed
+  corrected logs, but never overwrite the working or saved PHIT. Run the module
+  again after editing inputs. The fixed porosity scale is 0–0.5 v/v; use the mouse
+  wheel to zoom depth. RMSE and bias are computed
   from depth-matched core porosity and each method's valid results, excluding flagged
   coal and badhole samples. Core is matched to a log sample within 0.5 m, and markers
   appear at the matched log depth. Different log/core scales, depth alignment and
@@ -341,10 +342,11 @@ flowchart TD
 * **Input Curves:** `PHIE`, `PHIT`, `VCLAY`, `VSILT`, `SWIRR`  
 * **Output Curves:** `PERM`, `PERM_CHOO`, `PERM_COATES`, `RQI`, `FZI`
 
-* **Permeability comparison:** Select **Permeability Compare** above the right
-  pane and calculate the comparison to overlay Choo, Kozeny-Carman, Timur,
+* **Permeability comparison:** Run Permeability, then select **Permeability Methods
+  vs Depth + Core** from the Crossplot dropdown to overlay Choo, Kozeny-Carman, Timur,
   Tixier and Coates-Dumanoir curves against `CPERM` on a logarithmic
-  permeability axis. Toggle methods and use the emphasized active method as a
+  permeability axis (fixed at 0.1–100,000 mD). Use the mouse wheel to zoom depth.
+  Toggle methods and use the emphasized active method as a
   reference. The comparison uses the current model parameters, porosity and
   lithology inputs, including Thomas-Stieber inputs when enabled, without
   changing working or saved `PERM`. Only positive values are displayed or

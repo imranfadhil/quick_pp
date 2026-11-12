@@ -25,6 +25,8 @@
 	} from '$lib/utils/saturation';
 	import CoreDepthShiftPanel from '$lib/components/workbench/CoreDepthShiftPanel.svelte';
 	import VshCalibrationPanel from '$lib/components/workbench/VshCalibrationPanel.svelte';
+	import PorosityComparisonCanvas from '$lib/components/workbench/PorosityComparisonCanvas.svelte';
+	import PermeabilityComparisonCanvas from '$lib/components/workbench/PermeabilityComparisonCanvas.svelte';
 	import { getJson } from '$lib/api/client';
 
 	let plotEl = $state<HTMLDivElement | null>(null);
@@ -4727,6 +4729,7 @@
 	$effect(() => {
 		if (!PlotlyLib || !plotEl) return;
 		const mode = effectiveMode;
+		if (mode === 'porosity-comparison' || mode === 'permeability-comparison') return;
 		void wellData.visibleIndices;
 		void workbench.selectedZones;
 		void workbench.depthFilter;
@@ -5810,7 +5813,7 @@
 	{#if spectralNote}
 		<p class="shrink-0 px-2 py-1 text-[10px] leading-snug text-[var(--text-secondary)]">{spectralNote}</p>
 	{/if}
-	<div class="relative min-h-0 flex-1 overflow-hidden">
+	<div class="relative min-h-0 flex-1 overflow-hidden" style:display={effectiveMode === 'porosity-comparison' || effectiveMode === 'permeability-comparison' ? 'none' : undefined}>
 		<div bind:this={plotEl} class="absolute inset-0 h-full w-full"></div>
 		{#if (effectiveMode === 'th-k' || effectiveMode === 'pef-k' || effectiveMode === 'pef-th-k') && spectralReferenceError}
 			<div role="status" class="absolute bottom-1 left-2 rounded-xs bg-amber-50 px-2 py-1 text-[10px] text-amber-900">Mineral references unavailable: {spectralReferenceError}</div>
@@ -5826,6 +5829,11 @@
 			</div>
 		{/if}
 	</div>
+	{#if effectiveMode === 'porosity-comparison'}
+		<div class="min-h-0 flex-1"><PorosityComparisonCanvas /></div>
+	{:else if effectiveMode === 'permeability-comparison'}
+		<div class="min-h-0 flex-1"><PermeabilityComparisonCanvas /></div>
+	{/if}
 
 	{#if projectData.selectedScalPointIds.length > 0}
 		<div

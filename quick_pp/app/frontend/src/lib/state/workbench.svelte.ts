@@ -586,14 +586,14 @@ class WorkbenchState {
 	targetScrollDepth = $state<number | null>(null);
 
 	// Right pane view mode
-	rightPaneTab = $state<'crossplot' | 'grid' | 'split' | 'missing' | 'poro-comparison' | 'perm-comparison'>('split');
+	rightPaneTab = $state<'crossplot' | 'grid' | 'split' | 'missing'>('split');
 	missingMatrixRevision = $state(0);
 	/** Sub-tab within the right bottom data dock: 'data' (Step Data / QC) or 'params' (Parameters & Fits). */
 	rightGridSubTab = $state<'data' | 'params'>('data');
 
 	openParametersTab() {
 		this.rightGridSubTab = 'params';
-		if (this.rightPaneTab === 'crossplot' || this.rightPaneTab === 'missing' || this.rightPaneTab === 'poro-comparison' || this.rightPaneTab === 'perm-comparison') {
+		if (this.rightPaneTab === 'crossplot' || this.rightPaneTab === 'missing') {
 			this.rightPaneTab = 'split';
 		}
 	}
