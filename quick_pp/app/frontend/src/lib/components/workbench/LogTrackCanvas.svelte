@@ -176,9 +176,11 @@
 	let hasTsComputed = $derived.by(() => {
 		const vlam = wellData.curves['VSH_LAM'];
 		const psand = wellData.curves['PHIT_SAND'];
+		const vstr = wellData.curves['VSH_STR'];
 		return Boolean(
 			(vlam && vlam.some((v) => Number.isFinite(v))) ||
-			(psand && psand.some((v) => Number.isFinite(v)))
+			(psand && psand.some((v) => Number.isFinite(v))) ||
+			(vstr && vstr.some((v) => Number.isFinite(v)))
 		);
 	});
 
@@ -417,14 +419,32 @@
 				continue;
 			}
 
-			// When Thomas-Stieber is estimated and active, split VCLAY fill into VSH_LAM + VSH_DIS
+			// When Thomas-Stieber is estimated and active, split VCLAY fill into VSH_LAM + VSH_DIS + VSH_STR
 			if (spec.mnemonic === 'VCLAY' && tsOverlayActive) {
 				const vlam = pick('VSH_LAM');
 				const vdis = pick('VSH_DIS');
-				if (
-					vlam.some((v) => v !== null && v > 1e-4) ||
-					vdis.some((v) => v !== null && v > 1e-4)
-				) {
+				const vstr = pick('VSH_STR');
+				const hasLam = vlam.some((v) => v !== null && v > 1e-4);
+				const hasDis = vdis.some((v) => v !== null && v > 1e-4);
+				const hasStr = vstr.some((v) => v !== null && v > 1e-4);
+				if (hasLam || hasDis || hasStr) {
+					// Stack laminated (innermost) first, then dispersed, then structural so
+					// the fills sum back to the bulk VCLAY thickness
+					if (hasStr) {
+						out.push({
+							spec: {
+								mnemonic: 'VSH_STR',
+								mineralName: 'SHALE_STR',
+								shortLabel: 'Structural Shale',
+								fillRgba: 'rgba(185, 28, 28, 0.55)',
+								fillHex: PETRO_COLORS.vshStrFill,
+								strokeHex: PETRO_COLORS.vshStrStroke,
+								nphiEndpoint: 0.3,
+								rhobEndpoint: 2.55
+							},
+							arr: vstr
+						});
+					}
 					out.push({
 						spec: {
 							mnemonic: 'VSH_LAM',
@@ -438,19 +458,21 @@
 						},
 						arr: vlam
 					});
-					out.push({
-						spec: {
-							mnemonic: 'VSH_DIS',
-							mineralName: 'SHALE_DIS',
-							shortLabel: 'Dispersed Clay',
-							fillRgba: 'rgba(203, 213, 225, 0.65)',
-							fillHex: PETRO_COLORS.vshDisFill,
-							strokeHex: PETRO_COLORS.vshDisStroke,
-							nphiEndpoint: 0.3,
-							rhobEndpoint: 2.55
-						},
-						arr: vdis
-					});
+					if (hasDis) {
+						out.push({
+							spec: {
+								mnemonic: 'VSH_DIS',
+								mineralName: 'SHALE_DIS',
+								shortLabel: 'Dispersed Clay',
+								fillRgba: 'rgba(203, 213, 225, 0.65)',
+								fillHex: PETRO_COLORS.vshDisFill,
+								strokeHex: PETRO_COLORS.vshDisStroke,
+								nphiEndpoint: 0.3,
+								rhobEndpoint: 2.55
+							},
+							arr: vdis
+						});
+					}
 					continue;
 				}
 			}

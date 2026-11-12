@@ -902,6 +902,10 @@ class WorkspaceThomasStieberRequest(WorkspaceFilterBase):
     theta: float = Field(
         0.0, description="Relative dip / wellbore deviation angle theta (degrees)"
     )
+    estimate_structural_shale: bool = Field(
+        True,
+        description="Classify grain-replacing (structural) shale above the laminated line and emit VSH_STR / PHIT_TS / PHIE_TS / PHISAND_TS",
+    )
 
 
 class WorkspacePermeabilityRequest(WorkspaceFilterBase):
@@ -942,6 +946,9 @@ class WorkspacePermeabilityRequest(WorkspaceFilterBase):
     )
     vsh_dis: Optional[List[Optional[float]]] = Field(
         None, description="Optional client-side VSH_DIS array fallback"
+    )
+    vsh_str: Optional[List[Optional[float]]] = Field(
+        None, description="Optional client-side VSH_STR array fallback"
     )
 
 
@@ -1017,6 +1024,9 @@ class WorkspaceSaturationRequest(WorkspaceFilterBase):
     )
     vsh_dis: Optional[List[Optional[float]]] = Field(
         None, description="Optional client-side VSH_DIS array fallback"
+    )
+    vsh_str: Optional[List[Optional[float]]] = Field(
+        None, description="Optional client-side VSH_STR array fallback"
     )
     rsand_ts: Optional[List[Optional[float]]] = Field(
         None, description="Optional client-side RSAND_TS array fallback"
@@ -2895,6 +2905,7 @@ def _batch_evaluate_zone(
         "PHIT_SAND",
         "VSH_LAM",
         "VSH_DIS",
+        "VSH_STR",
         "RSAND_TS",
         "NPHI_HC",
         "RHOB_HC",
@@ -3853,12 +3864,12 @@ def workspace_lithology(
 
 @router.post(
     "/wells/{well_name}/thomas_stieber",
-    summary="Compute Thomas-Stieber thin-bed shale partitioning (VSH_LAM, VSH_DIS, PHIT_SAND) and Hagiwara RT_MOD",
+    summary="Compute Thomas-Stieber thin-bed shale partitioning (VSH_LAM, VSH_DIS, VSH_STR, PHIT_SAND) and Hagiwara RT_MOD",
 )
 def workspace_thomas_stieber(
     project_id: int, well_name: str, req: WorkspaceThomasStieberRequest
 ) -> Dict[str, Any]:
-    """Compute Thomas-Stieber laminated/dispersed shale volumes, sand lamina porosity, and Hagiwara resistivity."""
+    """Compute Thomas-Stieber laminated/dispersed/structural shale volumes, sand lamina porosity, and Hagiwara resistivity."""
     try:
         df = _get_filtered_well_df(
             project_id, well_name, req.min_depth, req.max_depth, req.zones
@@ -3903,7 +3914,7 @@ def workspace_thomas_stieber(
                 raise ValueError(
                     "No valid PHIT/VCLAY or NPHI/RHOB pairs found in the selected interval"
                 )
-            _, vsh_tb, phit_tb, _, _, _, _ = tb.estimate_litho_poro(
+            _, vsh_tb, phit_tb, _, _, _, _, _, _, _ = tb.estimate_litho_poro(
                 nphi[valid_nd].to_numpy(dtype=float),
                 rhob[valid_nd].to_numpy(dtype=float),
             )
@@ -3924,23 +3935,47 @@ def workspace_thomas_stieber(
 
         vsh_ts_v = vclay_bulk_v
 
-        vsh_lam_raw, vsh_dis_raw, vsand_dis_raw, phit_sand_raw = tb.litho_poro_fraction(
-            phit_v, vsh_ts_v
-        )
+        (
+            vsh_lam_raw,
+            vsh_dis_raw,
+            vsand_dis_raw,
+            phit_sand_raw,
+            vsh_str_raw,
+            phisand_ts_raw,
+            phie_ts_raw,
+        ) = tb.litho_poro_fraction(phit_v, vsh_ts_v)
         vsh_lam_raw = np.asarray(vsh_lam_raw, dtype=float)
         vsh_dis_raw = np.asarray(vsh_dis_raw, dtype=float)
         vsand_dis_raw = np.asarray(vsand_dis_raw, dtype=float)
         phit_sand_raw = np.asarray(phit_sand_raw, dtype=float)
+        vsh_str_raw = np.asarray(vsh_str_raw, dtype=float)
+        phie_ts_raw = np.asarray(phie_ts_raw, dtype=float)
 
-        # Partition bulk VCLAY into VSH_LAM + VSH_DIS == VCLAY so Track 4 mineral stacking stays exact
+        if not req.estimate_structural_shale:
+            vsh_str_raw = np.zeros_like(vsh_str_raw)
+
+        # Partition bulk VCLAY into VSH_LAM + VSH_DIS + VSH_STR == VCLAY so
+        # Track 4 mineral stacking stays exact across the three-way split
         vsh_lam_norm = np.clip(vsh_lam_raw, 0.0, vsh_ts_v)
+        vsh_str_norm = np.clip(vsh_str_raw, 0.0, np.maximum(vsh_ts_v - vsh_lam_norm, 0.0))
         lam_fraction = np.where(
             vsh_ts_v > 1e-5,
             np.clip(vsh_lam_norm / vsh_ts_v, 0.0, 1.0),
             0.0,
         )
+        str_fraction = np.where(
+            vsh_ts_v > 1e-5,
+            np.clip(vsh_str_norm / vsh_ts_v, 0.0, 1.0),
+            0.0,
+        )
+        str_fraction = np.clip(str_fraction, 0.0, np.maximum(1.0 - lam_fraction, 0.0))
         vsh_lam_bulk = np.clip(vclay_bulk_v * lam_fraction, 0.0, vclay_bulk_v)
-        vsh_dis_bulk = np.clip(vclay_bulk_v - vsh_lam_bulk, 0.0, vclay_bulk_v)
+        vsh_str_bulk = np.clip(
+            vclay_bulk_v * str_fraction, 0.0, np.maximum(vclay_bulk_v - vsh_lam_bulk, 0.0)
+        )
+        vsh_dis_bulk = np.clip(
+            vclay_bulk_v - vsh_lam_bulk - vsh_str_bulk, 0.0, vclay_bulk_v
+        )
         vsand_dis_clamped = np.clip(vsand_dis_raw, 0.0, 1.0)
         phit_sand_clamped = np.clip(
             np.where(np.isfinite(phit_sand_raw), phit_sand_raw, phit_v),
@@ -3950,6 +3985,13 @@ def workspace_thomas_stieber(
         # In pure shale (Vsh > 0.95), intrinsic sand lamina porosity tapers to shale porosity
         phit_sand_clamped = np.where(
             vsh_ts_v > 0.95, phit_v, np.maximum(phit_sand_clamped, phit_v)
+        )
+        phisand_ts_clamped = phit_sand_clamped
+        phit_ts_clamped = np.clip(phit_v, 0.0, 0.55)
+        phie_ts_clamped = np.clip(
+            np.where(np.isfinite(phie_ts_raw), phie_ts_raw, phit_v),
+            0.0,
+            phit_ts_clamped,
         )
 
         # Hagiwara (1995) anisotropic thin-bed resistivity forward model
@@ -4000,8 +4042,12 @@ def workspace_thomas_stieber(
         for col_name, arr_vals in (
             ("VSH_LAM", vsh_lam_bulk),
             ("VSH_DIS", vsh_dis_bulk),
+            ("VSH_STR", vsh_str_bulk),
             ("VSAND_DIS", vsand_dis_clamped),
             ("PHIT_SAND", phit_sand_clamped),
+            ("PHISAND_TS", phisand_ts_clamped),
+            ("PHIT_TS", phit_ts_clamped),
+            ("PHIE_TS", phie_ts_clamped),
             ("RT_MOD", rt_mod_v),
             ("RSAND_TS", rsand_ts_v),
             ("VSH_TS", vsh_ts_v),
@@ -4013,8 +4059,12 @@ def workspace_thomas_stieber(
         save_cols = [
             "VSH_LAM",
             "VSH_DIS",
+            "VSH_STR",
             "VSAND_DIS",
             "PHIT_SAND",
+            "PHISAND_TS",
+            "PHIT_TS",
+            "PHIE_TS",
             "RT_MOD",
             "RSAND_TS",
             "VSH_TS",
@@ -4069,11 +4119,17 @@ def workspace_thomas_stieber(
             "summary": {
                 "mean_vsh_lam": round(float(np.nanmean(vsh_lam_bulk)), 4),
                 "mean_vsh_dis": round(float(np.nanmean(vsh_dis_bulk)), 4),
+                "mean_vsh_str": round(float(np.nanmean(vsh_str_bulk)), 4),
                 "mean_phit_sand": round(float(np.nanmean(phit_sand_clamped)), 4),
+                "mean_phie_ts": round(float(np.nanmean(phie_ts_clamped)), 4),
                 "mean_porosity_uplift_vv": mean_uplift,
                 "rt_rmse_decade": rt_rmse_decade,
                 "lower_vertex_vsh": round(dry_sand_poro, 4),
                 "lower_vertex_phit": round(dry_sand_poro * dry_shale_poro, 4),
+                "upper_vertex_vsh": round(1.0 - dry_sand_poro, 4),
+                "upper_vertex_phit": round(
+                    dry_sand_poro + (1.0 - dry_sand_poro) * dry_shale_poro, 4
+                ),
             },
             "stats": stats,
             **dataframe_to_columnar(out_df),
@@ -4761,6 +4817,7 @@ def workspace_permeability(
                 "PHIT_SAND": req.phit_sand,
                 "VSH_LAM": req.vsh_lam,
                 "VSH_DIS": req.vsh_dis,
+                "VSH_STR": req.vsh_str,
             },
         )
         if "PHIT" not in df.columns:
@@ -5008,6 +5065,7 @@ def workspace_saturation(
                 "PHIT_SAND": req.phit_sand,
                 "VSH_LAM": req.vsh_lam,
                 "VSH_DIS": req.vsh_dis,
+                "VSH_STR": req.vsh_str,
                 "RSAND_TS": req.rsand_ts,
             },
         )
@@ -12592,7 +12650,11 @@ CALCULATED_CURVES_BY_GROUP: Dict[str, Tuple[str, ...]] = {
         "PHIT_SH",
         "VSH_LAM",
         "VSH_DIS",
+        "VSH_STR",
         "PHIT_SAND",
+        "PHISAND_TS",
+        "PHIT_TS",
+        "PHIE_TS",
         "RSAND_TS",
         "RT_MOD",
         "PHIT_P10",

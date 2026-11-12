@@ -50,6 +50,7 @@ export function comparisonRequest(kind: 'porosity' | 'permeability') {
 		phit_sand: useTs ? clean(phitSand) : undefined,
 		vsh_lam: useTs ? clean(curves['VSH_LAM']) : undefined,
 		vsh_dis: useTs ? clean(curves['VSH_DIS']) : undefined,
+		vsh_str: useTs ? clean(curves['VSH_STR']) : undefined,
 		...filter
 	};
 }

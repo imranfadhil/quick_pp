@@ -90,7 +90,9 @@
 	let tsSummary = $state<{
 		mean_vsh_lam: number;
 		mean_vsh_dis: number;
+		mean_vsh_str: number;
 		mean_phit_sand: number;
+		mean_phie_ts: number;
 		mean_porosity_uplift_vv: number;
 		rt_rmse_decade: number | null;
 	} | null>(null);
@@ -1472,7 +1474,7 @@
 		>
 			<div class="mb-1.5 flex items-center justify-between rounded-xs border border-teal-200 bg-teal-50/70 px-2 py-1 text-[10px] text-teal-950">
 				<span class="font-medium">
-					Partitions <span class="mono-num font-semibold">VCLAY</span> into <span class="mono-num font-semibold">VSH_LAM + VSH_DIS</span> &amp; models <span class="mono-num font-semibold">RT_MOD</span>
+					Partitions <span class="mono-num font-semibold">VCLAY</span> into <span class="mono-num font-semibold">VSH_LAM + VSH_DIS + VSH_STR</span> &amp; models <span class="mono-num font-semibold">RT_MOD</span>
 				</span>
 				<button
 					type="button"
@@ -1600,7 +1602,7 @@
 
 			{#if workbench.tsParams.enabled && tsSummary}
 				<div class="mt-1.5 rounded-sm border border-teal-200 bg-teal-50/50 p-1.5 text-[10px]">
-					<div class="grid grid-cols-4 gap-1 text-center">
+					<div class="grid grid-cols-6 gap-1 text-center">
 						<div>
 							<div class="text-[var(--text-muted)]">Vsh,lam</div>
 							<div class="mono-num font-bold text-slate-800">
@@ -1611,6 +1613,18 @@
 							<div class="text-[var(--text-muted)]">Vsh,dis</div>
 							<div class="mono-num font-bold text-slate-600">
 								{fmtNum(tsSummary.mean_vsh_dis, 3)}
+							</div>
+						</div>
+						<div>
+							<div class="text-[var(--text-muted)]">Vsh,str</div>
+							<div class="mono-num font-bold text-red-800">
+								{fmtNum(tsSummary.mean_vsh_str, 3)}
+							</div>
+						</div>
+						<div>
+							<div class="text-[var(--text-muted)]">Φe (TS)</div>
+							<div class="mono-num font-bold text-blue-800">
+								{fmtNum(tsSummary.mean_phie_ts, 3)}
 							</div>
 						</div>
 						<div>

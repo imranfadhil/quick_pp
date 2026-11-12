@@ -1224,6 +1224,10 @@
 			const A: [number, number] = [0, phiSand];
 			const B: [number, number] = [1, phiShale];
 			const C: [number, number] = [phiSand, Number((phiSand * phiShale).toFixed(4))];
+			const D: [number, number] = [
+				Number((1 - phiSand).toFixed(4)),
+				Number((phiSand + (1 - phiSand) * phiShale).toFixed(4))
+			];
 
 			// Laminated & Φsand isolines inside the A-B-C triangle
 			for (const t of [0.2, 0.4, 0.6, 0.8]) {
@@ -1278,7 +1282,16 @@
 			traces.push({
 				type: 'scatter',
 				mode: 'lines',
-				name: 'Grain-Replacing Envelope',
+				name: 'Structural (Grain-Replacing)',
+				x: [A[0], D[0]],
+				y: [A[1], D[1]],
+				line: { color: '#DC2626', width: 2.0 },
+				hoverinfo: 'skip'
+			});
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'Clay-Supported Envelope',
 				x: [C[0], B[0], 0],
 				y: [C[1], B[1], 0],
 				line: { color: '#475569', width: 1.4, dash: 'dash' },
@@ -1288,18 +1301,19 @@
 				type: 'scatter',
 				mode: 'markers+text',
 				name: 'TS Endpoints',
-				x: [A[0], B[0], C[0]],
-				y: [A[1], B[1], C[1]],
+				x: [A[0], B[0], C[0], D[0]],
+				y: [A[1], B[1], C[1], D[1]],
 				text: [
 					`Clean Sand (${phiSand.toFixed(2)})`,
 					`Pure Shale (${phiShale.toFixed(2)})`,
-					`Dispersed (${C[0].toFixed(2)}, ${C[1].toFixed(3)})`
+					`Dispersed (${C[0].toFixed(2)}, ${C[1].toFixed(3)})`,
+					`Structural (${D[0].toFixed(2)}, ${D[1].toFixed(3)})`
 				],
-				textposition: ['top right', 'top left', 'bottom right'],
+				textposition: ['top right', 'top left', 'bottom right', 'top left'],
 				textfont: { family: 'Inter', size: 10, color: '#0F172A' },
 				marker: {
 					size: 9.5,
-					color: ['#CA8A04', '#475569', '#0D9488'],
+					color: ['#CA8A04', '#475569', '#0D9488', '#DC2626'],
 					symbol: 'diamond',
 					line: { color: '#FFFFFF', width: 1.5 }
 				}
@@ -1308,7 +1322,7 @@
 			baseLayout.xaxis.title = { text: 'Vshale (v/v)' };
 			baseLayout.xaxis.range = [-0.04, 1.05];
 			baseLayout.yaxis.title = { text: 'Total Porosity PHIT (v/v)' };
-			baseLayout.yaxis.range = [0, Math.max(0.42, phiSand + 0.08)];
+			baseLayout.yaxis.range = [0, Math.max(0.42, phiSand + (1 - phiSand) * phiShale + 0.08)];
 			baseLayout.shapes = shapes;
 			return { traces, layout: baseLayout };
 		}

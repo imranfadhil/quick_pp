@@ -40,6 +40,7 @@
 		const phitSandArr = wellData.curves['PHIT_SAND'] ?? [];
 		const vshLamArr = wellData.curves['VSH_LAM'] ?? [];
 		const vshDisArr = wellData.curves['VSH_DIS'] ?? [];
+		const vshStrArr = wellData.curves['VSH_STR'] ?? [];
 		const useTs = hasTsAvailable && workbench.tsParams.useInPerm;
 		const cleanArr = (arr: number[]) =>
 			arr.length > 0 ? arr.map((v) => (Number.isFinite(v) ? v : null)) : undefined;
@@ -67,6 +68,7 @@
 						phit_sand: useTs ? cleanArr(phitSandArr) : undefined,
 						vsh_lam: useTs ? cleanArr(vshLamArr) : undefined,
 						vsh_dis: useTs ? cleanArr(vshDisArr) : undefined,
+						vsh_str: useTs ? cleanArr(vshStrArr) : undefined,
 						min_depth: workbench.depthFilter?.min ?? null,
 						max_depth: workbench.depthFilter?.max ?? null,
 						zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,

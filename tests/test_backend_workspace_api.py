@@ -573,6 +573,62 @@ def test_batch_preview_supports_thomas_stieber_and_rejects_mismatched_correction
     assert "settings do not match" in response.json()["results"][0]["error"]
 
 
+def test_thomas_stieber_emits_structural_shale_and_exact_partition(client_and_project):
+    client, pid = client_and_project
+
+    base = f"/quick_pp/workspace/projects/{pid}/wells/Well-A"
+    payload = {
+        "use_existing_phit_vsh": False,
+        "dry_sand_poro": 0.32,
+        "dry_shale_poro": 0.10,
+        "estimate_structural_shale": True,
+    }
+    response = client.post(f"{base}/thomas_stieber", json=payload)
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    for curve in ("VSH_LAM", "VSH_DIS", "VSH_STR", "PHIT_SAND", "PHISAND_TS", "PHIT_TS", "PHIE_TS"):
+        assert curve in body["data"], f"missing {curve} in response"
+        assert any(v is not None for v in body["data"][curve]), f"{curve} is all-null"
+
+    def to_arr(curve: str) -> np.ndarray:
+        return np.array([np.nan if v is None else v for v in body["data"][curve]])
+
+    vsh_lam = to_arr("VSH_LAM")
+    vsh_dis = to_arr("VSH_DIS")
+    vsh_str = to_arr("VSH_STR")
+    valid = np.isfinite(vsh_lam) & np.isfinite(vsh_dis) & np.isfinite(vsh_str)
+
+    # Three-way partition must reproduce the bulk VCLAY exactly
+    phit_v = to_arr("PHIT_TS")
+    vsh_bulk = to_arr("VSH_TS")
+    valid = valid & np.isfinite(vsh_bulk)
+    assert np.allclose(
+        vsh_lam[valid] + vsh_dis[valid] + vsh_str[valid], vsh_bulk[valid], atol=1e-9
+    )
+
+    # Structural classification must match the region geometry of the ThinBeds model
+    phi_lam_line = 0.32 + (0.10 - 0.32) * np.clip(vsh_bulk, 0.0, 1.0)
+    # Above the laminated line no dispersed shale may be assigned
+    above = valid & (phit_v > phi_lam_line)
+    assert np.all(vsh_dis[above] <= 1e-12)
+    # Below the laminated line no structural shale may be assigned
+    below = valid & (phit_v <= phi_lam_line)
+    assert np.all(vsh_str[below] <= 1e-12)
+
+    summary = body["summary"]
+    assert "mean_vsh_str" in summary
+    assert summary["mean_vsh_str"] == pytest.approx(
+        float(np.nanmean(vsh_str[valid])), abs=1e-3
+    )
+
+    # Disabling structural estimation keeps the legacy two-way partition
+    legacy = client.post(f"{base}/thomas_stieber", json={**payload, "estimate_structural_shale": False})
+    assert legacy.status_code == 200, legacy.text
+    legacy_str = np.array([np.nan if v is None else v for v in legacy.json()["data"]["VSH_STR"]])
+    assert not np.any(legacy_str[np.isfinite(legacy_str)] > 1e-12)
+
+
 def test_batch_preview_rejects_blank_zone(client_and_project):
     client, pid = client_and_project
     response = client.post(

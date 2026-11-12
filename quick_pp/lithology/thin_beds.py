@@ -51,7 +51,7 @@ class ThinBeds:
         )
 
     def estimate_litho_poro(self, nphi, rhob):
-        """Estimate laminated and dispersed shale based on neutron density cross plot.
+        """Estimate laminated, dispersed, and structural shale from neutron-density crossplot.
 
         Args:
             nphi (np.ndarray or float): Neutron Porosity log [v/v].
@@ -59,7 +59,8 @@ class ThinBeds:
 
         Returns:
             tuple: A tuple containing volumes of sand, shale, total porosity, laminated shale,
-                   dispersed shale, dispersed sand, and sand porosity.
+                   dispersed shale, dispersed sand, sand porosity, structural shale,
+                   sand-lamina porosity, and effective porosity.
         """
         logger.info(
             f"Estimating thin bed lithology and porosity for {len(nphi)} data points"
@@ -89,31 +90,64 @@ class ThinBeds:
         vshale = projlithofrac / rocklithofrac
         vsand = 1.0 - vshale
 
-        vsh_lam, vsh_dis, vsand_dis, phit_sand = self.litho_poro_fraction(phit, vshale)
+        (
+            vsh_lam,
+            vsh_dis,
+            vsand_dis,
+            phit_sand,
+            vsh_str,
+            phisand_ts,
+            phie_ts,
+        ) = self.litho_poro_fraction(phit, vshale)
 
         logger.debug(
             f"Thin bed estimation completed - mean vsand: {np.nanmean(vsand):.3f}, "
             f"vshale: {np.nanmean(vshale):.3f}, vsh_lam: {np.nanmean(vsh_lam):.3f}, "
-            f"vsh_dis: {np.nanmean(vsh_dis):.3f}"
+            f"vsh_dis: {np.nanmean(vsh_dis):.3f}, vsh_str: {np.nanmean(vsh_str):.3f}"
         )
 
-        return vsand, vshale, phit, vsh_lam, vsh_dis, vsand_dis, phit_sand
+        return (
+            vsand,
+            vshale,
+            phit,
+            vsh_lam,
+            vsh_dis,
+            vsand_dis,
+            phit_sand,
+            vsh_str,
+            phisand_ts,
+            phie_ts,
+        )
 
     def litho_poro_fraction(self, phit, vshale):
-        """Estimate laminated and dispersed shale and intrinsic sand porosity.
+        """Estimate laminated, dispersed, and structural shale and sand porosity.
 
-        Follows the analytical Thomas-Stieber (1975) model:
-        - Baseline dispersed line: Phi_dis(Vsh) = Phi_sd - Vsh * (1 - Phi_sh)
-        - Analytical laminated fraction: Vlam = (Phi - Phi_dis(Vsh)) / (1 - Phi_sd)
-        - Dispersed shale fraction: Vsh_dis = Vsh - Vlam
-        - Intrinsic sand lamina porosity: Phi_sand = (Phi - Vlam * Phi_sh) / (1 - Vlam)
+        Follows the analytical Thomas-Stieber (1975) model (Mavko, Rock Physics
+        Handbook, Figs 5.3.2/5.3.5) with vertices A=(0, Phi_sd) clean sand,
+        B=(1, Phi_sh) pure shale, C=(Phi_sd, Phi_sd*Phi_sh) dispersed, and
+        D=(1-Phi_sd, Phi_sd + (1-Phi_sd)*Phi_sh) structural:
+        - Dispersed (pore-filling) line A->C: Phi = Phi_sd - Vsh * (1 - Phi_sh)
+        - Structural (grain-replacing) line A->D: Phi = Phi_sd + Vsh * Phi_sh
+        - Laminated line A->B: Phi = Phi_sd + (Phi_sh - Phi_sd) * Vsh
+
+        Points below the laminated line lie in the dispersed triangle A-B-C and
+        their shale is split into laminated + dispersed; points above it lie in
+        the structural triangle A-B-D and split into laminated + structural:
+        - Dispersed branch: Vlam = (Phi - Phi_dis) / (1 - Phi_sd)
+        - Structural branch: Vlam = (Phi_sd + Vsh*Phi_sh - Phi) / Phi_sd
+
+        In both branches Vlam + Vdis + Vstr = Vsh and the intrinsic sand-lamina
+        porosity Phi_sand = (Phi - Vlam*Phi_sh) / (1 - Vlam).
 
         Args:
             phit (np.ndarray or float): Total porosity [v/v].
             vshale (np.ndarray or float): Volume of shale [v/v].
 
         Returns:
-            tuple: A tuple containing (vsh_lam, vsh_dis, vsand_dis, phit_sand).
+            tuple: A tuple containing (vsh_lam, vsh_dis, vsand_dis, phit_sand,
+                   vsh_str, phisand_ts, phie_ts), where vsh_str is structural
+                   shale volume, phisand_ts mirrors phit_sand, and phie_ts is
+                   the effective (non-clay-bound) porosity estimate.
         """
         logger.debug(
             "Calculating lithology-porosity fractions for thin beds using Thomas-Stieber model"
@@ -131,16 +165,33 @@ class ThinBeds:
         phi_sd = float(self.dry_sand_poro)
         phi_sh = float(self.dry_shale_poro)
 
+        vsh_clipped = np.clip(vsh_arr, 0.0, 1.0)
+
         # Dispersed shale baseline: all sand pores filled by dispersed shale particles
         phi_dis = phi_sd - vsh_arr * (1.0 - phi_sh)
+        # Laminated line A->B: separates dispersed (below) from structural (above)
+        phi_lam = phi_sd + (phi_sh - phi_sd) * vsh_arr
 
-        # Laminated shale fraction Vlam: analytical solution to Phi = (1 - Vlam)*Phi_sand + Vlam*Phi_sh
-        vsh_lam = (phit_arr - phi_dis) / max(1.0 - phi_sd, 1e-4)
-        # Bounded between 0 and min(Vshale, 1.0)
-        vsh_lam = np.clip(vsh_lam, 0.0, np.clip(vsh_arr, 0.0, 1.0))
+        # Region-based classification: below the laminated line is the dispersed
+        # triangle A-B-C; above it is the structural triangle A-B-D.
+        dispersed_region = phit_arr <= phi_lam
 
-        # Dispersed shale fraction (bulk)
-        vsh_dis = np.clip(vsh_arr - vsh_lam, 0.0, 1.0)
+        # Dispersed branch: laminated fraction from Phi = (1 - Vlam)*Phi_sand + Vlam*Phi_sh
+        vsh_lam_dis = (phit_arr - phi_dis) / max(1.0 - phi_sd, 1e-4)
+        vsh_lam_dis = np.clip(vsh_lam_dis, 0.0, vsh_clipped)
+
+        # Structural branch: shale grains replace clean sand grains
+        # Phi = (1 - Vsh)*Phi_sd + Vsh*Phi_sh with Vlam laminae:
+        # Phi = (1 - Vlam)*(Phi_sd + Vstr*Phi_sh) + Vlam*Phi_sh
+        vsh_lam_str = (phi_sd + vsh_arr * phi_sh - phit_arr) / max(phi_sd, 1e-4)
+        vsh_lam_str = np.clip(vsh_lam_str, 0.0, vsh_clipped)
+
+        vsh_lam = np.where(dispersed_region, vsh_lam_dis, vsh_lam_str)
+        vsh_dis = np.where(dispersed_region, vsh_clipped - vsh_lam_dis, 0.0)
+        vsh_str = np.where(dispersed_region, 0.0, vsh_clipped - vsh_lam_str)
+        vsh_lam = np.clip(vsh_lam, 0.0, 1.0)
+        vsh_dis = np.clip(vsh_dis, 0.0, 1.0)
+        vsh_str = np.clip(vsh_str, 0.0, 1.0)
 
         # Sand lamina fraction: (1 - Vlam)
         sand_lam_frac = np.maximum(1.0 - vsh_lam, 1e-4)
@@ -163,6 +214,10 @@ class ThinBeds:
             max(phi_sd * 1.15, 0.45),
         )
 
+        # Effective porosity: total porosity minus clay-bound water held by
+        # structural and dispersed clay (laminated shale already excluded).
+        phie_ts = np.clip(phit_arr - (vsh_dis + vsh_str) * phi_sh, 0.0, 1.0)
+
         logger.debug(
             f"Lithology-porosity fraction calculation completed for {len(vsh_lam)} points"
         )
@@ -172,8 +227,11 @@ class ThinBeds:
                 float(vsh_dis[0]),
                 float(vsand_dis[0]),
                 float(phit_sand[0]),
+                float(vsh_str[0]),
+                float(phit_sand[0]),
+                float(phie_ts[0]),
             )
-        return vsh_lam, vsh_dis, vsand_dis, phit_sand
+        return vsh_lam, vsh_dis, vsand_dis, phit_sand, vsh_str, phit_sand, phie_ts
 
     def resistivity_modelling(self, vsh_lam, rsand, rv_shale, rh_shale, theta):
         """Calculate the apparent resistivity of laminated sand-shale based on Hagiwara (1995).
@@ -335,10 +393,14 @@ def vsh_phit_xplot(vsh, phit, dry_sand_poro: float, dry_shale_poro: float, **kwa
     lower_vertex_phit = round(dry_sand_poro * dry_shale_poro, 4)
     lower_vertex_vshale = round(lower_vertex_phit / dry_shale_poro, 4)
     C = (lower_vertex_vshale, lower_vertex_phit)
+    upper_vertex_vshale = round(1.0 - dry_sand_poro, 4)
+    upper_vertex_phit = round(dry_sand_poro + upper_vertex_vshale * dry_shale_poro, 4)
+    D_upper = (upper_vertex_vshale, upper_vertex_phit)
 
     # Plotting the NPHI-RHOB crossplot
     vsh_lam_from_pt = (A, B)
     vsh_dis_from_pt = (A, C)
+    vsh_str_from_pt = (A, D_upper)
     vsh_lower_envlope_from_pt = ((0, 0), B)
 
     fig = plt.Figure(figsize=(7, 7))
@@ -353,8 +415,13 @@ def vsh_phit_xplot(vsh, phit, dry_sand_poro: float, dry_shale_poro: float, **kwa
         color="green",
     )
     ax.plot(
+        *zip(*vsh_str_from_pt, strict=True),
+        label="Structural (grain replacing)",
+        color="red",
+    )
+    ax.plot(
         *zip(*vsh_lower_envlope_from_pt, strict=True),
-        label="Dispersed (grain replacing)",
+        label="Clay-supported envelope",
         color="black",
     )
 
@@ -409,6 +476,7 @@ def vsh_phit_xplot(vsh, phit, dry_sand_poro: float, dry_shale_poro: float, **kwa
     ax.scatter(A[0], A[1], label=f"Clean Sand: ({A[0]}, {A[1]})", color="orange")
     ax.scatter(B[0], B[1], label=f"Pure Shale: ({B[0]}, {B[1]})", color="black")
     ax.scatter(C[0], C[1], label=f"Lower vertex: ({C[0]}, {C[1]})", color="blue")
+    ax.scatter(D_upper[0], D_upper[1], label=f"Upper vertex: ({D_upper[0]}, {D_upper[1]})", color="red")
 
     ax.set_ylim(0, 0.5)
     ax.set_ylabel("PHIT (v/v)")

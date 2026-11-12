@@ -175,6 +175,7 @@
 		const phitSandArr = wellData.curves['PHIT_SAND'] ?? [];
 		const vshLamArr = wellData.curves['VSH_LAM'] ?? [];
 		const vshDisArr = wellData.curves['VSH_DIS'] ?? [];
+		const vshStrArr = wellData.curves['VSH_STR'] ?? [];
 		const rsandTsArr = wellData.curves['RSAND_TS'] ?? [];
 		const useTs = hasTsAvailable && workbench.tsParams.useInSaturation;
 		const cleanArr = (arr: number[]) =>
@@ -214,6 +215,7 @@
 						phit_sand: useTs ? cleanArr(phitSandArr) : undefined,
 						vsh_lam: useTs ? cleanArr(vshLamArr) : undefined,
 						vsh_dis: useTs ? cleanArr(vshDisArr) : undefined,
+						vsh_str: useTs ? cleanArr(vshStrArr) : undefined,
 						rsand_ts: useTs ? cleanArr(rsandTsArr) : undefined,
 						min_depth: workbench.depthFilter?.min ?? null,
 						max_depth: workbench.depthFilter?.max ?? null,

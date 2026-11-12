@@ -212,8 +212,10 @@ flowchart TD
       $$V_{\text{sand}} + V_{\text{silt}} + V_{\text{clay}} + \phi_t = 1$$
 
     * **Thin-Bed Thomas-Stieber & Tensor Resistivity:**
-      Partitions shale into laminated ($V_{\text{lam}}$), dispersed ($V_{\text{disp}}$), and structural ($V_{\text{struct}}$) forms:
-      
+      Partitions shale into laminated ($V_{\text{lam}}$), dispersed ($V_{\text{disp}}$), and structural ($V_{\text{struct}}$) forms. On the $\phi_t$ vs. $V_{\text{sh}}$ crossplot, points below the laminated line $\phi_{\text{lam}} = \phi_{\text{sd}} + (\phi_{\text{sh}} - \phi_{\text{sd}}) V_{\text{sh}}$ fall in the dispersed triangle and split shale into $V_{\text{lam}} + V_{\text{disp}}$; points above it fall in the structural triangle bounded by the grain-replacing line $\phi_{\text{str}} = \phi_{\text{sd}} + \phi_{\text{sh}} V_{\text{sh}}$ and split shale into $V_{\text{lam}} + V_{\text{struct}}$:
+
+      $$V_{\text{lam}} = \begin{cases} \dfrac{\phi_t - \phi_{\text{sd}} + V_{\text{sh}}(1-\phi_{\text{sh}})}{1-\phi_{\text{sd}}} & \phi_t \le \phi_{\text{lam}} \\[2ex] \dfrac{\phi_{\text{sd}} + V_{\text{sh}}\,\phi_{\text{sh}} - \phi_t}{\phi_{\text{sd}}} & \phi_t > \phi_{\text{lam}} \end{cases}, \quad V_{\text{disp}} + V_{\text{struct}} = V_{\text{sh}} - V_{\text{lam}}$$
+
       $$R_h^{-1} = \frac{1 - V_{\text{lam}}}{R_{\text{sand}}} + \frac{V_{\text{lam}}}{R_{\text{shale}}}, \qquad R_v = (1 - V_{\text{lam}}) R_{\text{sand}} + V_{\text{lam}} R_{\text{shale}}$$
 
     * **Multi-Mineral Constrained Optimization (SLSQP):**

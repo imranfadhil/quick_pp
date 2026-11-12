@@ -33,6 +33,8 @@ export const PETRO_COLORS = {
 	vshLamStroke: '#1E293B',
 	vshDisFill: '#CBD5E1',
 	vshDisStroke: '#64748B',
+	vshStrFill: '#B91C1C',
+	vshStrStroke: '#7F1D1D',
 
 	// Extended minerals
 	illiFill: '#A1A1AA',
@@ -590,7 +592,11 @@ export const STANDARD_CURVE_META: Record<string, CurveMeta> = {
 	BADHOLE: { mnemonic: 'BADHOLE', label: 'Badhole Flag', unit: 'flag', min: 0, max: 1, color: '#DC2626' },
 	VSH_LAM: { mnemonic: 'VSH_LAM', label: 'Laminated Shale Volume', unit: 'v/v', min: 0, max: 1, color: PETRO_COLORS.vshLamStroke },
 	VSH_DIS: { mnemonic: 'VSH_DIS', label: 'Dispersed Shale Volume', unit: 'v/v', min: 0, max: 1, color: PETRO_COLORS.vshDisStroke },
+	VSH_STR: { mnemonic: 'VSH_STR', label: 'Structural Shale Volume', unit: 'v/v', min: 0, max: 1, color: PETRO_COLORS.vshStrStroke },
 	PHIT_SAND: { mnemonic: 'PHIT_SAND', label: 'Sand Lamina Porosity', unit: 'v/v', min: 0, max: 0.45, color: PETRO_COLORS.phitSand },
+	PHISAND_TS: { mnemonic: 'PHISAND_TS', label: 'Sand Lamina Porosity (TS)', unit: 'v/v', min: 0, max: 0.45, color: PETRO_COLORS.phitSand },
+	PHIT_TS: { mnemonic: 'PHIT_TS', label: 'Total Porosity (TS)', unit: 'v/v', min: 0, max: 0.45, color: PETRO_COLORS.phit },
+	PHIE_TS: { mnemonic: 'PHIE_TS', label: 'Effective Porosity (TS)', unit: 'v/v', min: 0, max: 0.45, color: PETRO_COLORS.phie },
 	RT_MOD: { mnemonic: 'RT_MOD', label: 'Hagiwara Modeled Resistivity', unit: 'ohm.m', min: 0.2, max: 2000, color: PETRO_COLORS.rtMod, logScale: true },
 	ROCK_FLAG: { mnemonic: 'ROCK_FLAG', label: 'Discrete Rock Type (DRT)', unit: 'flag', min: 1, max: 8, color: '#2563EB' },
 	FZI: { mnemonic: 'FZI', label: 'Flow Zone Indicator', unit: 'μm', min: 0.01, max: 50, color: '#0284C7', logScale: true },
