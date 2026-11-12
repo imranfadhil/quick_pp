@@ -544,16 +544,24 @@ def _compute_vsh_gr_series(
     df: pd.DataFrame,
     gr_clean: Optional[float] = None,
     gr_clay: Optional[float] = None,
+    use_enhanced: bool = False,
 ) -> pd.Series:
-    """Compute calibrated VSH_GR series in [0, 1] from GR endpoints, existing VSH_GR curve, or auto-normalized gr_index."""
+    """Compute calibrated VSH_GR series in [0, 1] from GR endpoints, existing VSH_GR curve, or auto-normalized gr_index.
+
+    When ``use_enhanced`` is set and ``GR_ENH`` is populated, the resolution-enhanced
+    gamma ray is used in place of the raw ``GR``.
+    """
     out = pd.Series(np.nan, index=df.index, dtype=float)
+    gr_col = "GR"
+    if use_enhanced and "GR_ENH" in df.columns and df["GR_ENH"].notna().any():
+        gr_col = "GR_ENH"
     if (
-        "GR" in df.columns
+        gr_col in df.columns
         and gr_clean is not None
         and gr_clay is not None
         and abs(float(gr_clay) - float(gr_clean)) > 1e-6
     ):
-        gr_s = pd.to_numeric(df["GR"], errors="coerce")
+        gr_s = pd.to_numeric(df[gr_col], errors="coerce")
         valid_gr = gr_s.notna()
         if valid_gr.any():
             out.loc[valid_gr] = (
@@ -565,9 +573,9 @@ def _compute_vsh_gr_series(
         vsh_existing = pd.to_numeric(df["VSH_GR"], errors="coerce")
         if vsh_existing.notna().any():
             return vsh_existing.clip(0.0, 1.0)
-    if "GR" not in df.columns:
+    if gr_col not in df.columns:
         return out
-    gr_s = pd.to_numeric(df["GR"], errors="coerce")
+    gr_s = pd.to_numeric(df[gr_col], errors="coerce")
     valid_gr = gr_s.notna()
     if not valid_gr.any():
         return out
@@ -787,6 +795,10 @@ class WorkspaceLithologyRequest(WorkspaceFilterBase, GammaParameters):
     use_hc_corrected: bool = Field(
         False, description="Use NPHI_HC and RHOB_HC curves if present"
     )
+    use_enhanced_logs: bool = Field(
+        False,
+        description="Use resolution-enhanced GR_ENH/NPHI_ENH/RHOB_ENH curves when present",
+    )
     dry_sand_point: Tuple[float, float] = Field((-0.02, 2.65))
     dry_silt_point: Tuple[Optional[float], Optional[float]] = Field((None, 2.68))
     dry_clay_point: Tuple[Optional[float], Optional[float]] = Field((0.33, 2.7))
@@ -852,6 +864,10 @@ class WorkspacePorosityRequest(WorkspaceFilterBase, GammaParameters):
     )
     use_hc_corrected: bool = Field(
         False, description="Use NPHI_HC and RHOB_HC curves if present"
+    )
+    use_enhanced_logs: bool = Field(
+        False,
+        description="Use resolution-enhanced GR_ENH/NPHI_ENH/RHOB_ENH curves when present",
     )
     dry_sand_point: Tuple[float, float] = Field((-0.02, 2.65))
     dry_silt_point: Tuple[Optional[float], Optional[float]] = Field((None, 2.68))
@@ -1012,6 +1028,10 @@ class WorkspacePermeabilityRequest(WorkspaceFilterBase):
 
 class WorkspaceSaturationRequest(WorkspaceFilterBase):
     lithology_model: Optional[str] = Field(None, description="Active lithology model")
+    use_enhanced_logs: bool = Field(
+        False,
+        description="Use resolution-enhanced GR_ENH/NPHI_ENH/RHOB_ENH curves when present",
+    )
     method: Literal[
         "archie", "waxman_smits", "simandoux", "indonesian", "dual_water"
     ] = Field(
@@ -3470,7 +3490,11 @@ def workspace_lithology(
         save_cols: List[str] = []
 
         if model == "ssc":
-            nphi, rhob = _select_nphi_rhob(df, use_hc_corrected=req.use_hc_corrected)
+            nphi, rhob = _select_nphi_rhob(
+                df,
+                use_hc_corrected=req.use_hc_corrected,
+                use_enhanced=req.use_enhanced_logs,
+            )
             valid_mask = nphi.notna() & rhob.notna()
             if not valid_mask.any():
                 raise ValueError(
@@ -3512,7 +3536,9 @@ def workspace_lithology(
             out_df["VSH_DN"] = vclay_s
             out_df["PROJ_NPHI"] = px_s
             out_df["PROJ_RHOB"] = py_s
-            vsh_gr_s = _compute_vsh_gr_series(df, req.gr_clean, req.gr_clay)
+            vsh_gr_s = _compute_vsh_gr_series(
+                df, req.gr_clean, req.gr_clay, use_enhanced=req.use_enhanced_logs
+            )
             if vsh_gr_s.notna().any():
                 out_df["VSH_GR"] = vsh_gr_s
 
@@ -3534,10 +3560,21 @@ def workspace_lithology(
             }
 
         elif model == "multi_mineral":
-            nphi, rhob = _select_nphi_rhob(df, use_hc_corrected=req.use_hc_corrected)
+            nphi, rhob = _select_nphi_rhob(
+                df,
+                use_hc_corrected=req.use_hc_corrected,
+                use_enhanced=req.use_enhanced_logs,
+            )
+            gr_col = (
+                "GR_ENH"
+                if req.use_enhanced_logs
+                and "GR_ENH" in df.columns
+                and df["GR_ENH"].notna().any()
+                else "GR"
+            )
             gr = (
-                pd.to_numeric(df["GR"], errors="coerce")
-                if "GR" in df.columns
+                pd.to_numeric(df[gr_col], errors="coerce")
+                if gr_col in df.columns
                 else pd.Series(np.nan, index=df.index, dtype=float)
             )
             pef = (
@@ -3637,7 +3674,15 @@ def workspace_lithology(
                 out_df["CGR_SYN"] = gr
                 save_cols.append("CGR_SYN")
             elif source in ("gr", "cgr"):
-                name = "GR" if source == "gr" else req.gamma_curve.strip().upper()
+                if (
+                    source == "gr"
+                    and req.use_enhanced_logs
+                    and "GR_ENH" in df.columns
+                    and df["GR_ENH"].notna().any()
+                ):
+                    name = "GR_ENH"
+                else:
+                    name = "GR" if source == "gr" else req.gamma_curve.strip().upper()
                 if not name or name not in df:
                     raise ValueError(
                         f"Selected gamma curve '{name}' not found in well data"
@@ -3730,7 +3775,9 @@ def workspace_lithology(
 
         if bh_mode != "none" and active_badhole.any():
             if bh_mode in ("vsh_gr", "gr"):
-                vsh_bh_s = _compute_vsh_gr_series(df, req.gr_clean, req.gr_clay)
+                vsh_bh_s = _compute_vsh_gr_series(
+                    df, req.gr_clean, req.gr_clay, use_enhanced=req.use_enhanced_logs
+                )
                 bh_gr = active_badhole & vsh_bh_s.notna()
                 if bh_gr.any():
                     vsh_v = vsh_bh_s.loc[bh_gr].to_numpy(dtype=float)
@@ -4301,7 +4348,11 @@ def workspace_porosity(
         df = _get_filtered_well_df(
             project_id, well_name, req.min_depth, req.max_depth, req.zones
         )
-        nphi, rhob = _select_nphi_rhob(df, use_hc_corrected=req.use_hc_corrected)
+        nphi, rhob = _select_nphi_rhob(
+            df,
+            use_hc_corrected=req.use_hc_corrected,
+            use_enhanced=req.use_enhanced_logs,
+        )
         valid_mask = nphi.notna() & rhob.notna()
         if not valid_mask.any():
             raise ValueError(
@@ -4508,7 +4559,9 @@ def workspace_porosity(
 
         if bh_mode != "none" and active_badhole.any():
             if bh_mode in ("vsh_gr", "gr"):
-                vsh_bh_s = _compute_vsh_gr_series(df, req.gr_clean, req.gr_clay)
+                vsh_bh_s = _compute_vsh_gr_series(
+                    df, req.gr_clean, req.gr_clay, use_enhanced=req.use_enhanced_logs
+                )
                 if vsh_bh_s.isna().all() and "VCLAY" in df.columns:
                     vcl_f = pd.to_numeric(df["VCLAY"], errors="coerce").fillna(0.0)
                     vsa_f = (
@@ -5275,14 +5328,23 @@ def workspace_saturation(
             if (use_ts and "RSAND_TS" in df.columns)
             else rt_raw
         )
+        use_enh = (
+            req.use_enhanced_logs
+            and "NPHI_ENH" in df.columns
+            and df["NPHI_ENH"].notna().any()
+            and "RHOB_ENH" in df.columns
+            and df["RHOB_ENH"].notna().any()
+        )
+        nphi_col = "NPHI_ENH" if use_enh else "NPHI"
+        rhob_col = "RHOB_ENH" if use_enh else "RHOB"
         nphi = (
-            pd.to_numeric(df["NPHI"], errors="coerce")
-            if "NPHI" in df.columns
+            pd.to_numeric(df[nphi_col], errors="coerce")
+            if nphi_col in df.columns
             else pd.Series(np.nan, index=df.index, dtype=float)
         )
         rhob = (
-            pd.to_numeric(df["RHOB"], errors="coerce")
-            if "RHOB" in df.columns
+            pd.to_numeric(df[rhob_col], errors="coerce")
+            if rhob_col in df.columns
             else pd.Series(np.nan, index=df.index, dtype=float)
         )
 

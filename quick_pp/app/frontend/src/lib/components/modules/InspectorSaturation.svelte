@@ -209,6 +209,7 @@
 						swb: sp.swb,
 						rwb: sp.rwb,
 						use_thomas_stieber: useTs,
+						use_enhanced_logs: workbench.enhanceParams.useEnhancedLogs,
 						depths: cleanArr(deptArr) as number[] | undefined,
 						phit: cleanArr(phitArr),
 						vclay: cleanArr(vclayArr),

@@ -27,6 +27,18 @@ export const SINGLE_WELL_REGIONAL_DEFAULTS: Record<ParamModuleKey, Record<string
 		tempGradient: 1.5,
 		salinityPpm: 30000.0
 	},
+	'qaqc-enhance': {
+		useEnhancedLogs: false,
+		mode: 'enhance_all',
+		method: 'constrained_huber',
+		targetFwhm: null,
+		nyquistFactor: 2.0,
+		lambdaVol: 0.05,
+		morozovTau: 1.05,
+		huberDeltaMult: 2.0,
+		volumeWindow: 3.0,
+		noiseCapMult: 3.0
+	},
 	'litho-poro': {
 		litho: {
 			model: 'ssc',
@@ -110,6 +122,7 @@ export const SINGLE_WELL_REGIONAL_DEFAULTS: Record<ParamModuleKey, Record<string
 export type ParamModuleKey =
 	| 'qaqc-badhole'
 	| 'qaqc-env'
+	| 'qaqc-enhance'
 	| 'litho-poro'
 	| 'perm'
 	| 'saturation'
@@ -119,6 +132,7 @@ export type ParamModuleKey =
 export const PARAM_MODULE_KEYS: ParamModuleKey[] = [
 	'qaqc-badhole',
 	'qaqc-env',
+	'qaqc-enhance',
 	'litho-poro',
 	'perm',
 	'saturation',
@@ -129,6 +143,7 @@ export const PARAM_MODULE_KEYS: ParamModuleKey[] = [
 export const PARAM_MODULE_LABELS: Record<ParamModuleKey, string> = {
 	'qaqc-badhole': 'Badhole',
 	'qaqc-env': 'Env. Corrections',
+	'qaqc-enhance': 'Resolution Enhancement',
 	'litho-poro': 'Litho & Poro',
 	perm: 'Permeability',
 	saturation: 'Saturation',
@@ -163,6 +178,23 @@ const DEPTH_KEY_DECIMALS = 2;
 export function isParamModuleKey(k: string): k is ParamModuleKey {
 	return (PARAM_MODULE_KEYS as string[]).includes(k);
 }
+
+/**
+ * Maps the pre-`qaqc-enhance` field names (saved under `litho-poro.ts`) onto the
+ * dedicated resolution-enhancement module so existing configs keep their tuning.
+ */
+export const ENHANCE_LEGACY_KEY_MAP: Record<string, string> = {
+	useEnhancedLogs: 'useEnhancedLogs',
+	enhanceMode: 'mode',
+	enhanceMethod: 'method',
+	enhanceTargetFwhm: 'targetFwhm',
+	enhanceNyquistFactor: 'nyquistFactor',
+	enhanceLambdaVol: 'lambdaVol',
+	enhanceMorozovTau: 'morozovTau',
+	enhanceHuberDeltaMult: 'huberDeltaMult',
+	enhanceVolumeWindow: 'volumeWindow',
+	enhanceNoiseCapMult: 'noiseCapMult'
+};
 
 export function currentSelection(): ParamSelection {
 	const zones = workbench.selectedZones.length > 0 ? [...workbench.selectedZones] : null;
@@ -238,6 +270,10 @@ const REGISTRY: Record<ParamModuleKey, ParamAccessor> = {
 		get: () => clone(workbench.envCorrParams),
 		set: (p) => assignKnown(workbench.envCorrParams, p)
 	},
+	'qaqc-enhance': {
+		get: () => clone(workbench.enhanceParams),
+		set: (p) => assignKnown(workbench.enhanceParams, p)
+	},
 	'litho-poro': {
 		get: () => ({ litho: clone(workbench.lithoParams), ts: clone(workbench.tsParams) }),
 		set: (p) => {
@@ -251,6 +287,15 @@ const REGISTRY: Record<ParamModuleKey, ParamAccessor> = {
 				}
 			}
 			assignKnown(workbench.tsParams, p?.ts);
+			// Enhance settings moved out of Thomas-Stieber params into their own
+			// QAQC-scoped module; forward any legacy values so saved configs survive.
+			if (p?.ts && typeof p.ts === 'object') {
+				const legacy: Record<string, any> = {};
+				for (const [key, value] of Object.entries(ENHANCE_LEGACY_KEY_MAP)) {
+					if (key in p.ts) legacy[value] = p.ts[key];
+				}
+				if (Object.keys(legacy).length > 0) assignKnown(workbench.enhanceParams, legacy);
+			}
 		}
 	},
 	perm: {

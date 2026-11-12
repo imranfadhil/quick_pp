@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { curveDepthSeries } from '../src/lib/utils/curveDepth.ts';
+import { curveDepthSeries, enhancedVsRawSeries } from '../src/lib/utils/curveDepth.ts';
 
 const depths = [100, 101, 102, 103];
 const curves = {
@@ -46,4 +46,53 @@ test('before splicing selected runs are not mislabeled as results', () => {
 	const series = curveDepthSeries(curves, depths, [0, 1], 'GR_RUN2', 'splice',
 		['GR', 'GR_RUN2'], null);
 	assert.deepEqual(series.map((item) => item.name), ['GR (source)', 'GR_RUN2 (source)']);
+});
+
+// ---------------------------------------------------------------------------
+// Resolution enhancement: enhanced vs raw comparison series
+// ---------------------------------------------------------------------------
+
+const enhCurves = {
+	GR: [10, 20, 30, 40],
+	GR_ENH: [12, 22, 32, 42],
+	GR_RECON: [11, 21, 31, 41],
+	NPHI: [0.3, 0.31, NaN, 0.33],
+	NPHI_ENH: [0.29, 0.3, 0.32, 0.33]
+};
+
+test('enhanced vs raw pairs the raw, enhanced, and reconstruction traces per curve', () => {
+	const series = enhancedVsRawSeries(enhCurves, depths, [0, 1, 2, 3]);
+	assert.deepEqual(series.map((item) => item.raw), ['GR', 'NPHI']);
+
+	const gr = series[0];
+	assert.equal(gr.enhanced, 'GR_ENH');
+	assert.deepEqual(gr.rawPoints.x, [10, 20, 30, 40]);
+	assert.deepEqual(gr.enhPoints.x, [12, 22, 32, 42]);
+	assert.deepEqual(gr.reconPoints?.x, [11, 21, 31, 41]);
+
+	// NPHI has no *_RECON curve, so parity is omitted rather than fabricated.
+	assert.equal(series[1].reconPoints, null);
+});
+
+test('enhanced vs raw preserves nulls instead of bridging gaps', () => {
+	const series = enhancedVsRawSeries(enhCurves, depths, [0, 1, 2, 3]);
+	assert.deepEqual(series[1].rawPoints.x, [0.3, 0.31, null, 0.33]);
+	assert.deepEqual(series[1].enhPoints.x, [0.29, 0.3, 0.32, 0.33]);
+});
+
+test('enhanced vs raw can focus a single curve and ignores absent ones', () => {
+	const onlyNphi = enhancedVsRawSeries(enhCurves, depths, [0, 1, 2, 3], 'NPHI');
+	assert.deepEqual(onlyNphi.map((item) => item.raw), ['NPHI']);
+
+	const absent = enhancedVsRawSeries(enhCurves, depths, [0, 1, 2, 3], 'RHOB');
+	assert.deepEqual(absent, []);
+});
+
+test('enhanced vs raw skips curves whose enhanced output is all-null', () => {
+	const series = enhancedVsRawSeries(
+		{ GR: [1, 2], GR_ENH: [NaN, NaN] },
+		[100, 101],
+		[0, 1]
+	);
+	assert.deepEqual(series, []);
 });

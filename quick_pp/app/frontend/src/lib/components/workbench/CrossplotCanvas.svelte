@@ -13,7 +13,7 @@
 	import { fmtDepth, fmtNum } from '$lib/utils/formatters';
 	import { crossplotGroups, crossplotLabel, resolveCrossplot } from '$lib/utils/crossplots';
 	import { spectralCrossplotPoints, spectralPlotNote, spectralYAxisRange } from '$lib/utils/spectralCrossplot';
-	import { curveDepthSeries } from '$lib/utils/curveDepth';
+	import { curveDepthSeries, enhancedVsRawSeries, ENHANCED_CURVE_PAIRS } from '$lib/utils/curveDepth';
 	import { gammaEndpoints, gammaLabel } from '$lib/utils/lithology';
 	import { normalizedScalSaturation, poreThroatDistribution } from '$lib/utils/poreThroat';
 	import {
@@ -85,6 +85,12 @@
 					(Array.isArray(trace.x) ? trace.x.length > 0 : Array.isArray(trace.y) && trace.y.length > 0)
 			);
 		switch (mode) {
+		case 'enhanced-vs-raw':
+			return traces.some((trace) =>
+				trace.x?.some((value: number | null) => value !== null)
+			)
+				? null
+				: 'No resolution-enhanced curves found. Run Raw Log Resolution Enhancement in Data & QAQC first.';
 		case 'curve-depth':
 			return traces.some((trace) => trace.x?.some((value: number | null) => value !== null))
 				? null
@@ -366,6 +372,63 @@
 				}
 				baseLayout.shapes = shapes;
 			}
+			return { traces, layout: baseLayout };
+		}
+
+		if (effectiveMode === 'enhanced-vs-raw') {
+			const series = enhancedVsRawSeries(
+				wellData.curves,
+				deptAll,
+				indices,
+				workbench.enhanceCompareCurve ?? undefined			);
+			const colorFor = (raw: string) =>
+				raw === 'GR' ? '#16A34A' : raw === 'NPHI' ? '#2563EB' : '#DC2626';
+			for (const item of series) {
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: `${item.raw} (raw)`,
+					x: item.rawPoints.x,
+					y: item.rawPoints.y,
+					connectgaps: false,
+					line: { color: colorFor(item.raw), width: 1, dash: 'dot' },
+					opacity: 0.65,
+					hovertemplate: `${item.raw} raw<br>Value: %{x:.4g}<br>Depth: %{y:.2f} m<extra></extra>`
+				});
+				if (item.reconPoints) {
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: `${item.raw}_RECON`,
+						x: item.reconPoints.x,
+						y: item.reconPoints.y,
+						connectgaps: false,
+						line: { color: colorFor(item.raw), width: 1, dash: 'dash' },
+						opacity: 0.5,
+						hovertemplate: `${item.raw}_RECON<br>Value: %{x:.4g}<br>Depth: %{y:.2f} m<extra></extra>`
+					});
+				}
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: `${item.enhanced} (enhanced)`,
+					x: item.enhPoints.x,
+					y: item.enhPoints.y,
+					connectgaps: false,
+					line: { color: colorFor(item.raw), width: 1.8 },
+					hovertemplate: `${item.enhanced}<br>Value: %{x:.4g}<br>Depth: %{y:.2f} m<extra></extra>`
+				});
+			}
+			const focus = series[0];
+			baseLayout.xaxis.title = {
+				text: focus ? `${focus.label} (${getCurveUnit(focus.enhanced)})` : 'Curve value'
+			};
+			baseLayout.xaxis.fixedrange = true;
+			baseLayout.yaxis.autorange = 'reversed';
+			baseLayout.yaxis.title = { text: 'Depth (m)' };
+			baseLayout.dragmode = 'zoom';
+			baseLayout.legend = { orientation: 'h', y: -0.12, font: { size: 9 } };
+			baseLayout.uirevision = `enhanced-vs-raw-${workbench.projectId}-${workbench.wellId}`;
 			return { traces, layout: baseLayout };
 		}
 
@@ -5262,6 +5325,21 @@
 				{/each}
 			</select>
 		</div>
+
+		{#if effectiveMode === 'enhanced-vs-raw'}
+			<div class="flex items-center gap-1">
+				<span class="text-[10px] text-[var(--text-muted)]">Curve:</span>
+				<select
+					bind:value={workbench.enhanceCompareCurve}
+					class="h-5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-[11px] font-medium text-[var(--text-primary)] focus:outline-none"
+				>
+					<option value={null}>All</option>
+					{#each ENHANCED_CURVE_PAIRS as pair (pair.raw)}
+						<option value={pair.raw}>{pair.raw}</option>
+					{/each}
+				</select>
+			</div>
+		{/if}
 
 		{#if effectiveMode === 'swirr-fit'}
 			<div class="flex items-center gap-1">

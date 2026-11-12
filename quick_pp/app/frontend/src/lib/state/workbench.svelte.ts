@@ -166,16 +166,20 @@ export interface ThomasStieberParams {
 	rvShale: number;
 	rhShale: number;
 	theta: number;
+}
+
+export interface ResolutionEnhancementParams {
+	/** Opt in to feeding <CURVE>_ENH into downstream non-linear transforms. */
 	useEnhancedLogs: boolean;
-	enhanceMode: 'enhance_all' | 'match_finest';
-	enhanceMethod: 'constrained_huber' | 'wiener';
-	enhanceTargetFwhm: number | null;
-	enhanceNyquistFactor: number;
-	enhanceLambdaVol: number;
-	enhanceMorozovTau: number;
-	enhanceHuberDeltaMult: number;
-	enhanceVolumeWindow: number;
-	enhanceNoiseCapMult: number;
+	mode: 'enhance_all' | 'match_finest';
+	method: 'constrained_huber' | 'wiener';
+	targetFwhm: number | null;
+	nyquistFactor: number;
+	lambdaVol: number;
+	morozovTau: number;
+	huberDeltaMult: number;
+	volumeWindow: number;
+	noiseCapMult: number;
 }
 
 export interface SaturationModelParams {
@@ -610,6 +614,9 @@ class WorkbenchState {
 	}
 	crossplotTemplateOverride = $state<CrossplotId | 'auto'>('auto');
 
+	/** Curve focused by the 'enhanced-vs-raw' crossplot; null shows every enhanced curve. */
+	enhanceCompareCurve = $state<string | null>(null);
+
 	get crossplotContext(): CrossplotContext {
 		return this.scope === 'single-well'
 			? { scope: 'single-well', step: this.singleWellStep }
@@ -788,17 +795,20 @@ class WorkbenchState {
 		rsand: 20.0,
 		rvShale: 4.0,
 		rhShale: 1.5,
-		theta: 0.0,
+		theta: 0.0
+	});
+
+	enhanceParams = $state<ResolutionEnhancementParams>({
 		useEnhancedLogs: false,
-		enhanceMode: 'enhance_all',
-		enhanceMethod: 'constrained_huber',
-		enhanceTargetFwhm: null,
-		enhanceNyquistFactor: 2.0,
-		enhanceLambdaVol: 0.05,
-		enhanceMorozovTau: 1.05,
-		enhanceHuberDeltaMult: 2.0,
-		enhanceVolumeWindow: 3.0,
-		enhanceNoiseCapMult: 3.0
+		mode: 'enhance_all',
+		method: 'constrained_huber',
+		targetFwhm: null,
+		nyquistFactor: 2.0,
+		lambdaVol: 0.05,
+		morozovTau: 1.05,
+		huberDeltaMult: 2.0,
+		volumeWindow: 3.0,
+		noiseCapMult: 3.0
 	});
 
 	badholeParams = $state<BadholeFlaggingParams>({

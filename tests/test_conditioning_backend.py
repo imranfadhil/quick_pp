@@ -199,3 +199,73 @@ def test_resolution_enhancement_rejects_missing_curves(client_and_project):
     )
     assert response.status_code == 400
     assert "None of the requested nuclear curves" in response.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    "endpoint,payload,curve",
+    [
+        ("lithology", {"model": "ssc"}, "VCLAY"),
+        ("porosity", {"method": "den"}, "PHIT"),
+        # Saturation reads NPHI/RHOB directly only for the Juhasz Qvn route; its
+        # default CEC route inherits enhancement transitively via PHIT/VCLAY.
+        ("saturation", {"method": "waxman_smits", "qv_method": "qvn"}, "SWT"),
+    ],
+)
+def test_enhanced_logs_toggle_changes_downstream_results(
+    client_and_project, endpoint, payload, curve
+):
+    """The enhanced-logs toggle must actually change lithology, porosity, and saturation."""
+    client, pid = client_and_project
+    base = f"/quick_pp/workspace/projects/{pid}/wells/Well-A"
+
+    enh = client.post(
+        f"{base}/resolution_enhancement",
+        json={"mode": "enhance_all", "save": True},
+    )
+    assert enh.status_code == 200, enh.text
+
+    raw = client.post(
+        f"{base}/{endpoint}",
+        json={**payload, "save": False, "use_enhanced_logs": False},
+    )
+    assert raw.status_code == 200, raw.text
+    enhanced = client.post(
+        f"{base}/{endpoint}",
+        json={**payload, "save": False, "use_enhanced_logs": True},
+    )
+    assert enhanced.status_code == 200, enhanced.text
+
+    raw_vals = np.asarray(raw.json()["data"][curve], dtype=float)
+    enh_vals = np.asarray(enhanced.json()["data"][curve], dtype=float)
+    both = np.isfinite(raw_vals) & np.isfinite(enh_vals)
+    assert both.any(), f"{curve} has no overlapping finite samples"
+    assert not np.allclose(raw_vals[both], enh_vals[both], atol=1e-9), (
+        f"{curve} is unchanged by use_enhanced_logs"
+    )
+
+
+def test_enhanced_logs_toggle_drives_vsh_gr_model(client_and_project):
+    """The VSH_GR lithology model must read GR_ENH when the toggle is on."""
+    client, pid = client_and_project
+    base = f"/quick_pp/workspace/projects/{pid}/wells/Well-A"
+
+    enh = client.post(
+        f"{base}/resolution_enhancement",
+        json={"mode": "enhance_all", "save": True},
+    )
+    assert enh.status_code == 200, enh.text
+
+    payload = {"model": "vsh_gr", "gamma_source": "gr", "gr_clean": 20.0, "gr_clay": 120.0}
+    raw = client.post(f"{base}/lithology", json={**payload, "save": False})
+    assert raw.status_code == 200, raw.text
+    enhanced = client.post(
+        f"{base}/lithology",
+        json={**payload, "save": False, "use_enhanced_logs": True},
+    )
+    assert enhanced.status_code == 200, enhanced.text
+
+    raw_vals = np.asarray(raw.json()["data"]["VCLAY"], dtype=float)
+    enh_vals = np.asarray(enhanced.json()["data"]["VCLAY"], dtype=float)
+    both = np.isfinite(raw_vals) & np.isfinite(enh_vals)
+    assert both.any()
+    assert not np.allclose(raw_vals[both], enh_vals[both], atol=1e-9)

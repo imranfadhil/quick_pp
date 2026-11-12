@@ -11,6 +11,7 @@ export type CrossplotId =
 	| 'bqv'
 	| 'histogram'
 	| 'curve-depth'
+	| 'enhanced-vs-raw'
 	| 'mw-distribution'
 	| 'swirr-fit'
 	| 'shf'
@@ -47,6 +48,11 @@ export const CROSSPLOTS: readonly CrossplotDefinition[] = [
 	{
 		id: 'curve-depth',
 		label: 'Curve Editor · Log vs Depth',
+		single: { group: 'Step 1 · Data & QAQC', steps: ['qaqc'] }
+	},
+	{
+		id: 'enhanced-vs-raw',
+		label: 'Resolution Enhanced vs. Raw',
 		single: { group: 'Step 1 · Data & QAQC', steps: ['qaqc'] }
 	},
 	{

@@ -97,6 +97,81 @@
 	let confirmDeleteCurve = $state<boolean>(false);
 	let editStatusMsg = $state<string | null>(null);
 
+	// --- Resolution Enhancement (1D constrained deconvolution) State ---
+	let enhSummary = $state<{
+		target_fwhm_m: number;
+		depth_step_m: number;
+		depth_uom: string;
+		enhanced_curves: string[];
+		diagnostics: Record<
+			string,
+			{
+				intrinsic_fwhm_m: number;
+				effective_fwhm_m: number;
+				estimated_noise_std: number;
+				lambda_reg: number;
+				weighted_recon_rmse: number;
+				relative_volume_bias_pct: number;
+				converged: boolean;
+				iterations: number;
+			}
+		>;
+		alignment_lags_samples: Record<string, number>;
+		warnings: string[];
+	} | null>(null);
+
+	async function runResolutionEnhancement(persist: boolean = false) {
+		if (!workbench.projectId || !workbench.wellId) return;
+		const ep = workbench.enhanceParams;
+		wellData.isCalculating = true;
+		wellData.lastError = null;
+		try {
+			const res = await postJson<any>(
+				`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/wells/${encodeURIComponent(workbench.wellId)}/resolution_enhancement`,
+				{
+					mode: ep.mode,
+					method: ep.method,
+					target_fwhm_m: ep.targetFwhm,
+					nyquist_factor: ep.nyquistFactor,
+					lambda_vol: ep.lambdaVol,
+					morozov_tau: ep.morozovTau,
+					huber_delta_mult: ep.huberDeltaMult,
+					volume_window_m: ep.volumeWindow,
+					noise_cap_mult: ep.noiseCapMult > 0 ? ep.noiseCapMult : null,
+					min_depth: workbench.depthFilter?.min ?? null,
+					max_depth: workbench.depthFilter?.max ?? null,
+					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
+					save: persist
+				}
+			);
+			if (res.data) {
+				wellData.mergeComputedCurves(res.data, res.stats, null);
+				wellData.markModuleComputed('qaqc-enhance', res.data);
+			}
+			enhSummary = {
+				target_fwhm_m: res.target_fwhm_m,
+				depth_step_m: res.depth_step_m,
+				depth_uom: res.depth_uom,
+				enhanced_curves: res.enhanced_curves ?? [],
+				diagnostics: res.diagnostics ?? {},
+				alignment_lags_samples: res.alignment_lags_samples ?? {},
+				warnings: res.warnings ?? []
+			};
+			if (persist) {
+				await wellData.saveModuleComputed('qaqc-enhance', 'Resolution Enhancement Saved ✓');
+			}
+		} catch (e: any) {
+			wellData.lastError = e?.message || 'Resolution enhancement failed';
+		} finally {
+			wellData.isCalculating = false;
+		}
+	}
+
+	function revertResolutionEnhancement() {
+		workbench.enhanceParams.useEnhancedLogs = false;
+		enhSummary = null;
+	}
+
 	// Clear All Calculated Curves state (Full Well or By Formation)
 	let showClearCalcPanel = $state<boolean>(false);
 	let clearCalcScope = $state<'full' | 'formation' | 'filtered'>('full');
@@ -877,7 +952,7 @@
 
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
 	<div class="flex-1 overflow-y-auto">
-		<SavedParamsIndicator modules={['qaqc-badhole', 'qaqc-env']} />
+		<SavedParamsIndicator modules={['qaqc-badhole', 'qaqc-env', 'qaqc-enhance']} />
 		<ParameterSection
 			title="Well Header & Metadata"
 			badge={wellData.header?.uwi ? `UWI: ${wellData.header.uwi}` : (workbench.wellId ?? '')}
@@ -2679,6 +2754,196 @@
 					{wellData.isSaving ? 'Saving...' : 'Save'}
 				</button>
 			</div>
+		</ParameterSection>
+
+		<ParameterSection
+			title="Raw Log Resolution Enhancement"
+			badge={enhSummary ? (workbench.enhanceParams.useEnhancedLogs ? 'Enhanced · In Use' : 'Enhanced') : 'Not Run'}
+			defaultOpen={false}
+		>
+			<div class="mb-1.5 rounded-xs bg-[var(--bg-subtle)] px-2 py-1 text-[10px] leading-snug text-[var(--text-secondary)]">
+				1D constrained deconvolution harmonizes <span class="mono-num">GR</span>, <span class="mono-num">NPHI</span>, and <span class="mono-num">RHOB</span> onto a common vertical footprint before any non-linear transform. Raw curves are never modified; results are written as <span class="mono-num">*_ENH</span>, <span class="mono-num">*_RECON</span>, and <span class="mono-num">DECONV_WEIGHT</span>.
+			</div>
+
+			<div class="grid grid-cols-[1fr_148px] items-center gap-x-2 py-0.5">
+				<span class="text-xs font-medium text-[var(--text-primary)]">Target Resolution</span>
+				<select
+					bind:value={workbench.enhanceParams.mode}
+					class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
+				>
+					<option value="enhance_all">Enhance All (Nyquist)</option>
+					<option value="match_finest">Match Finest Tool</option>
+				</select>
+			</div>
+
+			<div class="grid grid-cols-[1fr_148px] items-center gap-x-2 py-0.5">
+				<span class="text-xs font-medium text-[var(--text-primary)]">Solver</span>
+				<select
+					bind:value={workbench.enhanceParams.method}
+					class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
+				>
+					<option value="constrained_huber">Constrained Huber</option>
+					<option value="wiener">Wiener (preview)</option>
+				</select>
+			</div>
+
+			<NumericScrubber
+				label="Nyquist Factor"
+				bind:value={workbench.enhanceParams.nyquistFactor}
+				unit="×Δz"
+				min={1.0}
+				max={6.0}
+				step={0.1}
+				decimals={1}
+			/>
+			<NumericScrubber
+				label="Volume Tether Weight"
+				bind:value={workbench.enhanceParams.lambdaVol}
+				unit="λv"
+				min={0}
+				max={1}
+				step={0.01}
+				decimals={2}
+			/>
+			<NumericScrubber
+				label="Morozov Target"
+				bind:value={workbench.enhanceParams.morozovTau}
+				unit="τ"
+				min={0.5}
+				max={3.0}
+				step={0.05}
+				decimals={2}
+			/>
+			<NumericScrubber
+				label="Huber Threshold"
+				bind:value={workbench.enhanceParams.huberDeltaMult}
+				unit="×σ"
+				min={0.5}
+				max={6.0}
+				step={0.1}
+				decimals={1}
+			/>
+			<NumericScrubber
+				label="Volume Window"
+				bind:value={workbench.enhanceParams.volumeWindow}
+				unit="m"
+				min={0.5}
+				max={20}
+				step={0.5}
+				decimals={1}
+			/>
+			<NumericScrubber
+				label="Noise Cap"
+				bind:value={workbench.enhanceParams.noiseCapMult}
+				unit="×floor"
+				min={0}
+				max={10}
+				step={0.1}
+				decimals={1}
+			/>
+			<div class="mb-1 text-[10px] leading-snug text-[var(--text-muted)]">
+				Cap on the MAD noise estimate as a multiple of the tool noise floor. Set to 0 to disable the cap.
+			</div>
+
+			<div class="mt-1.5 flex items-center gap-1.5">
+				<button
+					type="button"
+					disabled={wellData.isCalculating}
+					onclick={() => runResolutionEnhancement(false)}
+					class="h-7 flex-1 rounded-sm border border-indigo-700 bg-indigo-700 px-2 text-xs font-semibold text-white hover:bg-indigo-800 disabled:opacity-50"
+				>
+					{wellData.isCalculating ? 'Enhancing...' : 'Enhance Resolution'}
+				</button>
+				<button
+					type="button"
+					disabled={wellData.isCalculating || !wellData.hasPendingComputed('qaqc-enhance')}
+					onclick={() => runResolutionEnhancement(true)}
+					title={wellData.hasPendingComputed('qaqc-enhance')
+						? 'Persist the enhanced curves to the database'
+						: 'Run enhancement before saving'}
+					class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-xs font-medium text-[var(--text-secondary)] hover:bg-slate-100 disabled:opacity-50"
+				>
+					Save
+				</button>
+				{#if enhSummary}
+					<button
+						type="button"
+						onclick={revertResolutionEnhancement}
+						title="Hide the enhanced curves and revert downstream modules to the raw logs"
+						class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-xs font-medium text-[var(--text-secondary)] hover:bg-slate-100"
+					>
+						Revert
+					</button>
+				{/if}
+			</div>
+
+			{#if enhSummary}
+				<div class="mt-1.5 rounded-sm border border-indigo-200 bg-indigo-50/50 p-1.5 text-[10px]">
+					<div class="mb-1 flex items-center justify-between">
+						<span class="font-semibold text-indigo-950">
+							Target FWHM {fmtNum(enhSummary.target_fwhm_m, 3)} {enhSummary.depth_uom}
+						</span>
+						<span class="text-[var(--text-muted)]">Δz {fmtNum(enhSummary.depth_step_m, 4)}</span>
+					</div>
+					<table class="w-full text-left">
+						<thead class="text-[var(--text-muted)]">
+							<tr>
+								<th class="font-medium">Curve</th>
+								<th class="text-right font-medium">FWHM</th>
+								<th class="text-right font-medium">σ̂</th>
+								<th class="text-right font-medium">Bias</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each Object.entries(enhSummary.diagnostics) as [name, d] (name)}
+								<tr>
+									<td class="mono-num font-semibold text-slate-800">{name}</td>
+									<td class="mono-num text-right">{fmtNum(d.effective_fwhm_m, 3)}</td>
+									<td class="mono-num text-right">{fmtNum(d.estimated_noise_std, 4)}</td>
+									<td
+										class="mono-num text-right"
+										class:text-red-700={Math.abs(d.relative_volume_bias_pct) >= 0.5}
+									>
+										{fmtNum(d.relative_volume_bias_pct, 2)}%
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+					{#if Object.values(enhSummary.alignment_lags_samples).some((v) => v !== 0)}
+						<div class="mt-1 font-medium text-amber-800">
+							Depth misalignment detected:
+							{Object.entries(enhSummary.alignment_lags_samples)
+								.filter(([, v]) => v !== 0)
+								.map(([k, v]) => `${k} ${v > 0 ? '+' : ''}${v}`)
+								.join(', ')}
+							samples
+						</div>
+					{/if}
+					{#each enhSummary.warnings as w (w)}
+						<div class="mt-1 text-amber-800">{w}</div>
+					{/each}
+				</div>
+			{/if}
+
+			<label
+				class="mt-2 flex cursor-pointer items-start gap-2 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-2"
+			>
+				<input
+					type="checkbox"
+					bind:checked={workbench.enhanceParams.useEnhancedLogs}
+					class="mt-0.5 h-3.5 w-3.5 shrink-0 accent-indigo-700"
+				/>
+				<span class="text-[10px] leading-snug text-[var(--text-secondary)]">
+					<span class="font-semibold text-[var(--text-primary)]">
+						Use enhanced logs downstream
+					</span>
+					<br />
+					Feed <span class="mono-num">GR_ENH</span>/<span class="mono-num">NPHI_ENH</span>/<span class="mono-num">RHOB_ENH</span>
+					into lithology, porosity, Thomas-Stieber, and saturation instead of the raw curves. Permeability follows automatically because it consumes the
+					<span class="mono-num">PHIT</span> and <span class="mono-num">VCLAY</span> those modules produce.
+				</span>
+			</label>
 		</ParameterSection>
 
 		{#if wellData.lastError}

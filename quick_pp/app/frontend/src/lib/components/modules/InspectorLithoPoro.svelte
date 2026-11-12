@@ -97,28 +97,6 @@
 		rt_rmse_decade: number | null;
 	} | null>(null);
 
-	let enhSummary = $state<{
-		target_fwhm_m: number;
-		depth_step_m: number;
-		depth_uom: string;
-		enhanced_curves: string[];
-		diagnostics: Record<
-			string,
-			{
-				intrinsic_fwhm_m: number;
-				effective_fwhm_m: number;
-				estimated_noise_std: number;
-				lambda_reg: number;
-				weighted_recon_rmse: number;
-				relative_volume_bias_pct: number;
-				converged: boolean;
-				iterations: number;
-			}
-		>;
-		alignment_lags_samples: Record<string, number>;
-		warnings: string[];
-	} | null>(null);
-
 	let hcSummary = $state<{
 		corr_angle: number;
 		hc_flagged_count: number;
@@ -459,6 +437,7 @@
 					body: {
 						model: lp.model,
 						use_hc_corrected: useCorrected,
+						use_enhanced_logs: workbench.enhanceParams.useEnhancedLogs,
 						dry_sand_point: [lp.drySandNphi, lp.drySandRhob],
 						dry_silt_point: [lp.drySiltNphi, lp.drySiltRhob],
 						dry_clay_point: [lp.dryClayNphi, lp.dryClayRhob],
@@ -493,6 +472,7 @@
 						sonic_fluid_dt: lp.sonicFluidDt,
 						lithology_model: lp.model,
 						use_hc_corrected: useCorrected,
+						use_enhanced_logs: workbench.enhanceParams.useEnhancedLogs,
 						dry_sand_point: [lp.drySandNphi, lp.drySandRhob],
 						dry_silt_point: [lp.drySiltNphi, lp.drySiltRhob],
 						dry_clay_point: [lp.dryClayNphi, lp.dryClayRhob],
@@ -531,7 +511,7 @@
 						rv_shale: ts.rvShale,
 						rh_shale: ts.rhShale,
 						theta: ts.theta,
-						use_enhanced_logs: ts.useEnhancedLogs,
+						use_enhanced_logs: workbench.enhanceParams.useEnhancedLogs,
 						...filterArgs
 					}
 				);
@@ -581,59 +561,6 @@
 		}
 	}
 
-	async function executeResolutionEnhancement(persist: boolean = false) {
-		if (!workbench.projectId || !workbench.wellId) return;
-		const ts = workbench.tsParams;
-		wellData.isCalculating = true;
-		wellData.lastError = null;
-		try {
-			const res = await postJson<any>(
-				`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/wells/${encodeURIComponent(workbench.wellId)}/resolution_enhancement`,
-				{
-					mode: ts.enhanceMode,
-					method: ts.enhanceMethod,
-					target_fwhm_m: ts.enhanceTargetFwhm,
-					nyquist_factor: ts.enhanceNyquistFactor,
-					lambda_vol: ts.enhanceLambdaVol,
-					morozov_tau: ts.enhanceMorozovTau,
-					huber_delta_mult: ts.enhanceHuberDeltaMult,
-					volume_window_m: ts.enhanceVolumeWindow,
-					noise_cap_mult: ts.enhanceNoiseCapMult > 0 ? ts.enhanceNoiseCapMult : null,
-					min_depth: workbench.depthFilter?.min ?? null,
-					max_depth: workbench.depthFilter?.max ?? null,
-					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
-					save: persist
-				}
-			);
-			if (res.data) {
-				wellData.mergeComputedCurves(res.data, res.stats, null);
-				wellData.markModuleComputed('litho-poro', res.data);
-			}
-			enhSummary = {
-				target_fwhm_m: res.target_fwhm_m,
-				depth_step_m: res.depth_step_m,
-				depth_uom: res.depth_uom,
-				enhanced_curves: res.enhanced_curves ?? [],
-				diagnostics: res.diagnostics ?? {},
-				alignment_lags_samples: res.alignment_lags_samples ?? {},
-				warnings: res.warnings ?? []
-			};
-			ts.useEnhancedLogs = true;
-			if (persist) {
-				wellData.lastSavedMessage = 'Resolution Enhancement Saved ✓';
-			}
-		} catch (e: any) {
-			wellData.lastError = e?.message || 'Resolution enhancement failed';
-		} finally {
-			wellData.isCalculating = false;
-		}
-	}
-
-	function clearResolutionEnhancement() {
-		workbench.tsParams.useEnhancedLogs = false;
-		enhSummary = null;
-	}
-
 	async function executeThomasStieber(persist: boolean = false, chained: boolean = false) {
 		if (!workbench.projectId || !workbench.wellId) return;
 		const selectionIndices = wellData.getBrushedCalculationIndices();
@@ -663,7 +590,7 @@
 					rv_shale: ts.rvShale,
 					rh_shale: ts.rhShale,
 					theta: ts.theta,
-					use_enhanced_logs: ts.useEnhancedLogs,
+					use_enhanced_logs: workbench.enhanceParams.useEnhancedLogs,
 					min_depth: workbench.depthFilter?.min ?? null,
 					max_depth: workbench.depthFilter?.max ?? null,
 					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
@@ -1543,165 +1470,6 @@
 					Evaluates NPHI/RHOB normally without overriding washout intervals.
 				{/if}
 			</div>
-		</ParameterSection>
-
-		<ParameterSection
-			title="Raw Log Resolution Enhancement"
-			badge={workbench.tsParams.useEnhancedLogs ? 'Enhanced' : 'Raw'}
-		>
-			<div class="mb-1.5 rounded-xs bg-[var(--bg-subtle)] px-2 py-1 text-[10px] leading-snug text-[var(--text-secondary)]">
-				1D constrained deconvolution harmonizes <span class="mono-num">GR</span>, <span class="mono-num">NPHI</span>, and <span class="mono-num">RHOB</span> onto a common vertical footprint before Thomas-Stieber. Raw curves are never modified; results are written as <span class="mono-num">*_ENH</span>, <span class="mono-num">*_RECON</span>, and <span class="mono-num">DECONV_WEIGHT</span>.
-			</div>
-
-			<div class="grid grid-cols-[1fr_148px] items-center gap-x-2 py-0.5">
-				<span class="text-xs font-medium text-[var(--text-primary)]">Target Resolution</span>
-				<select
-					bind:value={workbench.tsParams.enhanceMode}
-					class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
-				>
-					<option value="enhance_all">Enhance All (Nyquist)</option>
-					<option value="match_finest">Match Finest Tool</option>
-				</select>
-			</div>
-
-			<div class="grid grid-cols-[1fr_148px] items-center gap-x-2 py-0.5">
-				<span class="text-xs font-medium text-[var(--text-primary)]">Solver</span>
-				<select
-					bind:value={workbench.tsParams.enhanceMethod}
-					class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
-				>
-					<option value="constrained_huber">Constrained Huber</option>
-					<option value="wiener">Wiener (preview)</option>
-				</select>
-			</div>
-
-			<NumericScrubber
-				label="Nyquist Factor"
-				bind:value={workbench.tsParams.enhanceNyquistFactor}
-				unit="×Δz"
-				min={1.0}
-				max={6.0}
-				step={0.1}
-				decimals={1}
-			/>
-			<NumericScrubber
-				label="Volume Tether Weight"
-				bind:value={workbench.tsParams.enhanceLambdaVol}
-				unit="λv"
-				min={0}
-				max={1}
-				step={0.01}
-				decimals={2}
-			/>
-			<NumericScrubber
-				label="Morozov Target"
-				bind:value={workbench.tsParams.enhanceMorozovTau}
-				unit="τ"
-				min={0.5}
-				max={3.0}
-				step={0.05}
-				decimals={2}
-			/>
-			<NumericScrubber
-				label="Huber Threshold"
-				bind:value={workbench.tsParams.enhanceHuberDeltaMult}
-				unit="×σ"
-				min={0.5}
-				max={6.0}
-				step={0.1}
-				decimals={1}
-			/>
-			<NumericScrubber
-				label="Volume Window"
-				bind:value={workbench.tsParams.enhanceVolumeWindow}
-				unit="m"
-				min={0.5}
-				max={20}
-				step={0.5}
-				decimals={1}
-			/>
-			<NumericScrubber
-				label="Noise Cap"
-				bind:value={workbench.tsParams.enhanceNoiseCapMult}
-				unit="×floor"
-				min={0}
-				max={10}
-				step={0.1}
-				decimals={1}
-			/>
-			<div class="mb-1 text-[10px] leading-snug text-[var(--text-muted)]">
-				Cap on the MAD noise estimate as a multiple of the tool noise floor. Set to 0 to disable the cap.
-			</div>
-
-			<div class="mt-1.5 flex items-center gap-1.5">
-				<button
-					type="button"
-					disabled={wellData.isCalculating}
-					onclick={() => executeResolutionEnhancement(false)}
-					class="h-7 flex-1 rounded-sm border border-indigo-700 bg-indigo-700 px-2 text-xs font-semibold text-white hover:bg-indigo-800 disabled:opacity-50"
-				>
-					{wellData.isCalculating ? 'Enhancing...' : 'Enhance Resolution'}
-				</button>
-				{#if enhSummary}
-					<button
-						type="button"
-						onclick={clearResolutionEnhancement}
-						title="Revert Thomas-Stieber to raw logs and hide enhanced curves"
-						class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-xs font-medium text-[var(--text-secondary)] hover:bg-slate-100"
-					>
-						Revert
-					</button>
-				{/if}
-			</div>
-
-			{#if enhSummary}
-				<div class="mt-1.5 rounded-sm border border-indigo-200 bg-indigo-50/50 p-1.5 text-[10px]">
-					<div class="mb-1 flex items-center justify-between">
-						<span class="font-semibold text-indigo-950">
-							Target FWHM {fmtNum(enhSummary.target_fwhm_m, 3)} {enhSummary.depth_uom}
-						</span>
-						<span class="text-[var(--text-muted)]">Δz {fmtNum(enhSummary.depth_step_m, 4)}</span>
-					</div>
-					<table class="w-full text-left">
-						<thead class="text-[var(--text-muted)]">
-							<tr>
-								<th class="font-medium">Curve</th>
-								<th class="text-right font-medium">FWHM</th>
-								<th class="text-right font-medium">σ̂</th>
-								<th class="text-right font-medium">Bias</th>
-							</tr>
-						</thead>
-						<tbody>
-							{#each Object.entries(enhSummary.diagnostics) as [name, d] (name)}
-								<tr>
-									<td class="mono-num font-semibold text-slate-800">{name}</td>
-									<td class="mono-num text-right">{fmtNum(d.effective_fwhm_m, 3)}</td>
-									<td class="mono-num text-right">{fmtNum(d.estimated_noise_std, 4)}</td>
-									<td
-										class="mono-num text-right"
-										class:text-red-700={Math.abs(d.relative_volume_bias_pct) >= 0.5}
-									>
-										{fmtNum(d.relative_volume_bias_pct, 2)}%
-									</td>
-								</tr>
-							{/each}
-						</tbody>
-					</table>
-					{#if Object.values(enhSummary.alignment_lags_samples).some((v) => v !== 0)}
-						<div class="mt-1 font-medium text-amber-800">
-							Depth misalignment detected:
-							{Object.entries(enhSummary.alignment_lags_samples)
-								.filter(([, v]) => v !== 0)
-								.map(([k, v]) => `${k} ${v > 0 ? '+' : ''}${v}`)
-								.join(', ')}
-							samples
-						</div>
-					{/if}
-					{#each enhSummary.warnings as w (w)}
-						<div class="mt-1 text-amber-800">{w}</div>
-					{/each}
-				</div>
-			{/if}
 		</ParameterSection>
 
 		<ParameterSection

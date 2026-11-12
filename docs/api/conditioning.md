@@ -126,6 +126,7 @@ result = harmonize_nuclear_logs(
     depth_col="DEPTH",
     mode="enhance_all",          # or "match_finest"
     method="constrained_huber",  # or "wiener" for a fast preview
+    noise_cap_mult=3.0,          # None disables the MAD noise cap
 )
 
 result.df["GR_ENH"]        # enhanced GR
@@ -154,11 +155,30 @@ harmonization.
 
 ## Workspace integration
 
-The single-well lithology section exposes this through
+The single-well **Data & QAQC** step exposes this through
 `POST /quick_pp/workspace/projects/{project_id}/wells/{well_name}/resolution_enhancement`.
-The Thomas-Stieber endpoint accepts `use_enhanced_logs=true` to consume
-`GR_ENH`/`NPHI_ENH`/`RHOB_ENH` instead of the raw curves. Enhanced curves appear
-in the QAQC & Conditioning curve group and can be overlaid on the GR and
-neutron-density tracks.
+It is a raw-log conditioning step, so it lives alongside Badhole Flagging and
+Environmental Corrections rather than inside any single downstream module, and
+its outputs are grouped under the QAQC & Conditioning curve group.
+
+`use_enhanced_logs=true` makes the downstream evaluators consume
+`GR_ENH`/`NPHI_ENH`/`RHOB_ENH` instead of the raw curves. It is honored by:
+
+| Endpoint | How the enhanced curves enter |
+| --- | --- |
+| `thomas_stieber` | NPHI/RHOB via `_select_nphi_rhob` |
+| `lithology` | NPHI/RHOB for SSC and multi-mineral; GR for VSH_GR and badhole repair |
+| `porosity` | NPHI/RHOB via `_select_nphi_rhob` |
+| `saturation` | NPHI/RHOB for the Juhasz Qvn route; inherits enhancement transitively elsewhere through PHIT/VCLAY |
+
+Permeability takes no flag of its own: it consumes only `PHIT`, `VCLAY`, and
+`VSILT`, so it follows whatever the lithology and porosity runs produced.
+
+The toggle is explicit and defaults to off, so enhancement is always a
+deliberate choice rather than an implicit side effect of running it. The
+**Resolution Enhanced vs. Raw** crossplot in the right pane renders each nuclear
+curve against depth with the raw trace, the enhanced trace, and the
+forward-convolved `*_RECON` parity curve, which makes the deconvolution
+verifiable rather than merely asserted.
 
 ::: quick_pp.conditioning
