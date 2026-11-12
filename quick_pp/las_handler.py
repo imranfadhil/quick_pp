@@ -1389,6 +1389,19 @@ def extract_las_metadata(
     mud_filtrate_density, _ = _find_float(
         ["MF_DENSITY", "MUD_FILTRATE_DENSITY", "MFDEN", "MF_RHO", "MFRHO"]
     )
+    mud_type_raw = _find_str(
+        ["MUD_TYPE", "MUDTYPE", "MUD_SYSTEM", "MUDSYS", "MUD"]
+    )
+    mud_type = None
+    if mud_type_raw:
+        _mt = str(mud_type_raw).strip().upper()
+        if "OBM" in _mt or "SBM" in _mt or "OIL" in _mt or "SYNTH" in _mt:
+            mud_type = "OBM"
+        elif "WBM" in _mt or "WATER" in _mt or "FRESH" in _mt or "BRINE" in _mt:
+            mud_type = "WBM"
+    obm_base_density, _ = _find_float(
+        ["OBM_DENSITY", "OBM_BASE_DENSITY", "BASE_OIL_DENSITY", "SBM_DENSITY"]
+    )
 
     lat_aliases = ["LATI", "LAT", "LATITUDE", "SURF_LAT", "SLAT", "Y_LAT"]
     lon_aliases = [
@@ -1529,6 +1542,8 @@ def extract_las_metadata(
         mud_weight=mud_density,
         mud_filtrate_salinity=mud_filtrate_salinity,
         mud_filtrate_density=mud_filtrate_density,
+        mud_type=mud_type,
+        obm_base_density=obm_base_density,
         raw_well_header=_sanitize_json_value(
             {
                 k: v.get("value")

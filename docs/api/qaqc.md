@@ -6,6 +6,16 @@ Environmental correction outputs use distinct `*_ENV_CORR` mnemonics. Density re
 has its own `RHOB_DEN_CORR` output.
 They remain preview/derived curves; downstream calculations do not select them automatically.
 
+## Mud system metadata
+
+The QAQC Well Header panel stores the run-level mud system used by the
+continuous fluid-density engine: `mud_type` (`WBM`/`OBM`/`SBM`) and
+`obm_base_density` (g/cc), alongside the existing `rmf`,
+`mud_filtrate_salinity`, and `mud_filtrate_density` fields. These are read from
+the LAS header where present and can be overridden per well. See
+[Porosity Evaluation](porosity.md#continuous-apparent-fluid-density-rho_fl) for
+how they feed the $\rho_{fl}$ solver.
+
 ## Hydrocarbon correction targets
 
 The crossplot and standard invaded-zone hydrocarbon corrections default to

@@ -1,9 +1,11 @@
 import { postJson } from '$lib/api/client';
 import { wellData } from '$lib/state/wellData.svelte';
 import { workbench } from '$lib/state/workbench.svelte';
-import { thomasStieberAvailable } from '$lib/utils/lithology';
+import { fluidDensityParameters, thomasStieberAvailable } from '$lib/utils/lithology';
 
 export interface MethodComparison {
+	/** Continuous rho_fl engine QC curves (RHO_FL, RHO_MF, SXO_EST, PHID_RAW_100, RHO_FL_TIER). */
+	rho_fl_diagnostics?: Partial<Record<string, (number | null)[]>> | null;
 	depth: number[];
 	curves: Partial<Record<string, (number | null)[]>>;
 	errors: Partial<Record<string, string>>;
@@ -29,6 +31,7 @@ export function comparisonRequest(kind: 'porosity' | 'permeability') {
 			dry_silt_point: [lp.drySiltNphi, lp.drySiltRhob],
 			dry_clay_point: [lp.dryClayNphi, lp.dryClayRhob],
 			fluid_point: [lp.fluidNphi, lp.fluidRhob],
+			fluid_density: fluidDensityParameters(lp),
 			silt_line_angle: lp.siltLineAngle,
 			sonic_fluid_dt: lp.sonicFluidDt,
 			gr_clean: lp.grClean,

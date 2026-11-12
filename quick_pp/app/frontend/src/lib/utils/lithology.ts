@@ -137,3 +137,35 @@ export function gammaParameters(lp: LithoEndpointParams) {
 		cgr_k_coefficient: lp.cgrKCoefficient
 	};
 }
+
+/**
+ * Build the continuous apparent fluid density (RHO_FL) engine payload.
+ * Returns `undefined` for the legacy static mode so the backend keeps using
+ * the scalar `fluid_point` density.
+ */
+export function fluidDensityParameters(lp: LithoEndpointParams) {
+	if (lp.fluidDensityMode === 'static') return undefined;
+	const isObm = lp.fluidDensityMudType !== 'WBM';
+	return {
+		mode: lp.fluidDensityMode,
+		static_rho_fl: lp.fluidRhob,
+		mud_type: lp.fluidDensityMudType,
+		mud_salinity_ppm: isObm ? null : lp.fluidDensitySalinityPpm,
+		rmf_surface: isObm ? null : lp.fluidDensityRmf > 0 ? lp.fluidDensityRmf : null,
+		rmf_meas_temp_c: lp.fluidDensityRmfTempC,
+		obm_filtrate_density: lp.fluidDensityObmBase,
+		rxo_curve: lp.fluidDensityRxoCurve ? lp.fluidDensityRxoCurve : null,
+		rt_curve: lp.fluidDensityRtCurve || 'RT',
+		flush_exponent: lp.fluidDensityFlushExponent,
+		water_salinity_ppm: lp.fluidSalinityPpm,
+		oil_api: lp.fluidOilApi,
+		gas_gravity: lp.fluidGasGravity,
+		gor_scf_stb: lp.fluidGor,
+		default_shr_gas: lp.fluidDensityShrGas,
+		default_shr_oil: lp.fluidDensityShrOil,
+		temp_grad: lp.fluidTempGrad,
+		surf_temp: lp.fluidSurfTemp,
+		pres_grad: lp.fluidPresGrad,
+		surf_pres: lp.fluidSurfPres
+	};
+}

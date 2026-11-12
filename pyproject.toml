@@ -94,6 +94,7 @@ ml = [
     "pyarrow",
     "scikit-learn",
     "seaborn>=0.12",
+    "protobuf<5.0.0"
 ]
 app = [
     "email-validator",

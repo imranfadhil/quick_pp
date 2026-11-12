@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm.attributes import flag_modified
 
+from quick_pp.app.backend.schemas.fluid_density import FluidDensityConfig
 from quick_pp.app.backend.services.database import (
     _ephemeral_well_headers,
     _ephemeral_wells,
@@ -41,8 +42,8 @@ from quick_pp.app.backend.services.database import (
 from quick_pp.app.backend.services.rock_typing import _compute_fzi_data_sync
 from quick_pp.app.backend.utils.auth import is_demo_mode
 from quick_pp.app.backend.utils.db import get_db
-from quick_pp.config import Config
 from quick_pp.conditioning import DEFAULT_NOISE_CAP_MULT, harmonize_nuclear_logs
+from quick_pp.config import Config
 from quick_pp.core_analysis import (
     auto_cuddy_params,
     auto_j_params,
@@ -75,6 +76,7 @@ from quick_pp.permeability import (
 from quick_pp.porosity import (
     calc_secondary_porosity,
     density_porosity,
+    estimate_continuous_rho_fluid,
     estimate_shale_porosity,
     neu_den_xplot_poro,
     porosity_correction_averaging,
@@ -582,6 +584,280 @@ def _compute_coal_mask(
         ).fillna(False)
 
 
+def _resolve_fluid_zone_array(
+    df: pd.DataFrame,
+    depth: pd.Series,
+    contacts: Optional[List[Dict[str, Any]]] = None,
+) -> np.ndarray:
+    """Classify each depth sample as 'GAS', 'OIL', or 'WATER' from fluid contacts.
+
+    Contacts are interpreted as TVDSS depths and mapped onto the sample depths via
+    the well's TVDSS curve when available, otherwise the depths are used directly.
+    Samples above the shallowest hydrocarbon contact are gas, samples between the
+    gas and water contacts are oil, and samples below the deepest water contact are
+    water. When no usable contacts exist every sample is left unclassified ('').
+    """
+    n = len(df)
+    zone = np.full(n, "", dtype=object)
+    if not contacts:
+        return zone
+
+    def _contact_depth(name: str) -> Optional[float]:
+        for c in contacts:
+            c_name = str(c.get("name") or c.get("type") or "").strip().upper()
+            if c_name == name and c.get("depth") is not None:
+                try:
+                    return float(c["depth"])
+                except (TypeError, ValueError):
+                    return None
+        return None
+
+    goc = _contact_depth("GOC")
+    owc = _contact_depth("OWC")
+    gwc = _contact_depth("GWC")
+    fwl = _contact_depth("FWL")
+    if goc is None and owc is None and gwc is None and fwl is None:
+        return zone
+
+    tvdss_col = next(
+        (c for c in ("TVDSS", "TVD_SS", "DEPT_TVDSS", "DEPTH_TVDSS") if c in df.columns),
+        None,
+    )
+    if tvdss_col is not None:
+        ref = pd.to_numeric(df[tvdss_col], errors="coerce")
+        ref = ref.where(ref.notna(), depth)
+    else:
+        ref = depth
+    ref_arr = ref.to_numpy(dtype=float)
+
+    gas_base = goc if goc is not None else gwc
+    water_top = owc if owc is not None else gwc
+    if water_top is None:
+        water_top = fwl
+
+    with np.errstate(invalid="ignore"):
+        if gas_base is not None:
+            zone = np.where(ref_arr < gas_base, "GAS", zone)
+        if water_top is not None:
+            zone = np.where(ref_arr > water_top, "WATER", zone)
+        if gas_base is not None and water_top is not None:
+            zone = np.where(
+                (ref_arr >= gas_base) & (ref_arr <= water_top), "OIL", zone
+            )
+        elif gas_base is None and water_top is not None:
+            zone = np.where(ref_arr <= water_top, "OIL", zone)
+    return zone
+
+
+def _compute_continuous_rho_fluid(
+    df: pd.DataFrame,
+    depth: pd.Series,
+    rhob_v: np.ndarray,
+    rho_ma: np.ndarray,
+    cfg: FluidDensityConfig,
+    well_header: Optional[Dict[str, Any]] = None,
+    contacts: Optional[List[Dict[str, Any]]] = None,
+    badhole_mask: Optional[pd.Series] = None,
+) -> Dict[str, np.ndarray]:
+    """Run the continuous RHO_FL engine for the valid samples of a well.
+
+    Returns depth-aligned arrays for ``PHID``, ``PHID_RAW_100``, ``RHO_FL``,
+    ``RHO_MF``, ``SXO_EST``, and ``RHO_FL_TIER``. ``PHID`` falls back to the
+    static density porosity when the engine cannot produce a finite value.
+    """
+    from quick_pp.fluid_type import estimate_fluid_properties
+    from quick_pp.saturation import estimate_rw_temperature_salinity
+
+    n = len(rhob_v)
+    header = well_header or {}
+    mud_type = str(cfg.mud_type).upper()
+
+    # Depth reference for the P-T profile: prefer TVDSS/TVD, else measured depth.
+    tvd_col = next(
+        (c for c in ("TVDSS", "TVD_SS", "TVD", "DEPT_TVDSS", "DEPTH_TVDSS") if c in df.columns),
+        None,
+    )
+    if tvd_col is not None:
+        tvd_v = pd.to_numeric(df[tvd_col], errors="coerce").to_numpy(dtype=float)
+        tvd_v = np.where(np.isfinite(tvd_v), tvd_v, depth.to_numpy(dtype=float))
+    else:
+        tvd_v = depth.to_numpy(dtype=float)
+
+    temp_curve = None
+    pres_curve = None
+    for name in ("TEMP", "TEMPERATURE"):
+        if name in df.columns:
+            temp_curve = pd.to_numeric(df[name], errors="coerce").to_numpy(dtype=float)
+            break
+    for name in ("PRES", "PRESSURE"):
+        if name in df.columns:
+            pres_curve = pd.to_numeric(df[name], errors="coerce").to_numpy(dtype=float)
+            break
+
+    fluids = estimate_fluid_properties(
+        tvd=tvd_v,
+        temp_grad=cfg.temp_grad,
+        surf_temp=cfg.surf_temp,
+        pres_grad=cfg.pres_grad,
+        surf_pres=cfg.surf_pres,
+        gas_gravity=cfg.gas_gravity,
+        oil_api=cfg.oil_api,
+        gor=cfg.gor_scf_stb * 0.1781076067,  # scf/stb -> Sm3/Sm3
+        salinity_ppm=cfg.water_salinity_ppm,
+        temp_curve=temp_curve,
+        pres_curve=pres_curve,
+    )
+    temp_arr = np.asarray(fluids["TEMP_FL"], dtype=float)
+    pres_arr = np.asarray(fluids["PRES_FL"], dtype=float)
+
+    # Apparent hydrocarbon density: blend oil/gas apparent densities using the
+    # OIL_FLAG/GAS_FLAG (or VOIL/VGAS) weights when present, else default to oil.
+    def _weight(name: str) -> Optional[np.ndarray]:
+        col = next((c for c in df.columns if str(c).upper() == name), None)
+        if col is None:
+            return None
+        vals = pd.to_numeric(df[col], errors="coerce").to_numpy(dtype=float)
+        return np.maximum(np.nan_to_num(vals, nan=0.0), 0.0)
+
+    oil_w = _weight("OIL_FLAG")
+    if oil_w is None:
+        oil_w = _weight("VOIL")
+    gas_w = _weight("GAS_FLAG")
+    if gas_w is None:
+        gas_w = _weight("VGAS")
+    if oil_w is None and gas_w is None:
+        oil_frac = np.ones(n, dtype=float)
+        gas_frac = np.zeros(n, dtype=float)
+    else:
+        oil_w = oil_w if oil_w is not None else np.zeros(n, dtype=float)
+        gas_w = gas_w if gas_w is not None else np.zeros(n, dtype=float)
+        total_w = oil_w + gas_w
+        oil_frac = np.divide(
+            oil_w, total_w, out=np.ones_like(oil_w), where=total_w > 0
+        )
+        gas_frac = np.divide(
+            gas_w, total_w, out=np.zeros_like(gas_w), where=total_w > 0
+        )
+    rho_h_app = (
+        oil_frac * np.asarray(fluids["RHO_O_APP"], dtype=float)
+        + gas_frac * np.asarray(fluids["RHO_G_APP"], dtype=float)
+    )
+    rho_h_app = np.where(np.isfinite(rho_h_app), rho_h_app, 0.75)
+
+    # Mud-filtrate salinity: explicit config > well header > surface Rmf.
+    salinity_ppm = cfg.mud_salinity_ppm
+    if salinity_ppm is None:
+        hdr_sal = header.get("mud_filtrate_salinity")
+        if hdr_sal is not None:
+            try:
+                salinity_ppm = float(hdr_sal)
+            except (TypeError, ValueError):
+                salinity_ppm = None
+    rmf_surface = cfg.rmf_surface
+    if rmf_surface is None:
+        hdr_rmf = header.get("rmf")
+        if hdr_rmf is not None:
+            try:
+                rmf_surface = float(hdr_rmf)
+            except (TypeError, ValueError):
+                rmf_surface = None
+    rmf_temp_c = cfg.rmf_meas_temp_c
+    hdr_rmf_temp = header.get("rmf_temp")
+    if hdr_rmf_temp is not None:
+        try:
+            rmf_temp_c = float(hdr_rmf_temp)
+        except (TypeError, ValueError):
+            rmf_temp_c = cfg.rmf_meas_temp_c
+
+    obm_base = cfg.obm_filtrate_density
+    hdr_mf_density = header.get("mud_filtrate_density")
+    if mud_type in ("OBM", "SBM") and hdr_mf_density is not None:
+        try:
+            obm_base = float(hdr_mf_density)
+        except (TypeError, ValueError):
+            obm_base = cfg.obm_filtrate_density
+
+    # Resistivity curves for the tier routing.
+    def _curve(name: Optional[str]) -> Optional[np.ndarray]:
+        if not name:
+            return None
+        col = name if name in df.columns else None
+        if col is None:
+            upper = name.upper()
+            col = next((c for c in df.columns if str(c).upper() == upper), None)
+        if col is None:
+            return None
+        vals = pd.to_numeric(df[col], errors="coerce").to_numpy(dtype=float)
+        return vals if np.isfinite(vals).any() else None
+
+    rxo = _curve(cfg.rxo_curve)
+    rt = _curve(cfg.rt_curve)
+
+    # Downhole Rw for the Sw fallback.
+    if cfg.rw is not None and cfg.rw > 0:
+        rw_downhole = np.full(n, float(cfg.rw), dtype=float)
+    else:
+        rw_downhole = np.asarray(
+            estimate_rw_temperature_salinity(temp_arr, max(cfg.water_salinity_ppm, 100.0)),
+            dtype=float,
+        ).ravel()
+
+    # Downhole Rmf for the Tier 1 Archie Sxo.
+    rmf_downhole = None
+    if mud_type == "WBM":
+        if salinity_ppm is not None:
+            from quick_pp.fluid_type import brine_density
+
+            rho_mf_probe = brine_density(temp_arr, pres_arr, salinity_ppm)
+            rmf_downhole = np.where(
+                rho_mf_probe > 0, 0.9 / np.maximum(rho_mf_probe, 0.5), np.nan
+            )
+        elif rmf_surface is not None and rmf_surface > 0:
+            rmf_downhole = np.asarray(
+                estimate_rw_temperature_salinity(temp_arr, max(salinity_ppm or 0.0, 100.0))
+                if salinity_ppm
+                else np.full(n, rmf_surface, dtype=float),
+                dtype=float,
+            ).ravel()
+
+    fluid_zone = _resolve_fluid_zone_array(df, depth, contacts)
+    badhole_arr = (
+        badhole_mask.to_numpy(dtype=bool)
+        if badhole_mask is not None
+        else np.zeros(n, dtype=bool)
+    )
+
+    result = estimate_continuous_rho_fluid(
+        rhob=rhob_v,
+        rhoma=rho_ma,
+        tvd=tvd_v,
+        temp_c=temp_arr,
+        pressure_mpa=pres_arr,
+        mud_type=mud_type,
+        salinity_ppm=salinity_ppm,
+        rmf=rmf_surface,
+        rmf_temp_c=rmf_temp_c,
+        obm_base_density=obm_base,
+        rho_w=None,
+        rho_h_app=rho_h_app,
+        rxo=rxo,
+        rt=rt,
+        rmf_downhole=rmf_downhole,
+        rw_downhole=rw_downhole,
+        badhole_flag=badhole_arr,
+        fluid_zone=fluid_zone,
+        a=cfg.a,
+        m=cfg.m,
+        n=cfg.n,
+        flush_exponent=cfg.flush_exponent,
+        default_shr_gas=cfg.default_shr_gas,
+        default_shr_oil=cfg.default_shr_oil,
+        max_iter=cfg.max_iter,
+        tol=cfg.tol,
+    )
+    return result
+
+
 def _resolve_badhole_mask(
     df: pd.DataFrame, auto_detect_if_missing: bool = False
 ) -> pd.Series:
@@ -972,6 +1248,13 @@ class WorkspacePorosityRequest(WorkspaceFilterBase, GammaParameters):
     badhole_treatment: str = Field(
         "none",
         description="How to treat BADHOLE intervals: 'none', 'vsh_gr', 'interpolate', or 'ignore'",
+    )
+    fluid_density: Optional[FluidDensityConfig] = Field(
+        None,
+        description=(
+            "Continuous apparent fluid density (RHO_FL) engine configuration. "
+            "When omitted or mode='static', the legacy scalar fluid_point density is used."
+        ),
     )
 
 
@@ -4519,6 +4802,59 @@ def workspace_porosity(
             density_porosity(rhob_v, rho_ma, req.fluid_point[1]), dtype=float
         )
 
+        # Continuous apparent fluid density (RHO_FL) engine. When active it replaces
+        # the static density porosity with the iteratively corrected PHID and emits
+        # the diagnostic RHO_FL / RHO_MF / SXO_EST / PHID_RAW_100 / RHO_FL_TIER curves.
+        rho_fl_curves: Dict[str, np.ndarray] = {}
+        fd_cfg = req.fluid_density
+        if fd_cfg is not None and fd_cfg.mode != "static":
+            well_header: Dict[str, Any] = {}
+            contacts: List[Dict[str, Any]] = []
+            try:
+                with get_db() as session:
+                    proj = db_objects.Project.load(session, project_id=project_id)
+                    well_obj = proj.get_well(
+                        resolve_db_well_name(project_id, well_name)
+                    )
+                    if well_obj._orm_well and isinstance(
+                        well_obj._orm_well.header_data, dict
+                    ):
+                        well_header = dict(well_obj._orm_well.header_data)
+                    contacts_df = well_obj.get_fluid_contacts()
+                    if isinstance(contacts_df, pd.DataFrame) and not contacts_df.empty:
+                        contacts = contacts_df.to_dict(orient="records")
+            except Exception:
+                well_header = {}
+                contacts = []
+            eph_hdr = _ephemeral_well_headers.get((project_id, well_name))
+            if eph_hdr:
+                well_header = {**well_header, **eph_hdr}
+
+            bh_mask = _resolve_badhole_mask(df, auto_detect_if_missing=False)
+            rho_fl_result = _compute_continuous_rho_fluid(
+                df=df.loc[valid_mask],
+                depth=df.loc[valid_mask, "DEPTH"],
+                rhob_v=rhob_v,
+                rho_ma=rho_ma,
+                cfg=fd_cfg,
+                well_header=well_header,
+                contacts=contacts,
+                badhole_mask=bh_mask.loc[valid_mask],
+            )
+            phid_engine = np.asarray(rho_fl_result["PHID"], dtype=float)
+            phid_v = np.where(np.isfinite(phid_engine), phid_engine, phid_v)
+            rho_fl_curves = {
+                "RHO_FL": np.asarray(rho_fl_result["RHO_FL"], dtype=float),
+                "RHO_MF": np.asarray(rho_fl_result["RHO_MF"], dtype=float),
+                "SXO_EST": np.asarray(rho_fl_result["SXO_EST"], dtype=float),
+                "PHID_RAW_100": np.asarray(
+                    rho_fl_result["PHID_RAW_100"], dtype=float
+                ),
+                "RHO_FL_TIER": np.asarray(
+                    rho_fl_result["RHO_FL_TIER"], dtype=float
+                ),
+            }
+
         if req.method.lower() == "neu_den":
             phit_v = np.asarray(
                 neu_den_xplot_poro(
@@ -4832,6 +5168,10 @@ def workspace_porosity(
                 "CPORE": cpore_s,
             }
         )
+        for _name, _arr in rho_fl_curves.items():
+            _col = pd.Series(np.nan, index=df.index, dtype=float)
+            _col.loc[valid_mask] = _arr
+            out_df[_name] = _col
 
         # Core comparison metrics (exclude coal and badhole intervals)
         core_mask = (
@@ -4860,6 +5200,14 @@ def workspace_porosity(
                     core_metrics["r2"] = round(float(1.0 - ss_res / ss_tot), 4)
 
         save_poro_cols = ["DEPTH", "PHIT", "PHIE", "PHID", "RHOM"]
+        if rho_fl_curves:
+            save_poro_cols = save_poro_cols + [
+                "RHO_FL",
+                "RHO_MF",
+                "SXO_EST",
+                "PHID_RAW_100",
+                "RHO_FL_TIER",
+            ]
         save_row_mask = valid_mask | active_badhole
         saved_rows = 0
         if req.save:
@@ -4893,6 +5241,8 @@ def workspace_porosity(
                 else None,
                 "fluid_point": list(req.fluid_point) if req.fluid_point else None,
                 "badhole_treatment": bh_mode,
+                "fluid_density_mode": fd_cfg.mode if fd_cfg else "static",
+                "fluid_density_mud_type": fd_cfg.mud_type if fd_cfg else None,
             },
             persist_db=bool(req.save),
         )
@@ -4904,10 +5254,15 @@ def workspace_porosity(
             "saved": req.save,
             "saved_rows": saved_rows,
             "core_metrics": core_metrics,
+            "fluid_density_mode": fd_cfg.mode if fd_cfg else "static",
             "stats": {
                 "PHIT": _curve_summary_stats(phit_s),
                 "PHIE": _curve_summary_stats(phie_s),
                 "PHID": _curve_summary_stats(phid_s),
+                **{
+                    name: _curve_summary_stats(out_df[name])
+                    for name in rho_fl_curves
+                },
             },
             **dataframe_to_columnar(out_df),
         }
@@ -4953,6 +5308,10 @@ def workspace_porosity_comparison(
         curves: Dict[str, Any] = {}
         errors: Dict[str, str] = {}
         rhom: Optional[List[Any]] = None
+        # Continuous rho_fl engine diagnostics are QC outputs, not well-log curves.
+        # They are surfaced only in the porosity comparison plot.
+        rho_fl_diagnostics: Dict[str, Any] = {}
+        active_method = req.method.lower()
         for method in methods:
             isolated = _IsolatedEvaluation(project_id, well_name, baseline.copy())
             token = _isolated_evaluation.set(isolated)
@@ -4965,6 +5324,17 @@ def workspace_porosity_comparison(
                 curves[method] = result["data"]["PHIT"]
                 if rhom is None:
                     rhom = result["data"].get("RHOM")
+                if not rho_fl_diagnostics or method == active_method:
+                    for name in (
+                        "RHO_FL",
+                        "RHO_MF",
+                        "SXO_EST",
+                        "PHID",
+                        "PHID_RAW_100",
+                        "RHO_FL_TIER",
+                    ):
+                        if name in result["data"]:
+                            rho_fl_diagnostics[name] = result["data"][name]
             except HTTPException as exc:
                 if exc.status_code != 400:
                     raise
@@ -4977,6 +5347,7 @@ def workspace_porosity_comparison(
             "errors": errors,
             "rhom": rhom,
             "rho_fluid": float(req.fluid_point[1]),
+            "rho_fl_diagnostics": _sanitize_for_json(rho_fl_diagnostics),
         }
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

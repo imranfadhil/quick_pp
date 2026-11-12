@@ -593,7 +593,7 @@ def deconvolve_curve_1d(
     all_converged = True
     chosen_lambda = float(lambda_reg) if lambda_reg is not None else float(sigma_n)
 
-    for s, e in zip(starts, ends):
+    for s, e in zip(starts, ends, strict=False):
         seg_y = y_work[s:e]
         seg_w = weights[s:e]
         if len(seg_y) < len(kernel) + 4:
@@ -762,7 +762,7 @@ def deconvolve_curve_wiener(
     starts = np.flatnonzero(padded[1:] & ~padded[:-1])
     ends = np.flatnonzero(~padded[1:] & padded[:-1])
 
-    for s, e in zip(starts, ends):
+    for s, e in zip(starts, ends, strict=False):
         seg = y_work[s:e]
         m = len(seg)
         if m < 4:
@@ -985,7 +985,9 @@ def harmonize_nuclear_logs(
         raise ValueError(f"{depth_col} contains non-finite values")
     if np.any(np.diff(z_raw) <= 0):
         out_df = out_df.sort_values(depth_col).reset_index(drop=True)
-        z_raw = pd.to_numeric(out_df[depth_col], errors="coerce").to_numpy(dtype=np.float64)
+        z_raw = pd.to_numeric(out_df[depth_col], errors="coerce").to_numpy(
+            dtype=np.float64
+        )
 
     dz_raw = float(np.median(np.diff(z_raw)))
     if dz_raw <= 0:
@@ -1047,7 +1049,9 @@ def harmonize_nuclear_logs(
 
     for curve_name, spec in present_specs.items():
         w_curve = w_both if spec.apply_drho_weight else w_cali
-        y = pd.to_numeric(out_df[curve_name], errors="coerce").to_numpy(dtype=np.float64)
+        y = pd.to_numeric(out_df[curve_name], errors="coerce").to_numpy(
+            dtype=np.float64
+        )
         if solver is deconvolve_curve_wiener:
             x_enh, y_rec, diag = solver(
                 y=y,
@@ -1082,10 +1086,12 @@ def harmonize_nuclear_logs(
 
     lags: Dict[str, int] = {}
     if check_alignment:
-        ref_col = "RHOB_ENH" if "RHOB_ENH" in out_df.columns else f"{next(iter(present_specs))}_ENH"
-        compare = tuple(
-            f"{c}_ENH" for c in present_specs if f"{c}_ENH" != ref_col
+        ref_col = (
+            "RHOB_ENH"
+            if "RHOB_ENH" in out_df.columns
+            else f"{next(iter(present_specs))}_ENH"
         )
+        compare = tuple(f"{c}_ENH" for c in present_specs if f"{c}_ENH" != ref_col)
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             lags = check_interlog_depth_alignment(
@@ -1145,7 +1151,7 @@ def plot_resolution_qc(
         1, len(plotted), figsize=figsize, sharey=True, squeeze=False
     )
     axes = axes[0]
-    for ax, name in zip(axes, plotted):
+    for ax, name in zip(axes, plotted, strict=False):
         raw = pd.to_numeric(df[name], errors="coerce").to_numpy(dtype=float)
         enh = pd.to_numeric(df[f"{name}_ENH"], errors="coerce").to_numpy(dtype=float)
         rec = pd.to_numeric(df[f"{name}_RECON"], errors="coerce").to_numpy(dtype=float)
@@ -1154,7 +1160,14 @@ def plot_resolution_qc(
 
         ax.plot(raw[mask], depth[mask], "k--", lw=0.9, label=f"{name} (raw)")
         ax.plot(enh[mask], depth[mask], "r-", lw=1.3, label=f"{name}_ENH")
-        ax.plot(rec[mask], depth[mask], color="tab:blue", lw=0.8, alpha=0.7, label=f"{name}_RECON")
+        ax.plot(
+            rec[mask],
+            depth[mask],
+            color="tab:blue",
+            lw=0.8,
+            alpha=0.7,
+            label=f"{name}_RECON",
+        )
         if np.isfinite(sigma):
             ax.fill_betweenx(
                 depth[mask],

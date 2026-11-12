@@ -236,6 +236,31 @@ flowchart TD
 * **Input Curves:** `GR`, `RHOB`, `NPHI`, `PEF`, `DTC`, `POTA`, `THOR`, `URAN`  
 * **Output Curves:** `VSH`, `VSAND`, `VSILT`, `VCLAY`, `VCALC`, `VDOLO`, `PHIT`, `PHIE`
 
+* **Continuous fluid density ($\rho_{fl}$):** The **Fluid Density** selector offers
+  three modes. `Static` keeps the single scalar fluid density used by the classic
+  density-porosity equation. `Mud & Zonal Profile` builds a continuous
+  $\rho_{mf}(z)$ from the mud system (Batzle & Wang brine for WBM, thermal/pressure
+  corrected base oil for OBM/SBM) and applies a static zonal residual hydrocarbon
+  saturation across the fluid contacts. `Auto Iterative (Rxo / Sw^0.2)` runs the
+  full 3-tier coupled solver, iterating $\rho_{fl}$ and $\phi_D$ to convergence and
+  degrading per depth sample from shallow-resistivity $S_{xo}$ to the Poupon
+  $S_w^{c}$ fallback to a zonal $S_{hr}$ constant.
+
+  The non-static modes add diagnostic curves: `RHO_FL` (continuous apparent fluid
+    density), `RHO_MF` (filtrate profile), `SXO_EST` (estimated flushed-zone
+    saturation), `PHID_RAW_100` (density porosity at $\rho_{fl} = 1.0$), and
+    `RHO_FL_TIER` (solver tier per sample). These are QC outputs, so they are not
+    drawn on the well log: they appear in the **Porosity Methods vs Core** comparison
+    plot, where `RHO_FL` and `RHO_MF` share the density axis with `RHOM` and the
+    scalar fluid density line, while `PHID_RAW_100` and the corrected `PHID` are drawn
+    on the porosity axis so the porosity shift ($\Delta\phi_D$) is directly visible.
+
+  Mud system and base-oil density come from the QAQC Well Header (`mud_type`,
+  `obm_base_density`); filtrate salinity or surface `Rmf` and the flushing exponent
+  are set in the inspector. The engine is not available in batch evaluation.
+  See [Porosity Evaluation](../api/porosity.md#continuous-apparent-fluid-density-rho_fl)
+  for the tier logic, the physics, and the documented implementation conventions.
+
 * **Selectable input logs:** The multi-mineral inversion accepts any subset of the
   available curves via `input_logs` (UI: *Input Logs* checkboxes). Leaving the selection
   empty auto-uses every loaded curve among `GR`, `NPHI`, `RHOB`, `PEF`, `DTC`, `POTA`,

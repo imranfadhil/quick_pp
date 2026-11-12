@@ -156,6 +156,18 @@ export interface LithoEndpointParams {
 	coalWindowSize: number;
 	coalTrendFactor: number;
 	badholeTreatment: BadholeTreatmentMode;
+	/** Continuous apparent fluid density (RHO_FL) engine mode. */
+	fluidDensityMode: 'static' | 'zonal_coupled' | 'iterative_sxo';
+	fluidDensityMudType: 'WBM' | 'OBM' | 'SBM';
+	fluidDensitySalinityPpm: number;
+	fluidDensityRmf: number;
+	fluidDensityRmfTempC: number;
+	fluidDensityObmBase: number;
+	fluidDensityRxoCurve: string;
+	fluidDensityRtCurve: string;
+	fluidDensityFlushExponent: number;
+	fluidDensityShrGas: number;
+	fluidDensityShrOil: number;
 }
 
 export interface ThomasStieberParams {
@@ -786,7 +798,18 @@ class WorkbenchState {
 		coalNphiMin: 0.3,
 		coalWindowSize: 41,
 		coalTrendFactor: 0.05,
-		badholeTreatment: 'vsh_gr'
+		badholeTreatment: 'vsh_gr',
+		fluidDensityMode: 'static',
+		fluidDensityMudType: 'WBM',
+		fluidDensitySalinityPpm: 30000,
+		fluidDensityRmf: 0.5,
+		fluidDensityRmfTempC: 25,
+		fluidDensityObmBase: 0.82,
+		fluidDensityRxoCurve: '',
+		fluidDensityRtCurve: 'RT',
+		fluidDensityFlushExponent: 0.2,
+		fluidDensityShrGas: 0.25,
+		fluidDensityShrOil: 0.15
 	});
 
 	tsParams = $state<ThomasStieberParams>({

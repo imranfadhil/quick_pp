@@ -1,8 +1,9 @@
 """Porosity and multi-mineral volumetric estimation models.
 
 Provides density, neutron-density, sonic, and multi-mineral solver routines,
-shale porosity trend estimation, hydrocarbon density corrections, and Thomas-Stieber
-thin-bed sand porosity partitioning.
+shale porosity trend estimation, hydrocarbon density corrections, Thomas-Stieber
+thin-bed sand porosity partitioning, and the continuous apparent fluid density
+(``RHO_FL``) iterative solver.
 """
 
 import numpy as np
@@ -570,3 +571,413 @@ def calc_secondary_porosity(phit, phis):
 
 
 secondary_porosity = calc_secondary_porosity
+
+
+# ---------------------------------------------------------------------------
+# Continuous apparent fluid density (RHO_FL) & iterative density porosity
+# ---------------------------------------------------------------------------
+
+# Tier routing codes returned in RHO_FL_TIER
+RHO_FL_TIER_RXO = 1
+RHO_FL_TIER_SW_FALLBACK = 2
+RHO_FL_TIER_ZONAL = 3
+
+# Default residual hydrocarbon saturations used by the Tier 3 zonal fallback
+DEFAULT_SHR_GAS = 0.25
+DEFAULT_SHR_OIL = 0.15
+
+# Default filtrate densities used when no mud-filtrate property is supplied
+DEFAULT_WBM_FILTRATE_DENSITY = 1.00
+DEFAULT_OBM_FILTRATE_DENSITY = 0.80
+
+# Worst-case WBM filtrate salinities (ppm) when neither Rmf nor salinity is known
+DEFAULT_WBM_FRESH_SALINITY_PPM = 5_000.0
+DEFAULT_WBM_SALINE_SALINITY_PPM = 150_000.0
+
+
+def salinity_from_rmf(rmf: float, temp_c: float = 25.0) -> float:
+    """Back-calculate NaCl-equivalent salinity (ppm) from a mud-filtrate resistivity.
+
+    The measured ``Rmf`` is first corrected to 75 degF with the Arps/Bateman-Konen
+    temperature relation, then inverted through the Bateman-Konen salinity
+    correlation.
+
+    Args:
+        rmf (float): Mud-filtrate resistivity in ohm.m at ``temp_c``.
+        temp_c (float, optional): Temperature of the ``rmf`` measurement in degrees
+            Celsius. Defaults to 25.0.
+
+    Returns:
+        float: NaCl-equivalent salinity in ppm, clipped to [0, 350000].
+    """
+    if not np.isfinite(rmf) or rmf <= 0:
+        raise ValueError("rmf must be a positive finite value.")
+    temp_f = float(temp_c) * 9.0 / 5.0 + 32.0
+    rmf_75 = float(rmf) * (temp_f + 6.77) / (75.0 + 6.77)
+    if rmf_75 <= 0.0123:
+        return 350_000.0
+    exponent = (3.562 - np.log10(rmf_75 - 0.0123)) / 0.955
+    salinity = float(10.0**exponent)
+    return float(np.clip(salinity, 0.0, 350_000.0))
+
+
+def _as_float_array(value, n: int, default: float) -> np.ndarray:
+    """Broadcast a scalar/array/None into a float array of length ``n``."""
+    if value is None:
+        return np.full(n, float(default), dtype=float)
+    arr = np.asarray(value, dtype=float)
+    if arr.ndim == 0:
+        return np.full(n, float(arr), dtype=float)
+    return np.broadcast_to(arr, (n,)).astype(float)
+
+
+def _normalize_fluid_zone(fluid_zone, n: int) -> np.ndarray:
+    """Normalize a fluid-zone array into uppercase strings ('GAS'/'OIL'/'WATER'/'')."""
+    if fluid_zone is None:
+        return np.full(n, "", dtype=object)
+    arr = np.asarray(fluid_zone).astype(str)
+    if arr.ndim == 0:
+        arr = np.full(n, str(arr), dtype=object)
+    else:
+        arr = np.broadcast_to(arr, (n,)).astype(object)
+    return np.char.upper(arr.astype(str))
+
+
+def solve_continuous_rho_fluid_and_phid(
+    rhob: np.ndarray,
+    rhoma: np.ndarray | float,
+    tvd: np.ndarray,
+    mud_type: str = "WBM",
+    rho_mf: np.ndarray | float | None = None,
+    rho_w: np.ndarray | float | None = 1.02,
+    rho_h_app: np.ndarray | float | None = 0.75,
+    rxo: np.ndarray | None = None,
+    rt: np.ndarray | None = None,
+    rmf_downhole: np.ndarray | None = None,
+    rw_downhole: np.ndarray | None = None,
+    badhole_flag: np.ndarray | None = None,
+    fluid_zone: np.ndarray | None = None,
+    a: float = 1.0,
+    m: float = 2.0,
+    n: float = 2.0,
+    flush_exponent: float = 0.2,
+    default_shr_gas: float = DEFAULT_SHR_GAS,
+    default_shr_oil: float = DEFAULT_SHR_OIL,
+    max_iter: int = 8,
+    tol: float = 1e-4,
+) -> dict[str, np.ndarray]:
+    """Vectorized fixed-point solver for continuous apparent fluid density and PHID.
+
+    At every depth the flushed-zone apparent fluid density is
+    ``rho_fl = Sxo * rho_mf + (1 - Sxo) * rho_h_app`` and density porosity is
+    ``phid = (rhoma - rhob) / (rhoma - rho_fl)``. Because ``Sxo`` depends on
+    ``phid``, the pair is solved by fixed-point iteration.
+
+    The solver auto-degrades per depth sample:
+
+    * Tier 1 - ``Rxo`` shallow resistivity with a valid ``Rmf`` (WBM only).
+    * Tier 2 - ``Sxo = Sw ** flush_exponent`` from deep ``Rt`` (Poupon coupling).
+    * Tier 3 - zonal constant residual hydrocarbon saturation.
+
+    OBM/SBM filtrate miscibly displaces mobile hydrocarbons, so the flushed zone
+    is modelled as capillary-bound brine plus OBM filtrate/residual hydrocarbon.
+
+    Args:
+        rhob: Bulk density log in g/cc.
+        rhoma: Matrix density in g/cc (scalar or per-sample).
+        tvd: True vertical depth in m (used only for length/broadcasting).
+        mud_type: 'WBM', 'OBM', or 'SBM'.
+        rho_mf: Mud-filtrate density in g/cc (scalar or per-sample).
+        rho_w: Formation water density in g/cc.
+        rho_h_app: Apparent (electron-density) hydrocarbon density in g/cc.
+        rxo: Shallow/invaded-zone resistivity in ohm.m.
+        rt: Deep resistivity in ohm.m.
+        rmf_downhole: Downhole mud-filtrate resistivity in ohm.m.
+        rw_downhole: Downhole formation water resistivity in ohm.m.
+        badhole_flag: Boolean/0-1 flag marking unreliable intervals.
+        fluid_zone: Per-sample fluid zone labels ('GAS', 'OIL', 'WATER').
+        a: Archie tortuosity factor.
+        m: Cementation exponent.
+        n: Saturation exponent.
+        flush_exponent: Poupon exponent ``c`` in ``Sxo = Sw ** c``.
+        default_shr_gas: Tier 3 residual gas saturation.
+        default_shr_oil: Tier 3 residual oil saturation.
+        max_iter: Maximum fixed-point iterations.
+        tol: Convergence tolerance on the maximum PHID change.
+
+    Returns:
+        dict[str, np.ndarray]: ``PHID``, ``PHID_RAW_100`` (rho_fl = 1.0),
+        ``RHO_FL``, ``RHO_MF``, ``SXO_EST``, and ``RHO_FL_TIER``.
+    """
+    rhob_arr = np.asarray(rhob, dtype=float).ravel()
+    n_samples = rhob_arr.size
+    if n_samples == 0:
+        empty = np.array([], dtype=float)
+        return {
+            "PHID": empty,
+            "PHID_RAW_100": empty,
+            "RHO_FL": empty,
+            "RHO_MF": empty,
+            "SXO_EST": empty,
+            "RHO_FL_TIER": np.array([], dtype=int),
+        }
+    rhoma_arr = _as_float_array(rhoma, n_samples, 2.65)
+    tvd_arr = _as_float_array(tvd, n_samples, 0.0)
+    del tvd_arr  # depth is carried by the caller; kept for API symmetry
+
+    mud = str(mud_type).upper()
+    is_obm = mud in ("OBM", "SBM")
+
+    default_mf = DEFAULT_OBM_FILTRATE_DENSITY if is_obm else DEFAULT_WBM_FILTRATE_DENSITY
+    rho_mf_arr = _as_float_array(rho_mf, n_samples, default_mf)
+    rho_w_arr = _as_float_array(rho_w, n_samples, 1.02)
+    rho_h_arr = _as_float_array(rho_h_app, n_samples, 0.75)
+
+    zone = _normalize_fluid_zone(fluid_zone, n_samples)
+    is_water_zone = zone == "WATER"
+    # In known water zones the hydrocarbon term collapses to formation water.
+    rho_h_arr = np.where(is_water_zone, rho_w_arr, rho_h_arr)
+
+    badhole = (
+        np.asarray(badhole_flag, dtype=bool).ravel()
+        if badhole_flag is not None
+        else np.zeros(n_samples, dtype=bool)
+    )
+    if badhole.size != n_samples:
+        badhole = np.broadcast_to(badhole, (n_samples,)).astype(bool)
+
+    def _finite_positive(arr: np.ndarray | None) -> np.ndarray:
+        if arr is None:
+            return np.zeros(n_samples, dtype=bool)
+        vals = np.asarray(arr, dtype=float).ravel()
+        if vals.size != n_samples:
+            vals = np.broadcast_to(vals, (n_samples,)).astype(float)
+        return np.isfinite(vals) & (vals > 0)
+
+    rxo_ok = _finite_positive(rxo)
+    rt_ok = _finite_positive(rt)
+    rmf_ok = _finite_positive(rmf_downhole)
+    rw_ok = _finite_positive(rw_downhole)
+
+    has_rxo = rxo_ok & rmf_ok & (~badhole)
+    has_rt = rt_ok & rw_ok
+
+    tier_used = np.full(n_samples, RHO_FL_TIER_ZONAL, dtype=int)
+    tier_used[has_rt] = RHO_FL_TIER_SW_FALLBACK
+    if not is_obm:
+        tier_used[has_rxo] = RHO_FL_TIER_RXO
+
+    rxo_arr = _as_float_array(rxo, n_samples, np.nan)
+    rt_arr = _as_float_array(rt, n_samples, np.nan)
+    rmf_arr = _as_float_array(rmf_downhole, n_samples, np.nan)
+    rw_arr = _as_float_array(rw_downhole, n_samples, np.nan)
+
+    # Tier 3 zonal residual hydrocarbon saturation
+    shr_zonal = np.where(
+        zone == "GAS",
+        float(default_shr_gas),
+        np.where(zone == "OIL", float(default_shr_oil), 0.0),
+    )
+    sxo_t3 = np.clip(1.0 - shr_zonal, 0.0, 1.0)
+
+    # Initialization (k = 0)
+    rho_fl = rho_mf_arr.copy()
+    phid_raw = np.clip(
+        (rhoma_arr - rhob_arr) / np.maximum(rhoma_arr - 1.0, 0.1), 0.0, 0.60
+    )
+    phid = np.clip(
+        (rhoma_arr - rhob_arr) / np.maximum(rhoma_arr - rho_fl, 0.1), 0.001, 0.60
+    )
+
+    sxo = np.ones(n_samples, dtype=float)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        for _ in range(max(1, int(max_iter))):
+            phid_prev = phid.copy()
+            phi_m = np.maximum(phid, 0.01) ** m
+
+            sw = np.where(
+                has_rt,
+                np.clip(
+                    ((a * rw_arr) / (phi_m * np.maximum(rt_arr, 0.01))) ** (1.0 / n),
+                    0.02,
+                    1.0,
+                ),
+                1.0,
+            )
+
+            if is_obm:
+                # OBM/SBM: capillary-bound brine + OBM filtrate / residual HC.
+                sxo = np.where(
+                    has_rt,
+                    sw,
+                    np.where(is_water_zone, 0.15, 0.10),
+                )
+                rho_fl = sxo * rho_w_arr + (1.0 - sxo) * rho_mf_arr
+            else:
+                sxo_t2 = np.clip(sw**flush_exponent, sw, 1.0)
+                # The spec clips Tier 1 Sxo to [Sw, 1]. When Rt is unavailable Sw is
+                # undefined, so fall back to the zonal residual saturation as the
+                # lower bound instead of forcing Sxo = 1.
+                sxo_lower = np.where(has_rt, sw, sxo_t3)
+                sxo_t1 = np.where(
+                    has_rxo,
+                    np.clip(
+                        ((a * rmf_arr) / (phi_m * np.maximum(rxo_arr, 0.01)))
+                        ** (1.0 / n),
+                        sxo_lower,
+                        1.0,
+                    ),
+                    sxo_t2,
+                )
+                sxo = np.where(
+                    tier_used == RHO_FL_TIER_RXO,
+                    sxo_t1,
+                    np.where(tier_used == RHO_FL_TIER_SW_FALLBACK, sxo_t2, sxo_t3),
+                )
+                sxo = np.where(is_water_zone, 1.0, sxo)
+                rho_fl = sxo * rho_mf_arr + (1.0 - sxo) * rho_h_arr
+
+            phid = np.clip(
+                (rhoma_arr - rhob_arr) / np.maximum(rhoma_arr - rho_fl, 0.1),
+                0.0,
+                0.60,
+            )
+            if np.nanmax(np.abs(phid - phid_prev)) < tol:
+                break
+
+    return {
+        "PHID": phid,
+        "PHID_RAW_100": phid_raw,
+        "RHO_FL": rho_fl,
+        "RHO_MF": rho_mf_arr,
+        "SXO_EST": sxo,
+        "RHO_FL_TIER": tier_used,
+    }
+
+
+def estimate_continuous_rho_fluid(
+    rhob: np.ndarray,
+    rhoma: np.ndarray | float,
+    tvd: np.ndarray,
+    temp_c: np.ndarray | float,
+    pressure_mpa: np.ndarray | float,
+    mud_type: str = "WBM",
+    salinity_ppm: np.ndarray | float | None = None,
+    rmf: float | None = None,
+    rmf_temp_c: float = 25.0,
+    obm_base_density: float = 0.82,
+    rho_w: np.ndarray | float | None = None,
+    rho_h_app: np.ndarray | float | None = 0.75,
+    rxo: np.ndarray | None = None,
+    rt: np.ndarray | None = None,
+    rmf_downhole: np.ndarray | None = None,
+    rw_downhole: np.ndarray | None = None,
+    badhole_flag: np.ndarray | None = None,
+    fluid_zone: np.ndarray | None = None,
+    a: float = 1.0,
+    m: float = 2.0,
+    n: float = 2.0,
+    flush_exponent: float = 0.2,
+    default_shr_gas: float = DEFAULT_SHR_GAS,
+    default_shr_oil: float = DEFAULT_SHR_OIL,
+    max_iter: int = 8,
+    tol: float = 1e-4,
+) -> dict[str, np.ndarray]:
+    """Build continuous downhole filtrate/water densities then solve for RHO_FL.
+
+    This is the physics-facing wrapper around
+    :func:`solve_continuous_rho_fluid_and_phid`. It derives the continuous
+    mud-filtrate density profile ``rho_mf(z)`` from the mud system:
+
+    * WBM with a known salinity -> Batzle & Wang brine density.
+    * WBM with only a surface ``Rmf`` -> salinity back-calculated via
+      :func:`salinity_from_rmf`, then Batzle & Wang brine density.
+    * WBM with neither -> fresh (5,000 ppm) or saline (150,000 ppm) fallback.
+    * OBM/SBM -> base-oil thermal expansion/compressibility profile.
+
+    Args:
+        rhob: Bulk density log in g/cc.
+        rhoma: Matrix density in g/cc.
+        tvd: True vertical depth in m.
+        temp_c: Formation temperature in degrees Celsius.
+        pressure_mpa: Absolute formation pressure in MPa.
+        mud_type: 'WBM', 'OBM', or 'SBM'.
+        salinity_ppm: Mud-filtrate salinity in ppm (WBM).
+        rmf: Surface mud-filtrate resistivity in ohm.m (WBM fallback).
+        rmf_temp_c: Temperature of the ``rmf`` measurement in degrees Celsius.
+        obm_base_density: Surface base-oil density in g/cc (OBM/SBM).
+        rho_w: Formation water density in g/cc; defaults to the filtrate profile.
+        rho_h_app: Apparent hydrocarbon density in g/cc.
+        rxo: Shallow/invaded-zone resistivity in ohm.m.
+        rt: Deep resistivity in ohm.m.
+        rmf_downhole: Downhole mud-filtrate resistivity in ohm.m.
+        rw_downhole: Downhole formation water resistivity in ohm.m.
+        badhole_flag: Boolean/0-1 flag marking unreliable intervals.
+        fluid_zone: Per-sample fluid zone labels.
+        a: Archie tortuosity factor.
+        m: Cementation exponent.
+        n: Saturation exponent.
+        flush_exponent: Poupon exponent for the Tier 2 fallback.
+        default_shr_gas: Tier 3 residual gas saturation.
+        default_shr_oil: Tier 3 residual oil saturation.
+        max_iter: Maximum fixed-point iterations.
+        tol: Convergence tolerance on the maximum PHID change.
+
+    Returns:
+        dict[str, np.ndarray]: Solver outputs plus ``RHO_MF`` and ``SALINITY_PPM``.
+    """
+    from quick_pp.fluid_type import brine_density, obm_filtrate_density
+
+    rhob_arr = np.asarray(rhob, dtype=float).ravel()
+    n_samples = rhob_arr.size
+    temp_arr = _as_float_array(temp_c, n_samples, 25.0)
+    pres_arr = _as_float_array(pressure_mpa, n_samples, 0.1013)
+    mud = str(mud_type).upper()
+
+    if mud in ("OBM", "SBM"):
+        rho_mf_arr = obm_filtrate_density(temp_arr, pres_arr, obm_base_density)
+        salinity_arr = np.zeros(n_samples, dtype=float)
+    else:
+        if salinity_ppm is not None:
+            salinity_arr = _as_float_array(salinity_ppm, n_samples, 0.0)
+        elif rmf is not None and np.isfinite(rmf) and rmf > 0:
+            salinity_arr = np.full(
+                n_samples, salinity_from_rmf(rmf, rmf_temp_c), dtype=float
+            )
+        else:
+            salinity_arr = np.full(
+                n_samples, DEFAULT_WBM_FRESH_SALINITY_PPM, dtype=float
+            )
+        rho_mf_arr = brine_density(temp_arr, pres_arr, salinity_arr)
+
+    if rho_w is None:
+        rho_w_arr = rho_mf_arr
+    else:
+        rho_w_arr = _as_float_array(rho_w, n_samples, 1.02)
+
+    result = solve_continuous_rho_fluid_and_phid(
+        rhob=rhob_arr,
+        rhoma=rhoma,
+        tvd=tvd,
+        mud_type=mud,
+        rho_mf=rho_mf_arr,
+        rho_w=rho_w_arr,
+        rho_h_app=rho_h_app,
+        rxo=rxo,
+        rt=rt,
+        rmf_downhole=rmf_downhole,
+        rw_downhole=rw_downhole,
+        badhole_flag=badhole_flag,
+        fluid_zone=fluid_zone,
+        a=a,
+        m=m,
+        n=n,
+        flush_exponent=flush_exponent,
+        default_shr_gas=default_shr_gas,
+        default_shr_oil=default_shr_oil,
+        max_iter=max_iter,
+        tol=tol,
+    )
+    result["RHO_MF"] = rho_mf_arr
+    result["SALINITY_PPM"] = salinity_arr
+    return result

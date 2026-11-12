@@ -26,6 +26,91 @@ plt.rcParams.update(
 )
 
 
+def brine_density(
+    temp_c: np.ndarray | float,
+    pressure_mpa: np.ndarray | float,
+    salinity_ppm: np.ndarray | float = 0.0,
+) -> np.ndarray:
+    """Batzle & Wang (1992) brine density at in-situ temperature, pressure, and salinity.
+
+    Args:
+        temp_c: Temperature in degrees Celsius.
+        pressure_mpa: Absolute pressure in MPa.
+        salinity_ppm: NaCl-equivalent salinity in ppm by weight (0-1,000,000).
+
+    Returns:
+        np.ndarray: Brine density in g/cc.
+
+    References:
+        Batzle, M. and Wang, Z. (1992). Seismic properties of pore fluids.
+        Geophysics, 57(11), 1396-1408.
+    """
+    temp = np.asarray(temp_c, dtype=float)
+    pres = np.asarray(pressure_mpa, dtype=float)
+    salinity = np.asarray(salinity_ppm, dtype=float) / 1_000_000.0
+    rho_w0 = 1.0 + 1e-6 * (
+        -80.0 * temp
+        - 3.3 * temp**2
+        + 0.00175 * temp**3
+        + 489.0 * pres
+        - 2.0 * temp * pres
+        + 0.016 * temp**2 * pres
+        - 1.3e-5 * temp**3 * pres
+        - 0.333 * pres**2
+        - 0.002 * temp * pres**2
+    )
+    rho_w = rho_w0 + salinity * (
+        0.668
+        + 0.44 * salinity
+        + 1e-6
+        * (
+            300.0 * pres
+            - 2400.0 * pres * salinity
+            + temp
+            * (
+                80.0
+                + 3.0 * temp
+                - 3300.0 * salinity
+                - 13.0 * pres
+                + 47.0 * pres * salinity
+            )
+        )
+    )
+    return np.asarray(rho_w, dtype=float)
+
+
+def obm_filtrate_density(
+    temp_c: np.ndarray | float,
+    pressure_mpa: np.ndarray | float,
+    base_oil_density: float = 0.82,
+) -> np.ndarray:
+    """Downhole density of an OBM/SBM base-oil filtrate (dead oil, Batzle & Wang 1992).
+
+    Applies thermal expansion and pressure compressibility to the surface base-oil
+    density. With the default 0.82 g/cc surface density this reproduces the
+    0.78-0.83 g/cc downhole range typical of synthetic-base muds.
+
+    Args:
+        temp_c: Temperature in degrees Celsius.
+        pressure_mpa: Absolute pressure in MPa.
+        base_oil_density: Surface base-oil density in g/cc.
+
+    Returns:
+        np.ndarray: Downhole filtrate density in g/cc.
+    """
+    if not np.isfinite(base_oil_density) or base_oil_density <= 0:
+        raise ValueError("base_oil_density must be a positive finite value.")
+    temp = np.asarray(temp_c, dtype=float)
+    pres = np.asarray(pressure_mpa, dtype=float)
+    rho_thermal = base_oil_density / (0.972 + 3.81e-4 * (temp + 17.78) ** 1.175)
+    rho = (
+        rho_thermal
+        + (0.00277 * pres - 1.71e-7 * pres**3) * (rho_thermal - 1.15) ** 2
+        + 3.49e-4 * pres
+    )
+    return np.asarray(rho, dtype=float)
+
+
 def estimate_fluid_properties(
     tvd: np.ndarray | float,
     temp_grad: float = 30.0,
@@ -116,34 +201,7 @@ def estimate_fluid_properties(
         raise ValueError("Temperature must be above absolute zero.")
 
     salinity = salinity_ppm / 1_000_000.0
-    rho_w0 = 1.0 + 1e-6 * (
-        -80.0 * temp_c
-        - 3.3 * temp_c**2
-        + 0.00175 * temp_c**3
-        + 489.0 * pressure_mpa
-        - 2.0 * temp_c * pressure_mpa
-        + 0.016 * temp_c**2 * pressure_mpa
-        - 1.3e-5 * temp_c**3 * pressure_mpa
-        - 0.333 * pressure_mpa**2
-        - 0.002 * temp_c * pressure_mpa**2
-    )
-    rho_w = rho_w0 + salinity * (
-        0.668
-        + 0.44 * salinity
-        + 1e-6
-        * (
-            300.0 * pressure_mpa
-            - 2400.0 * pressure_mpa * salinity
-            + temp_c
-            * (
-                80.0
-                + 3.0 * temp_c
-                - 3300.0 * salinity
-                - 13.0 * pressure_mpa
-                + 47.0 * pressure_mpa * salinity
-            )
-        )
-    )
+    rho_w = brine_density(temp_c, pressure_mpa, salinity_ppm)
     hi_w = rho_w * (1.0 - salinity)
 
     p_pc = 4.892 - 0.4048 * gas_gravity

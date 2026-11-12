@@ -88,6 +88,57 @@
 			});
 		}
 
+		// Continuous rho_fl engine diagnostics are QC outputs, so they live here rather than on the
+		// well plot: RHO_FL / RHO_MF share the density axis (x), while the PHID_RAW_100 vs PHID
+		// shift is drawn on the porosity axis (x2).
+		const diagnostics = result.rho_fl_diagnostics ?? {};
+		const diagnosticSeries = (name: string) => {
+			const values = diagnostics[name];
+			if (!values) return null;
+			const xs: number[] = [];
+			const ys: number[] = [];
+			for (let i = 0; i < values.length && i < depth.length; i++) {
+				const value = values[i];
+				if (typeof value === 'number' && Number.isFinite(value)) {
+					xs.push(value);
+					ys.push(depth[i]);
+				}
+			}
+			return xs.length ? { xs, ys } : null;
+		};
+		const rhoFlSeries = diagnosticSeries('RHO_FL');
+		if (rhoFlSeries) {
+			traces.push({
+				type: 'scatter', mode: 'lines', name: 'RHO_FL', xaxis: 'x', yaxis: 'y',
+				x: rhoFlSeries.xs, y: rhoFlSeries.ys, connectgaps: false,
+				line: { color: '#0891b2', width: 1.6, dash: '6px,3px' }
+			});
+		}
+		const rhoMfSeries = diagnosticSeries('RHO_MF');
+		if (rhoMfSeries) {
+			traces.push({
+				type: 'scatter', mode: 'lines', name: 'RHO_MF', xaxis: 'x', yaxis: 'y',
+				x: rhoMfSeries.xs, y: rhoMfSeries.ys, connectgaps: false,
+				line: { color: '#7c3aed', width: 1.0, dash: '2px,3px' }
+			});
+		}
+		const phidRawSeries = diagnosticSeries('PHID_RAW_100');
+		if (phidRawSeries) {
+			traces.push({
+				type: 'scatter', mode: 'lines', name: 'PHID (rho_fl=1.0)', xaxis: 'x2', yaxis: 'y',
+				x: phidRawSeries.xs, y: phidRawSeries.ys, connectgaps: false,
+				line: { color: '#94a3b8', width: 1.0, dash: '3px,3px' }
+			});
+		}
+		const phidSeries = diagnosticSeries('PHID');
+		if (phidSeries) {
+			traces.push({
+				type: 'scatter', mode: 'lines', name: 'PHID (corrected)', xaxis: 'x2', yaxis: 'y',
+				x: phidSeries.xs, y: phidSeries.ys, connectgaps: false,
+				line: { color: '#1d4ed8', width: 1.5 }
+			});
+		}
+
 		for (const m of methods.filter((item) => selected.includes(item.key) && result?.curves[item.key])) {
 			traces.push({
 				type: 'scatter', mode: 'lines', name: m.label, xaxis: 'x2', yaxis: 'y',

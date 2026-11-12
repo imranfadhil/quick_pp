@@ -777,7 +777,9 @@
 			rmf: h.rmf ?? null,
 			mud_density: h.mud_density ?? null,
 			mud_filtrate_salinity: h.mud_filtrate_salinity ?? null,
-			mud_filtrate_density: h.mud_filtrate_density ?? null
+			mud_filtrate_density: h.mud_filtrate_density ?? null,
+			mud_type: h.mud_type ?? '',
+			obm_base_density: h.obm_base_density ?? null
 		};
 		editingWellHeader = true;
 	}
@@ -1088,7 +1090,7 @@
 					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1">
 						<div class="text-[9.5px] text-[var(--text-muted)]">Mud Filtrate Density / Salinity</div>
 						<div class="mono-num truncate font-semibold text-[var(--text-primary)]">
-							{hdr.mud_filtrate_density != null ? `${fmtNum(hdr.mud_filtrate_density, 3)} g/cc` : '—'} • {hdr.mud_filtrate_salinity != null ? `${fmtNum(hdr.mud_filtrate_salinity, 0)} ppm` : '—'}
+							{hdr.mud_filtrate_density != null ? `${fmtNum(hdr.mud_filtrate_density, 3)} g/cc` : '—'} • {hdr.mud_filtrate_salinity != null ? `${fmtNum(hdr.mud_filtrate_salinity, 0)} ppm` : '—'} • {hdr.mud_type ? hdr.mud_type : '—'}
 						</div>
 					</div>
 				</div>
@@ -1271,6 +1273,29 @@
 								max="2"
 								step="0.01"
 								bind:value={headerDraft.mud_filtrate_density}
+								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+							/>
+						</label>
+						<label class="flex flex-col gap-0.5">
+							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">Mud Type</span>
+							<select
+								bind:value={headerDraft.mud_type}
+								class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+							>
+								<option value="">—</option>
+								<option value="WBM">WBM (Water-Based)</option>
+								<option value="OBM">OBM (Oil-Based)</option>
+								<option value="SBM">SBM (Synthetic-Based)</option>
+							</select>
+						</label>
+						<label class="flex flex-col gap-0.5">
+							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">OBM Base Oil Density (g/cc)</span>
+							<input
+								type="number"
+								min="0.65"
+								max="0.95"
+								step="0.01"
+								bind:value={headerDraft.obm_base_density}
 								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
 							/>
 						</label>

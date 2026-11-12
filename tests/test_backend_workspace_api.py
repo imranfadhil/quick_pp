@@ -295,10 +295,39 @@ def test_porosity_comparison_is_isolated_and_matches_active_method(client_and_pr
     assert body["curves"]["avg_weighted"] == pytest.approx(active.json()["data"]["PHIT"])
     assert body["rhom"] == pytest.approx(active.json()["data"]["RHOM"])
     assert body["rho_fluid"] == pytest.approx(1.0)
+    assert "rho_fl_diagnostics" in body
     pd.testing.assert_frame_equal(before, ws_service._get_filtered_well_df(pid, "Well-A"))
     assert before_config == ws_service._ephemeral_well_configs.get((pid, "Well-A"), {})
     assert client.post(f"{base}/porosity_comparison", json={**payload, "save": True}).status_code == 400
     assert client.post(f"{base}/porosity_comparison", json={**payload, "lithology_model": "vsh_bulk"}).status_code == 400
+
+
+def test_porosity_comparison_surfaces_rho_fl_diagnostics(client_and_project):
+    """The rho_fl engine QC curves are reported by the comparison endpoint, not the well plot."""
+    client, pid = client_and_project
+    base = f"/quick_pp/workspace/projects/{pid}/wells/Well-A"
+    assert client.post(f"{base}/lithology", json={"model": "ssc"}).status_code == 200
+    payload = {
+        "method": "den",
+        "lithology_model": "ssc",
+        "fluid_point": [1.0, 1.0],
+        "fluid_density": {
+            "mode": "iterative_sxo",
+            "mud_type": "WBM",
+            "mud_salinity_ppm": 180000.0,
+            "rt_curve": "RT",
+            "water_salinity_ppm": 180000.0,
+        },
+    }
+    comparison = client.post(f"{base}/porosity_comparison", json=payload)
+    assert comparison.status_code == 200, comparison.text
+    body = comparison.json()
+    diagnostics = body["rho_fl_diagnostics"]
+    for curve in ("RHO_FL", "RHO_MF", "SXO_EST", "PHID", "PHID_RAW_100", "RHO_FL_TIER"):
+        assert curve in diagnostics, curve
+        assert len(diagnostics[curve]) == len(body["depth"])
+    # The comparison must stay read-only: no diagnostic curves leak into the well data.
+    assert "RHO_FL" not in ws_service._get_filtered_well_df(pid, "Well-A").columns
 
 
 def test_porosity_comparison_reports_unavailable_sonic_methods(client_and_project, monkeypatch):
@@ -316,6 +345,97 @@ def test_porosity_comparison_reports_unavailable_sonic_methods(client_and_projec
     body = response.json()
     assert len(body["curves"]) == 5
     assert set(body["errors"]) == {"sonic_wyllie", "sonic_hunt_raymer"}
+
+
+def test_workspace_porosity_continuous_rho_fluid_engine(client_and_project):
+    """The iterative RHO_FL engine emits diagnostic curves and corrects PHID."""
+    client, pid = client_and_project
+    base = f"/quick_pp/workspace/projects/{pid}/wells/Well-A"
+    assert client.post(f"{base}/lithology", json={"model": "ssc"}).status_code == 200
+
+    static = client.post(
+        f"{base}/porosity",
+        json={"method": "den", "lithology_model": "ssc", "fluid_point": [1.0, 1.0]},
+    )
+    assert static.status_code == 200, static.text
+    static_data = static.json()["data"]
+    assert "RHO_FL" not in static_data
+
+    engine = client.post(
+        f"{base}/porosity",
+        json={
+            "method": "den",
+            "lithology_model": "ssc",
+            "fluid_point": [1.0, 1.0],
+            "fluid_density": {
+                "mode": "iterative_sxo",
+                "mud_type": "WBM",
+                "mud_salinity_ppm": 180000.0,
+                "rt_curve": "RT",
+                "water_salinity_ppm": 180000.0,
+            },
+        },
+    )
+    assert engine.status_code == 200, engine.text
+    body = engine.json()
+    data = body["data"]
+    for curve in ("RHO_FL", "RHO_MF", "SXO_EST", "PHID_RAW_100", "RHO_FL_TIER"):
+        assert curve in data, curve
+        assert len(data[curve]) == len(data["DEPTH"])
+    assert body["fluid_density_mode"] == "iterative_sxo"
+    # Saline filtrate profile sits above 1.0 g/cc
+    finite_mf = [v for v in data["RHO_MF"] if v is not None]
+    assert finite_mf and min(finite_mf) > 1.0
+    # rho_fl stays in a physically plausible band and is fully finite
+    finite_rho = [v for v in data["RHO_FL"] if v is not None]
+    assert finite_rho and all(0.5 <= v <= 1.35 for v in finite_rho)
+    # The engine actually shifts PHID relative to the static 1.0 g/cc reference
+    deltas = [
+        abs(corr - raw)
+        for corr, raw in zip(data["PHID"], data["PHID_RAW_100"], strict=True)
+        if corr is not None and raw is not None
+    ]
+    assert deltas and max(deltas) > 1e-4
+    # Tier codes stay within the documented 1-3 range
+    tiers = {int(v) for v in data["RHO_FL_TIER"] if v is not None}
+    assert tiers and tiers <= {1, 2, 3}
+
+
+def test_workspace_porosity_rho_fluid_saves_diagnostic_curves(client_and_project):
+    client, pid = client_and_project
+    base = f"/quick_pp/workspace/projects/{pid}/wells/Well-A"
+    assert client.post(f"{base}/lithology", json={"model": "ssc"}).status_code == 200
+    response = client.post(
+        f"{base}/porosity",
+        json={
+            "method": "den",
+            "lithology_model": "ssc",
+            "save": True,
+            "fluid_density": {
+                "mode": "zonal_coupled",
+                "mud_type": "OBM",
+                "obm_filtrate_density": 0.80,
+            },
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["saved"] is True
+
+    from sqlalchemy import select
+
+    from quick_pp.database.models import Curve
+    from quick_pp.database.models import Well as WellModel
+
+    with ws_service.get_db() as session:
+        mnemonics = {
+            row[0]
+            for row in session.execute(
+                select(Curve.mnemonic)
+                .join(WellModel, Curve.well_id == WellModel.well_id)
+                .where(WellModel.project_id == pid, WellModel.name == "Well-A")
+            ).all()
+        }
+    assert {"RHO_FL", "RHO_MF", "SXO_EST", "PHID_RAW_100", "RHO_FL_TIER"} <= mnemonics
 
 
 @pytest.mark.parametrize("use_ts", [False, True])

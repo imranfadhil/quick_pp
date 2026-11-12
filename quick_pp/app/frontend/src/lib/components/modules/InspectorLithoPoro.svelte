@@ -10,7 +10,7 @@
 	import { workbench, computeSiltIntersection } from '$lib/state/workbench.svelte';
 	import { fmtNum } from '$lib/utils/formatters';
 	import { calculateMethodComparison } from '$lib/utils/methodComparison';
-	import { gammaParameters } from '$lib/utils/lithology';
+	import { gammaParameters, fluidDensityParameters } from '$lib/utils/lithology';
 	import {
 		gorMetricToScfStb,
 		gorScfStbToMetric,
@@ -511,6 +511,7 @@
 						dry_silt_point: [lp.drySiltNphi, lp.drySiltRhob],
 						dry_clay_point: [lp.dryClayNphi, lp.dryClayRhob],
 						fluid_point: [lp.fluidNphi, lp.fluidRhob],
+						fluid_density: fluidDensityParameters(lp),
 						silt_line_angle: lp.siltLineAngle,
 						gr_clean: lp.grClean,
 						gr_clay: lp.grClay,
@@ -761,6 +762,181 @@
 				<NumericScrubber label="Fluid sonic transit time" bind:value={workbench.lithoParams.sonicFluidDt} unit="µs/ft" min={1} max={1000} step={1} onrun={() => executeLithoPoro(false)} />
 				<p class="text-[10px] text-[var(--text-secondary)]">Matrix transit time is weighted by lithology; DTC or DT is required.</p>
 			{/if}
+
+			<div class="mt-1.5 border-t border-[var(--border-hairline)] pt-1.5">
+				<div class="mb-1 flex items-center justify-between">
+					<span class="text-xs font-medium text-[var(--text-primary)]">Fluid Density (ρ<sub>fl</sub>)</span>
+					<span class="mono-num text-[10px] text-[var(--text-muted)]">
+						{workbench.lithoParams.fluidDensityMode === 'static'
+							? `${fmtNum(workbench.lithoParams.fluidRhob, 2)} g/cc`
+							: workbench.lithoParams.fluidDensityMode === 'zonal_coupled'
+								? 'Zonal'
+								: 'Iterative'}
+					</span>
+				</div>
+				<div class="grid grid-cols-3 gap-1">
+					{#each [
+						['static', 'Static'],
+						['zonal_coupled', 'Mud & Zonal'],
+						['iterative_sxo', 'Auto Iterative']
+					] as [mode, label]}
+						<button
+							type="button"
+							onclick={() => {
+								workbench.lithoParams.fluidDensityMode = mode as
+									| 'static'
+									| 'zonal_coupled'
+									| 'iterative_sxo';
+								executeLithoPoro(false);
+							}}
+							class="h-6 rounded-xs border px-1 text-[10px] font-semibold transition-colors {workbench.lithoParams
+								.fluidDensityMode === mode
+								? 'border-emerald-700 bg-emerald-700 text-white'
+								: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+						>
+							{label}
+						</button>
+					{/each}
+				</div>
+
+				{#if workbench.lithoParams.fluidDensityMode === 'static'}
+					<p class="mt-1 text-[10px] text-[var(--text-secondary)]">
+						Uses the scalar fluid density from the NPHI/RHOB fluid point ({fmtNum(
+							workbench.lithoParams.fluidRhob,
+							2
+						)} g/cc).
+					</p>
+				{:else}
+					<div class="mt-1.5 grid grid-cols-2 gap-1">
+						{#each [
+							['WBM', 'WBM'],
+							['OBM', 'OBM / SBM']
+						] as [mud, label]}
+							<button
+								type="button"
+								onclick={() => {
+									workbench.lithoParams.fluidDensityMudType = mud as 'WBM' | 'OBM' | 'SBM';
+									executeLithoPoro(false);
+								}}
+								class="h-6 rounded-xs border px-1.5 text-[10px] font-semibold transition-colors {workbench
+									.lithoParams.fluidDensityMudType === mud
+									? 'border-emerald-700 bg-emerald-700 text-white'
+									: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+							>
+								{label}
+							</button>
+						{/each}
+					</div>
+
+					{#if wellData.header?.mud_type || wellData.header?.mud_filtrate_density != null}
+						<p class="mt-1 text-[10px] text-[var(--text-secondary)]">
+							Well metadata:
+							{#if wellData.header?.mud_type}<span class="font-semibold">{wellData.header.mud_type}</span>{/if}
+							{#if wellData.header?.mud_filtrate_density != null}
+								• ρ<sub>mf</sub> {fmtNum(wellData.header.mud_filtrate_density, 3)} g/cc
+							{/if}
+							{#if wellData.header?.mud_filtrate_salinity != null}
+								• {fmtNum(wellData.header.mud_filtrate_salinity, 0)} ppm
+							{/if}
+						</p>
+					{/if}
+
+					{#if workbench.lithoParams.fluidDensityMudType === 'WBM'}
+						<NumericScrubber
+							label="Mud Salinity"
+							bind:value={workbench.lithoParams.fluidDensitySalinityPpm}
+							unit="ppm"
+							min={0}
+							max={350000}
+							step={1000}
+							onrun={() => executeLithoPoro(false)}
+						/>
+						<NumericScrubber
+							label="Rmf @ Temp (fallback)"
+							bind:value={workbench.lithoParams.fluidDensityRmf}
+							unit="ohm.m"
+							min={0.001}
+							max={10}
+							step={0.001}
+							decimals={3}
+							onrun={() => executeLithoPoro(false)}
+						/>
+						<NumericScrubber
+							label="Rmf Measurement Temp"
+							bind:value={workbench.lithoParams.fluidDensityRmfTempC}
+							unit="°C"
+							min={0}
+							max={200}
+							step={1}
+							onrun={() => executeLithoPoro(false)}
+						/>
+					{:else}
+						<NumericScrubber
+							label="Base Oil Density"
+							bind:value={workbench.lithoParams.fluidDensityObmBase}
+							unit="g/cc"
+							min={0.65}
+							max={0.95}
+							step={0.01}
+							onrun={() => executeLithoPoro(false)}
+						/>
+					{/if}
+
+					<div class="mt-1 grid grid-cols-[1fr_118px] items-center gap-x-2 py-0.5">
+						<span class="text-xs font-medium text-[var(--text-primary)]">Rxo Curve</span>
+						<select
+							bind:value={workbench.lithoParams.fluidDensityRxoCurve}
+							onchange={() => executeLithoPoro(false)}
+							class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
+						>
+							<option value="">None — use Sw^c</option>
+							{#each ['RXO', 'RXOZ', 'MSFL', 'RSHA', 'RSHAL', 'LLS', 'SFL'] as curve}
+								{#if wellData.curves[curve]}
+									<option value={curve}>{curve}</option>
+								{/if}
+							{/each}
+						</select>
+					</div>
+					<NumericScrubber
+						label="Flushing Exponent c"
+						bind:value={workbench.lithoParams.fluidDensityFlushExponent}
+						unit="Sxo = Sw^c"
+						min={0.05}
+						max={0.5}
+						step={0.01}
+						decimals={2}
+						onrun={() => executeLithoPoro(false)}
+					/>
+					{#if workbench.lithoParams.fluidDensityMode === 'zonal_coupled'}
+						<NumericScrubber
+							label="Residual Gas Saturation"
+							bind:value={workbench.lithoParams.fluidDensityShrGas}
+							unit="v/v"
+							min={0}
+							max={1}
+							step={0.01}
+							decimals={2}
+							onrun={() => executeLithoPoro(false)}
+						/>
+						<NumericScrubber
+							label="Residual Oil Saturation"
+							bind:value={workbench.lithoParams.fluidDensityShrOil}
+							unit="v/v"
+							min={0}
+							max={1}
+							step={0.01}
+							decimals={2}
+							onrun={() => executeLithoPoro(false)}
+						/>
+					{/if}
+					<p class="mt-1 text-[10px] text-[var(--text-secondary)]">
+						Emits <span class="mono-num">RHO_FL</span>, <span class="mono-num">RHO_MF</span>,
+						<span class="mono-num">SXO_EST</span>, <span class="mono-num">PHID_RAW_100</span> and
+											<span class="mono-num">RHO_FL_TIER</span> as QC curves in the Porosity Methods vs
+											Core comparison plot. Fluid zones come from GOC/OWC/GWC contacts.
+					</p>
+				{/if}
+			</div>
 		</ParameterSection>
 
 		<ParameterSection title="Endpoint Parameters (NPHI / RHOB / Vsh)" badge="Live Crossplot & Tracks">
