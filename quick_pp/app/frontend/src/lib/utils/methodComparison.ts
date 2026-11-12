@@ -7,6 +7,9 @@ export interface MethodComparison {
 	depth: number[];
 	curves: Partial<Record<string, (number | null)[]>>;
 	errors: Partial<Record<string, string>>;
+	rhom?: (number | null)[] | null;
+	rho_fluid?: number | null;
+	vshale?: (number | null)[] | null;
 }
 
 export function comparisonRequest(kind: 'porosity' | 'permeability') {
@@ -19,34 +22,50 @@ export function comparisonRequest(kind: 'porosity' | 'permeability') {
 	};
 	if (kind === 'porosity') {
 		return {
-			method: lp.porosityMethod, lithology_model: lp.model,
+			method: lp.porosityMethod,
+			lithology_model: lp.model,
 			use_hc_corrected: lp.logCorrectionMode !== 'none',
 			dry_sand_point: [lp.drySandNphi, lp.drySandRhob],
 			dry_silt_point: [lp.drySiltNphi, lp.drySiltRhob],
 			dry_clay_point: [lp.dryClayNphi, lp.dryClayRhob],
 			fluid_point: [lp.fluidNphi, lp.fluidRhob],
-			silt_line_angle: lp.siltLineAngle, sonic_fluid_dt: lp.sonicFluidDt,
-			gr_clean: lp.grClean, gr_clay: lp.grClay,
-			enable_coal_flagging: lp.enableCoalFlagging, coal_rhob_max: lp.coalRhobMax,
-			coal_nphi_min: lp.coalNphiMin, coal_window_size: Math.round(lp.coalWindowSize),
-			coal_trend_factor: lp.coalTrendFactor, badhole_treatment: lp.badholeTreatment,
+			silt_line_angle: lp.siltLineAngle,
+			sonic_fluid_dt: lp.sonicFluidDt,
+			gr_clean: lp.grClean,
+			gr_clay: lp.grClay,
+			enable_coal_flagging: lp.enableCoalFlagging,
+			coal_rhob_max: lp.coalRhobMax,
+			coal_nphi_min: lp.coalNphiMin,
+			coal_window_size: Math.round(lp.coalWindowSize),
+			coal_trend_factor: lp.coalTrendFactor,
+			badhole_treatment: lp.badholeTreatment,
 			...filter
 		};
 	}
 	const pp = workbench.permParams;
 	const curves = wellData.curves;
 	const phitSand = curves['PHIT_SAND'] ?? [];
-	const useTs = thomasStieberAvailable(lp.model,
-		Boolean(workbench.tsParams.enabled || phitSand.some((v) => Number.isFinite(v)))
-	) && workbench.tsParams.useInPerm;
+	const useTs =
+		thomasStieberAvailable(
+			lp.model,
+			Boolean(workbench.tsParams.enabled || phitSand.some((v) => Number.isFinite(v)))
+		) && workbench.tsParams.useInPerm;
 	const clean = (arr: number[] | undefined) =>
-		arr?.length ? arr.map((v) => Number.isFinite(v) ? v : null) : undefined;
+		arr?.length ? arr.map((v) => (Number.isFinite(v) ? v : null)) : undefined;
 	return {
-		method: pp.method, lithology_model: lp.model,
-		m: pp.m, A: pp.A, B: pp.B, C: pp.C, s: pp.s, swirr: pp.swirr,
+		method: pp.method,
+		lithology_model: lp.model,
+		m: pp.m,
+		A: pp.A,
+		B: pp.B,
+		C: pp.C,
+		s: pp.s,
+		swirr: pp.swirr,
 		use_thomas_stieber: useTs,
-		depths: clean(curves['DEPT'] ?? curves['DEPTH']), phit: clean(curves['PHIT']),
-		vclay: clean(curves['VCLAY'] ?? curves['VSHALE']), vsilt: clean(curves['VSILT']),
+		depths: clean(curves['DEPT'] ?? curves['DEPTH']),
+		phit: clean(curves['PHIT']),
+		vclay: clean(curves['VCLAY'] ?? curves['VSHALE']),
+		vsilt: clean(curves['VSILT']),
 		phit_sand: useTs ? clean(phitSand) : undefined,
 		vsh_lam: useTs ? clean(curves['VSH_LAM']) : undefined,
 		vsh_dis: useTs ? clean(curves['VSH_DIS']) : undefined,
@@ -56,14 +75,39 @@ export function comparisonRequest(kind: 'porosity' | 'permeability') {
 }
 
 export function comparisonKey(kind: 'porosity' | 'permeability') {
-	const porosityInputs = kind === 'porosity'
-		? Object.fromEntries(Object.entries(wellData.curves).filter(([name]) =>
-			name.startsWith('V') || ['DEPT', 'DEPTH', 'PHIT', 'NPHI', 'RHOB', 'NPHI_HC', 'RHOB_HC',
-				'DTC', 'DT', 'GR', 'BADHOLE', 'BAD_HOLE', 'BAD_HOLE_FLAG', 'COAL_FLAG'].includes(name)))
-		: null;
+	const porosityInputs =
+		kind === 'porosity'
+			? Object.fromEntries(
+					Object.entries(wellData.curves).filter(
+						([name]) =>
+							name.startsWith('V') ||
+							[
+								'DEPT',
+								'DEPTH',
+								'PHIT',
+								'RHOM',
+								'NPHI',
+								'RHOB',
+								'NPHI_HC',
+								'RHOB_HC',
+								'DTC',
+								'DT',
+								'GR',
+								'BADHOLE',
+								'BAD_HOLE',
+								'BAD_HOLE_FLAG',
+								'COAL_FLAG'
+							].includes(name)
+					)
+				)
+			: null;
 	return JSON.stringify([
-		workbench.projectId, workbench.wellId, wellData.wellLoadGeneration,
-		comparisonRequest(kind), kind === 'porosity' ? workbench.lithoParams : null, porosityInputs
+		workbench.projectId,
+		workbench.wellId,
+		wellData.wellLoadGeneration,
+		comparisonRequest(kind),
+		kind === 'porosity' ? workbench.lithoParams : null,
+		porosityInputs
 	]);
 }
 

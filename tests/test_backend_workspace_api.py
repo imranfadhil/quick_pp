@@ -293,6 +293,8 @@ def test_porosity_comparison_is_isolated_and_matches_active_method(client_and_pr
     body = comparison.json()
     assert len(body["curves"]) == 7
     assert body["curves"]["avg_weighted"] == pytest.approx(active.json()["data"]["PHIT"])
+    assert body["rhom"] == pytest.approx(active.json()["data"]["RHOM"])
+    assert body["rho_fluid"] == pytest.approx(1.0)
     pd.testing.assert_frame_equal(before, ws_service._get_filtered_well_df(pid, "Well-A"))
     assert before_config == ws_service._ephemeral_well_configs.get((pid, "Well-A"), {})
     assert client.post(f"{base}/porosity_comparison", json={**payload, "save": True}).status_code == 400
@@ -336,6 +338,8 @@ def test_permeability_comparison_is_isolated_and_matches_active_method(client_an
     body = comparison.json()
     assert set(body["curves"]) == {"choo", "kozeny_carman", "timur", "tixier", "coates"}
     assert body["curves"]["choo"] == pytest.approx(active.json()["data"]["PERM"])
+    assert len(body["vshale"]) == len(body["depth"])
+    assert all(v is None or 0.0 <= v <= 1.0 for v in body["vshale"])
     pd.testing.assert_frame_equal(before, ws_service._get_filtered_well_df(pid, "Well-A"))
     assert before_config == ws_service._ephemeral_well_configs.get((pid, "Well-A"), {})
     for method in ("kozeny_carman", "timur", "tixier", "coates"):

@@ -4952,6 +4952,7 @@ def workspace_porosity_comparison(
         )
         curves: Dict[str, Any] = {}
         errors: Dict[str, str] = {}
+        rhom: Optional[List[Any]] = None
         for method in methods:
             isolated = _IsolatedEvaluation(project_id, well_name, baseline.copy())
             token = _isolated_evaluation.set(isolated)
@@ -4962,6 +4963,8 @@ def workspace_porosity_comparison(
                     req.model_copy(update={"method": method, "save": False}),
                 )
                 curves[method] = result["data"]["PHIT"]
+                if rhom is None:
+                    rhom = result["data"].get("RHOM")
             except HTTPException as exc:
                 if exc.status_code != 400:
                     raise
@@ -4972,6 +4975,8 @@ def workspace_porosity_comparison(
             "depth": _sanitize_for_json(baseline["DEPTH"].tolist()),
             "curves": curves,
             "errors": errors,
+            "rhom": rhom,
+            "rho_fluid": float(req.fluid_point[1]),
         }
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -5276,6 +5281,38 @@ def workspace_permeability(
         ) from e
 
 
+def _comparison_vshale(
+    df: pd.DataFrame, lithology_model: Optional[str]
+) -> List[Optional[float]]:
+    """Depth-aligned VSHALE for comparison tracks, matching the saturation plot convention."""
+    n = len(df)
+    saved = (
+        pd.to_numeric(df["VSHALE"], errors="coerce").to_numpy(dtype=float)
+        if "VSHALE" in df.columns
+        else np.full(n, np.nan)
+    )
+    vclay = (
+        pd.to_numeric(df["VCLAY"], errors="coerce").to_numpy(dtype=float)
+        if "VCLAY" in df.columns
+        else np.full(n, np.nan)
+    )
+    vsilt = (
+        pd.to_numeric(df["VSILT"], errors="coerce").to_numpy(dtype=float)
+        if "VSILT" in df.columns
+        else np.full(n, np.nan)
+    )
+    is_ssc = (lithology_model or "").lower() == "ssc"
+    derived = np.where(
+        is_ssc & np.isfinite(vclay) & np.isfinite(vsilt),
+        vclay + vsilt,
+        vclay,
+    )
+    saved_valid = np.isfinite(saved) & (saved >= 0.0) & (saved <= 1.0)
+    values = np.where(saved_valid, saved, derived)
+    values = np.where(np.isfinite(values), np.clip(values, 0.0, 1.0), np.nan)
+    return _sanitize_for_json(values.tolist())
+
+
 @router.post(
     "/wells/{well_name}/permeability_comparison",
     summary="Compare permeability methods without modifying well data",
@@ -5317,6 +5354,7 @@ def workspace_permeability_comparison(
             "depth": _sanitize_for_json(baseline["DEPTH"].tolist()),
             "curves": curves,
             "errors": errors,
+            "vshale": _comparison_vshale(baseline, req.lithology_model),
         }
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

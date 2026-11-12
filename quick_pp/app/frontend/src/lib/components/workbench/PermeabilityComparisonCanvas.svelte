@@ -7,7 +7,7 @@
 	import { depthFromMeters } from '$lib/utils/depthUnits';
 	import { permeabilityComparisonMetrics } from '$lib/utils/permeabilityComparison';
 	import { comparisonKey, comparisonRequest } from '$lib/utils/methodComparison';
-	import { comparisonPlotConfig, comparisonXAxis } from '$lib/utils/comparisonPlot';
+	import { comparisonPlotConfig, comparisonLeadingAxis, comparisonXAxis } from '$lib/utils/comparisonPlot';
 
 	const methods = [
 		{ key: 'choo', label: 'Choo', color: '#2563eb' },
@@ -62,25 +62,56 @@
 		if (!plotEl || !plotly || !result || stale || unsupported) return;
 		const unit = depthDisplay.unit;
 		const depth = result.depth.map((d) => depthFromMeters(d, unit));
-		const traces = methods.filter((m) => selected.includes(m.key) && result?.curves[m.key]).map((m) => ({
-			type: 'scatter' as const, mode: 'lines' as const, name: m.label,
-			x: result!.curves[m.key]!.map((v) => typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null),
-			y: depth, connectgaps: false,
-			line: { color: m.color, width: m.key === workbench.permParams.method ? 3 : 1.5 }
-		}));
+		const traces: Record<string, unknown>[] = [];
+
+		const vshale = result.vshale ?? [];
+		const vshX: (number | null)[] = [];
+		const vshY: number[] = [];
+		for (let i = 0; i < depth.length; i++) {
+			const value = vshale[i];
+			if (typeof value === 'number' && Number.isFinite(value)) {
+				vshX.push(value);
+				vshY.push(depth[i]);
+			}
+		}
+		if (vshX.length) {
+			traces.push({
+				type: 'scatter', mode: 'lines', name: 'VSHALE', xaxis: 'x', yaxis: 'y',
+				x: vshX, y: vshY, connectgaps: false, fill: 'tozerox',
+				fillcolor: 'rgba(22, 163, 74, 0.16)',
+				line: { color: '#16a34a', width: 1.5 }
+			});
+		}
+
+		for (const m of methods.filter((item) => selected.includes(item.key) && result?.curves[item.key])) {
+			traces.push({
+				type: 'scatter', mode: 'lines', name: m.label, xaxis: 'x2', yaxis: 'y',
+				x: result!.curves[m.key]!.map((v) => typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null),
+				y: depth, connectgaps: false,
+				line: { color: m.color, width: m.key === workbench.permParams.method ? 3 : 1.5 }
+			});
+		}
 		const availableDepths = new Set(result.depth);
 		const matched = core.filter((sample) => availableDepths.has(sample.depth));
-		const coreTrace = {
-			type: 'scatter' as const, mode: 'markers' as const, name: 'CPERM',
+		traces.push({
+			type: 'scatter', mode: 'markers', name: 'CPERM', xaxis: 'x2', yaxis: 'y',
 			x: matched.map((sample) => sample.permeability),
 			y: matched.map((sample) => depthFromMeters(sample.depth, unit)),
 			marker: { color: '#111827', symbol: 'circle', size: 7 }
-		};
-		void plotly.react(plotEl, [...traces, coreTrace], {
-			margin: { l: 55, r: 12, t: 10, b: 48 },
-			xaxis: comparisonXAxis('permeability'),
+		});
+
+		const leading = comparisonLeadingAxis('permeability');
+		void plotly.react(plotEl, traces, {
+			margin: { l: 55, r: 12, t: 34, b: 48 },
+			xaxis: { ...leading, domain: [0, 0.24], anchor: 'y' },
+			xaxis2: { ...comparisonXAxis('permeability'), domain: [0.34, 1], anchor: 'y' },
 			yaxis: { title: { text: `Depth (${unit})` }, autorange: 'reversed' },
-			showlegend: false, paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+			showlegend: true,
+			legend: {
+				orientation: 'h', x: 0, y: 1.02, xanchor: 'left', yanchor: 'bottom',
+				font: { family: 'Inter', size: 10, color: '#334155' }
+			},
+			paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
 			autosize: true, uirevision: `${workbench.wellId}-${unit}`
 		}, comparisonPlotConfig).catch((e: unknown) => {
 			error = `Could not render comparison plot: ${e instanceof Error ? e.message : String(e)}`;

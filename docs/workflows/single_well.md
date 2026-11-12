@@ -263,8 +263,10 @@ flowchart TD
   The new methods are not available in batch evaluation.
 
 * **Porosity comparison:** Run Lithology & Porosity, then select **Porosity Methods
-  vs Depth + Core** from the Crossplot dropdown. Toggle the methods to overlay
-  their total-porosity curves with core markers; the active method is emphasized.
+  vs Depth + Core** from the Crossplot dropdown. The first track shows matrix
+  density (`RHOM`) and the configured fluid density; the second track overlays the
+  method curves with core markers. Toggle the methods to overlay
+  their total-porosity curves; the active method is emphasized.
   Calculations use the current parameters and most recently calculated lithology and
   corrected logs, but never overwrite the working or saved PHIT. Run the module
   again after editing inputs. The fixed porosity scale is 0–0.5 v/v; use the mouse
@@ -342,9 +344,10 @@ flowchart TD
 * **Permeability comparison:** Run Permeability, then select **Permeability Methods
   vs Depth + Core** from the Crossplot dropdown to overlay Choo, Kozeny-Carman, Timur,
   Tixier and Coates-Dumanoir curves against `CPERM` on a logarithmic
-  permeability axis (fixed at 0.1–100,000 mD). Use the mouse wheel to zoom depth.
-  Toggle methods and use the emphasized active method as a
-  reference. The comparison uses the current model parameters, porosity and
+  permeability axis (fixed at 0.1–100,000 mD). The first track shows `VSHALE`
+  (clay plus silt for the SSC model), matching the saturation comparison plot.
+  Use the mouse wheel to zoom depth. Toggle methods and use the emphasized active
+  method as a reference. The comparison uses the current model parameters, porosity and
   lithology inputs, including Thomas-Stieber inputs when enabled, without
   changing working or saved `PERM`. Only positive values are displayed or
   included in the matched-core metrics. RMSE and bias are in log10 permeability

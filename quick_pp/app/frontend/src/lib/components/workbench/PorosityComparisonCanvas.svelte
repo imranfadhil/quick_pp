@@ -7,7 +7,7 @@
 	import { depthFromMeters } from '$lib/utils/depthUnits';
 	import { comparisonMetrics } from '$lib/utils/porosityComparison';
 	import { comparisonKey } from '$lib/utils/methodComparison';
-	import { comparisonPlotConfig, comparisonXAxis } from '$lib/utils/comparisonPlot';
+	import { comparisonPlotConfig, comparisonLeadingAxis, comparisonXAxis } from '$lib/utils/comparisonPlot';
 
 	const methods = [
 		{ key: 'den', label: 'Density', color: '#2563eb' },
@@ -60,28 +60,62 @@
 		if (!plotEl || !plotly || !result || stale || unsupported) return;
 		const unit = depthDisplay.unit;
 		const depth = result.depth.map((d) => depthFromMeters(d, unit));
-		const traces = methods.filter((m) => selected.includes(m.key) && result?.curves[m.key]).map((m) => ({
-			type: 'scatter' as const,
-			mode: 'lines' as const,
-			name: m.label,
-			x: result!.curves[m.key],
-			y: depth,
-			connectgaps: false,
-			line: { color: m.color, width: m.key === workbench.lithoParams.porosityMethod ? 3 : 1.5 }
-		}));
+		const traces: Record<string, unknown>[] = [];
+
+		const rhom = result.rhom ?? [];
+		const rhomX: (number | null)[] = [];
+		const rhomY: number[] = [];
+		for (let i = 0; i < depth.length; i++) {
+			const value = rhom[i];
+			if (typeof value === 'number' && Number.isFinite(value)) {
+				rhomX.push(value);
+				rhomY.push(depth[i]);
+			}
+		}
+		if (rhomX.length) {
+			traces.push({
+				type: 'scatter', mode: 'lines', name: 'RHOM', xaxis: 'x', yaxis: 'y',
+				x: rhomX, y: rhomY, connectgaps: false,
+				line: { color: '#0f766e', width: 1.5 }
+			});
+		}
+		const rhoFluid = result.rho_fluid;
+		if (typeof rhoFluid === 'number' && Number.isFinite(rhoFluid) && depth.length) {
+			traces.push({
+				type: 'scatter', mode: 'lines', name: 'RHO_FLUID', xaxis: 'x', yaxis: 'y',
+				x: [rhoFluid, rhoFluid], y: [depth[0], depth[depth.length - 1]],
+				line: { color: '#b45309', width: 1.5, dash: 'dash' }
+			});
+		}
+
+		for (const m of methods.filter((item) => selected.includes(item.key) && result?.curves[item.key])) {
+			traces.push({
+				type: 'scatter', mode: 'lines', name: m.label, xaxis: 'x2', yaxis: 'y',
+				x: result!.curves[m.key], y: depth, connectgaps: false,
+				line: { color: m.color, width: m.key === workbench.lithoParams.porosityMethod ? 3 : 1.5 }
+			});
+		}
 		const availableDepths = new Set(result.depth);
 		const matched = core.filter((sample) => availableDepths.has(sample.depth));
-		const coreTrace = {
-			type: 'scatter' as const, mode: 'markers' as const, name: 'CPORE',
+		traces.push({
+			type: 'scatter', mode: 'markers', name: 'CPORE', xaxis: 'x2', yaxis: 'y',
 			x: matched.map((sample) => sample.porosity),
 			y: matched.map((sample) => depthFromMeters(sample.depth, unit)),
 			marker: { color: '#111827', symbol: 'circle', size: 7 }
-		};
-		void plotly.react(plotEl, [...traces, coreTrace], {
-			margin: { l: 55, r: 12, t: 10, b: 48 },
-			xaxis: comparisonXAxis('porosity'),
+		});
+
+		const leading = comparisonLeadingAxis('porosity', result.rho_fluid);
+		void plotly.react(plotEl, traces, {
+			margin: { l: 55, r: 12, t: 34, b: 48 },
+			xaxis: { ...leading, domain: [0, 0.24], anchor: 'y' },
+			xaxis2: { ...comparisonXAxis('porosity'), domain: [0.34, 1], anchor: 'y' },
 			yaxis: { title: { text: `Depth (${unit})` }, autorange: 'reversed' },
-			showlegend: false, paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+			showlegend: true,
+			legend: {
+				orientation: 'h', x: 0, y: 1.02, xanchor: 'left', yanchor: 'bottom',
+				font: { family: 'Inter', size: 10, color: '#334155' }
+			},
+			paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
 			autosize: true, uirevision: `${workbench.wellId}-${unit}`
 		}, comparisonPlotConfig).catch((e: unknown) => {
 			error = `Could not render comparison plot: ${e instanceof Error ? e.message : String(e)}`;
