@@ -120,6 +120,120 @@ def test_resolution_enhancement_endpoint(client_and_project):
         assert abs(diag["relative_volume_bias_pct"]) < 0.5
 
 
+@pytest.fixture
+def client_and_jittered_project(monkeypatch):
+    """Well with a non-uniform depth grid and three non-contiguous zones.
+
+    Mirrors the reported failure: a zone-filtered run on a well whose depth step is
+    not exactly constant takes the resampling path, which used to return a freshly
+    generated grid and silently drop every enhanced sample on the client.
+    """
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    SessionLocal = sessionmaker(bind=engine)
+    session = SessionLocal()
+
+    proj = Project(db_session=session, name="conditioning_jitter_proj")
+    proj.save()
+
+    rng = np.random.default_rng(23)
+    n = 600
+    depth = 2000.0 + np.cumsum(rng.normal(DZ, 0.0004, n))
+    bed = (np.floor((depth - depth[0]) / 0.45) % 2).astype(int)
+    truth = {
+        "GR": np.where(bed == 0, 25.0, 115.0),
+        "NPHI": np.where(bed == 0, 0.27, 0.36),
+        "RHOB": np.where(bed == 0, 2.22, 2.55),
+    }
+    measured = {}
+    for name, spec in DEFAULT_LEGACY_SPECS.items():
+        kernel = build_vrf_kernel(spec.fwhm_m, DZ)
+        measured[name] = apply_vrf_forward(truth[name], kernel) + rng.normal(
+            0.0, spec.noise_floor * 3.0, n
+        )
+
+    zones = np.array(["Zone-1"] * 200 + ["Zone-2"] * 200 + ["Zone-3"] * 200)
+    df = pd.DataFrame(
+        {
+            "DEPTH": depth,
+            "WELL_NAME": ["Well-J"] * n,
+            "GR": measured["GR"],
+            "NPHI": measured["NPHI"],
+            "RHOB": measured["RHOB"],
+            "RT": np.full(n, 10.0),
+            "CALI": np.full(n, 8.5),
+            "BS": np.full(n, 8.5),
+            "DRHO": np.zeros(n),
+            "ZONES": zones,
+        }
+    )
+    well_j = Well(
+        db_session=session, project_id=proj.project_id, name="Well-J", uwi="WELL-J-1"
+    )
+    well_j.save()
+    proj.update_data(df)
+    proj.save()
+    well_j.add_formation_tops(
+        [
+            {"name": "Zone-1", "depth": float(depth[0])},
+            {"name": "Zone-2", "depth": float(depth[200])},
+            {"name": "Zone-3", "depth": float(depth[400])},
+        ]
+    )
+    session.commit()
+
+    class DummyCtx:
+        def __init__(self, s):
+            self._s = s
+
+        def __enter__(self):
+            return self._s
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(db_service, "get_db", lambda: DummyCtx(session))
+    monkeypatch.setattr(ws_service, "get_db", lambda: DummyCtx(session))
+    db_service.invalidate_well_cache()
+
+    client = TestClient(app)
+    yield client, proj.project_id, depth
+    session.close()
+
+
+def test_zone_filtered_enhancement_returns_well_depths(client_and_jittered_project):
+    """A zone-filtered run on a non-uniform grid must return the well's own depths.
+
+    The UI merges computed curves by exact depth, so any other grid makes the
+    enhancement appear to do nothing.
+    """
+    client, pid, depth = client_and_jittered_project
+    base = f"/quick_pp/workspace/projects/{pid}/wells/Well-J"
+
+    response = client.post(
+        f"{base}/resolution_enhancement",
+        json={"mode": "match_finest", "zones": ["Zone-1", "Zone-3"], "save": False},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    returned = np.asarray(body["data"]["DEPTH"], dtype=float)
+    expected = np.concatenate([depth[:200], depth[400:]])
+    assert len(returned) == len(expected)
+    np.testing.assert_allclose(returned, expected, atol=1e-9)
+
+    for curve in ("GR_ENH", "NPHI_ENH", "RHOB_ENH", "DECONV_WEIGHT"):
+        values = np.asarray(body["data"][curve], dtype=float)
+        assert np.isfinite(values).all(), f"{curve} has dropped samples"
+
+    # The excluded middle zone must not be bridged into the output.
+    assert not np.any((returned > depth[200]) & (returned < depth[400]))
+
+
 def test_resolution_enhancement_feeds_thomas_stieber(client_and_project):
     client, pid = client_and_project
     base = f"/quick_pp/workspace/projects/{pid}/wells/Well-A"

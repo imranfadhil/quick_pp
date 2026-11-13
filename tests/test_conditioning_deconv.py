@@ -356,6 +356,70 @@ def test_nonuniform_grid_resamples_with_warning():
     assert "GR_ENH" in result.df.columns
 
 
+def test_nonuniform_grid_preserves_original_depths():
+    """Resampling must not leak the internal uniform grid into the returned depths.
+
+    Depth-keyed consumers (the UI merges computed curves by exact depth) silently drop
+    every enhanced sample when the returned grid differs from the well grid.
+    """
+    df, _, _ = _synthetic_lrlc(n=200, seed=17)
+    rng = np.random.default_rng(17)
+    df["DEPTH"] = df["DEPTH"] + np.cumsum(rng.normal(0.0, 0.0004, len(df)))
+    with pytest.warns(UserWarning, match="not uniformly sampled"):
+        result = harmonize_nuclear_logs(df, mode="enhance_all")
+    np.testing.assert_allclose(
+        result.df["DEPTH"].to_numpy(), df["DEPTH"].to_numpy(), atol=1e-9
+    )
+    for name in ("GR", "NPHI", "RHOB"):
+        enh = result.df[f"{name}_ENH"].to_numpy()
+        assert np.isfinite(enh).all()
+        assert np.sqrt(np.mean((enh - df[name].to_numpy()) ** 2)) > 0.0
+
+
+def test_zone_gaps_are_not_interpolated_across():
+    """Excluded depth intervals must stay NaN instead of being bridged by a straight line."""
+    df, _, _ = _synthetic_lrlc(n=400, seed=18)
+    keep = (df["DEPTH"] < 1015.0) | (df["DEPTH"] > 1045.0)
+    filtered = df[keep].reset_index(drop=True)
+    with pytest.warns(UserWarning, match="not uniformly sampled"):
+        result = harmonize_nuclear_logs(filtered, mode="enhance_all")
+    # The returned frame must stay on the filtered grid, never grow across the gap.
+    assert len(result.df) == len(filtered)
+    np.testing.assert_allclose(
+        result.df["DEPTH"].to_numpy(), filtered["DEPTH"].to_numpy(), atol=1e-9
+    )
+    for name in ("GR", "NPHI", "RHOB"):
+        assert np.isfinite(result.df[f"{name}_ENH"].to_numpy()).all()
+
+
+def test_borehole_weights_survive_resampling():
+    """Caliper/density-correction weights must be derived from the measured frame."""
+    df, _, _ = _synthetic_lrlc(n=200, seed=19)
+    rng = np.random.default_rng(19)
+    df["DEPTH"] = df["DEPTH"] + np.cumsum(rng.normal(0.0, 0.0004, len(df)))
+    df["BS"] = 8.5
+    df["CALI"] = 8.5
+    df.loc[80:100, "CALI"] = 12.0
+    with pytest.warns(UserWarning, match="not uniformly sampled"):
+        result = harmonize_nuclear_logs(df, mode="enhance_all")
+    weight = result.df["DECONV_WEIGHT"].to_numpy()
+    assert np.isfinite(weight).all()
+    assert weight.min() < 0.9
+
+
+def test_curve_already_at_target_resolution_warns():
+    """A curve finer than the target must report the pass-through instead of silently no-oping."""
+    df, _, _ = _synthetic_lrlc(n=200, seed=20)
+    with pytest.warns(UserWarning, match="already at or below"):
+        result = harmonize_nuclear_logs(df, mode="match_finest")
+    assert result.diagnostics["RHOB"].effective_fwhm_m == pytest.approx(0.0)
+    # No residual smearing to invert, so the output stays close to the raw curve
+    # (only the volume tether and Huber penalty perturb it).
+    raw = df["RHOB"].to_numpy()
+    enh = result.df["RHOB_ENH"].to_numpy()
+    assert np.sqrt(np.mean((enh - raw) ** 2)) < 0.3 * np.std(raw)
+
+
 def test_nyquist_floor_clamping():
     """A target resolution below the Nyquist floor must be clamped with a warning."""
     df, _, _ = _synthetic_lrlc(n=200, seed=14)

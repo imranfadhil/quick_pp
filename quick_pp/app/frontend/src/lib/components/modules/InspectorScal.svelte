@@ -724,9 +724,12 @@
 		return null;
 	}
 
-	/** Build paired (driver, grain density) records from core samples or CGD/driver curves. */
-	function buildGrainDensityRecords(driverCol: string): Array<{ driver: number; CGD: number }> {
-		const records: Array<{ driver: number; CGD: number }> = [];
+	/**
+	 * Build paired (driver, grain density) records from core samples or CGD/driver curves.
+	 * Records are keyed by the resolved driver column name so the backend can locate it.
+	 */
+	function buildGrainDensityRecords(driverCol: string): Array<Record<string, number>> {
+		const records: Array<Record<string, number>> = [];
 		const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
 		const driverCurve = wellData.curves[driverCol] ?? [];
 
@@ -761,7 +764,7 @@
 				const cgd = readCgd(s);
 				if (!Number.isFinite(cgd)) return;
 				const driver = Number(s[driverCol] ?? s.CGR ?? s.GR ?? nearestDriver(dCur));
-				if (Number.isFinite(driver)) records.push({ driver, CGD: cgd });
+				if (Number.isFinite(driver)) records.push({ [driverCol]: driver, CGD: cgd });
 			});
 		}
 
@@ -774,7 +777,7 @@
 					const cgd = Number(cgdCurve[i]);
 					const driver = Number(driverCurve[i]);
 					if (Number.isFinite(cgd) && cgd > 0 && Number.isFinite(driver)) {
-						records.push({ driver, CGD: cgd });
+						records.push({ [driverCol]: driver, CGD: cgd });
 					}
 				}
 			}

@@ -495,7 +495,8 @@ class GrainDensityCorrelationInput(BaseModel):
 
 
 # Column fallback preference order (uppercase match).
-_DRIVER_FALLBACKS = ("CGR", "SGR", "GR", "GAMMA")
+# "DRIVER" is accepted last so callers that send a generic driver key still resolve.
+_DRIVER_FALLBACKS = ("CGR", "SGR", "GR", "GAMMA", "DRIVER")
 _CGD_FALLBACKS = ("CGD", "GRDEN", "RHOG", "RHOMAA", "GRAIN_DEN")
 
 

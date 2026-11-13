@@ -885,12 +885,61 @@ def _detect_depth_uom(dz_raw: float) -> str:
     return "ft" if ft_err < m_err else "m"
 
 
+def _uniform_grid(z: np.ndarray, step: float) -> Tuple[np.ndarray, np.ndarray]:
+    """Build a uniform depth grid spanning ``z`` and flag nodes inside excluded intervals.
+
+    Args:
+        z: Strictly increasing measured depths.
+        step: Uniform grid step in the same units as ``z``.
+
+    Returns:
+        tuple[np.ndarray, np.ndarray]: ``(grid, in_gap)`` where ``in_gap`` marks nodes
+        further than half a step from any measured sample.
+    """
+    grid = np.arange(z[0], z[-1] + step * 0.5, step)
+    # Never emit a node below the deepest measured sample: it would have no bracketing
+    # data and would map back to NaN on the last sample of the interval.
+    grid = grid[grid <= z[-1] + 1e-9]
+    idx = np.clip(np.searchsorted(z, grid), 1, len(z) - 1)
+    left = z[idx - 1]
+    right = z[idx]
+    nearest = np.where(np.abs(grid - left) <= np.abs(right - grid), left, right)
+    return grid, np.abs(grid - nearest) > step * 0.5
+
+
+def _interp_onto_grid(
+    z: np.ndarray, grid: np.ndarray, vals: np.ndarray, in_gap: np.ndarray
+) -> np.ndarray:
+    """Linearly interpolate ``vals`` from measured depths ``z`` onto ``grid``.
+
+    Args:
+        z: Strictly increasing measured depths.
+        grid: Uniform target grid.
+        vals: Values sampled at ``z``.
+        in_gap: Nodes to force to ``NaN`` because they fall inside an excluded interval.
+
+    Returns:
+        np.ndarray: Interpolated values on ``grid``.
+    """
+    finite = np.isfinite(vals)
+    if finite.sum() < 2:
+        return np.full(len(grid), np.nan, dtype=np.float64)
+    resampled = np.interp(grid, z[finite], vals[finite], left=np.nan, right=np.nan)
+    resampled[in_gap] = np.nan
+    return resampled
+
+
 def _resample_to_uniform_grid(
     df: pd.DataFrame,
     depth_col: str,
     columns: Sequence[str],
 ) -> Tuple[pd.DataFrame, float]:
     """Linearly resample selected columns onto a uniform grid at the median depth step.
+
+    Grid nodes that fall inside an excluded depth interval (no measured sample within
+    half a step) are emitted as ``NaN``. Without that mask a zone-filtered run would
+    interpolate a straight line across every skipped formation, so the solver would
+    treat unrelated intervals as contiguous and smear the gap into the real data.
 
     Args:
         df: Input DataFrame sorted by depth.
@@ -904,16 +953,63 @@ def _resample_to_uniform_grid(
     z = df[depth_col].to_numpy(dtype=np.float64)
     diffs = np.diff(z)
     step = float(np.median(diffs[diffs > 0]))
-    grid = np.arange(z[0], z[-1] + step * 0.5, step)
+    grid, in_gap = _uniform_grid(z, step)
+
     out = pd.DataFrame({depth_col: grid})
     for col in columns:
         vals = pd.to_numeric(df[col], errors="coerce").to_numpy(dtype=np.float64)
-        finite = np.isfinite(vals)
-        if finite.sum() < 2:
-            out[col] = np.nan
-            continue
-        out[col] = np.interp(grid, z[finite], vals[finite], left=np.nan, right=np.nan)
+        out[col] = _interp_onto_grid(z, grid, vals, in_gap)
     return out, step
+
+
+def _map_results_to_original_depths(
+    source_df: pd.DataFrame,
+    depth_col: str,
+    original_df: pd.DataFrame,
+    columns: Sequence[str],
+    step: float,
+) -> pd.DataFrame:
+    """Interpolate deconvolution outputs from the uniform grid back onto the measured depths.
+
+    The uniform grid is an internal artifact of the solver. Returning it directly breaks
+    every depth-keyed consumer: the UI merges computed curves onto the well grid by exact
+    depth, so a freshly generated grid silently discards almost every enhanced sample and
+    the enhancement appears to do nothing. Mapping back onto the original sample depths
+    keeps the outputs aligned with the well grid while the solver still sees a uniform step.
+
+    Args:
+        source_df: Deconvolution output on the uniform grid.
+        depth_col: Depth column name.
+        original_df: Frame holding the measured depths and the untouched raw curves.
+        columns: Computed columns to map back.
+        step: Uniform grid step in the input depth units.
+
+    Returns:
+        pd.DataFrame: Copy of ``original_df`` with the mapped computed columns added.
+    """
+    grid = source_df[depth_col].to_numpy(dtype=np.float64)
+    orig_depth = original_df[depth_col].to_numpy(dtype=np.float64)
+    out = original_df.copy()
+    if len(grid) < 2:
+        for col in columns:
+            out[col] = np.nan
+        return out
+
+    pos = (orig_depth - grid[0]) / step
+    i0 = np.clip(np.floor(pos).astype(int), 0, len(grid) - 1)
+    i1 = np.clip(i0 + 1, 0, len(grid) - 1)
+    frac = np.clip(pos - i0, 0.0, 1.0)
+
+    for col in columns:
+        vals = source_df[col].to_numpy(dtype=np.float64)
+        v0 = vals[i0]
+        v1 = vals[i1]
+        # A measured sample can bracket a grid node that was masked as an excluded
+        # interval; fall back to the finite neighbour instead of dropping the sample.
+        v0_filled = np.where(np.isfinite(v0), v0, v1)
+        v1_filled = np.where(np.isfinite(v1), v1, v0)
+        out[col] = v0_filled + (v1_filled - v0_filled) * frac
+    return out
 
 
 def harmonize_nuclear_logs(
@@ -1008,6 +1104,9 @@ def harmonize_nuclear_logs(
         )
 
     # Guard 1: depth grid uniformity
+    original_df = out_df
+    work_df = out_df
+    resampled = False
     if np.max(np.abs(np.diff(z_raw) - dz_raw)) > 1e-3 * dz_raw:
         if not resample_nonuniform:
             raise ValueError(
@@ -1019,10 +1118,11 @@ def harmonize_nuclear_logs(
         )
         collected_warnings.append(msg)
         warnings.warn(msg, UserWarning, stacklevel=2)
-        out_df, dz_raw = _resample_to_uniform_grid(
+        work_df, dz_raw = _resample_to_uniform_grid(
             out_df, depth_col, list(present_specs.keys())
         )
         dz_m = dz_raw * _METRES_PER_FOOT if resolved_uom == "ft" else dz_raw
+        resampled = True
 
     # Guard 2: Nyquist target-resolution floor
     nyquist_floor_m = nyquist_factor * dz_m
@@ -1041,15 +1141,23 @@ def harmonize_nuclear_logs(
         warnings.warn(msg, UserWarning, stacklevel=2)
         target_fwhm_m = nyquist_floor_m
 
-    w_cali, w_both = compute_borehole_weights(out_df)
-    out_df["DECONV_WEIGHT"] = w_both
+    # Borehole weights must be derived from the measured frame: the resampled frame only
+    # carries the nuclear curves, so CALI/BS/DRHO would be lost and every sample would be
+    # treated as fully reliable.
+    w_cali, w_both = compute_borehole_weights(original_df)
+    if resampled:
+        z_orig = original_df[depth_col].to_numpy(dtype=np.float64)
+        grid, in_gap = _uniform_grid(z_orig, dz_raw)
+        w_cali = _interp_onto_grid(z_orig, grid, w_cali, in_gap)
+        w_both = _interp_onto_grid(z_orig, grid, w_both, in_gap)
+    work_df["DECONV_WEIGHT"] = w_both
 
     diagnostics: Dict[str, CurveDeconvDiagnostics] = {}
     solver = deconvolve_curve_wiener if method == "wiener" else deconvolve_curve_1d
 
     for curve_name, spec in present_specs.items():
         w_curve = w_both if spec.apply_drho_weight else w_cali
-        y = pd.to_numeric(out_df[curve_name], errors="coerce").to_numpy(
+        y = pd.to_numeric(work_df[curve_name], errors="coerce").to_numpy(
             dtype=np.float64
         )
         if solver is deconvolve_curve_wiener:
@@ -1075,14 +1183,35 @@ def harmonize_nuclear_logs(
                 volume_window_m=volume_window_m,
                 noise_cap_mult=noise_cap_mult,
             )
-        out_df[f"{curve_name}_ENH"] = x_enh
-        out_df[f"{curve_name}_RECON"] = y_rec
+        work_df[f"{curve_name}_ENH"] = x_enh
+        work_df[f"{curve_name}_RECON"] = y_rec
         diagnostics[curve_name] = diag
+        if diag.effective_fwhm_m <= 1e-6:
+            msg = (
+                f"{curve_name} intrinsic FWHM ({spec.fwhm_m:.3f} m) is already at or below "
+                f"the {target_fwhm_m:.3f} m target; {curve_name}_ENH is a pass-through copy "
+                "of the raw curve."
+            )
+            collected_warnings.append(msg)
+            warnings.warn(msg, UserWarning, stacklevel=2)
         logger.debug(
             f"[conditioning] {curve_name}: FWHM {spec.fwhm_m:.3f} -> {target_fwhm_m:.3f} m, "
             f"lambda={diag.lambda_reg:.4g}, rmse={diag.weighted_recon_rmse:.4g}, "
             f"vol_bias={diag.relative_volume_bias_pct:+.3f}%"
         )
+
+    computed_cols = [
+        c
+        for c in work_df.columns
+        if c.endswith("_ENH") or c.endswith("_RECON") or c == "DECONV_WEIGHT"
+    ]
+    if resampled:
+        # Return the measured depth grid so depth-keyed consumers keep every sample.
+        out_df = _map_results_to_original_depths(
+            work_df, depth_col, original_df, computed_cols, dz_raw
+        )
+    else:
+        out_df = work_df
 
     lags: Dict[str, int] = {}
     if check_alignment:

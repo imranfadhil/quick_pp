@@ -2860,6 +2860,9 @@
 					<option value="match_finest">Match Finest Tool</option>
 				</select>
 			</div>
+			<div class="mb-1 text-[10px] leading-snug text-[var(--text-muted)]">
+				Target FWHM. <span class="mono-num">Enhance All</span> = Nyquist floor (Factor × Δz). <span class="mono-num">Match Finest</span> = sharpest tool FWHM. Curves already at target pass through.
+			</div>
 
 			<div class="grid grid-cols-[1fr_148px] items-center gap-x-2 py-0.5">
 				<span class="text-xs font-medium text-[var(--text-primary)]">Solver</span>
@@ -2871,6 +2874,9 @@
 					<option value="wiener">Wiener (preview)</option>
 				</select>
 			</div>
+			<div class="mb-1 text-[10px] leading-snug text-[var(--text-muted)]">
+				<span class="mono-num">Constrained Huber</span> = production, edge-preserving. <span class="mono-num">Wiener</span> = fast preview, smoother, ignores Huber and Morozov.
+			</div>
 
 			<NumericScrubber
 				label="Nyquist Factor"
@@ -2880,6 +2886,7 @@
 				max={6.0}
 				step={0.1}
 				decimals={1}
+				hint="Target FWHM as a multiple of Δz. Lower sharpens more but amplifies noise; below 2 is finer than sampling resolves."
 			/>
 			<NumericScrubber
 				label="Volume Tether Weight"
@@ -2889,6 +2896,7 @@
 				max={1}
 				step={0.01}
 				decimals={2}
+				hint="Penalizes drift of the rolling mean from the raw curve. Higher keeps bulk volume unbiased but limits sharpening; 0 removes the tether."
 			/>
 			<NumericScrubber
 				label="Morozov Target"
@@ -2898,6 +2906,7 @@
 				max={3.0}
 				step={0.05}
 				decimals={2}
+				hint="Stops regularization when the residual reaches τ × noise. Higher sharpens harder and fits noise; lower stays smoother."
 			/>
 			<NumericScrubber
 				label="Huber Threshold"
@@ -2907,6 +2916,7 @@
 				max={6.0}
 				step={0.1}
 				decimals={1}
+				hint="Change per sample where the prior stops penalizing quadratically. Higher smooths and softens beds; lower keeps edges crisp but admits noise."
 			/>
 			<NumericScrubber
 				label="Volume Window"
@@ -2916,6 +2926,7 @@
 				max={20}
 				step={0.5}
 				decimals={1}
+				hint="Averaging length of the volume tether; span several beds (≈4× tool FWHM). Larger preserves only long-wavelength volume."
 			/>
 			<NumericScrubber
 				label="Noise Cap"
@@ -2925,10 +2936,8 @@
 				max={10}
 				step={0.1}
 				decimals={1}
+				hint="Caps the MAD noise estimate at this multiple of the tool floor. Lower assumes cleaner data and sharpens harder; 0 disables the cap."
 			/>
-			<div class="mb-1 text-[10px] leading-snug text-[var(--text-muted)]">
-				Cap on the MAD noise estimate as a multiple of the tool noise floor. Set to 0 to disable the cap.
-			</div>
 
 			<div class="mt-1.5 flex items-center gap-1.5">
 				<button
