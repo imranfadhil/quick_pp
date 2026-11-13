@@ -3045,6 +3045,9 @@ class Well(object):
             meas_list: List[Dict[str, Any]] = list(s.get("measurements") or [])
             poro = s.get("porosity", s.get("cpore"))
             perm = s.get("permeability", s.get("cperm"))
+            grain_density = s.get(
+                "grain_density", s.get("cgd", s.get("CGD", s.get("rhog")))
+            )
             poro_amb = s.get("porosity_amb", s.get("cpore_amb", s.get("cpore_ori")))
             perm_air = s.get("perm_air", s.get("cperm_air", s.get("cperm_ori")))
             raw_depth_val = s.get("raw_depth", s.get("driller_depth"))
@@ -3060,6 +3063,17 @@ class Well(object):
                 try:
                     meas_list.append(
                         {"property_name": "CPERM", "value": float(perm), "unit": "mD"}
+                    )
+                except (TypeError, ValueError):
+                    pass
+            if grain_density is not None and str(grain_density).strip() != "":
+                try:
+                    meas_list.append(
+                        {
+                            "property_name": "CGRAIN_DENSITY",
+                            "value": float(grain_density),
+                            "unit": "g/cc",
+                        }
                     )
                 except (TypeError, ValueError):
                     pass

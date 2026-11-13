@@ -1012,6 +1012,31 @@ class ProjectDataState {
 		}
 		projectParams.setCounts(this.projectModuleParams);
 		projectParams.loadGeneration += 1;
+		this.applyGrainDensityCorrelation();
+	}
+
+	/**
+	 * Apply the project-scoped grain density correlation (stored under the `grain_density`
+	 * module key) into `workbench.scalParams` so it is shared across all wells in the project
+	 * and consumed by the Lithology & Porosity density-porosity calculation.
+	 */
+	applyGrainDensityCorrelation() {
+		const modMap = (this.projectModuleParams || {})['grain_density' as ProjectParamModuleKey];
+		const resolved = resolveMatchingProjectParamsEntry(modMap, workbench.selectedZones);
+		const p = resolved?.entry?.params;
+		if (!p || typeof p !== 'object') return;
+		const sp = workbench.scalParams;
+		if (typeof p.gd_driver_col === 'string') sp.gd_driver_col = p.gd_driver_col;
+		if (Number.isFinite(Number(p.gd_rho_ma_clean))) sp.gd_rho_ma_clean = Number(p.gd_rho_ma_clean);
+		if (Number.isFinite(Number(p.gd_k))) sp.gd_k = Number(p.gd_k);
+		if (Number.isFinite(Number(p.gd_driver_clean))) sp.gd_driver_clean = Number(p.gd_driver_clean);
+		if (Number.isFinite(Number(p.gd_rho_ma_min))) sp.gd_rho_ma_min = Number(p.gd_rho_ma_min);
+		if (Number.isFinite(Number(p.gd_rho_ma_max))) sp.gd_rho_ma_max = Number(p.gd_rho_ma_max);
+		sp.gd_r2 = p.gd_r2 ?? null;
+		sp.gd_rmse = p.gd_rmse ?? null;
+		sp.gd_count = p.gd_count ?? null;
+		sp.gd_calibrated = Boolean(p.gd_calibrated);
+		sp.gd_enabled = Boolean(p.gd_enabled);
 	}
 
 	/** Apply zone-key matches (exact, bundle subset, or fallback) from saved project parameters to all multi-well modules. */

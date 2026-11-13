@@ -4,6 +4,8 @@
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
 	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
+	import { projectData } from '$lib/state/projectData.svelte';
+	import { zoneSelectionKey, zoneSelectionLabel } from '$lib/state/projectParams.svelte';
 	import { appStatus } from '$lib/state/status.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
@@ -695,6 +697,200 @@
 		);
 	}
 
+	// ---- Grain / Matrix Density Correlation (project-scoped) ----
+	const GD_DRIVER_FALLBACKS = ['CGR', 'SGR', 'GR', 'GAMMA'];
+	const GD_CGD_SAMPLE_KEYS = [
+		'grain_density',
+		'CGD',
+		'grainDensity',
+		'GRDEN',
+		'RHOG',
+		'rho_g',
+		'rhog'
+	];
+
+	const gdDriverCurves = $derived(
+		Object.keys(wellData.curves).filter((c) => /^(CGR|SGR|GR|GAMMA)$/i.test(c))
+	);
+
+	function resolveGdDriverCol(): string | null {
+		const curveNames = Object.keys(wellData.curves);
+		const upper = new Map(curveNames.map((c) => [c.toUpperCase(), c]));
+		const preferred = (workbench.scalParams.gd_driver_col || 'CGR').toUpperCase();
+		for (const cand of [preferred, ...GD_DRIVER_FALLBACKS]) {
+			const hit = upper.get(cand.toUpperCase());
+			if (hit) return hit;
+		}
+		return null;
+	}
+
+	/** Build paired (driver, grain density) records from core samples or CGD/driver curves. */
+	function buildGrainDensityRecords(driverCol: string): Array<{ driver: number; CGD: number }> {
+		const records: Array<{ driver: number; CGD: number }> = [];
+		const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
+		const driverCurve = wellData.curves[driverCol] ?? [];
+
+		const nearestDriver = (depth: number): number => {
+			if (dept.length === 0 || driverCurve.length !== dept.length) return Number.NaN;
+			let lo = 0;
+			let hi = dept.length - 1;
+			while (lo < hi) {
+				const mid = (lo + hi) >> 1;
+				if (dept[mid] < depth) lo = mid + 1;
+				else hi = mid;
+			}
+			if (lo > 0 && Math.abs(dept[lo - 1] - depth) < Math.abs(dept[lo] - depth)) lo = lo - 1;
+			return Math.abs(dept[lo] - depth) <= 0.5 ? driverCurve[lo] : Number.NaN;
+		};
+
+		const readCgd = (s: Record<string, any>): number => {
+			for (const key of GD_CGD_SAMPLE_KEYS) {
+				const v = Number(s[key]);
+				if (Number.isFinite(v) && v > 0) return v;
+			}
+			return Number.NaN;
+		};
+
+		// Prefer discrete core plug samples (respecting the active filter).
+		if (wellData.coreSamples.length > 0) {
+			wellData.coreSamples.forEach((s, idx) => {
+				const origS = wellData.originalCoreSamples[idx];
+				const dCur = Number(s.depth ?? s.DEPTH ?? origS?.depth);
+				const dRaw = Number(s.raw_depth ?? origS?.raw_depth ?? dCur);
+				if (wellData.hasActiveFilter && !wellData.isCorePlugInActiveFilter(dRaw, dCur)) return;
+				const cgd = readCgd(s);
+				if (!Number.isFinite(cgd)) return;
+				const driver = Number(s[driverCol] ?? s.CGR ?? s.GR ?? nearestDriver(dCur));
+				if (Number.isFinite(driver)) records.push({ driver, CGD: cgd });
+			});
+		}
+
+		// Fallback / supplement from a continuous CGD curve aligned with the driver curve.
+		if (records.length === 0) {
+			const cgdCurve =
+				wellData.curves['CGD'] ?? wellData.curves['GRDEN'] ?? wellData.curves['RHOMAA'] ?? [];
+			if (cgdCurve.length === dept.length && driverCurve.length === dept.length) {
+				for (const i of wellData.visibleIndices) {
+					const cgd = Number(cgdCurve[i]);
+					const driver = Number(driverCurve[i]);
+					if (Number.isFinite(cgd) && cgd > 0 && Number.isFinite(driver)) {
+						records.push({ driver, CGD: cgd });
+					}
+				}
+			}
+		}
+		return records;
+	}
+
+	async function calibrateGrainDensity() {
+		const sp = workbench.scalParams;
+		wellData.isCalculating = true;
+		wellData.lastError = null;
+		try {
+			const driverCol = resolveGdDriverCol();
+			if (!driverCol) {
+				throw new Error(
+					`No driver log found. Expected one of ${GD_DRIVER_FALLBACKS.join(', ')} in the well curves.`
+				);
+			}
+			const records = buildGrainDensityRecords(driverCol);
+			if (records.length < 2) {
+				throw new Error(
+					'Need at least two core plugs with grain density and a driver (CGR/GR) reading to calibrate.'
+				);
+			}
+
+			const res = await postJson<{
+				fit: {
+					rho_ma_clean: number;
+					k: number;
+					driver_clean: number;
+					r2: number;
+					rmse: number;
+					count: number;
+					rho_ma_min: number;
+					rho_ma_max: number;
+				};
+				driver_col: string;
+				grain_density_col: string;
+			}>('/quick_pp/scal/grain_density_correlation', {
+				driver_col: driverCol,
+				grain_density_col: 'CGD',
+				rho_ma_clean: sp.gd_rho_ma_clean,
+				driver_clean: null,
+				data: records
+			});
+
+			const fit = res.fit;
+			sp.gd_driver_col = driverCol;
+			sp.gd_rho_ma_clean = fit.rho_ma_clean;
+			sp.gd_k = fit.k;
+			sp.gd_driver_clean = fit.driver_clean;
+			sp.gd_rho_ma_min = fit.rho_ma_min;
+			sp.gd_rho_ma_max = fit.rho_ma_max;
+			sp.gd_r2 = fit.r2;
+			sp.gd_rmse = fit.rmse;
+			sp.gd_count = fit.count;
+			sp.gd_calibrated = true;
+			sp.gd_enabled = true;
+			scalPendingSave = true;
+
+			await saveGrainDensityToProject();
+			appStatus.success(
+				`Grain density correlation calibrated on ${fit.count} plugs (k=${fmtNum(fit.k, 5)}, R²=${fmtNum(fit.r2, 3)}) — applies project-wide`,
+				workbench.wellId ?? undefined
+			);
+		} catch (e: any) {
+			wellData.lastError = e?.message || 'Failed to calibrate grain density correlation';
+		} finally {
+			wellData.isCalculating = false;
+		}
+	}
+
+	/** Persist the calibrated correlation to project-level module params (shared across wells). */
+	async function saveGrainDensityToProject() {
+		const pid = workbench.projectId;
+		if (!pid) return;
+		const sp = workbench.scalParams;
+		try {
+			const res = await postJson<any>(
+				`/quick_pp/workspace/projects/${encodeURIComponent(pid)}/module_params`,
+				{
+					entries: [
+						{
+							module: 'grain_density',
+							key: zoneSelectionKey(),
+							label: zoneSelectionLabel(),
+							selection: { zones: workbench.selectedZones },
+							params: {
+								gd_enabled: sp.gd_enabled,
+								gd_driver_col: sp.gd_driver_col,
+								gd_rho_ma_clean: sp.gd_rho_ma_clean,
+								gd_k: sp.gd_k,
+								gd_driver_clean: sp.gd_driver_clean,
+								gd_rho_ma_min: sp.gd_rho_ma_min,
+								gd_rho_ma_max: sp.gd_rho_ma_max,
+								gd_r2: sp.gd_r2,
+								gd_rmse: sp.gd_rmse,
+								gd_count: sp.gd_count,
+								gd_calibrated: sp.gd_calibrated
+							}
+						}
+					]
+				}
+			);
+			if (res?.module_params) projectData.projectModuleParams = res.module_params;
+		} catch {
+			// Non-fatal: the correlation still lives in scal_params on the well config.
+		}
+	}
+
+	async function toggleGrainDensityEnabled() {
+		workbench.scalParams.gd_enabled = !workbench.scalParams.gd_enabled;
+		scalPendingSave = true;
+		await saveGrainDensityToProject();
+	}
+
 	async function saveScalToWell() {
 		const pid = workbench.projectId;
 		const wid = workbench.wellId;
@@ -1161,6 +1357,100 @@
 							{/if}
 						</div>
 					{/if}
+				</div>
+			{/if}
+		</ParameterSection>
+
+		<ParameterSection
+			title="4. Grain Density Correlation"
+			badge={workbench.scalParams.gd_calibrated
+				? workbench.scalParams.gd_enabled
+					? `k=${fmtNum(workbench.scalParams.gd_k, 5)} • ON`
+					: `k=${fmtNum(workbench.scalParams.gd_k, 5)} • OFF`
+				: 'PROJECT'}
+			defaultOpen={false}
+		>
+			<p class="mb-1 text-[9.5px] leading-snug text-[var(--text-muted)]">
+				Calibrate a project-wide matrix density trend from core grain density vs. a gamma
+				driver (CGR = Th + K preferred, GR fallback):
+				<span class="mono-num text-[var(--text-secondary)]">
+					ρ<sub>ma</sub> = ρ<sub>clean</sub> + k·(driver − driver<sub>clean</sub>)
+				</span>. When enabled, this overrides the mineral-model ρ<sub>ma</sub> in the
+				Lithology &amp; Porosity density-porosity calculation.
+			</p>
+
+			<div class="grid grid-cols-2 gap-1">
+				<label class="text-[9px] text-[var(--text-muted)]">
+					Driver log
+					<select
+						bind:value={workbench.scalParams.gd_driver_col}
+						class="mt-0.5 h-6 w-full rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-[10px] text-[var(--text-primary)]"
+					>
+						{#if gdDriverCurves.length === 0}
+							<option value="CGR">CGR (auto)</option>
+						{/if}
+						{#each gdDriverCurves as curve (curve)}
+							<option value={curve}>{curve}</option>
+						{/each}
+					</select>
+				</label>
+				<div class="text-[9px] text-[var(--text-muted)]">
+					<NumericScrubber
+						label="Clean-sand anchor ρclean"
+						unit="g/cc"
+						bind:value={workbench.scalParams.gd_rho_ma_clean}
+						min={2.5}
+						max={2.9}
+						step={0.01}
+						decimals={2}
+						onchange={() => {
+							scalPendingSave = true;
+						}}
+					/>
+				</div>
+			</div>
+
+			<button
+				type="button"
+				disabled={wellData.isCalculating}
+				onclick={calibrateGrainDensity}
+				title="Fit k (and driver_clean) from core grain density vs. the selected driver across the active interval, then persist project-wide"
+				class="mt-1.5 h-7 w-full rounded-sm bg-[var(--accent-primary)] px-2.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+			>
+				{wellData.isCalculating ? 'Calibrating...' : 'Calibrate from Core'}
+			</button>
+
+			{#if workbench.scalParams.gd_calibrated}
+				<div
+					class="mt-1 rounded-sm border border-blue-200 bg-blue-50 px-2 py-1 text-xs text-blue-900"
+				>
+					<div class="mono-num flex items-center justify-between font-semibold">
+						<span>
+							ρ<sub>ma</sub> = {fmtNum(workbench.scalParams.gd_rho_ma_clean, 2)} + {fmtNum(
+								workbench.scalParams.gd_k,
+								5
+							)}·(driver − {fmtNum(workbench.scalParams.gd_driver_clean, 1)})
+						</span>
+					</div>
+					<div
+						class="mt-0.5 flex items-center justify-between border-t border-blue-200/70 pt-0.5 text-[9px] text-blue-800"
+					>
+						<span>
+							R² = {fmtNum(workbench.scalParams.gd_r2 ?? 0, 3)} • RMSE = {fmtNum(
+								workbench.scalParams.gd_rmse ?? 0,
+								4
+							)} • n = {workbench.scalParams.gd_count ?? 0}
+						</span>
+						<button
+							type="button"
+							onclick={toggleGrainDensityEnabled}
+							class="font-semibold {workbench.scalParams.gd_enabled
+								? 'text-emerald-700'
+								: 'text-amber-800'} hover:underline"
+						>
+							{workbench.scalParams.gd_enabled ? 'Applied in Porosity ✓' : 'Enable in Porosity'}
+						</button>
+					</div>
 				</div>
 			{/if}
 		</ParameterSection>

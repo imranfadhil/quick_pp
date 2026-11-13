@@ -26,6 +26,25 @@
 		MINERAL_TO_CURVE_MNEMONIC
 	} from '$lib/utils/petrophysicsColors';
 
+	/**
+	 * Project-scoped grain density correlation payload for the porosity endpoint. Returns the
+	 * calibrated coefficients only when the correlation has been fit and enabled (in the LAB:
+	 * Core & Pc Prep step); otherwise undefined so the mineral-model rho_ma is used.
+	 */
+	function grainDensityCorrelationBody() {
+		const sp = workbench.scalParams;
+		if (!sp.gd_enabled || !sp.gd_calibrated) return undefined;
+		return {
+			enabled: true,
+			driver_col: sp.gd_driver_col,
+			rho_ma_clean: sp.gd_rho_ma_clean,
+			k: sp.gd_k,
+			driver_clean: sp.gd_driver_clean,
+			rho_ma_min: sp.gd_rho_ma_min,
+			rho_ma_max: sp.gd_rho_ma_max
+		};
+	}
+
 	const AVAILABLE_MINERALS = [
 		'QUARTZ',
 		'CALCITE',
@@ -515,6 +534,7 @@
 						silt_line_angle: lp.siltLineAngle,
 						gr_clean: lp.grClean,
 						gr_clay: lp.grClay,
+						grain_density_correlation: grainDensityCorrelationBody(),
 						...gammaArgs,
 						...coalArgs,
 						...filterArgs

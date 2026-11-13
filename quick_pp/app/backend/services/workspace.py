@@ -129,6 +129,7 @@ from quick_pp.saturation import (
     swirr_timur,
     waxman_smits_saturation,
 )
+from quick_pp.scal import grain_density_from_correlation
 from quick_pp.uncertainty import (
     calc_stochastic_reservoir_summary,
     sample_lhs_parameters,
@@ -858,6 +859,22 @@ def _compute_continuous_rho_fluid(
     return result
 
 
+def _resolve_grain_density_driver(
+    df: pd.DataFrame, preferred: str
+) -> Optional[str]:
+    """Resolve the grain-density correlation driver column (CGR preferred, GR fallback).
+
+    Matches case-insensitively, trying the preferred column first, then CGR, SGR, GR, GAMMA.
+    """
+    fallbacks = ("CGR", "SGR", "GR", "GAMMA")
+    upper_map = {str(c).upper(): c for c in df.columns}
+    for candidate in (preferred, *fallbacks):
+        key = str(candidate or "").upper()
+        if key and key in upper_map:
+            return upper_map[key]
+    return None
+
+
 def _resolve_badhole_mask(
     df: pd.DataFrame, auto_detect_if_missing: bool = False
 ) -> pd.Series:
@@ -1186,6 +1203,42 @@ class WorkspaceLithologyRequest(WorkspaceFilterBase, GammaParameters):
     )
 
 
+class GrainDensityCorrelation(BaseModel):
+    """Project-scoped calibrated grain/matrix density correlation.
+
+    Applies ``rho_ma(z) = rho_ma_clean + k * (driver(z) - driver_clean)`` using a log driver
+    (CGR = Th + K preferred, GR fallback) to override the mineral-model matrix density when
+    computing density porosity. Calibrated once per project via the SCAL
+    ``/scal/grain_density_correlation`` endpoint.
+    """
+
+    enabled: bool = Field(
+        False, description="Apply the calibrated grain density correlation to rho_ma."
+    )
+    driver_col: str = Field(
+        "CGR",
+        description=(
+            "Driver log curve for the correlation. Resolved case-insensitively with "
+            "fallbacks CGR, SGR, GR, GAMMA."
+        ),
+    )
+    rho_ma_clean: float = Field(
+        2.65, gt=0.0, description="Clean-sand grain density anchor (g/cc)."
+    )
+    k: float = Field(
+        0.0, description="Calibrated slope (g/cc per driver unit)."
+    )
+    driver_clean: float = Field(
+        0.0, description="Driver reading of the clean/low-clay end member."
+    )
+    rho_ma_min: float = Field(
+        2.55, gt=0.0, description="Lower physical clamp for predicted rho_ma (g/cc)."
+    )
+    rho_ma_max: float = Field(
+        3.00, gt=0.0, description="Upper physical clamp for predicted rho_ma (g/cc)."
+    )
+
+
 class WorkspacePorosityRequest(WorkspaceFilterBase, GammaParameters):
     method: Literal[
         "den",
@@ -1254,6 +1307,14 @@ class WorkspacePorosityRequest(WorkspaceFilterBase, GammaParameters):
         description=(
             "Continuous apparent fluid density (RHO_FL) engine configuration. "
             "When omitted or mode='static', the legacy scalar fluid_point density is used."
+        ),
+    )
+    grain_density_correlation: Optional[GrainDensityCorrelation] = Field(
+        None,
+        description=(
+            "Project-scoped calibrated grain density correlation. When enabled, overrides the "
+            "mineral-model matrix density (rho_ma) with rho_ma = rho_ma_clean + k*(driver - "
+            "driver_clean) before computing density porosity."
         ),
     )
 
@@ -4798,6 +4859,32 @@ def workspace_porosity(
         # Calculate matrix density from unnormalized mineral fractions and density porosity
         rho_ma = np.asarray(rho_matrix(**norm_kwargs), dtype=float)
         rho_ma = np.where((rho_ma > 1.2) & np.isfinite(rho_ma), rho_ma, 2.65)
+
+        # Project-scoped grain density correlation override: replace the mineral-model
+        # matrix density with the core-calibrated rho_ma(z) driven by a log (CGR/GR).
+        gdc = getattr(req, "grain_density_correlation", None)
+        if gdc is not None and gdc.enabled:
+            driver_col = _resolve_grain_density_driver(df, gdc.driver_col)
+            if driver_col is not None:
+                driver_v = (
+                    pd.to_numeric(df[driver_col], errors="coerce")
+                    .to_numpy(dtype=float)[valid_mask.to_numpy()]
+                )
+                rho_ma_corr = np.asarray(
+                    grain_density_from_correlation(
+                        driver_v,
+                        rho_ma_clean=gdc.rho_ma_clean,
+                        k=gdc.k,
+                        driver_clean=gdc.driver_clean,
+                        rho_ma_min=gdc.rho_ma_min,
+                        rho_ma_max=gdc.rho_ma_max,
+                    ),
+                    dtype=float,
+                )
+                # Only override where the driver (and thus correlation) is valid; keep the
+                # mineral-model rho_ma elsewhere so sparse/absent driver points stay robust.
+                rho_ma = np.where(np.isfinite(rho_ma_corr), rho_ma_corr, rho_ma)
+
         phid_v = np.asarray(
             density_porosity(rhob_v, rho_ma, req.fluid_point[1]), dtype=float
         )

@@ -26,6 +26,12 @@ Provides petrophysically rigorous core-to-log and lab-to-reservoir reconciliatio
   5. DataFrame Pipeline Helper:
      - `correct_core_data`: Applies overburden porosity/permeability, clay-bound water,
        Dean-Stark saturation, Klinkenberg permeability, and $P_c$ corrections to a core DataFrame.
+  5b. Grain / Matrix Density ($\\rho_{ma}$) Correlation:
+     - `fit_grain_density_correlation`: Calibrates an anchored linear grain-density trend
+       $\\rho_{ma} = \\rho_{ma,clean} + k \\cdot (\\mathrm{driver} - \\mathrm{driver}_{clean})$
+       from paired core grain density (CGD) and a log driver (CGR = Th + K, or GR).
+     - `grain_density_from_correlation`: Applies a calibrated correlation to a driver log to
+       produce a continuous $\\rho_{ma}(z)$ curve for density-porosity in Lithology & Porosity.
   6. Two-Phase Relative Permeability ($k_{rw}, k_{ro}$) & Simulator Handover (`SWOF`):
      - `normalize_water_saturation`: Normalizes water saturation $S_w$ between $S_{wirr}$ and $1 - S_{or}$.
      - `corey_relperm`: Modified Corey (1954) power-law water-oil relative permeability model.
@@ -48,8 +54,10 @@ __all__ = [
     "dean_stark_cbw_correction",
     "dean_stark_saturation_correction",
     "estimate_cbw_from_qv",
+    "fit_grain_density_correlation",
     "fit_relperm",
     "generate_swof_table",
+    "grain_density_from_correlation",
     "humidity_to_total_porosity",
     "klinkenberg_permeability_correction",
     "let_relperm",
@@ -1234,3 +1242,151 @@ class CoreyRelPerm:
             pc_exponent=pc_exponent,
             pc_max=pc_max,
         )
+
+
+def grain_density_from_correlation(
+    driver: Union[float, np.ndarray, pd.Series, Sequence[float]],
+    rho_ma_clean: float = 2.65,
+    k: float = 0.0,
+    driver_clean: float = 0.0,
+    rho_ma_min: float = 2.55,
+    rho_ma_max: float = 3.00,
+) -> Union[float, np.ndarray]:
+    r"""Estimate matrix/grain density ($\rho_{ma}$) from a calibrated linear log driver correlation.
+
+    Implements the anchored "matrix-corrected density" form::
+
+        rho_ma(z) = rho_ma_clean + k * (driver(z) - driver_clean)
+
+    where `driver` is typically a uranium-free spectral gamma (CGR = Th + K) or total
+    gamma (GR) curve, `rho_ma_clean` is the clean-sand grain density anchor (e.g. 2.65 g/cc
+    for quartz), `driver_clean` is the driver reading of the clean/low-clay end member, and
+    `k` is a field-calibrated slope (g/cc per driver unit) fit to core grain density.
+
+    Args:
+        driver (float or array-like): Driver log value(s), e.g. CGR (GAPI) or GR (GAPI).
+        rho_ma_clean (float, optional): Clean end-member grain density anchor (g/cc). Defaults to 2.65.
+        k (float, optional): Calibrated slope in g/cc per driver unit. Defaults to 0.0.
+        driver_clean (float, optional): Driver reading of the clean end member. Defaults to 0.0.
+        rho_ma_min (float, optional): Lower physical clamp (g/cc). Defaults to 2.55.
+        rho_ma_max (float, optional): Upper physical clamp (g/cc). Defaults to 3.00.
+
+    Returns:
+        float or np.ndarray: Estimated matrix/grain density $\rho_{ma}$ (g/cc), clamped to
+        `[rho_ma_min, rho_ma_max]`.
+    """
+    d = np.asarray(driver, dtype=float)
+    rho_ma = float(rho_ma_clean) + float(k) * (d - float(driver_clean))
+    rho_ma = np.clip(rho_ma, float(rho_ma_min), float(rho_ma_max))
+    if np.ndim(d) == 0:
+        return float(rho_ma)
+    return rho_ma
+
+
+def fit_grain_density_correlation(
+    driver,
+    grain_density,
+    rho_ma_clean: Optional[float] = None,
+    driver_clean: Optional[float] = None,
+    clean_percentile: float = 5.0,
+    rho_ma_min: float = 2.55,
+    rho_ma_max: float = 3.00,
+) -> dict:
+    r"""Fit an anchored linear grain-density correlation from core grain density vs. a log driver.
+
+    Calibrates the field-specific slope `k` in::
+
+        rho_ma(z) = rho_ma_clean + k * (driver(z) - driver_clean)
+
+    from paired core grain density (CGD) and a driver log (typically CGR = Th + K, or GR).
+    Physically, radioactive accessory minerals (micas, K-feldspar, glauconite, illite) raise
+    both the gamma response and the grain density, so a positive `k` is expected in
+    mica/arkosic/shaly sands. The form is *anchored* on a clean end member to remain stable
+    when core coverage is sparse.
+
+    Args:
+        driver (array-like): Driver log values paired with the core samples (e.g. CGR/GR in GAPI).
+        grain_density (array-like): Measured core grain density (CGD) in g/cc.
+        rho_ma_clean (float, optional): Clean end-member grain density anchor (g/cc). If None,
+            defaults to 2.65 (quartz). The regression is pinned through
+            `(driver_clean, rho_ma_clean)`.
+        driver_clean (float, optional): Driver reading of the clean/low-clay end member. If None,
+            it is estimated from the `clean_percentile` of the driver data.
+        clean_percentile (float, optional): Percentile of `driver` used to estimate
+            `driver_clean` when not supplied. Defaults to 5.0.
+        rho_ma_min (float, optional): Lower physical clamp for predictions (g/cc). Defaults to 2.55.
+        rho_ma_max (float, optional): Upper physical clamp for predictions (g/cc). Defaults to 3.00.
+
+    Returns:
+        dict: Fitted correlation ``{'rho_ma_clean', 'k', 'driver_clean', 'r2', 'rmse', 'count',
+        'rho_ma_min', 'rho_ma_max'}``.
+    """
+    x_arr = np.asarray(driver, dtype=float).ravel()
+    y_arr = np.asarray(grain_density, dtype=float).ravel()
+
+    anchor = 2.65 if rho_ma_clean is None else float(rho_ma_clean)
+
+    # Keep only physically plausible paired samples.
+    mask = (
+        np.isfinite(x_arr)
+        & np.isfinite(y_arr)
+        & (y_arr >= rho_ma_min)
+        & (y_arr <= rho_ma_max)
+    )
+    n = int(np.sum(mask))
+
+    if n == 0:
+        return {
+            "rho_ma_clean": round(anchor, 4),
+            "k": 0.0,
+            "driver_clean": round(float(driver_clean), 4)
+            if driver_clean is not None
+            else 0.0,
+            "r2": 0.0,
+            "rmse": 0.0,
+            "count": 0,
+            "rho_ma_min": float(rho_ma_min),
+            "rho_ma_max": float(rho_ma_max),
+        }
+
+    x_v = x_arr[mask]
+    y_v = y_arr[mask]
+
+    # Estimate the clean driver reading from the low-clay end member if not supplied.
+    if driver_clean is None:
+        d_clean = float(np.percentile(x_v, float(clean_percentile)))
+    else:
+        d_clean = float(driver_clean)
+
+    dx = x_v - d_clean
+    # Pinned (no-intercept) least squares through (d_clean, anchor):
+    #   (y - anchor) = k * dx  ->  k = sum(dx * (y - anchor)) / sum(dx^2)
+    denom = float(np.sum(dx * dx))
+    if n >= 2 and denom > 1e-9:
+        k_val = float(np.sum(dx * (y_v - anchor)) / denom)
+    else:
+        k_val = 0.0
+
+    # Reasonable physical slope bounds (g/cc per GAPI): clay/mica trends are gentle.
+    k_val = float(np.clip(k_val, -0.02, 0.02))
+
+    y_pred = np.clip(anchor + k_val * dx, rho_ma_min, rho_ma_max)
+    residuals = y_v - y_pred
+    rmse = float(np.sqrt(np.mean(residuals**2)))
+    ss_res = float(np.sum(residuals**2))
+    ss_tot = float(np.sum((y_v - np.mean(y_v)) ** 2))
+    if ss_tot > 1e-12:
+        r2 = float(max(0.0, min(1.0, 1.0 - ss_res / ss_tot)))
+    else:
+        r2 = 1.0 if rmse < 1e-4 else 0.0
+
+    return {
+        "rho_ma_clean": round(anchor, 4),
+        "k": round(k_val, 6),
+        "driver_clean": round(d_clean, 4),
+        "r2": round(r2, 4),
+        "rmse": round(rmse, 5),
+        "count": n,
+        "rho_ma_min": float(rho_ma_min),
+        "rho_ma_max": float(rho_ma_max),
+    }

@@ -142,6 +142,10 @@
 				return hasTrace((name) => name === 'Spectral log samples')
 					? null
 					: 'No valid paired spectral log values in the selection. Check POTA (%), THOR (ppm), PEF and the depth filters; Th/K requires positive K and Th.';
+			case 'grain-density':
+				return hasTrace((name) => name === 'Core grain density')
+					? null
+					: 'No core grain density (CGD) paired with a GR/CGR driver in the selection. Add grain density in Tops & Ancillary → RCA and check the driver log.';
 			default:
 				return null;
 		}
@@ -379,6 +383,128 @@
 				}
 				baseLayout.shapes = shapes;
 			}
+			return { traces, layout: baseLayout };
+		}
+
+		if (effectiveMode === 'grain-density') {
+			baseLayout.margin.t = 70;
+			const sp = workbench.scalParams;
+
+			// Resolve the driver curve (calibrated driver first, then CGR/GR fallbacks).
+			const curveNames = Object.keys(wellData.curves);
+			const upperMap = new Map(curveNames.map((c) => [c.toUpperCase(), c]));
+			const driverCandidates = [sp.gd_driver_col, 'CGR', 'SGR', 'GR', 'GAMMA'];
+			let driverCol: string | null = null;
+			for (const cand of driverCandidates) {
+				const hit = upperMap.get(String(cand || '').toUpperCase());
+				if (hit) {
+					driverCol = hit;
+					break;
+				}
+			}
+			const driverCurve = driverCol ? (wellData.curves[driverCol] ?? []) : [];
+			const cgdCurve =
+				wellData.curves['CGD'] ??
+				wellData.curves['GRDEN'] ??
+				wellData.curves['RHOMAA'] ??
+				wellData.curves['CGRAIN_DENSITY'] ??
+				[];
+
+			// Collect (driver, CGD) pairs: prefer discrete core plug samples, then a CGD curve.
+			const xPts: number[] = [];
+			const yPts: number[] = [];
+			const depthPts: Array<number | null> = [];
+
+			const nearestDriver = (depth: number): number => {
+				if (deptAll.length === 0 || driverCurve.length !== deptAll.length) return Number.NaN;
+				let lo = 0;
+				let hi = deptAll.length - 1;
+				while (lo < hi) {
+					const mid = (lo + hi) >> 1;
+					if (deptAll[mid] < depth) lo = mid + 1;
+					else hi = mid;
+				}
+				if (lo > 0 && Math.abs(deptAll[lo - 1] - depth) < Math.abs(deptAll[lo] - depth)) lo = lo - 1;
+				return Math.abs(deptAll[lo] - depth) <= 0.5 ? driverCurve[lo] : Number.NaN;
+			};
+
+			const readCgd = (s: Record<string, any>): number => {
+				for (const key of ['grain_density', 'CGD', 'grainDensity', 'GRDEN', 'RHOG', 'rhog', 'rhoma', 'RHOMA']) {
+					const v = Number(s[key]);
+					if (Number.isFinite(v) && v > 0) return v;
+				}
+				return Number.NaN;
+			};
+
+			if (wellData.coreSamples.length > 0) {
+				wellData.coreSamples.forEach((s, idx) => {
+					const origS = wellData.originalCoreSamples[idx];
+					const dCur = Number(s.depth ?? s.DEPTH ?? origS?.depth);
+					const dRaw = Number(s.raw_depth ?? origS?.raw_depth ?? dCur);
+					if (wellData.hasActiveFilter && !wellData.isCorePlugInActiveFilter(dRaw, dCur)) return;
+					const cgd = readCgd(s);
+					if (!Number.isFinite(cgd)) return;
+					const driver = Number(s[driverCol ?? ''] ?? s.CGR ?? s.GR ?? nearestDriver(dCur));
+					if (!Number.isFinite(driver)) return;
+					xPts.push(driver);
+					yPts.push(cgd);
+					depthPts.push(Number.isFinite(dCur) ? dCur : null);
+				});
+			}
+			if (xPts.length === 0 && cgdCurve.length === deptAll.length && driverCurve.length === deptAll.length) {
+				for (const i of indices) {
+					const cgd = Number(cgdCurve[i]);
+					const driver = Number(driverCurve[i]);
+					if (Number.isFinite(cgd) && cgd > 0 && Number.isFinite(driver)) {
+						xPts.push(driver);
+						yPts.push(cgd);
+						depthPts.push(Number.isFinite(deptAll[i]) ? deptAll[i] : null);
+					}
+				}
+			}
+
+			if (xPts.length > 0) {
+				traces.push({
+					type: 'scatter',
+					mode: 'markers',
+					name: 'Core grain density',
+					x: xPts,
+					y: yPts,
+					text: depthPts.map((d) => (d === null ? 'Depth unavailable' : `Depth: ${fmtNum(d, 2)} m`)),
+					marker: {
+						size: 7,
+						color: depthPts.map((d) => (d === null ? 0 : d)),
+						colorscale: 'Viridis',
+						opacity: 0.85,
+						colorbar: { title: { text: 'Depth (m)' }, thickness: 10 }
+					},
+					hovertemplate: '%{text}<br>Driver: %{x:.3g}<br>CGD: %{y:.4g} g/cc<extra></extra>'
+				});
+
+				// Fitted correlation line (if calibrated) across the observed driver range.
+				if (sp.gd_calibrated && Number.isFinite(sp.gd_k)) {
+					const xMin = Math.min(...xPts);
+					const xMax = Math.max(...xPts);
+					const lineX = [xMin, xMax];
+					const clamp = (v: number) =>
+						Math.min(sp.gd_rho_ma_max, Math.max(sp.gd_rho_ma_min, v));
+					const lineY = lineX.map((x) =>
+						clamp(sp.gd_rho_ma_clean + sp.gd_k * (x - sp.gd_driver_clean))
+					);
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: `Fit: ρma = ${fmtNum(sp.gd_rho_ma_clean, 2)} + ${fmtNum(sp.gd_k, 5)}·(driver − ${fmtNum(sp.gd_driver_clean, 1)})`,
+						x: lineX,
+						y: lineY,
+						line: { color: '#DC2626', width: 2 },
+						hovertemplate: 'Driver: %{x:.3g}<br>ρma: %{y:.4g} g/cc<extra>Calibrated fit</extra>'
+					});
+				}
+			}
+
+			baseLayout.xaxis.title = { text: `${driverCol ?? 'GR/CGR'} (GAPI)` };
+			baseLayout.yaxis.title = { text: 'Grain / Matrix Density (g/cc)' };
 			return { traces, layout: baseLayout };
 		}
 
@@ -5059,6 +5185,19 @@
 		} else if (mode === 'core-qc') {
 			void wellData.coreComparison;
 			void workbench.coreQcView;
+		} else if (mode === 'grain-density') {
+			void wellData.coreSamples;
+			void wellData.curves['CGD'];
+			void wellData.curves['CGR'];
+			void wellData.curves['GR'];
+			void wellData.curves[workbench.scalParams.gd_driver_col];
+			void workbench.scalParams.gd_driver_col;
+			void workbench.scalParams.gd_calibrated;
+			void workbench.scalParams.gd_k;
+			void workbench.scalParams.gd_rho_ma_clean;
+			void workbench.scalParams.gd_driver_clean;
+			void wellData.curves['DEPT'];
+			void wellData.curves['DEPTH'];
 		} else if (mode === 'vsh-qc') {
 			void wellData.vshComparison;
 			void workbench.vshQcView;

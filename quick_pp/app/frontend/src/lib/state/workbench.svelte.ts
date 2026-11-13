@@ -275,6 +275,19 @@ export interface ScalModelParams {
 	pc_res_output: number | null;
 	pc_scale_factor: number | null;
 	pc_scaling_applied: boolean;
+	// Project-scoped Grain / Matrix Density Correlation
+	// rho_ma(z) = gd_rho_ma_clean + gd_k * (driver(z) - gd_driver_clean)
+	gd_enabled: boolean;
+	gd_driver_col: string;
+	gd_rho_ma_clean: number;
+	gd_k: number;
+	gd_driver_clean: number;
+	gd_rho_ma_min: number;
+	gd_rho_ma_max: number;
+	gd_r2: number | null;
+	gd_rmse: number | null;
+	gd_count: number | null;
+	gd_calibrated: boolean;
 }
 
 export interface ScalComputedResult {
@@ -931,7 +944,18 @@ class WorkbenchState {
 		theta_res: 30.0,
 		pc_res_output: null,
 		pc_scale_factor: null,
-		pc_scaling_applied: false
+		pc_scaling_applied: false,
+		gd_enabled: false,
+		gd_driver_col: 'CGR',
+		gd_rho_ma_clean: 2.65,
+		gd_k: 0.0,
+		gd_driver_clean: 0.0,
+		gd_rho_ma_min: 2.55,
+		gd_rho_ma_max: 3.0,
+		gd_r2: null,
+		gd_rmse: null,
+		gd_count: null,
+		gd_calibrated: false
 	});
 
 	scalResult = $state<ScalComputedResult | null>(null);

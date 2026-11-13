@@ -54,6 +54,14 @@
 		{ key: 'depth', label: 'Depth', unit: 'm', numeric: true, decimals: 2, editable: true },
 		{ key: 'porosity', label: 'CPORE', unit: 'v/v', numeric: true, decimals: 3, editable: true },
 		{ key: 'permeability', label: 'CPERM', unit: 'mD', numeric: true, decimals: 2, editable: true },
+		{
+			key: 'grain_density',
+			label: 'CGD',
+			unit: 'g/cc',
+			numeric: true,
+			decimals: 3,
+			editable: true
+		},
 		{ key: 'rock_type', label: 'Rock Type', editable: false }
 	];
 
@@ -323,11 +331,18 @@
 						r.permeability !== null && r.permeability !== undefined
 							? Number(r.permeability)
 							: null;
+					const gdRaw =
+						r.grain_density ?? r.cgd ?? r.CGD ?? r.rhog ?? r.rhoma ?? r.RHOMA ?? null;
+					const gd =
+						gdRaw !== null && gdRaw !== undefined && Number.isFinite(Number(gdRaw))
+							? Number(gdRaw)
+							: null;
 					return {
 						sample_name: String(r.sample_name || `S-${wellData.coreSamples.length + i + 1}`).trim(),
 						depth: Number(r.depth ?? 0),
 						porosity: por,
 						permeability: perm,
+						grain_density: gd,
 						rock_type: projectData.classifyRockType(por, perm)
 					};
 				})

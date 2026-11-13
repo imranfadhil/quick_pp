@@ -21,7 +21,8 @@ export type CrossplotId =
 	| 'vsh-qc'
 	| 'th-k'
 	| 'pef-k'
-	| 'pef-th-k';
+	| 'pef-th-k'
+	| 'grain-density';
 
 export type CrossplotContext =
 	| { scope: 'single-well'; step: SingleWellStep }
@@ -137,6 +138,14 @@ export const CROSSPLOTS: readonly CrossplotDefinition[] = [
 			group: 'Standalone · Core & Pc Prep',
 			steps: ['scal', 'litho-poro', 'perm'],
 			autoFor: ['scal']
+		}
+	},
+	{
+		id: 'grain-density',
+		label: 'Grain Density vs. GR/CGR',
+		single: {
+			group: 'Standalone · Core & Pc Prep',
+			steps: ['scal', 'litho-poro']
 		}
 	},
 	{
