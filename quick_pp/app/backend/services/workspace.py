@@ -2316,8 +2316,12 @@ def workspace_well_bundle(
                 meas_df = sdict.get("measurements")
                 poro_val = None
                 perm_val = None
+                perm_vert_val = None
                 poro_amb_val = None
                 perm_air_val = None
+                grain_density_val = None
+                sw_val = None
+                so_val = None
                 raw_depth_val = None
                 shift_m_val = None
                 if isinstance(meas_df, pd.DataFrame) and not meas_df.empty:
@@ -2334,6 +2338,34 @@ def workspace_well_bundle(
                             and mrow.get("value") is not None
                         ):
                             perm_val = float(mrow["value"])
+                        elif (
+                            prop
+                            in (
+                                "CGRAIN_DENSITY",
+                                "GRAIN_DENSITY",
+                                "CGD",
+                                "RHOG",
+                                "RHOMA",
+                                "MATRIX_DENSITY",
+                            )
+                            and mrow.get("value") is not None
+                        ):
+                            grain_density_val = float(mrow["value"])
+                        elif (
+                            prop in ("CPERMV", "PERM_V", "KV", "PERMEABILITY_VERTICAL")
+                            and mrow.get("value") is not None
+                        ):
+                            perm_vert_val = float(mrow["value"])
+                        elif (
+                            prop in ("CSAT_WATER", "SW", "SW_CORE", "SAT_WATER")
+                            and mrow.get("value") is not None
+                        ):
+                            sw_val = float(mrow["value"])
+                        elif (
+                            prop in ("CSAT_OIL", "SO", "SO_CORE", "SAT_OIL")
+                            and mrow.get("value") is not None
+                        ):
+                            so_val = float(mrow["value"])
                         elif (
                             prop in ("CPORE_AMB", "CPORE_ORI", "POR_AMB")
                             and mrow.get("value") is not None
@@ -2409,7 +2441,12 @@ def workspace_well_bundle(
                         scal_pc_list.append(pc_item)
 
                 # Include in RCA list if it has RCA measurements or if it's an empty sample stub without SCAL Pc
-                if poro_val is not None or perm_val is not None or not has_pc:
+                if (
+                    poro_val is not None
+                    or perm_val is not None
+                    or grain_density_val is not None
+                    or not has_pc
+                ):
                     eff_raw_d = raw_depth_val if raw_depth_val is not None else s_depth
                     eff_shift = (
                         shift_m_val
@@ -2423,7 +2460,14 @@ def workspace_well_bundle(
                         "shift_m": eff_shift,
                         "porosity": poro_val,
                         "permeability": perm_val,
+                        "grain_density": grain_density_val,
                     }
+                    if perm_vert_val is not None:
+                        sample_entry["permeability_vertical"] = perm_vert_val
+                    if sw_val is not None:
+                        sample_entry["sw"] = sw_val
+                    if so_val is not None:
+                        sample_entry["so"] = so_val
                     if poro_amb_val is not None:
                         sample_entry["porosity_amb"] = poro_amb_val
                         if poro_val is not None:

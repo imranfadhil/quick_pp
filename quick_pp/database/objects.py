@@ -3050,6 +3050,11 @@ class Well(object):
             )
             poro_amb = s.get("porosity_amb", s.get("cpore_amb", s.get("cpore_ori")))
             perm_air = s.get("perm_air", s.get("cperm_air", s.get("cperm_ori")))
+            perm_vert = s.get(
+                "permeability_vertical", s.get("cpermv", s.get("CPERMV", s.get("kv")))
+            )
+            sw_val = s.get("sw", s.get("csat_water", s.get("CSAT_WATER")))
+            so_val = s.get("so", s.get("csat_oil", s.get("CSAT_OIL")))
             raw_depth_val = s.get("raw_depth", s.get("driller_depth"))
             shift_m_val = s.get("shift_m")
             if poro is not None and str(poro).strip() != "":
@@ -3095,6 +3100,39 @@ class Well(object):
                             "property_name": "CPERM_AIR",
                             "value": float(perm_air),
                             "unit": "mD",
+                        }
+                    )
+                except (TypeError, ValueError):
+                    pass
+            if perm_vert is not None and str(perm_vert).strip() != "":
+                try:
+                    meas_list.append(
+                        {
+                            "property_name": "CPERMV",
+                            "value": float(perm_vert),
+                            "unit": "mD",
+                        }
+                    )
+                except (TypeError, ValueError):
+                    pass
+            if sw_val is not None and str(sw_val).strip() != "":
+                try:
+                    meas_list.append(
+                        {
+                            "property_name": "CSAT_WATER",
+                            "value": float(sw_val),
+                            "unit": "v/v",
+                        }
+                    )
+                except (TypeError, ValueError):
+                    pass
+            if so_val is not None and str(so_val).strip() != "":
+                try:
+                    meas_list.append(
+                        {
+                            "property_name": "CSAT_OIL",
+                            "value": float(so_val),
+                            "unit": "v/v",
                         }
                     )
                 except (TypeError, ValueError):

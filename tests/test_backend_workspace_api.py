@@ -1044,6 +1044,48 @@ def test_merged_well_data_columnar_and_cache(client_and_project):
     assert len(bundle["tops"]) == 2
 
 
+def test_bundle_surfaces_rca_grain_density(client_and_project, monkeypatch):
+    """RCA grain density (CGRAIN_DENSITY) must be flattened onto bundle core_samples."""
+    client, pid = client_and_project
+    from quick_pp.app.backend.services import ancillary as anc_service
+
+    monkeypatch.setattr(anc_service, "get_db", ws_service.get_db)
+    r = client.post(
+        f"/quick_pp/database/projects/{pid}/wells/Well-A/core_samples",
+        json={
+            "samples": [
+                {
+                    "sample_name": "PLUG-GD-1",
+                    "depth": 1002.0,
+                    "porosity": 0.21,
+                    "permeability": 120.0,
+                    "grain_density": 2.71,
+                },
+                {
+                    "sample_name": "PLUG-GD-2",
+                    "depth": 1006.0,
+                    "porosity": 0.18,
+                    "permeability": 45.0,
+                    "grain_density": 2.68,
+                },
+            ]
+        },
+    )
+    assert r.status_code == 200, r.text
+    db_service.invalidate_well_cache()
+
+    r_bundle = client.get(f"/quick_pp/workspace/projects/{pid}/wells/Well-A/bundle")
+    assert r_bundle.status_code == 200, r_bundle.text
+    core = r_bundle.json()["core_samples"]
+    by_name = {s["sample_name"]: s for s in core}
+    assert "PLUG-GD-1" in by_name and "PLUG-GD-2" in by_name
+    assert by_name["PLUG-GD-1"]["grain_density"] == pytest.approx(2.71)
+    assert by_name["PLUG-GD-2"]["grain_density"] == pytest.approx(2.68)
+    # Porosity/permeability flattening must keep working alongside grain density
+    assert by_name["PLUG-GD-1"]["porosity"] == pytest.approx(0.21)
+    assert by_name["PLUG-GD-1"]["permeability"] == pytest.approx(120.0)
+
+
 def test_end_to_end_workspace_compute_workflow(client_and_project):
     client, pid = client_and_project
 

@@ -615,7 +615,7 @@
 					? 'bg-[var(--bg-surface)] text-[var(--accent-primary)] border-b-2 border-b-[var(--accent-primary)]'
 					: 'text-[var(--text-secondary)] hover:bg-slate-200/60'}"
 				title={key === 'core'
-					? 'Routine Core Analysis (CPORE, CPERM)'
+					? 'Routine Core Analysis (CPORE, CPERM, CGD)'
 					: key === 'scal'
 						? 'SCAL Capillary Pressure (Multiple Pc & Sw pairs per sample/depth)'
 						: key === 'perfs'
@@ -881,7 +881,7 @@
 				columns={CORE_COLS}
 				bind:rows={wellData.coreSamples}
 				editable={true}
-				emptyMessage="No RCA core plugs (CPORE, CPERM). Add above or paste from Excel."
+				emptyMessage="No RCA core plugs (CPORE, CPERM, CGD). Add above or paste from Excel."
 				oncellchange={handleCoreCellChange}
 				onpasteRows={handlePasteRows}
 				ondeleteRow={handleDeleteRow}

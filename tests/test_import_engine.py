@@ -986,6 +986,96 @@ TNPH.%      : Thermal Neutron Porosity
     assert res_scal_commit.json()["total_committed"] == 5
 
 
+def test_rca_bulk_import_grain_density_reaches_bundle():
+    """CGRAIN_DENSITY imported via the bulk RCA path must surface on the well bundle."""
+    res_proj = client.post(
+        "/quick_pp/database/projects", json={"name": "RcaGrainDensityTestProj"}
+    )
+    assert res_proj.status_code == 200
+    pid = res_proj.json()["project_id"]
+    well_name = "RCA-GD-WELL"
+    res_well = client.post(
+        f"/quick_pp/database/projects/{pid}/wells",
+        json={"name": well_name, "uwi": "RCA-GD-UWI"},
+    )
+    assert res_well.status_code == 200
+
+    # The bundle endpoint requires curve data for the well, so seed a minimal log first.
+    las_bytes = (
+        "~Version\n"
+        "VERS. 2.0 : CWLS LOG ASCII STANDARD\n"
+        "WRAP. NO  : ONE LINE PER DEPTH STEP\n"
+        "~Well\n"
+        "STRT.M 2000.0 : START DEPTH\n"
+        "STOP.M 2001.0 : STOP DEPTH\n"
+        "STEP.M 0.5 : STEP\n"
+        "NULL. -999.25 : NULL VALUE\n"
+        f"WELL. {well_name} : WELL\n"
+        "~Curve\n"
+        "DEPT.M : Depth\n"
+        "GR.GAPI : Gamma Ray\n"
+        "~Ascii\n"
+        "2000.0 45.0\n"
+        "2000.5 50.0\n"
+        "2001.0 55.0\n"
+    ).encode("utf-8")
+    res_inspect = client.post(
+        "/api/v1/import/logs/inspect",
+        files=[("files", ("rca_gd_well.las", las_bytes, "text/plain"))],
+    )
+    assert res_inspect.status_code == 200
+    f_info = res_inspect.json()["files"][0]
+    res_log_commit = client.post(
+        "/api/v1/import/logs/commit",
+        json={
+            "project_id": pid,
+            "files": [
+                {
+                    "file_id": f_info["file_id"],
+                    "filename": "rca_gd_well.las",
+                    "metadata": f_info["metadata"],
+                    "curve_mappings": {"DEPT": "DEPTH", "GR": "GR"},
+                    "unit_overrides": {"DEPT": "m", "GR": "gAPI"},
+                }
+            ],
+        },
+    )
+    assert res_log_commit.status_code == 200, res_log_commit.text
+
+    rca_csv = (
+        b"Sample,Depth (m),Porosity (%),Permeability (mD),Grain Density (g/cc)\n"
+        b"P-1,2000.05,21.5,140.0,2.71\n"
+        b"P-2,2000.52,19.0,85.0,2.68\n"
+    )
+    res_prev = client.post(
+        "/api/v1/import/ancillary/preview",
+        files={"file": ("rca_gd.csv", rca_csv, "text/csv")},
+        data={"data_type": "rca"},
+    )
+    assert res_prev.status_code == 200
+    prev_json = res_prev.json()
+    assert prev_json["detected"]["cgrain_density"] == "Grain Density (g/cc)"
+
+    commit_payload = {
+        "project_id": pid,
+        "well_name": well_name,
+        "data_type": "rca",
+        "column_mappings": prev_json["column_mappings"],
+        "file_content_base64": base64.b64encode(rca_csv).decode("ascii"),
+        "filename": "rca_gd.csv",
+        "core_snap_tolerance_m": 0.08,
+    }
+    res_commit = client.post("/api/v1/import/ancillary/commit", json=commit_payload)
+    assert res_commit.status_code == 200, res_commit.text
+    assert res_commit.json()["total_committed"] == 2
+
+    bundle = client.get(f"/quick_pp/workspace/projects/{pid}/wells/{well_name}/bundle")
+    assert bundle.status_code == 200, bundle.text
+    core = {s["sample_name"]: s for s in bundle.json()["core_samples"]}
+    assert core["P-1"]["grain_density"] == pytest.approx(2.71)
+    assert core["P-2"]["grain_density"] == pytest.approx(2.68)
+
+
 def test_well_header_dms_coords_and_bundle_metadata():
     res_proj = client.post("/quick_pp/database/projects", json={"name": "HeaderMetadataTestProj"})
     assert res_proj.status_code == 200
