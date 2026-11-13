@@ -2,6 +2,7 @@ import type { MultiWellStep, SingleWellStep } from '../state/workbench.svelte';
 
 export type CrossplotId =
 	| 'nphi-rhob'
+	| 'mn-plot'
 	| 'thomas-stieber'
 	| 'phi-k'
 	| 'pickett'
@@ -63,6 +64,11 @@ export const CROSSPLOTS: readonly CrossplotDefinition[] = [
 			steps: ['litho-poro'],
 			autoFor: ['litho-poro']
 		}
+	},
+	{
+		id: 'mn-plot',
+		label: 'M-N Plot (Mineral ID)',
+		single: { group: 'Step 3 · Lithology & Porosity', steps: ['litho-poro'] }
 	},
 	{
 		id: 'vsh-qc',

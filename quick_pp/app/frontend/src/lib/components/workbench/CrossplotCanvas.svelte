@@ -41,6 +41,9 @@
 	let shfView = $state<'scal_fit' | 'height_profile'>('height_profile');
 	let shfLogScale = $state<boolean>(false);
 	let swirrLogY = $state<boolean>(false);
+	// Mud/fluid system for the M-N plot: freshwater (WBM) vs saltwater mud.
+	// Drives the fluid endpoints (DT_fluid, rho_fluid) used to auto-calculate M and N.
+	let mnMudType = $state<'fresh' | 'salt'>('fresh');
 	let showCoreShiftDrawer = $state<boolean>(false);
 	let showVshCalibDrawer = $state<boolean>(false);
 	let emptyPlotMessage = $state<string | null>(null);
@@ -105,6 +108,10 @@
 				return hasTrace((name) => name.startsWith('Log Data') || name.startsWith('Coal Flagged') || name.startsWith('Badhole Flagged'))
 					? null
 					: 'No paired NPHI and RHOB values in the current selection. Load the curves or adjust the filters.';
+			case 'mn-plot':
+				return hasTrace((name) => name === 'Log Data (M-N)')
+					? null
+					: 'No paired NPHI and RHOB values in the current selection. M-N auto-calculates from RHOB, NPHI and sonic (DTC); load the curves or adjust the filters.';
 			case 'thomas-stieber':
 				return hasTrace((name) => name.startsWith('Log Data'))
 					? null
@@ -2496,6 +2503,174 @@
 				text: `1 / (${rtKey} · ${phiKey}<sup>${m}</sup>) (1 / ohm·m)`
 			};
 			baseLayout.yaxis.range = [0, 50];
+			return { traces, layout: baseLayout };
+		}
+
+		if (effectiveMode === 'mn-plot') {
+			// Burke's M-N mineral-identification crossplot. M and N are fully
+			// auto-calculated from RHOB, NPHI and sonic (DTC) — no manual picking
+			// is needed to place the points. Mirrors the backend formula in
+			// quick_pp.machine_learning.feature_engineering.mn_lithology_parameters:
+			//   M = ((DT_fluid - DT) / (RHOB - rho_fluid)) * 0.01
+			//   N = (NPHI_fluid - NPHI) / (RHOB - rho_fluid)
+			// Sonic is optional: where DTC is missing we fall back to a
+			// Gardner density-derived synthetic slowness so the N axis still
+			// discriminates minerals even in density/neutron-only wells.
+			const rhobArr = wellData.curves['RHOB'] ?? [];
+			const nphiArr = wellData.curves['NPHI'] ?? [];
+			const DTC_ALIASES = ['DTC', 'DT', 'DTCO', 'AC', 'DT4P'];
+			let dtcArr: number[] = [];
+			for (const alias of DTC_ALIASES) {
+				const c = wellData.curves[alias];
+				if (c && c.some((v) => Number.isFinite(v) && v > 20)) {
+					dtcArr = c;
+					break;
+				}
+			}
+			const colorCurve = wellData.curves['VCLAY'] !== undefined ? 'VCLAY' : 'GR';
+			const vclArr = wellData.curves['VCLAY'] ?? wellData.curves['GR'] ?? [];
+
+			// Fluid endpoints (Schlumberger Lith-7). Freshwater mud (WBM):
+			// DT_fluid=189 µs/ft, rho_fluid=1.0. Saltwater mud: DT_fluid=185 µs/ft,
+			// and rho_fluid tracks the well's actual filtrate density rather than a
+			// fixed chart value: the explicit rhoWater from the lithology params if
+			// the user set it, otherwise a salinity-derived brine density
+			// (ρ_brine ≈ 1.0 + 0.695·(ppm/1e6), the standard surface approximation).
+			// NPHI_fluid stays at 1.0 for both systems.
+			const isSalt = mnMudType === 'salt';
+			const lp = workbench.lithoParams;
+			const brineFromSalinity = 1.0 + 0.695 * ((lp.fluidSalinityPpm ?? 0) / 1e6);
+			const saltRhoFluid =
+				Number.isFinite(lp.rhoWater) && lp.rhoWater > 1.0 ? lp.rhoWater : brineFromSalinity;
+			const dtFluid = isSalt ? 185.0 : 189.0;
+			const rhoFluid = isSalt ? saltRhoFluid : 1.0;
+			const nphiFluid = 1.0;
+
+			const gardnerDtc = (rhob: number): number => {
+				const rhobSafe = Math.min(Math.max(rhob, 1.5), 3.1);
+				const vp = Math.pow(rhobSafe / 0.23, 4);
+				const dtc = 1e6 / Math.min(Math.max(vp, 3500), 25000);
+				return Math.min(Math.max(dtc, 40), 220);
+			};
+
+			const xs: number[] = [];
+			const ys: number[] = [];
+			const cols: number[] = [];
+			const customIdx: number[] = [];
+			let sonicMeasured = 0;
+			let total = 0;
+
+			for (const idx of indices) {
+				const rhob = rhobArr[idx];
+				const nphi = nphiArr[idx];
+				if (!Number.isFinite(rhob) || !Number.isFinite(nphi)) continue;
+				total++;
+				const rawDtc = dtcArr[idx];
+				const hasSonic = Number.isFinite(rawDtc) && rawDtc > 20;
+				const dtc = hasSonic ? rawDtc : gardnerDtc(rhob);
+				if (hasSonic) sonicMeasured++;
+
+				let denom = rhob - rhoFluid;
+				if (Math.abs(denom) < 0.1) denom = denom >= 0 ? 0.1 : -0.1;
+
+				let m = ((dtFluid - dtc) / denom) * 0.01;
+				let n = (nphiFluid - nphi) / denom;
+				m = Math.min(Math.max(m, -0.5), 2.0);
+				n = Math.min(Math.max(n, -0.5), 2.0);
+
+				xs.push(n);
+				ys.push(m);
+				cols.push(Number.isFinite(vclArr[idx]) ? vclArr[idx] : 0.2);
+				customIdx.push(idx);
+			}
+
+			traces.push({
+				type: 'scatter',
+				mode: 'markers',
+				name: 'Log Data (M-N)',
+				x: xs,
+				y: ys,
+				customdata: customIdx,
+				marker: {
+					size: 5.5,
+					color: cols,
+					colorscale: 'YlGnBu',
+					showscale: true,
+					opacity: 0.85,
+					colorbar: {
+						title: { text: colorCurve, font: { size: 9 } },
+						thickness: 10,
+						len: 0.75,
+						tickfont: { family: 'JetBrains Mono', size: 8 }
+					}
+				},
+				hovertemplate: 'N: %{x:.3f}<br>M: %{y:.3f}<extra></extra>'
+			});
+
+			// Mineral identification endpoints, derived from canonical matrix
+			// properties (rho_ma, NPHI_ma, DT_ma) so they track the selected mud
+			// system via the same M/N definition used for the log data:
+			//   M = ((DT_fluid - DT_ma) / (rho_ma - rho_fluid)) * 0.01
+			//   N = (NPHI_fluid - NPHI_ma) / (rho_ma - rho_fluid)
+			const MINERAL_MATRIX: Array<{
+				name: string;
+				rhoMa: number;
+				nphiMa: number;
+				dtMa: number;
+			}> = [
+				{ name: 'Quartz sandstone', rhoMa: 2.65, nphiMa: -0.035, dtMa: 55.5 },
+				{ name: 'Calcite (limestone)', rhoMa: 2.71, nphiMa: 0.0, dtMa: 47.6 },
+				{ name: 'Dolomite', rhoMa: 2.87, nphiMa: 0.02, dtMa: 43.5 },
+				{ name: 'Anhydrite', rhoMa: 2.98, nphiMa: -0.005, dtMa: 50.0 },
+				{ name: 'Gypsum', rhoMa: 2.35, nphiMa: 0.49, dtMa: 52.0 }
+			];
+			const MINERAL_POINTS = MINERAL_MATRIX.map((mineral) => {
+				const d = mineral.rhoMa - rhoFluid;
+				return {
+					name: mineral.name,
+					n: (nphiFluid - mineral.nphiMa) / d,
+					m: ((dtFluid - mineral.dtMa) / d) * 0.01
+				};
+			});
+			traces.push({
+				type: 'scatter',
+				mode: 'markers+text',
+				name: 'Mineral endpoints',
+				x: MINERAL_POINTS.map((p) => p.n),
+				y: MINERAL_POINTS.map((p) => p.m),
+				text: MINERAL_POINTS.map((p) => p.name),
+				textposition: 'top center',
+				textfont: { family: 'Inter', size: 9, color: '#0F172A' },
+				marker: { size: 9, color: '#0F172A', symbol: 'diamond' },
+				hovertemplate: '%{text}<br>N: %{x:.3f}<br>M: %{y:.3f}<extra>Fixed reference endpoint</extra>'
+			});
+
+			baseLayout.dragmode = 'lasso';
+			baseLayout.xaxis.title = { text: 'N  (neutron-density)' };
+			baseLayout.xaxis.range = [0.3, 0.8];
+			baseLayout.yaxis.title = { text: 'M  (sonic-density)' };
+			baseLayout.yaxis.range = [0.5, 1.1];
+			baseLayout.annotations = [
+				{
+					xref: 'paper',
+					yref: 'paper',
+					x: 0,
+					y: 1.08,
+					xanchor: 'left',
+					yanchor: 'bottom',
+					showarrow: false,
+					font: { family: 'Inter', size: 9.5, color: '#64748B' },
+					text:
+						total === 0
+							? ''
+							: `${isSalt ? `Saltwater mud (ρf=${rhoFluid.toFixed(2)}, DTf=185)` : 'Freshwater mud (ρf=1.0, DTf=189)'} · ` +
+								(sonicMeasured === total
+									? 'Sonic: measured DTC'
+									: sonicMeasured === 0
+										? 'Sonic: Gardner density estimate (no DTC)'
+										: `Sonic: ${sonicMeasured}/${total} measured DTC, remainder Gardner-estimated`)
+				}
+			];
 			return { traces, layout: baseLayout };
 		}
 
@@ -5380,6 +5555,27 @@
 				{/each}
 			</select>
 		</div>
+
+		{#if effectiveMode === 'mn-plot'}
+			<div class="flex items-center gap-1">
+				<span class="text-[10px] text-[var(--text-muted)]">Mud:</span>
+				<div class="inline-flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]">
+					{#each [['fresh', 'Freshwater (WBM)', 'Freshwater mud: ρf=1.0 g/cc, DTf=189 µs/ft'], ['salt', 'Saltwater', 'Saltwater mud: DTf=185 µs/ft; ρf tracks the well filtrate density (rhoWater / salinity)']] as [mKey, mLbl, mTip]}
+						<button
+							type="button"
+							title={mTip}
+							onclick={() => (mnMudType = mKey as 'fresh' | 'salt')}
+							class="h-5 px-1.5 text-[10px] font-medium whitespace-nowrap transition-colors first:border-r first:border-[var(--border-hairline)] {mnMudType ===
+							mKey
+								? 'bg-blue-600 font-semibold text-white'
+								: 'text-[var(--text-secondary)] hover:bg-slate-100'}"
+						>
+							{mLbl}
+						</button>
+					{/each}
+				</div>
+			</div>
+		{/if}
 
 		{#if effectiveMode === 'enhanced-vs-raw'}
 			<div class="flex items-center gap-1">
