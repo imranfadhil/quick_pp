@@ -123,6 +123,28 @@
 	async function runResolutionEnhancement(persist: boolean = false) {
 		if (!workbench.projectId || !workbench.wellId) return;
 		const ep = workbench.enhanceParams;
+
+		// Deconvolution needs a contiguous depth-ordered window. When the user has an
+		// active lasso selection and "Apply to selection" is enabled, constrain the run
+		// to the selected depth interval instead of the whole (depth-filtered) well.
+		let minDepth = workbench.depthFilter?.min ?? null;
+		let maxDepth = workbench.depthFilter?.max ?? null;
+		let zones: string[] | null =
+			workbench.selectedZones.length > 0 ? workbench.selectedZones : null;
+		const brushed = workbench.brushedDepthIndices;
+		if (workbench.useBrushedCalculationFilter && brushed.size > 0) {
+			const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
+			const selDepths = Array.from(brushed)
+				.map((i) => dept[i])
+				.filter((d) => Number.isFinite(d)) as number[];
+			if (selDepths.length > 0) {
+				minDepth = Math.min(...selDepths);
+				maxDepth = Math.max(...selDepths);
+				// Zones would further subset the selection; the lasso interval is explicit.
+				zones = null;
+			}
+		}
+
 		wellData.isCalculating = true;
 		wellData.lastError = null;
 		try {
@@ -138,14 +160,18 @@
 					huber_delta_mult: ep.huberDeltaMult,
 					volume_window_m: ep.volumeWindow,
 					noise_cap_mult: ep.noiseCapMult > 0 ? ep.noiseCapMult : null,
-					min_depth: workbench.depthFilter?.min ?? null,
-					max_depth: workbench.depthFilter?.max ?? null,
-					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
+					min_depth: minDepth,
+					max_depth: maxDepth,
+					zones,
 					save: persist
 				}
 			);
 			if (res.data) {
-				wellData.mergeComputedCurves(res.data, res.stats, null);
+				const mergeIndices =
+					workbench.useBrushedCalculationFilter && brushed.size > 0
+						? wellData.getBrushedCalculationIndices()
+						: null;
+				wellData.mergeComputedCurves(res.data, res.stats, mergeIndices);
 				wellData.markModuleComputed('qaqc-enhance', res.data);
 			}
 			enhSummary = {
@@ -167,8 +193,42 @@
 		}
 	}
 
-	function revertResolutionEnhancement() {
+	/** Curves written by the resolution-enhancement run (raw curves are never touched). */
+	const ENHANCEMENT_CURVES = [
+		'GR_ENH',
+		'NPHI_ENH',
+		'RHOB_ENH',
+		'GR_RECON',
+		'NPHI_RECON',
+		'RHOB_RECON',
+		'DECONV_WEIGHT'
+	];
+
+	async function revertResolutionEnhancement() {
+		// Stop feeding enhanced logs downstream first so dependent modules fall back
+		// to the raw curves before the enhanced columns disappear.
 		workbench.enhanceParams.useEnhancedLogs = false;
+
+		const present = ENHANCEMENT_CURVES.filter((c) => Boolean(wellData.curves[c]));
+		if (present.length > 0) {
+			wellData.isCalculating = true;
+			wellData.lastError = null;
+			try {
+				// Persist only when the enhancement was already saved to the DB; otherwise
+				// just drop the in-memory columns from the pending run.
+				const persist = !wellData.hasPendingComputed('qaqc-enhance');
+				await wellData.clearCalculatedCurves({
+					scope: 'full',
+					curves: present,
+					persist
+				});
+			} catch (e: any) {
+				wellData.lastError = e?.message || 'Failed to clear enhanced curves';
+			} finally {
+				wellData.isCalculating = false;
+			}
+		}
+
 		enhSummary = null;
 	}
 
@@ -2893,11 +2953,12 @@
 				{#if enhSummary}
 					<button
 						type="button"
+						disabled={wellData.isCalculating}
 						onclick={revertResolutionEnhancement}
-						title="Hide the enhanced curves and revert downstream modules to the raw logs"
-						class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-xs font-medium text-[var(--text-secondary)] hover:bg-slate-100"
+						title="Remove the enhanced (*_ENH, *_RECON, DECONV_WEIGHT) curves and revert downstream modules to the raw logs"
+						class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-xs font-medium text-[var(--text-secondary)] hover:bg-slate-100 disabled:opacity-50"
 					>
-						Revert
+						Reset
 					</button>
 				{/if}
 			</div>

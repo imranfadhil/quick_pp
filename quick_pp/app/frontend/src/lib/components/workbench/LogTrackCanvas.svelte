@@ -2651,7 +2651,12 @@
 		'SHF',
 		'SW_SHF',
 		'SWIRR',
-		'PAY_FLAGS'
+		'PAY_FLAGS',
+		// Resolution-enhanced overlays: track their data so re-running the
+		// enhancement (e.g. on a new selection) forces a Plotly re-render.
+		'GR_ENH',
+		'NPHI_ENH',
+		'RHOB_ENH'
 	] as const;
 
 	let lastBaseTrackDeps: unknown[] | null = null;
@@ -2680,6 +2685,7 @@
 			showTopLabels,
 			depthDisplay.unit,
 			tsOverlayActive,
+			enhancedOverlayActive,
 			workbench.lithoParams.enableHcCorrection,
 			workbench.lithoParams.model,
 			workbench.lithoParams.minerals,

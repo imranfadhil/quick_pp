@@ -1191,6 +1191,10 @@ class WorkbenchState {
 		this.brushedDepthIndices = new Set(indices);
 		if (this.brushedDepthIndices.size === 0) {
 			this.useBrushedCalculationFilter = false;
+		} else if (this.scope === 'single-well') {
+			// Selecting an interval implies the user wants calculations scoped to it,
+			// so turn "Apply to selection" on by default. They can still opt out.
+			this.useBrushedCalculationFilter = true;
 		}
 	}
 

@@ -383,16 +383,33 @@
 				workbench.enhanceCompareCurve ?? undefined			);
 			const colorFor = (raw: string) =>
 				raw === 'GR' ? '#16A34A' : raw === 'NPHI' ? '#2563EB' : '#DC2626';
-			for (const item of series) {
+			// Each curve family (GR, NPHI, RHOB) gets its own side-by-side track with
+			// an independent x-axis scale, all sharing a single depth (y) axis. The
+			// tracks are laid out as horizontal subplots across the plot width.
+			const trackCount = Math.max(series.length, 1);
+			const gap = 0.045;
+			const trackWidth = (1 - gap * (trackCount - 1)) / trackCount;
+			const xAxisKey = (index: number) => (index === 0 ? 'x' : `x${index + 1}`);
+			const yAxisKey = (index: number) => (index === 0 ? 'y' : `y${index + 1}`);
+			const xAxisLayoutKey = (index: number) => (index === 0 ? 'xaxis' : `xaxis${index + 1}`);
+			const yAxisLayoutKey = (index: number) => (index === 0 ? 'yaxis' : `yaxis${index + 1}`);
+
+			series.forEach((item, index) => {
+				const xref = xAxisKey(index);
+				const yref = yAxisKey(index);
+				const color = colorFor(item.raw);
 				traces.push({
 					type: 'scatter',
 					mode: 'lines',
 					name: `${item.raw} (raw)`,
 					x: item.rawPoints.x,
 					y: item.rawPoints.y,
+					xaxis: xref,
+					yaxis: yref,
 					connectgaps: false,
-					line: { color: colorFor(item.raw), width: 1, dash: 'dot' },
+					line: { color, width: 1, dash: 'dot' },
 					opacity: 0.65,
+					legendgroup: item.raw,
 					hovertemplate: `${item.raw} raw<br>Value: %{x:.4g}<br>Depth: %{y:.2f} m<extra></extra>`
 				});
 				if (item.reconPoints) {
@@ -402,9 +419,12 @@
 						name: `${item.raw}_RECON`,
 						x: item.reconPoints.x,
 						y: item.reconPoints.y,
+						xaxis: xref,
+						yaxis: yref,
 						connectgaps: false,
-						line: { color: colorFor(item.raw), width: 1, dash: 'dash' },
+						line: { color, width: 1, dash: 'dash' },
 						opacity: 0.5,
+						legendgroup: item.raw,
 						hovertemplate: `${item.raw}_RECON<br>Value: %{x:.4g}<br>Depth: %{y:.2f} m<extra></extra>`
 					});
 				}
@@ -414,19 +434,54 @@
 					name: `${item.enhanced} (enhanced)`,
 					x: item.enhPoints.x,
 					y: item.enhPoints.y,
+					xaxis: xref,
+					yaxis: yref,
 					connectgaps: false,
-					line: { color: colorFor(item.raw), width: 1.8 },
+					line: { color, width: 1.8 },
+					legendgroup: item.raw,
 					hovertemplate: `${item.enhanced}<br>Value: %{x:.4g}<br>Depth: %{y:.2f} m<extra></extra>`
 				});
-			}
-			const focus = series[0];
-			baseLayout.xaxis.title = {
-				text: focus ? `${focus.label} (${getCurveUnit(focus.enhanced)})` : 'Curve value'
-			};
-			baseLayout.xaxis.fixedrange = true;
-			baseLayout.yaxis.autorange = 'reversed';
-			baseLayout.yaxis.title = { text: 'Depth (m)' };
+			});
+
+			series.forEach((item, index) => {
+				const color = colorFor(item.raw);
+				const start = index * (trackWidth + gap);
+				const end = start + trackWidth;
+				baseLayout[xAxisLayoutKey(index)] = {
+					domain: [start, Math.min(1, end)],
+					anchor: yAxisKey(index),
+					showgrid: true,
+					gridcolor: '#E2E8F0',
+					zeroline: false,
+					automargin: true,
+					fixedrange: true,
+					side: 'top',
+					title: {
+						text: `${item.label} (${getCurveUnit(item.enhanced)})`,
+						font: { family: 'Inter', size: 11, color }
+					},
+					tickfont: { family: 'JetBrains Mono', size: 9, color },
+					linecolor: color,
+					tickcolor: color
+				};
+				// First track keeps the depth tick labels; the rest share the scale
+				// via matches but hide duplicate labels to save horizontal space.
+				baseLayout[yAxisLayoutKey(index)] = {
+					anchor: xAxisKey(index),
+					autorange: 'reversed',
+					showgrid: true,
+					gridcolor: '#E2E8F0',
+					zeroline: false,
+					automargin: true,
+					...(index === 0
+						? { title: { text: 'Depth (m)' } }
+						: { matches: 'y', showticklabels: false }),
+					tickfont: { family: 'JetBrains Mono', size: 10, color: '#64748B' }
+				};
+			});
+
 			baseLayout.dragmode = 'zoom';
+			baseLayout.margin = { ...baseLayout.margin, t: 52 };
 			baseLayout.legend = { orientation: 'h', y: -0.12, font: { size: 9 } };
 			baseLayout.uirevision = `enhanced-vs-raw-${workbench.projectId}-${workbench.wellId}`;
 			return { traces, layout: baseLayout };
