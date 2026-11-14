@@ -34,6 +34,20 @@
 	function grainDensityCorrelationBody() {
 		const sp = workbench.scalParams;
 		if (!sp.gd_enabled || !sp.gd_calibrated) return undefined;
+			if (sp.gd_mode === 'multivariate' && sp.gd_driver_cols.length > 0 && sp.gd_coef.length > 0) {
+				return {
+					enabled: true,
+					driver_col: sp.gd_driver_col,
+					driver_cols: sp.gd_driver_cols,
+					coef: sp.gd_coef,
+					center: sp.gd_center,
+					scale: sp.gd_scale,
+					intercept: sp.gd_intercept,
+					rho_ma_clean: sp.gd_rho_ma_clean,
+					rho_ma_min: sp.gd_rho_ma_min,
+					rho_ma_max: sp.gd_rho_ma_max
+				};
+			}
 		return {
 			enabled: true,
 			driver_col: sp.gd_driver_col,

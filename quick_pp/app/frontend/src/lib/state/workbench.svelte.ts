@@ -276,9 +276,21 @@ export interface ScalModelParams {
 	pc_scale_factor: number | null;
 	pc_scaling_applied: boolean;
 	// Project-scoped Grain / Matrix Density Correlation
-	// rho_ma(z) = gd_rho_ma_clean + gd_k * (driver(z) - gd_driver_clean)
+		// Single driver: rho_ma(z) = gd_rho_ma_clean + gd_k * (driver(z) - gd_driver_clean)
+		// Multi-log:    rho_ma(z) = gd_intercept + sum_j gd_coef_j * (driver_j - gd_center_j)/gd_scale_j
 	gd_enabled: boolean;
+		gd_mode: 'single' | 'multivariate';
 	gd_driver_col: string;
+		gd_driver_cols: string[];
+		gd_coef: number[];
+		gd_center: number[];
+		gd_scale: number[];
+		gd_intercept: number | null;
+		gd_alpha: number;
+		gd_robust: boolean;
+		gd_vif: Record<string, number>;
+		gd_breusch_pagan_p: number | null;
+		gd_resid_mad: number | null;
 	gd_rho_ma_clean: number;
 	gd_k: number;
 	gd_driver_clean: number;
@@ -946,7 +958,18 @@ class WorkbenchState {
 		pc_scale_factor: null,
 		pc_scaling_applied: false,
 		gd_enabled: false,
+				gd_mode: 'multivariate',
 		gd_driver_col: 'CGR',
+				gd_driver_cols: ['CGR', 'GR', 'RHOB', 'NPHI'],
+				gd_coef: [],
+				gd_center: [],
+				gd_scale: [],
+				gd_intercept: null,
+				gd_alpha: 1.0,
+				gd_robust: true,
+				gd_vif: {},
+				gd_breusch_pagan_p: null,
+				gd_resid_mad: null,
 		gd_rho_ma_clean: 2.65,
 		gd_k: 0.0,
 		gd_driver_clean: 0.0,

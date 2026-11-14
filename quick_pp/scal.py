@@ -32,6 +32,13 @@ Provides petrophysically rigorous core-to-log and lab-to-reservoir reconciliatio
        from paired core grain density (CGD) and a log driver (CGR = Th + K, or GR).
      - `grain_density_from_correlation`: Applies a calibrated correlation to a driver log to
        produce a continuous $\\rho_{ma}(z)$ curve for density-porosity in Lithology & Porosity.
+          - `fit_grain_density_correlation_multivariate`: Ridge / Huber-robust multi-log equivalent
+            that regresses several robustly-standardized drivers (GR/CGR/SGR, RHOB, NPHI,
+            Burke $M$-parameter, acoustic impedance, $\\ldots$) jointly, reporting per-driver
+            coefficients, variance-inflation factors, and a Breusch-Pagan heteroscedasticity
+            test so heteroscedastic gamma drivers do not dominate the fit.
+          - `grain_density_from_correlation_multivariate`: Applies the multivariate fit to aligned
+            driver arrays using the stored standardization statistics, clamped to bounds.
   6. Two-Phase Relative Permeability ($k_{rw}, k_{ro}$) & Simulator Handover (`SWOF`):
      - `normalize_water_saturation`: Normalizes water saturation $S_w$ between $S_{wirr}$ and $1 - S_{or}$.
      - `corey_relperm`: Modified Corey (1954) power-law water-oil relative permeability model.
@@ -55,9 +62,11 @@ __all__ = [
     "dean_stark_saturation_correction",
     "estimate_cbw_from_qv",
     "fit_grain_density_correlation",
+    "fit_grain_density_correlation_multivariate",
     "fit_relperm",
     "generate_swof_table",
     "grain_density_from_correlation",
+    "grain_density_from_correlation_multivariate",
     "humidity_to_total_porosity",
     "klinkenberg_permeability_correction",
     "let_relperm",
@@ -1390,3 +1399,375 @@ def fit_grain_density_correlation(
         "rho_ma_min": float(rho_ma_min),
         "rho_ma_max": float(rho_ma_max),
     }
+
+
+def _robust_standardize(x: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Center/scale a 2-D design matrix using median and IQR (robust to outliers).
+
+    Args:
+        x (np.ndarray): 2-D design matrix of driver values.
+
+    Returns:
+        tuple: ``(z, center, scale)`` where ``z = (x - center) / scale``.
+    """
+    center = np.nanmedian(x, axis=0)
+    q75 = np.nanpercentile(x, 75, axis=0)
+    q25 = np.nanpercentile(x, 25, axis=0)
+    scale = q75 - q25
+    # Fall back to std, then to unit scale, when a driver is nearly constant.
+    fallback = np.nanstd(x, axis=0)
+    scale = np.where(scale > 1e-9, scale, fallback)
+    scale = np.where(scale > 1e-9, scale, 1.0)
+    z = (x - center) / scale
+    return z, center, scale
+
+
+def _ridge_solve(
+    z: np.ndarray,
+    y: np.ndarray,
+    alpha: float,
+    sample_weight: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """Solve ridge regression on an already-standardized design matrix.
+
+    The intercept column (last) is left unpenalized so the fit is not biased toward zero
+    when the response mean is non-zero.
+    """
+    w = np.ones(z.shape[0], dtype=float) if sample_weight is None else sample_weight
+    zw = z * w[:, None]
+    pen = np.full(z.shape[1], float(alpha), dtype=float)
+    pen[-1] = 0.0  # do not shrink the intercept column
+    gram = z.T @ zw + np.diag(pen)
+    rhs = zw.T @ y
+    try:
+        return np.linalg.solve(gram, rhs)
+    except np.linalg.LinAlgError:
+        return np.linalg.lstsq(gram, rhs, rcond=None)[0]
+
+
+def _huber_weights(residuals: np.ndarray, delta: float) -> np.ndarray:
+    """Huber IRLS weights: 1 inside ``|r| <= delta``, ``delta / |r|`` outside."""
+    abs_r = np.abs(residuals)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        w = np.where(abs_r <= delta, 1.0, delta / np.maximum(abs_r, 1e-12))
+    return np.clip(w, 1e-6, 1.0)
+
+
+def _variance_inflation_factors(
+    z_drivers: np.ndarray, driver_names: Sequence[str]
+) -> Dict[str, float]:
+    """Compute variance inflation factors (VIF) for each standardized driver.
+
+    ``VIF_j = 1 / (1 - R^2_j)`` where ``R^2_j`` regresses driver ``j`` on the remaining
+    drivers. Large VIF (> ~10) flags collinearity, e.g. GR vs. CGR vs. SGR.
+    """
+    n_cols = z_drivers.shape[1]
+    vifs: Dict[str, float] = {}
+    if n_cols < 2:
+        return {str(name): 1.0 for name in driver_names}
+
+    for j in range(n_cols):
+        others = np.delete(z_drivers, j, axis=1)
+        target = z_drivers[:, j]
+        design = np.column_stack([others, np.ones(others.shape[0])])
+        coef, *_ = np.linalg.lstsq(design, target, rcond=None)
+        resid = target - design @ coef
+        ss_res = float(np.sum(resid**2))
+        ss_tot = float(np.sum((target - np.mean(target)) ** 2))
+        r2_j = 1.0 - ss_res / ss_tot if ss_tot > 1e-12 else 0.0
+        vifs[str(driver_names[j])] = float(min(1.0 / max(1.0 - r2_j, 1e-6), 1e6))
+    return vifs
+
+
+def _breusch_pagan_stat(
+    residuals: np.ndarray, z_drivers: np.ndarray
+) -> Tuple[float, float]:
+    """Breusch-Pagan LM statistic and p-value for heteroscedasticity.
+
+    Regresses squared residuals on the standardized drivers; a small p-value indicates
+    non-constant residual variance, the condition that motivates ridge/Huber fits over OLS.
+    """
+    n = residuals.shape[0]
+    if n < 4 or z_drivers.shape[1] == 0:
+        return 0.0, 1.0
+    resid_var = float(np.mean(residuals**2))
+    if resid_var <= 1e-18:
+        return 0.0, 1.0
+    g = residuals**2 / resid_var
+    design = np.column_stack([z_drivers, np.ones(n)])
+    coef, *_ = np.linalg.lstsq(design, g, rcond=None)
+    fitted = design @ coef
+    ss_reg = float(np.sum((fitted - np.mean(g)) ** 2))
+    lm_stat = 0.5 * ss_reg
+    p_value = 1.0
+    try:
+        from scipy.stats import chi2
+
+        p_value = float(chi2.sf(lm_stat, df=z_drivers.shape[1]))
+    except Exception:  # pragma: no cover - scipy is a hard dependency
+        p_value = 1.0
+    return float(lm_stat), p_value
+
+
+def fit_grain_density_correlation_multivariate(
+    drivers: Union[np.ndarray, pd.DataFrame, Dict[str, Sequence[float]]],
+    grain_density,
+    driver_names: Optional[Sequence[str]] = None,
+    rho_ma_clean: Optional[float] = None,
+    alpha: float = 1.0,
+    robust: bool = True,
+    huber_delta: float = 1.345,
+    irls_max_iter: int = 25,
+    irls_tol: float = 1e-6,
+    rho_ma_min: float = 2.55,
+    rho_ma_max: float = 3.00,
+) -> dict:
+    r"""Fit a ridge / Huber-robust multi-log grain-density correlation.
+
+    Models core grain density as a ridge-penalized linear combination of several robustly
+    standardized log drivers::
+
+        rho_ma = intercept + sum_j beta_j * (driver_j - center_j) / scale_j
+
+    Using several drivers (GR/CGR/SGR, RHOB, NPHI, Burke's ``M`` parameter, acoustic
+    impedance, ...) is preferable to a single gamma driver when that driver is
+    heteroscedastic: total GR mixes K/Th/U sources, so a single-log OLS slope is dominated
+    by high-gamma outliers (mica, glauconite, heavy minerals). Ridge shrinkage stabilizes
+    the coefficients of collinear gamma channels, while the optional Huber IRLS weighting
+    down-weights the high-leverage radioactive outliers that break OLS.
+
+    Args:
+        drivers (np.ndarray | pd.DataFrame | dict): ``(n, p)`` driver matrix, or a mapping of
+            driver name -> values (columns aligned by row).
+        grain_density (array-like): Measured core grain density (CGD) in g/cc.
+        driver_names (sequence of str, optional): Names for the driver columns. Required when
+            `drivers` is an ndarray.
+        rho_ma_clean (float, optional): Clean-sand grain density anchor (g/cc). Defaults to
+            2.65 (quartz). Reported as the clean reference and used as the fallback intercept
+            when no samples are usable.
+        alpha (float, optional): Ridge penalty on standardized coefficients. Defaults to 1.0;
+            use 0.0 for plain OLS.
+        robust (bool, optional): Use Huber IRLS reweighting. Defaults to True.
+        huber_delta (float, optional): Huber tuning constant in robust-residual units
+            (scaled by the residual MAD). Defaults to 1.345 (~95% Gaussian efficiency).
+        irls_max_iter (int, optional): Maximum IRLS iterations. Defaults to 25.
+        irls_tol (float, optional): Convergence tolerance on coefficient change. Defaults to 1e-6.
+        rho_ma_min (float, optional): Lower physical clamp (g/cc). Defaults to 2.55.
+        rho_ma_max (float, optional): Upper physical clamp (g/cc). Defaults to 3.00.
+
+    Returns:
+        dict: Fit bundle with ``driver_names``, ``center``/``scale`` (robust standardization),
+        ``coef`` (standardized), ``native_slopes`` (g/cc per driver unit), ``intercept``,
+        ``rho_ma_clean``, ``r2``/``rmse``/``mae``, ``robust_rmse``/``robust_mae``/``resid_mad``,
+        ``vif``, ``breusch_pagan_stat``/``breusch_pagan_p``, ``alpha``/``robust``/``n_iter``,
+        ``count``, ``rho_ma_min``/``rho_ma_max``, and ``active_drivers``.
+    """
+    if isinstance(drivers, pd.DataFrame):
+        names = (
+            list(driver_names)
+            if driver_names is not None
+            else [str(c) for c in drivers.columns]
+        )
+        x_raw = drivers[names].to_numpy(dtype=float)
+    elif isinstance(drivers, dict):
+        names = list(driver_names) if driver_names is not None else list(drivers.keys())
+        x_raw = np.column_stack(
+            [np.asarray(drivers[n], dtype=float).ravel() for n in names]
+        )
+    else:
+        x_raw = np.asarray(drivers, dtype=float)
+        if x_raw.ndim == 1:
+            x_raw = x_raw[:, None]
+        names = (
+            [f"driver_{j + 1}" for j in range(x_raw.shape[1])]
+            if driver_names is None
+            else [str(n) for n in driver_names]
+        )
+
+    anchor = 2.65 if rho_ma_clean is None else float(rho_ma_clean)
+    y = np.asarray(grain_density, dtype=float).ravel()
+
+    if x_raw.ndim != 2 or x_raw.shape[1] != len(names):
+        raise ValueError(
+            f"Driver matrix shape {x_raw.shape} does not match {len(names)} driver names."
+        )
+    if x_raw.shape[0] != y.shape[0]:
+        raise ValueError(
+            f"Driver rows ({x_raw.shape[0]}) must match grain density samples ({y.shape[0]})."
+        )
+
+    # Drop rows that are non-finite or physically implausible.
+    mask = (
+        np.isfinite(y)
+        & (y >= rho_ma_min)
+        & (y <= rho_ma_max)
+        & np.all(np.isfinite(x_raw), axis=1)
+    )
+    n = int(np.sum(mask))
+
+    if n == 0:
+        return {
+            "driver_names": names,
+            "center": [0.0] * len(names),
+            "scale": [1.0] * len(names),
+            "coef": [0.0] * len(names),
+            "native_slopes": [0.0] * len(names),
+            "intercept": round(anchor, 4),
+            "rho_ma_clean": round(anchor, 4),
+            "r2": 0.0,
+            "rmse": 0.0,
+            "mae": 0.0,
+            "robust_rmse": 0.0,
+            "robust_mae": 0.0,
+            "resid_mad": 0.0,
+            "vif": {str(nm): 1.0 for nm in names},
+            "breusch_pagan_stat": 0.0,
+            "breusch_pagan_p": 1.0,
+            "alpha": float(alpha),
+            "robust": bool(robust),
+            "n_iter": 0,
+            "count": 0,
+            "rho_ma_min": float(rho_ma_min),
+            "rho_ma_max": float(rho_ma_max),
+            "active_drivers": [],
+        }
+
+    x_v = x_raw[mask]
+    y_v = y[mask]
+    z_drivers, center, scale = _robust_standardize(x_v)
+
+    # Design matrix with an explicit intercept column appended last.
+    design = np.column_stack([z_drivers, np.ones(n)])
+
+    sample_w = np.ones(n, dtype=float)
+    coef = _ridge_solve(design, y_v, float(alpha), sample_w)
+    n_iter = 0
+    if robust and n >= 4:
+        for _ in range(max(int(irls_max_iter), 1)):
+            resid = y_v - design @ coef
+            resid_mad = float(np.median(np.abs(resid - np.median(resid)))) * 1.4826
+            delta_scaled = float(huber_delta) * max(resid_mad, 1e-6)
+            new_w = _huber_weights(resid, delta_scaled)
+            new_coef = _ridge_solve(design, y_v, float(alpha), new_w)
+            n_iter += 1
+            change = float(np.max(np.abs(new_coef - coef)))
+            coef, sample_w = new_coef, new_w
+            if change < float(irls_tol):
+                break
+
+    beta = coef[:-1]
+    intercept = float(coef[-1])
+
+    y_pred = np.clip(intercept + z_drivers @ beta, rho_ma_min, rho_ma_max)
+    resid = y_v - y_pred
+    rmse = float(np.sqrt(np.mean(resid**2)))
+    mae = float(np.mean(np.abs(resid)))
+    resid_mad = float(np.median(np.abs(resid - np.median(resid)))) * 1.4826
+    abs_dev = np.abs(resid)
+    capped = np.minimum(abs_dev, 3.0 * max(resid_mad, 1e-9))
+    robust_rmse = float(np.sqrt(np.mean(capped**2)))
+    robust_mae = float(np.median(abs_dev))
+    ss_res = float(np.sum(resid**2))
+    ss_tot = float(np.sum((y_v - np.mean(y_v)) ** 2))
+    r2 = (
+        float(max(0.0, min(1.0, 1.0 - ss_res / ss_tot)))
+        if ss_tot > 1e-12
+        else (1.0 if rmse < 1e-4 else 0.0)
+    )
+
+    vif = _variance_inflation_factors(z_drivers, names)
+    bp_stat, bp_p = _breusch_pagan_stat(resid, z_drivers)
+
+    # Re-express per-driver slopes in native units (g/cc per driver unit).
+    native_slopes = [float(b / s) for b, s in zip(beta, scale, strict=False)]
+
+    return {
+        "driver_names": names,
+        "center": [round(float(c), 6) for c in center],
+        "scale": [round(float(s), 6) for s in scale],
+        "coef": [round(float(b), 6) for b in beta],
+        "native_slopes": [round(v, 8) for v in native_slopes],
+        "intercept": round(intercept, 6),
+        "rho_ma_clean": round(anchor, 4),
+        "r2": round(r2, 4),
+        "rmse": round(rmse, 5),
+        "mae": round(mae, 5),
+        "robust_rmse": round(robust_rmse, 5),
+        "robust_mae": round(robust_mae, 5),
+        "resid_mad": round(resid_mad, 5),
+        "vif": {k: round(float(v), 3) for k, v in vif.items()},
+        "breusch_pagan_stat": round(float(bp_stat), 3),
+        "breusch_pagan_p": round(float(bp_p), 4),
+        "alpha": float(alpha),
+        "robust": bool(robust),
+        "n_iter": int(n_iter),
+        "count": n,
+        "rho_ma_min": float(rho_ma_min),
+        "rho_ma_max": float(rho_ma_max),
+        "active_drivers": [
+            str(nm) for nm, b in zip(names, beta, strict=False) if abs(float(b)) > 1e-9
+        ],
+    }
+
+
+def grain_density_from_correlation_multivariate(
+    drivers: Union[np.ndarray, pd.DataFrame, Dict[str, Sequence[float]]],
+    fit: dict,
+    driver_names: Optional[Sequence[str]] = None,
+    rho_ma_min: Optional[float] = None,
+    rho_ma_max: Optional[float] = None,
+) -> np.ndarray:
+    """Apply a multivariate grain-density fit produced by the multivariate fitter.
+
+    Re-standardizes each driver with the stored ``center``/``scale`` statistics, then
+    evaluates ``rho_ma = intercept + sum_j coef_j * z_j``. Non-finite drivers fall back to
+    their center (``z = 0``) so those samples reproduce the clean-sand intercept rather
+    than propagating NaNs.
+
+    Args:
+        drivers: ``(n, p)`` matrix, DataFrame, or mapping matching the fitted
+            ``driver_names`` order (unless `driver_names` overrides it).
+        fit (dict): Output of :func:`fit_grain_density_correlation_multivariate`.
+        driver_names (sequence of str, optional): Override the driver order to match `fit`.
+        rho_ma_min (float, optional): Override the clamp from the fit.
+        rho_ma_max (float, optional): Override the clamp from the fit.
+
+    Returns:
+        np.ndarray: Predicted grain/matrix density (g/cc), clamped to bounds.
+    """
+    fit_names = [str(n) for n in fit.get("driver_names", [])]
+    if not fit_names:
+        raise ValueError("Fit bundle is missing 'driver_names'.")
+
+    order = list(driver_names) if driver_names is not None else fit_names
+    center = np.asarray(fit.get("center", [0.0]), dtype=float)
+    scale = np.asarray(fit.get("scale", [1.0]), dtype=float)
+    coef = np.asarray(fit.get("coef", [0.0]), dtype=float)
+    intercept = float(fit.get("intercept", fit.get("rho_ma_clean", 2.65)))
+    lo = float(fit.get("rho_ma_min", 2.55) if rho_ma_min is None else rho_ma_min)
+    hi = float(fit.get("rho_ma_max", 3.00) if rho_ma_max is None else rho_ma_max)
+
+    if isinstance(drivers, pd.DataFrame):
+        x = drivers[order].to_numpy(dtype=float)
+    elif isinstance(drivers, dict):
+        x = np.column_stack(
+            [np.asarray(drivers[n], dtype=float).ravel() for n in order]
+        )
+    else:
+        x = np.asarray(drivers, dtype=float)
+        if x.ndim == 1:
+            x = x[:, None]
+
+    if x.shape[1] != len(fit_names):
+        raise ValueError(
+            f"Drivers ({x.shape[1]}) do not match the fitted columns ({len(fit_names)})."
+        )
+    if len(order) != len(fit_names):
+        raise ValueError(
+            f"Driver name list ({len(order)}) does not match the fit ({len(fit_names)})."
+        )
+
+    z = (x - center) / np.where(np.abs(scale) > 1e-12, scale, 1.0)
+    z = np.where(np.isfinite(z), z, 0.0)
+    rho_ma = intercept + z @ coef
+    return np.clip(np.asarray(rho_ma, dtype=float), lo, hi)

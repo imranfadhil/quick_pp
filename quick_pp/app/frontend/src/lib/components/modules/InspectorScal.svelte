@@ -698,7 +698,10 @@
 	}
 
 	// ---- Grain / Matrix Density Correlation (project-scoped) ----
+		// Multi-log ridge/Huber fit is the default: gamma is heteroscedastic (GR/CGR/SGR mix
+		// K/Th/U sources), so joint drivers (RHOB, NPHI, M-parameter, AI) stabilize the trend.
 	const GD_DRIVER_FALLBACKS = ['CGR', 'SGR', 'GR', 'GAMMA'];
+		const GD_CANDIDATE_PATTERN = /^(CGR|SGR|GR|GAMMA|RHOB|RHOB_HC|NPHI|NPHI_HC|M_LITH|N_LITH|AI|DPHI)$/i;
 	const GD_CGD_SAMPLE_KEYS = [
 		'grain_density',
 		'CGD',
@@ -708,8 +711,12 @@
 		'rho_g',
 		'rhog'
 	];
+		const GD_CGD_CURVES = ['CGD', 'GRDEN', 'RHOMAA', 'CGRAIN_DENSITY', 'RHOMA'];
 
 	const gdDriverCurves = $derived(
+			Object.keys(wellData.curves).filter((c) => GD_CANDIDATE_PATTERN.test(c))
+		);
+		const gdSingleDriverCurves = $derived(
 		Object.keys(wellData.curves).filter((c) => /^(CGR|SGR|GR|GAMMA)$/i.test(c))
 	);
 
@@ -724,17 +731,35 @@
 		return null;
 	}
 
-	/**
-	 * Build paired (driver, grain density) records from core samples or CGD/driver curves.
-	 * Records are keyed by the resolved driver column name so the backend can locate it.
-	 */
-	function buildGrainDensityRecords(driverCol: string): Array<Record<string, number>> {
+		/** Resolve the requested multi-log driver columns against available well curves. */
+		function resolveGdDriverCols(): string[] {
+			const upper = new Map(Object.keys(wellData.curves).map((c) => [c.toUpperCase(), c]));
+			const resolved: string[] = [];
+			for (const name of workbench.scalParams.gd_driver_cols) {
+				const hit = upper.get(String(name || '').toUpperCase());
+				if (hit && !resolved.includes(hit)) resolved.push(hit);
+			}
+			return resolved;
+		}
+
+		function toggleGdDriverCol(curve: string) {
+			const cols = [...workbench.scalParams.gd_driver_cols];
+			const idx = cols.findIndex((c) => c.toUpperCase() === curve.toUpperCase());
+			if (idx >= 0) cols.splice(idx, 1);
+			else cols.push(curve);
+			workbench.scalParams.gd_driver_cols = cols;
+			scalPendingSave = true;
+		}
+
+		/** Build paired core grain-density records with all selected driver values. */
+		function buildGrainDensityRecords(driverCols: string[]): Array<Record<string, number>> {
 		const records: Array<Record<string, number>> = [];
 		const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
-		const driverCurve = wellData.curves[driverCol] ?? [];
+			const driverCurves = driverCols.map((col) => wellData.curves[col] ?? []);
 
-		const nearestDriver = (depth: number): number => {
-			if (dept.length === 0 || driverCurve.length !== dept.length) return Number.NaN;
+			const nearestDriverValues = (depth: number): number[] | null => {
+				if (dept.length === 0) return null;
+				if (driverCurves.some((c) => c.length !== dept.length)) return null;
 			let lo = 0;
 			let hi = dept.length - 1;
 			while (lo < hi) {
@@ -743,7 +768,8 @@
 				else hi = mid;
 			}
 			if (lo > 0 && Math.abs(dept[lo - 1] - depth) < Math.abs(dept[lo] - depth)) lo = lo - 1;
-			return Math.abs(dept[lo] - depth) <= 0.5 ? driverCurve[lo] : Number.NaN;
+				if (Math.abs(dept[lo] - depth) > 0.5) return null;
+				return driverCurves.map((c) => Number(c[lo]));
 		};
 
 		const readCgd = (s: Record<string, any>): number => {
@@ -754,6 +780,14 @@
 			return Number.NaN;
 		};
 
+			const pushRecord = (cgd: number, values: number[]): boolean => {
+				if (!Number.isFinite(cgd) || values.some((v) => !Number.isFinite(v))) return false;
+				const rec: Record<string, number> = { CGD: cgd };
+				driverCols.forEach((col, j) => (rec[col] = values[j]));
+				records.push(rec);
+				return true;
+			};
+
 		// Prefer discrete core plug samples (respecting the active filter).
 		if (wellData.coreSamples.length > 0) {
 			wellData.coreSamples.forEach((s, idx) => {
@@ -763,22 +797,25 @@
 				if (wellData.hasActiveFilter && !wellData.isCorePlugInActiveFilter(dRaw, dCur)) return;
 				const cgd = readCgd(s);
 				if (!Number.isFinite(cgd)) return;
-				const driver = Number(s[driverCol] ?? s.CGR ?? s.GR ?? nearestDriver(dCur));
-				if (Number.isFinite(driver)) records.push({ [driverCol]: driver, CGD: cgd });
+					const sampled = driverCols.map((col) => Number(s[col]));
+					const values = sampled.every((v) => Number.isFinite(v))
+						? sampled
+						: (nearestDriverValues(dCur) ?? sampled);
+					pushRecord(cgd, values);
 			});
 		}
 
-		// Fallback / supplement from a continuous CGD curve aligned with the driver curve.
+			// Fallback / supplement from a continuous CGD curve aligned with the driver curves.
 		if (records.length === 0) {
-			const cgdCurve =
-				wellData.curves['CGD'] ?? wellData.curves['GRDEN'] ?? wellData.curves['RHOMAA'] ?? [];
-			if (cgdCurve.length === dept.length && driverCurve.length === dept.length) {
+				const cgdCurve = GD_CGD_CURVES.map((n) => wellData.curves[n]).find(
+					(c) => c && c.length === dept.length
+				);
+				if (cgdCurve && driverCurves.every((c) => c.length === dept.length)) {
 				for (const i of wellData.visibleIndices) {
-					const cgd = Number(cgdCurve[i]);
-					const driver = Number(driverCurve[i]);
-					if (Number.isFinite(cgd) && cgd > 0 && Number.isFinite(driver)) {
-						records.push({ [driverCol]: driver, CGD: cgd });
-					}
+						pushRecord(
+							Number(cgdCurve[i]),
+							driverCurves.map((c) => Number(c[i]))
+						);
 				}
 			}
 		}
@@ -790,13 +827,69 @@
 		wellData.isCalculating = true;
 		wellData.lastError = null;
 		try {
+				const multivariate = sp.gd_mode !== 'single';
+				if (multivariate) {
+					const driverCols = resolveGdDriverCols();
+					if (driverCols.length === 0) {
+						throw new Error(
+							'Select at least one driver log (GR/CGR/SGR, RHOB, NPHI, M_LITH, N_LITH, AI).'
+						);
+					}
+					const records = buildGrainDensityRecords(driverCols);
+					if (records.length < 3) {
+						throw new Error(
+							'Need at least three core plugs with grain density and all selected driver logs to calibrate.'
+						);
+					}
+
+					const res = await postJson<{ fit: Record<string, any>; driver_cols: string[] }>(
+						'/quick_pp/scal/grain_density_correlation_multivariate',
+						{
+							driver_cols: driverCols,
+							grain_density_col: 'CGD',
+							rho_ma_clean: sp.gd_rho_ma_clean,
+							alpha: sp.gd_alpha,
+							robust: sp.gd_robust,
+							rho_ma_min: sp.gd_rho_ma_min,
+							rho_ma_max: sp.gd_rho_ma_max,
+							data: records
+						}
+					);
+
+					const fit = res.fit;
+					sp.gd_mode = 'multivariate';
+					sp.gd_driver_cols = driverCols;
+					sp.gd_coef = fit.coef;
+					sp.gd_center = fit.center;
+					sp.gd_scale = fit.scale;
+					sp.gd_intercept = fit.intercept;
+					sp.gd_vif = fit.vif ?? {};
+					sp.gd_breusch_pagan_p = fit.breusch_pagan_p ?? null;
+					sp.gd_resid_mad = fit.resid_mad ?? null;
+					sp.gd_rho_ma_min = fit.rho_ma_min;
+					sp.gd_rho_ma_max = fit.rho_ma_max;
+					sp.gd_r2 = fit.r2;
+					sp.gd_rmse = fit.robust_rmse ?? fit.rmse;
+					sp.gd_count = fit.count;
+					sp.gd_calibrated = true;
+					sp.gd_enabled = true;
+					scalPendingSave = true;
+
+					await saveGrainDensityToProject();
+					appStatus.success(
+						`Multi-log grain density fit on ${fit.count} plugs (${driverCols.length} drivers, R²=${fmtNum(fit.r2, 3)}, BP p=${fmtNum(fit.breusch_pagan_p, 2)}) — project-wide`,
+						workbench.wellId ?? undefined
+					);
+					return;
+				}
+
 			const driverCol = resolveGdDriverCol();
 			if (!driverCol) {
 				throw new Error(
-					`No driver log found. Expected one of ${GD_DRIVER_FALLBACKS.join(', ')} in the well curves.`
+						`No gamma driver found. Expected one of ${GD_DRIVER_FALLBACKS.join(', ')} in the well curves.`
 				);
 			}
-			const records = buildGrainDensityRecords(driverCol);
+				const records = buildGrainDensityRecords([driverCol]);
 			if (records.length < 2) {
 				throw new Error(
 					'Need at least two core plugs with grain density and a driver (CGR/GR) reading to calibrate.'
@@ -815,7 +908,6 @@
 					rho_ma_max: number;
 				};
 				driver_col: string;
-				grain_density_col: string;
 			}>('/quick_pp/scal/grain_density_correlation', {
 				driver_col: driverCol,
 				grain_density_col: 'CGD',
@@ -825,6 +917,7 @@
 			});
 
 			const fit = res.fit;
+				sp.gd_mode = 'single';
 			sp.gd_driver_col = driverCol;
 			sp.gd_rho_ma_clean = fit.rho_ma_clean;
 			sp.gd_k = fit.k;
@@ -867,7 +960,18 @@
 							selection: { zones: workbench.selectedZones },
 							params: {
 								gd_enabled: sp.gd_enabled,
+															gd_mode: sp.gd_mode,
 								gd_driver_col: sp.gd_driver_col,
+															gd_driver_cols: sp.gd_driver_cols,
+															gd_coef: sp.gd_coef,
+															gd_center: sp.gd_center,
+															gd_scale: sp.gd_scale,
+															gd_intercept: sp.gd_intercept,
+															gd_alpha: sp.gd_alpha,
+															gd_robust: sp.gd_robust,
+															gd_vif: sp.gd_vif,
+															gd_breusch_pagan_p: sp.gd_breusch_pagan_p,
+															gd_resid_mad: sp.gd_resid_mad,
 								gd_rho_ma_clean: sp.gd_rho_ma_clean,
 								gd_k: sp.gd_k,
 								gd_driver_clean: sp.gd_driver_clean,
@@ -1368,56 +1472,149 @@
 			title="4. Grain Density Correlation"
 			badge={workbench.scalParams.gd_calibrated
 				? workbench.scalParams.gd_enabled
-					? `k=${fmtNum(workbench.scalParams.gd_k, 5)} • ON`
-					: `k=${fmtNum(workbench.scalParams.gd_k, 5)} • OFF`
+							? `${workbench.scalParams.gd_mode === 'multivariate' ? `${workbench.scalParams.gd_driver_cols.length} DRV` : `k=${fmtNum(workbench.scalParams.gd_k, 5)}`} • ON`
+							: `${workbench.scalParams.gd_mode === 'multivariate' ? `${workbench.scalParams.gd_driver_cols.length} DRV` : `k=${fmtNum(workbench.scalParams.gd_k, 5)}`} • OFF`
 				: 'PROJECT'}
 			defaultOpen={false}
 		>
 			<p class="mb-1 text-[9.5px] leading-snug text-[var(--text-muted)]">
-				Calibrate a project-wide matrix density trend from core grain density vs. a gamma
-				driver (CGR = Th + K preferred, GR fallback):
+						Calibrate a project-wide matrix density trend from core grain density. Gamma logs
+						are heteroscedastic (GR/CGR/SGR mix K/Th/U and heavy-mineral outliers), so the
+						<strong>multi-log</strong> ridge/Huber fit is the default and jointly regresses RHOB,
+						NPHI, Burke M-parameter or AI alongside gamma:
 				<span class="mono-num text-[var(--text-secondary)]">
-					ρ<sub>ma</sub> = ρ<sub>clean</sub> + k·(driver − driver<sub>clean</sub>)
+							ρ<sub>ma</sub> = b<sub>0</sub> + Σ β<sub>j</sub>·(log<sub>j</sub> − c<sub>j</sub>)/s<sub>j</sub>
 				</span>. When enabled, this overrides the mineral-model ρ<sub>ma</sub> in the
 				Lithology &amp; Porosity density-porosity calculation.
 			</p>
 
-			<div class="grid grid-cols-2 gap-1">
-				<label class="text-[9px] text-[var(--text-muted)]">
-					Driver log
-					<select
-						bind:value={workbench.scalParams.gd_driver_col}
-						class="mt-0.5 h-6 w-full rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-[10px] text-[var(--text-primary)]"
+					<div class="flex gap-1">
+						{#each [['multivariate', 'Multi-log'], ['single', 'Single gamma']] as [m, lbl]}
+							<button
+								type="button"
+								onclick={() => {
+									workbench.scalParams.gd_mode = m as 'single' | 'multivariate';
+									scalPendingSave = true;
+								}}
+								class="h-6 flex-1 rounded-sm border px-1 text-[10px] font-medium {workbench
+									.scalParams.gd_mode === m
+									? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
+									: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)]'}"
 					>
-						{#if gdDriverCurves.length === 0}
-							<option value="CGR">CGR (auto)</option>
-						{/if}
-						{#each gdDriverCurves as curve (curve)}
-							<option value={curve}>{curve}</option>
+								{lbl}
+							</button>
 						{/each}
-					</select>
-				</label>
-				<div class="text-[9px] text-[var(--text-muted)]">
-					<NumericScrubber
-						label="Clean-sand anchor ρclean"
-						unit="g/cc"
-						bind:value={workbench.scalParams.gd_rho_ma_clean}
-						min={2.5}
-						max={2.9}
-						step={0.01}
-						decimals={2}
-						onchange={() => {
-							scalPendingSave = true;
-						}}
-					/>
+					</div>
+
+					{#if workbench.scalParams.gd_mode === 'multivariate'}
+						<div class="mt-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
+							<div class="flex items-center justify-between text-[9px] text-[var(--text-muted)]">
+								<span class="font-semibold text-[var(--text-secondary)]">Driver logs</span>
+								<span>{resolveGdDriverCols().length} selected</span>
+							</div>
+							<div class="mt-1 flex flex-wrap gap-1">
+								{#each gdDriverCurves as curve (curve)}
+									{@const active = workbench.scalParams.gd_driver_cols.some(
+										(c) => c.toUpperCase() === curve.toUpperCase()
+									)}
+									<button
+										type="button"
+										onclick={() => toggleGdDriverCol(curve)}
+										class="h-5 rounded-xs border px-1.5 text-[9.5px] font-medium transition-colors {active
+											? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
+											: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)]'}"
+									>
+										{curve}
+									</button>
+								{/each}
+						{#if gdDriverCurves.length === 0}
+									<span class="text-[9px] text-amber-700"
+										>No driver curves loaded (GR/CGR/SGR, RHOB, NPHI, M_LITH, N_LITH, AI).</span
+									>
+						{/if}
+							</div>
+							<div class="mt-1 grid grid-cols-3 gap-1">
+								<NumericScrubber
+									label="Ridge α"
+									bind:value={workbench.scalParams.gd_alpha}
+									min={0}
+									max={20}
+									step={0.5}
+									decimals={1}
+									onchange={() => {
+										scalPendingSave = true;
+									}}
+								/>
+								<label class="text-[9px] text-[var(--text-muted)]">
+									Huber robust
+									<button
+										type="button"
+										onclick={() => {
+											workbench.scalParams.gd_robust = !workbench.scalParams.gd_robust;
+											scalPendingSave = true;
+										}}
+										class="mt-0.5 h-6 w-full rounded-sm border px-1 text-[10px] font-semibold {workbench
+											.scalParams.gd_robust
+											? 'border-emerald-600 bg-emerald-50 text-emerald-700'
+											: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-muted)]'}"
+									>
+										{workbench.scalParams.gd_robust ? 'IRLS ON' : 'Off (OLS)'}
+									</button>
+								</label>
+								<div class="text-[9px] text-[var(--text-muted)]">
+									<NumericScrubber
+										label="Clean anchor ρclean"
+										unit="g/cc"
+										bind:value={workbench.scalParams.gd_rho_ma_clean}
+										min={2.5}
+										max={2.9}
+										step={0.01}
+										decimals={2}
+										onchange={() => {
+											scalPendingSave = true;
+										}}
+									/>
+								</div>
+							</div>
 				</div>
-			</div>
+					{:else}
+						<div class="grid grid-cols-2 gap-1">
+							<label class="text-[9px] text-[var(--text-muted)]">
+								Driver log
+								<select
+									bind:value={workbench.scalParams.gd_driver_col}
+									class="mt-0.5 h-6 w-full rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-[10px] text-[var(--text-primary)]"
+								>
+									{#if gdSingleDriverCurves.length === 0}
+										<option value="CGR">CGR (auto)</option>
+									{/if}
+									{#each gdSingleDriverCurves as curve (curve)}
+										<option value={curve}>{curve}</option>
+									{/each}
+								</select>
+							</label>
+							<div class="text-[9px] text-[var(--text-muted)]">
+								<NumericScrubber
+									label="Clean-sand anchor ρclean"
+									unit="g/cc"
+									bind:value={workbench.scalParams.gd_rho_ma_clean}
+									min={2.5}
+									max={2.9}
+									step={0.01}
+									decimals={2}
+									onchange={() => {
+										scalPendingSave = true;
+									}}
+								/>
+							</div>
+						</div>
+					{/if}
 
 			<button
 				type="button"
 				disabled={wellData.isCalculating}
 				onclick={calibrateGrainDensity}
-				title="Fit k (and driver_clean) from core grain density vs. the selected driver across the active interval, then persist project-wide"
+						title="Fit the correlation from core grain density across the active interval, then persist project-wide"
 				class="mt-1.5 h-7 w-full rounded-sm bg-[var(--accent-primary)] px-2.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
 			>
 				{wellData.isCalculating ? 'Calibrating...' : 'Calibrate from Core'}
@@ -1428,12 +1625,16 @@
 					class="mt-1 rounded-sm border border-blue-200 bg-blue-50 px-2 py-1 text-xs text-blue-900"
 				>
 					<div class="mono-num flex items-center justify-between font-semibold">
-						<span>
-							ρ<sub>ma</sub> = {fmtNum(workbench.scalParams.gd_rho_ma_clean, 2)} + {fmtNum(
-								workbench.scalParams.gd_k,
-								5
-							)}·(driver − {fmtNum(workbench.scalParams.gd_driver_clean, 1)})
-						</span>
+								{#if workbench.scalParams.gd_mode === 'multivariate'}
+									<span>ρ<sub>ma</sub> = {fmtNum(workbench.scalParams.gd_intercept ?? workbench.scalParams.gd_rho_ma_clean, 3)} + Σ β<sub>j</sub>·z<sub>j</sub></span>
+								{:else}
+									<span>
+										ρ<sub>ma</sub> = {fmtNum(workbench.scalParams.gd_rho_ma_clean, 2)} + {fmtNum(
+											workbench.scalParams.gd_k,
+											5
+										)}·(driver − {fmtNum(workbench.scalParams.gd_driver_clean, 1)})
+									</span>
+								{/if}
 					</div>
 					<div
 						class="mt-0.5 flex items-center justify-between border-t border-blue-200/70 pt-0.5 text-[9px] text-blue-800"
@@ -1443,6 +1644,9 @@
 								workbench.scalParams.gd_rmse ?? 0,
 								4
 							)} • n = {workbench.scalParams.gd_count ?? 0}
+									{#if workbench.scalParams.gd_breusch_pagan_p !== null}
+										• BP p = {fmtNum(workbench.scalParams.gd_breusch_pagan_p, 2)}
+									{/if}
 						</span>
 						<button
 							type="button"
@@ -1454,6 +1658,21 @@
 							{workbench.scalParams.gd_enabled ? 'Applied in Porosity ✓' : 'Enable in Porosity'}
 						</button>
 					</div>
+							{#if workbench.scalParams.gd_mode === 'multivariate'}
+								<div class="mt-0.5 space-y-0.5 border-t border-blue-200/70 pt-0.5 text-[9px] text-blue-800">
+									{#each workbench.scalParams.gd_driver_cols as name, j (name)}
+										<div class="mono-num flex items-center justify-between">
+											<span>{name}</span>
+											<span>
+												β = {fmtNum(workbench.scalParams.gd_coef[j] ?? 0, 4)}
+												{#if Object.keys(workbench.scalParams.gd_vif).length > 0}
+													· VIF = {fmtNum(workbench.scalParams.gd_vif[name] ?? 1, 1)}
+												{/if}
+											</span>
+										</div>
+									{/each}
+								</div>
+							{/if}
 				</div>
 			{/if}
 		</ParameterSection>

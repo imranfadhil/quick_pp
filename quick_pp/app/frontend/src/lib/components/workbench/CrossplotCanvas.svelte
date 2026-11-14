@@ -238,6 +238,9 @@
 		};
 	});
 
+	/** Gamma-log fallback order used when no multi-log driver is selected. */
+	const GD_GAMMA_FALLBACKS = ['CGR', 'SGR', 'GR', 'GAMMA'];
+
 	const MW_PALETTE = [
 		'#2563EB',
 		'#0D9488',
@@ -389,11 +392,16 @@
 		if (effectiveMode === 'grain-density') {
 			baseLayout.margin.t = 70;
 			const sp = workbench.scalParams;
+					const multivariate =
+						sp.gd_mode === 'multivariate' && sp.gd_driver_cols.length > 0 && sp.gd_coef.length > 0;
 
-			// Resolve the driver curve (calibrated driver first, then CGR/GR fallbacks).
+					// Resolve the x-axis driver: the first selected multi-log driver when multivariate,
+					// else the calibrated/single gamma driver with CGR/GR fallbacks.
 			const curveNames = Object.keys(wellData.curves);
 			const upperMap = new Map(curveNames.map((c) => [c.toUpperCase(), c]));
-			const driverCandidates = [sp.gd_driver_col, 'CGR', 'SGR', 'GR', 'GAMMA'];
+					const driverCandidates = multivariate
+						? [...sp.gd_driver_cols, sp.gd_driver_col]
+						: [sp.gd_driver_col, ...GD_GAMMA_FALLBACKS];
 			let driverCol: string | null = null;
 			for (const cand of driverCandidates) {
 				const hit = upperMap.get(String(cand || '').toUpperCase());
@@ -481,13 +489,35 @@
 					hovertemplate: '%{text}<br>Driver: %{x:.3g}<br>CGD: %{y:.4g} g/cc<extra></extra>'
 				});
 
-				// Fitted correlation line (if calibrated) across the observed driver range.
-				if (sp.gd_calibrated && Number.isFinite(sp.gd_k)) {
-					const xMin = Math.min(...xPts);
-					const xMax = Math.max(...xPts);
-					const lineX = [xMin, xMax];
-					const clamp = (v: number) =>
-						Math.min(sp.gd_rho_ma_max, Math.max(sp.gd_rho_ma_min, v));
+						const clamp = (v: number) =>
+							Math.min(sp.gd_rho_ma_max, Math.max(sp.gd_rho_ma_min, v));
+						const xMin = Math.min(...xPts);
+						const xMax = Math.max(...xPts);
+						const lineX = [xMin, xMax];
+
+						if (multivariate) {
+							// Sweep the plotted driver while holding the other drivers at their fitted
+							// centers (z = 0), which is the marginal 1-D slice of the multi-log model.
+							const xIdx = sp.gd_driver_cols.findIndex(
+								(c) => c.toUpperCase() === (driverCol ?? '').toUpperCase()
+							);
+							if (xIdx >= 0 && sp.gd_intercept !== null) {
+								const lineY = lineX.map((x) => {
+									const z = (x - (sp.gd_center[xIdx] ?? 0)) / (sp.gd_scale[xIdx] || 1);
+									return clamp((sp.gd_intercept ?? 0) + (sp.gd_coef[xIdx] ?? 0) * z);
+								});
+								traces.push({
+									type: 'scatter',
+									mode: 'lines',
+									name: `Multi-log fit (${sp.gd_driver_cols.length} drivers)`,
+									x: lineX,
+									y: lineY,
+									line: { color: '#DC2626', width: 2 },
+									hovertemplate:
+										'Driver: %{x:.3g}<br>ρma: %{y:.4g} g/cc<extra>Multi-log fit</extra>'
+								});
+							}
+						} else if (sp.gd_calibrated && Number.isFinite(sp.gd_k)) {
 					const lineY = lineX.map((x) =>
 						clamp(sp.gd_rho_ma_clean + sp.gd_k * (x - sp.gd_driver_clean))
 					);
@@ -503,7 +533,9 @@
 				}
 			}
 
-			baseLayout.xaxis.title = { text: `${driverCol ?? 'GR/CGR'} (GAPI)` };
+			baseLayout.xaxis.title = {
+							text: `${driverCol ?? 'GR/CGR'} (${multivariate ? 'driver unit' : 'GAPI'})`
+						};
 			baseLayout.yaxis.title = { text: 'Grain / Matrix Density (g/cc)' };
 			return { traces, layout: baseLayout };
 		}
@@ -5192,10 +5224,18 @@
 			void wellData.curves['GR'];
 			void wellData.curves[workbench.scalParams.gd_driver_col];
 			void workbench.scalParams.gd_driver_col;
+					void workbench.scalParams.gd_mode;
 			void workbench.scalParams.gd_calibrated;
 			void workbench.scalParams.gd_k;
 			void workbench.scalParams.gd_rho_ma_clean;
 			void workbench.scalParams.gd_driver_clean;
+					void workbench.scalParams.gd_intercept;
+					void workbench.scalParams.gd_coef;
+					void workbench.scalParams.gd_center;
+					void workbench.scalParams.gd_scale;
+					for (const col of workbench.scalParams.gd_driver_cols) {
+						void wellData.curves[col];
+					}
 			void wellData.curves['DEPT'];
 			void wellData.curves['DEPTH'];
 		} else if (mode === 'vsh-qc') {

@@ -496,5 +496,18 @@ flowchart TD
       
       $$P_{c,\text{res}} = P_{c,\text{lab}} \cdot \frac{(\sigma \cos\theta)_{\text{res}}}{(\sigma \cos\theta)_{\text{lab}}}$$
 
-* **Input Data:** Core plugs table (`DEPTH`, `CPORE`, `CPERM`), Overburden stress parameters, Lab IFT and contact angle  
-* **Output Data:** `CPOR_SHIFTED`, `CPERM_SHIFTED`, `SV_EST`, `PP_EST`, `NU_DYN`, `NCS_EST`, Stress-corrected core properties, Scaled $P_c$ curves
+        * **Core-Calibrated Grain / Matrix Density ($\rho_{ma}$) Correlation:**
+          Calibrates a project-wide matrix density trend from core grain density (CGD) that overrides the mineral-model $\rho_{ma}$ in the Lithology & Porosity density-porosity calculation. Two forms are available:
+
+          **Single anchored gamma driver:**
+
+          $$\rho_{ma}(z) = \rho_{ma,\text{clean}} + k \cdot \left(\text{driver}(z) - \text{driver}_{\text{clean}}\right)$$
+
+          **Multi-log ridge / Huber (default):**
+
+          $$\rho_{ma}(z) = b_0 + \sum_j \beta_j \frac{\text{log}_j(z) - c_j}{s_j}$$
+
+          Gamma logs are heteroscedastic — GR, CGR and SGR mix K/Th/U sources, so a single-log OLS slope is dominated by radioactive and heavy-mineral outliers (mica, glauconite). The multi-log form jointly regresses GR/CGR/SGR with RHOB, NPHI, Burke's $M$-parameter or acoustic impedance, standardizing each driver with a robust median/IQR and fitting by ridge regression with optional Huber IRLS reweighting. The fit reports $R^2$/RMSE, robust residual spread, per-driver variance inflation factors (collinearity), and a Breusch-Pagan heteroscedasticity test.
+
+    * **Input Data:** Core plugs table (`DEPTH`, `CPORE`, `CPERM`, `CGRAIN_DENSITY`), Overburden stress parameters, Lab IFT and contact angle, driver logs (`GR`, `CGR`, `SGR`, `RHOB`, `NPHI`, `M_LITH`, `N_LITH`, `AI`)  
+    * **Output Data:** `CPOR_SHIFTED`, `CPERM_SHIFTED`, `SV_EST`, `PP_EST`, `NU_DYN`, `NCS_EST`, Stress-corrected core properties, Scaled $P_c$ curves, Calibrated grain density correlation (project-scoped)

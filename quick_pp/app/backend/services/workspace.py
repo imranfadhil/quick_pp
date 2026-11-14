@@ -129,7 +129,10 @@ from quick_pp.saturation import (
     swirr_timur,
     waxman_smits_saturation,
 )
-from quick_pp.scal import grain_density_from_correlation
+from quick_pp.scal import (
+    grain_density_from_correlation,
+    grain_density_from_correlation_multivariate,
+)
 from quick_pp.uncertainty import (
     calc_stochastic_reservoir_summary,
     sample_lhs_parameters,
@@ -875,6 +878,95 @@ def _resolve_grain_density_driver(
     return None
 
 
+def _resolve_log_column_exact(df: pd.DataFrame, name: str) -> Optional[str]:
+    """Resolve an exact log column case-insensitively (no substitution)."""
+    key = str(name or "").upper()
+    if not key:
+        return None
+    for col in df.columns:
+        if str(col).upper() == key:
+            return col
+    return None
+
+
+def _apply_grain_density_correlation(
+    df: pd.DataFrame,
+    valid_mask: pd.Series,
+    cfg: Any,
+) -> Optional[np.ndarray]:
+    """Predict a continuous matrix density from a calibrated (multi-)log correlation.
+
+    Handles both payload shapes:
+
+    * multi-log ridge/Huber (``driver_cols`` + ``coef``/``center``/``scale``) via
+      :func:`grain_density_from_correlation_multivariate`, and
+    * the single anchored gamma driver via :func:`grain_density_from_correlation`.
+
+    Args:
+        df (pd.DataFrame): Full well dataframe (unfiltered by `valid_mask`).
+        valid_mask (pd.Series): Boolean mask of rows included in the porosity computation.
+        cfg: Calibrated correlation payload (``GrainDensityCorrelation``).
+
+    Returns:
+        np.ndarray | None: Predicted rho_ma aligned with the masked rows, or None when a
+        requested driver is unavailable in the dataframe.
+    """
+    selection = valid_mask.to_numpy()
+
+    driver_cols = list(getattr(cfg, "driver_cols", []) or [])
+    coef = list(getattr(cfg, "coef", []) or [])
+    scale = list(getattr(cfg, "scale", []) or [])
+    if driver_cols and coef and scale and len(coef) == len(driver_cols):
+        names = [str(n) for n in driver_cols]
+        resolved = [_resolve_log_column_exact(df, n) for n in names]
+        if any(col is None for col in resolved):
+            return None
+        matrix = np.column_stack(
+            [
+                pd.to_numeric(df[col], errors="coerce").to_numpy(dtype=float)[selection]
+                for col in resolved
+            ]
+        )
+        center = list(getattr(cfg, "center", []) or [])
+        if len(center) != len(names):
+            center = [0.0] * len(names)
+        intercept = getattr(cfg, "intercept", None)
+        fit = {
+            "driver_names": names,
+            "center": center,
+            "scale": scale,
+            "coef": coef,
+            "intercept": (
+                float(intercept) if intercept is not None else float(cfg.rho_ma_clean)
+            ),
+            "rho_ma_clean": float(cfg.rho_ma_clean),
+            "rho_ma_min": float(cfg.rho_ma_min),
+            "rho_ma_max": float(cfg.rho_ma_max),
+        }
+        return np.asarray(
+            grain_density_from_correlation_multivariate(matrix, fit, driver_names=names),
+            dtype=float,
+        )
+
+    driver_col = _resolve_grain_density_driver(df, cfg.driver_col)
+    if driver_col is None:
+        return None
+    driver_v = (
+        pd.to_numeric(df[driver_col], errors="coerce").to_numpy(dtype=float)[selection]
+    )
+    return np.asarray(
+        grain_density_from_correlation(
+            driver_v,
+            rho_ma_clean=cfg.rho_ma_clean,
+            k=cfg.k,
+            driver_clean=cfg.driver_clean,
+            rho_ma_min=cfg.rho_ma_min,
+            rho_ma_max=cfg.rho_ma_max,
+        ),
+        dtype=float,
+    )
+
+
 def _resolve_badhole_mask(
     df: pd.DataFrame, auto_detect_if_missing: bool = False
 ) -> pd.Series:
@@ -1206,10 +1298,21 @@ class WorkspaceLithologyRequest(WorkspaceFilterBase, GammaParameters):
 class GrainDensityCorrelation(BaseModel):
     """Project-scoped calibrated grain/matrix density correlation.
 
-    Applies ``rho_ma(z) = rho_ma_clean + k * (driver(z) - driver_clean)`` using a log driver
-    (CGR = Th + K preferred, GR fallback) to override the mineral-model matrix density when
-    computing density porosity. Calibrated once per project via the SCAL
-    ``/scal/grain_density_correlation`` endpoint.
+    Applies a core-calibrated trend to override the mineral-model matrix density when
+    computing density porosity. Two forms are supported:
+
+    1. Single anchored driver (``driver_col`` + ``k``)::
+
+           rho_ma(z) = rho_ma_clean + k * (driver(z) - driver_clean)
+
+    2. Multi-log ridge/Huber fit (``driver_cols`` + ``coef``/``center``/``scale``)::
+
+           rho_ma(z) = intercept + sum_j coef_j * (driver_j(z) - center_j) / scale_j
+
+    Use the multivariate form when the gamma driver is heteroscedastic (GR/CGR/SGR mix
+    K/Th/U sources), adding RHOB, NPHI, the Burke M-parameter, or acoustic impedance as
+    co-drivers. Calibrated once per project via the SCAL
+    ``/scal/grain_density_correlation(_multivariate)`` endpoints.
     """
 
     enabled: bool = Field(
@@ -1218,15 +1321,39 @@ class GrainDensityCorrelation(BaseModel):
     driver_col: str = Field(
         "CGR",
         description=(
-            "Driver log curve for the correlation. Resolved case-insensitively with "
-            "fallbacks CGR, SGR, GR, GAMMA."
+            "Single-driver log curve for the anchored correlation. Resolved case-insensitively "
+            "with fallbacks CGR, SGR, GR, GAMMA. Ignored when ``driver_cols`` is populated."
+        ),
+    )
+    driver_cols: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Multi-log driver columns for the ridge/Huber correlation, in the same order as "
+            "``coef``/``center``/``scale``. When non-empty, overrides ``driver_col``."
+        ),
+    )
+    coef: List[float] = Field(
+        default_factory=list,
+        description="Standardized ridge coefficients per driver (g/cc per standardized unit).",
+    )
+    center: List[float] = Field(
+        default_factory=list, description="Robust driver centers used for standardization."
+    )
+    scale: List[float] = Field(
+        default_factory=list, description="Robust driver IQR scales used for standardization."
+    )
+    intercept: Optional[float] = Field(
+        None,
+        description=(
+            "Fitted clean-sand intercept for the multi-log form (g/cc). Defaults to "
+            "``rho_ma_clean`` when omitted."
         ),
     )
     rho_ma_clean: float = Field(
         2.65, gt=0.0, description="Clean-sand grain density anchor (g/cc)."
     )
     k: float = Field(
-        0.0, description="Calibrated slope (g/cc per driver unit)."
+        0.0, description="Calibrated single-driver slope (g/cc per driver unit)."
     )
     driver_clean: float = Field(
         0.0, description="Driver reading of the clean/low-clay end member."
@@ -1313,8 +1440,8 @@ class WorkspacePorosityRequest(WorkspaceFilterBase, GammaParameters):
         None,
         description=(
             "Project-scoped calibrated grain density correlation. When enabled, overrides the "
-            "mineral-model matrix density (rho_ma) with rho_ma = rho_ma_clean + k*(driver - "
-            "driver_clean) before computing density porosity."
+            "mineral-model matrix density (rho_ma) with the calibrated trend before computing "
+            "density porosity. Supports a single anchored driver or a multi-log ridge/Huber fit."
         ),
     )
 
@@ -4905,28 +5032,14 @@ def workspace_porosity(
         rho_ma = np.where((rho_ma > 1.2) & np.isfinite(rho_ma), rho_ma, 2.65)
 
         # Project-scoped grain density correlation override: replace the mineral-model
-        # matrix density with the core-calibrated rho_ma(z) driven by a log (CGR/GR).
+        # matrix density with the core-calibrated rho_ma(z). Supports both the single
+        # anchored gamma driver and the multi-log ridge/Huber fit.
         gdc = getattr(req, "grain_density_correlation", None)
         if gdc is not None and gdc.enabled:
-            driver_col = _resolve_grain_density_driver(df, gdc.driver_col)
-            if driver_col is not None:
-                driver_v = (
-                    pd.to_numeric(df[driver_col], errors="coerce")
-                    .to_numpy(dtype=float)[valid_mask.to_numpy()]
-                )
-                rho_ma_corr = np.asarray(
-                    grain_density_from_correlation(
-                        driver_v,
-                        rho_ma_clean=gdc.rho_ma_clean,
-                        k=gdc.k,
-                        driver_clean=gdc.driver_clean,
-                        rho_ma_min=gdc.rho_ma_min,
-                        rho_ma_max=gdc.rho_ma_max,
-                    ),
-                    dtype=float,
-                )
-                # Only override where the driver (and thus correlation) is valid; keep the
-                # mineral-model rho_ma elsewhere so sparse/absent driver points stay robust.
+            rho_ma_corr = _apply_grain_density_correlation(df, valid_mask, gdc)
+            if rho_ma_corr is not None:
+                # Only override where the correlation is valid; keep the mineral-model
+                # rho_ma elsewhere so sparse/absent driver points stay robust.
                 rho_ma = np.where(np.isfinite(rho_ma_corr), rho_ma_corr, rho_ma)
 
         phid_v = np.asarray(

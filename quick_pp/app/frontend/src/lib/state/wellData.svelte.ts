@@ -1530,6 +1530,18 @@ class WellDataState {
 				const v = savedScal[key] ?? cfgAny[key];
 				return typeof v === 'number' && Number.isFinite(v) ? v : fallback;
 			};
+						const pickVal = (key: string, fallback: any): any => {
+							const v = savedScal[key] ?? cfgAny[key];
+							return v === undefined || v === null ? fallback : v;
+						};
+						const pickStr = (key: string, fallback: string): string => {
+							const v = savedScal[key] ?? cfgAny[key];
+							return typeof v === 'string' && v.length > 0 ? v : fallback;
+						};
+						const pickBooleanVal = (key: string, fallback: boolean): boolean => {
+							const v = savedScal[key] ?? cfgAny[key];
+							return typeof v === 'boolean' ? v : Boolean(v ?? fallback);
+						};
 			workbench.scalParams.model = (savedScal.model ??
 				cfgAny.scal_model ??
 				workbench.scalParams.model) as any;
@@ -1651,6 +1663,77 @@ class WellDataState {
 			workbench.scalParams.pc_scaling_applied = Boolean(
 				savedScal.pc_scaling_applied ?? cfgAny.pc_scaling_applied ?? false
 			);
+
+						// Restore the project-scoped grain / matrix density correlation (single or multi-log).
+						workbench.scalParams.gd_enabled = Boolean(
+							pickBooleanVal('gd_enabled', workbench.scalParams.gd_enabled)
+						);
+						workbench.scalParams.gd_mode =
+							pickStr('gd_mode', workbench.scalParams.gd_mode) === 'single'
+								? 'single'
+								: 'multivariate';
+						workbench.scalParams.gd_driver_col = pickStr(
+							'gd_driver_col',
+							workbench.scalParams.gd_driver_col
+						);
+						const savedCols = pickVal('gd_driver_cols', workbench.scalParams.gd_driver_cols);
+						if (Array.isArray(savedCols) && savedCols.length > 0) {
+							workbench.scalParams.gd_driver_cols = savedCols.map((c: unknown) => String(c));
+						}
+						const savedCoef = pickVal('gd_coef', workbench.scalParams.gd_coef);
+						if (Array.isArray(savedCoef)) workbench.scalParams.gd_coef = savedCoef.map(Number);
+						const savedCenter = pickVal('gd_center', workbench.scalParams.gd_center);
+						if (Array.isArray(savedCenter)) workbench.scalParams.gd_center = savedCenter.map(Number);
+						const savedScale = pickVal('gd_scale', workbench.scalParams.gd_scale);
+						if (Array.isArray(savedScale)) workbench.scalParams.gd_scale = savedScale.map(Number);
+						workbench.scalParams.gd_intercept = pickNullableNum(
+							'gd_intercept',
+							workbench.scalParams.gd_intercept
+						);
+						workbench.scalParams.gd_alpha = pickNum('gd_alpha', workbench.scalParams.gd_alpha);
+						workbench.scalParams.gd_robust = Boolean(
+							pickBooleanVal('gd_robust', workbench.scalParams.gd_robust)
+						);
+						const savedVif = pickVal('gd_vif', workbench.scalParams.gd_vif);
+						if (savedVif && typeof savedVif === 'object' && !Array.isArray(savedVif)) {
+							const vifMap: Record<string, number> = {};
+							for (const [k, v] of Object.entries(savedVif as Record<string, unknown>)) {
+								const num = Number(v);
+								if (Number.isFinite(num)) vifMap[k] = num;
+							}
+							workbench.scalParams.gd_vif = vifMap;
+						}
+						workbench.scalParams.gd_breusch_pagan_p = pickNullableNum(
+							'gd_breusch_pagan_p',
+							workbench.scalParams.gd_breusch_pagan_p
+						);
+						workbench.scalParams.gd_resid_mad = pickNullableNum(
+							'gd_resid_mad',
+							workbench.scalParams.gd_resid_mad
+						);
+						workbench.scalParams.gd_rho_ma_clean = pickNum(
+							'gd_rho_ma_clean',
+							workbench.scalParams.gd_rho_ma_clean
+						);
+						workbench.scalParams.gd_k = pickNum('gd_k', workbench.scalParams.gd_k);
+						workbench.scalParams.gd_driver_clean = pickNum(
+							'gd_driver_clean',
+							workbench.scalParams.gd_driver_clean
+						);
+						workbench.scalParams.gd_rho_ma_min = pickNum(
+							'gd_rho_ma_min',
+							workbench.scalParams.gd_rho_ma_min
+						);
+						workbench.scalParams.gd_rho_ma_max = pickNum(
+							'gd_rho_ma_max',
+							workbench.scalParams.gd_rho_ma_max
+						);
+						workbench.scalParams.gd_r2 = pickNullableNum('gd_r2', workbench.scalParams.gd_r2);
+						workbench.scalParams.gd_rmse = pickNullableNum('gd_rmse', workbench.scalParams.gd_rmse);
+						workbench.scalParams.gd_count = pickNullableNum('gd_count', workbench.scalParams.gd_count);
+						workbench.scalParams.gd_calibrated = Boolean(
+							pickBooleanVal('gd_calibrated', workbench.scalParams.gd_calibrated)
+						);
 
 			// Restore persistent working Top/Bottom depth interval for this specific well (if configured)
 			let focusMin: number | null =
