@@ -315,6 +315,8 @@ class WellDataState {
 	zonalSummary = $state.raw<Record<string, any>[]>([]);
 	zonalSummarySource = $state<{ projectId: string; wellId: string } | null>(null);
 	poroCoreMetrics = $state<CoreComparisonMetrics | null>(null);
+	/** Provenance of the applied grain-density correlation in the last porosity run. */
+	poroGrainDensityProvenance = $state<Record<string, any> | null>(null);
 	permCoreMetrics = $state<CoreComparisonMetrics | null>(null);
 
 	// Unsaved computed curve mnemonics per single-well module (cleared on well load or after saving that module)
@@ -1538,6 +1540,10 @@ class WellDataState {
 							const v = savedScal[key] ?? cfgAny[key];
 							return typeof v === 'string' && v.length > 0 ? v : fallback;
 						};
+						const pickNullableStr = (key: string, fallback: string | null): string | null => {
+							const v = savedScal[key] ?? cfgAny[key];
+							return typeof v === 'string' && v.length > 0 ? v : fallback;
+						};
 						const pickBooleanVal = (key: string, fallback: boolean): boolean => {
 							const v = savedScal[key] ?? cfgAny[key];
 							return typeof v === 'boolean' ? v : Boolean(v ?? fallback);
@@ -1682,6 +1688,14 @@ class WellDataState {
 						}
 						const savedCoef = pickVal('gd_coef', workbench.scalParams.gd_coef);
 						if (Array.isArray(savedCoef)) workbench.scalParams.gd_coef = savedCoef.map(Number);
+						const savedNative = pickVal('gd_native_slopes', workbench.scalParams.gd_native_slopes);
+						if (Array.isArray(savedNative)) {
+							workbench.scalParams.gd_native_slopes = savedNative.map(Number);
+						}
+						workbench.scalParams.gd_plot_driver_col = pickNullableStr(
+							'gd_plot_driver_col',
+							workbench.scalParams.gd_plot_driver_col
+						);
 						const savedCenter = pickVal('gd_center', workbench.scalParams.gd_center);
 						if (Array.isArray(savedCenter)) workbench.scalParams.gd_center = savedCenter.map(Number);
 						const savedScale = pickVal('gd_scale', workbench.scalParams.gd_scale);
@@ -2671,6 +2685,7 @@ class WellDataState {
 			}
 			if (groupSet.has('litho_poro') || clearedSet.has('PHIT')) {
 				this.poroCoreMetrics = null;
+				this.poroGrainDensityProvenance = null;
 				this.porosityComparison = null;
 				this.porosityComparisonError = null;
 			}

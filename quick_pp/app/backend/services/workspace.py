@@ -5030,17 +5030,40 @@ def workspace_porosity(
         # Calculate matrix density from unnormalized mineral fractions and density porosity
         rho_ma = np.asarray(rho_matrix(**norm_kwargs), dtype=float)
         rho_ma = np.where((rho_ma > 1.2) & np.isfinite(rho_ma), rho_ma, 2.65)
+        rho_ma_mineral = rho_ma.copy()
 
         # Project-scoped grain density correlation override: replace the mineral-model
         # matrix density with the core-calibrated rho_ma(z). Supports both the single
         # anchored gamma driver and the multi-log ridge/Huber fit.
         gdc = getattr(req, "grain_density_correlation", None)
+        gdc_provenance: Optional[Dict[str, Any]] = None
         if gdc is not None and gdc.enabled:
             rho_ma_corr = _apply_grain_density_correlation(df, valid_mask, gdc)
             if rho_ma_corr is not None:
                 # Only override where the correlation is valid; keep the mineral-model
                 # rho_ma elsewhere so sparse/absent driver points stay robust.
-                rho_ma = np.where(np.isfinite(rho_ma_corr), rho_ma_corr, rho_ma)
+                replaced = np.isfinite(rho_ma_corr)
+                rho_ma = np.where(replaced, rho_ma_corr, rho_ma)
+                if replaced.any():
+                    delta = rho_ma_corr[replaced] - rho_ma_mineral[replaced]
+                    gdc_provenance = {
+                        "applied": True,
+                        "mode": (
+                            "multivariate"
+                            if list(getattr(gdc, "driver_cols", []) or [])
+                            else "single"
+                        ),
+                        "drivers": list(getattr(gdc, "driver_cols", []) or [])
+                        or [getattr(gdc, "driver_col", None)],
+                        "points_replaced": int(replaced.sum()),
+                        "points_total": int(valid_mask.sum()),
+                        "rho_ma_mean": round(float(np.mean(rho_ma_corr[replaced])), 4),
+                        "rho_ma_mineral_mean": round(
+                            float(np.mean(rho_ma_mineral[replaced])), 4
+                        ),
+                        "delta_mean": round(float(np.mean(delta)), 4),
+                        "delta_abs_mean": round(float(np.mean(np.abs(delta))), 4),
+                    }
 
         phid_v = np.asarray(
             density_porosity(rhob_v, rho_ma, req.fluid_point[1]), dtype=float
@@ -5498,6 +5521,7 @@ def workspace_porosity(
             "saved": req.save,
             "saved_rows": saved_rows,
             "core_metrics": core_metrics,
+            "grain_density_correlation": gdc_provenance,
             "fluid_density_mode": fd_cfg.mode if fd_cfg else "static",
             "stats": {
                 "PHIT": _curve_summary_stats(phit_s),

@@ -561,6 +561,8 @@
 				if (poroData.data) Object.assign(batchedCurves, poroData.data);
 				if (poroData.stats) Object.assign(batchedStats, poroData.stats);
 				wellData.poroCoreMetrics = poroData.core_metrics;
+				wellData.poroGrainDensityProvenance =
+					(poroData as any).grain_density_correlation ?? null;
 			}
 
 			// 4. Optional Thomas-Stieber Laminated Shaly-Sand (batched into same single merge)
@@ -2118,6 +2120,34 @@
 		{/if}
 
 		-->
+		{#if wellData.poroGrainDensityProvenance?.applied}
+			{@const gd = wellData.poroGrainDensityProvenance}
+			<div
+				class="mx-2 mt-1 rounded-sm border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] text-emerald-900"
+			>
+				<div class="flex items-center justify-between font-semibold">
+					<span>Grain-density correlation applied in Porosity</span>
+					<span class="mono-num">ρ<sub>ma</sub> = {fmtNum(gd.rho_ma_mean, 4)} g/cc</span>
+				</div>
+				<div class="mt-0.5 text-[9.5px] text-emerald-800">
+					{gd.mode === 'multivariate' ? 'Multi-log' : 'Single gamma'} ρ<sub>ma</sub> replaced the
+					mineral-model value at
+					<span class="mono-num">{gd.points_replaced}</span>/<span class="mono-num"
+						>{gd.points_total}</span
+					> points
+					{#if Array.isArray(gd.drivers) && gd.drivers.length > 0}
+						· drivers: <span class="mono-num">{gd.drivers.filter(Boolean).join(', ')}</span>
+					{/if}
+					· Δρ<sub>ma</sub> mean {gd.delta_mean >= 0 ? '+' : ''}{fmtNum(gd.delta_mean, 4)} g/cc
+					(|Δ| {fmtNum(gd.delta_abs_mean, 4)})
+				</div>
+				<div class="mt-0.5 text-[9px] text-emerald-700/80">
+					Saved as the <span class="mono-num">RHOM</span> curve — open the Porosity Methods
+					comparison to plot it against the mineral-model matrix density.
+				</div>
+			</div>
+		{/if}
+
 		{#if wellData.lastError}
 			<div class="m-2 rounded-sm border border-red-200 bg-red-50 p-2 text-xs text-[var(--status-error)]">
 				{wellData.lastError}

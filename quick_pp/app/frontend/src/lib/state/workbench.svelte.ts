@@ -282,7 +282,11 @@ export interface ScalModelParams {
 		gd_mode: 'single' | 'multivariate';
 	gd_driver_col: string;
 		gd_driver_cols: string[];
+		/** Driver plotted on the crossplot X axis; null = auto (first selected driver). */
+		gd_plot_driver_col: string | null;
 		gd_coef: number[];
+		/** Per-driver slopes re-expressed in g/cc per native log unit. */
+		gd_native_slopes: number[];
 		gd_center: number[];
 		gd_scale: number[];
 		gd_intercept: number | null;
@@ -961,7 +965,9 @@ class WorkbenchState {
 				gd_mode: 'multivariate',
 		gd_driver_col: 'CGR',
 				gd_driver_cols: ['CGR', 'GR', 'RHOB', 'NPHI'],
+				gd_plot_driver_col: null,
 				gd_coef: [],
+				gd_native_slopes: [],
 				gd_center: [],
 				gd_scale: [],
 				gd_intercept: null,

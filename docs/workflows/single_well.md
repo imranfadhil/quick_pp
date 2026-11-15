@@ -507,7 +507,16 @@ flowchart TD
 
           $$\rho_{ma}(z) = b_0 + \sum_j \beta_j \frac{\text{log}_j(z) - c_j}{s_j}$$
 
-          Gamma logs are heteroscedastic — GR, CGR and SGR mix K/Th/U sources, so a single-log OLS slope is dominated by radioactive and heavy-mineral outliers (mica, glauconite). The multi-log form jointly regresses GR/CGR/SGR with RHOB, NPHI, Burke's $M$-parameter or acoustic impedance, standardizing each driver with a robust median/IQR and fitting by ridge regression with optional Huber IRLS reweighting. The fit reports $R^2$/RMSE, robust residual spread, per-driver variance inflation factors (collinearity), and a Breusch-Pagan heteroscedasticity test.
+          Gamma logs are heteroscedastic — GR, CGR and SGR mix K/Th/U sources, so a single-log OLS slope is dominated by radioactive and heavy-mineral outliers (mica, glauconite). The multi-log form jointly regresses GR/CGR/SGR with RHOB, NPHI, Burke's $M$-parameter or acoustic impedance, standardizing each driver with a robust median/IQR and fitting by ridge regression with optional Huber IRLS reweighting. The fit reports $R^2$/RMSE, robust residual spread, per-driver variance inflation factors (collinearity), a Breusch-Pagan heteroscedasticity test, and the per-driver slopes in **native log units** so the model reads as a familiar regression equation, e.g.
+
+          $$\hat{\rho}_{ma} = b_0 + \beta_1 \cdot \text{CGR} + \beta_2 \cdot \text{RHOB} + \beta_3 \cdot M_{\text{lith}}$$
+
+          Characterizing the correlation in the UI:
+
+          * **Crossplot X-axis selector** — the "Grain Density vs. GR/CGR" crossplot header exposes an *X axis* dropdown so CGD can be plotted against any calibrated driver (CGR, GR, RHOB, NPHI, M_LITH, AI, …). When a multi-log fit is active the red trend line is the marginal 1-D slice: the plotted driver is swept while the remaining drivers are held at their fitted centers.
+          * **Weightage panel** — besides the standardized $\beta_j$ and VIF, each driver row shows the swing in $\rho_{ma}$ across that driver's observed interquartile range ($|\beta_j \cdot \text{IQR}_j| / s_j$), i.e. how much each log actually moves the predicted matrix density.
+          * **Burke $M$/$N$ drivers** — `M_LITH`+ / `N_LITH`+ chips are offered whenever `RHOB` and `NPHI` are loaded; selecting one *generates* the curve from RHOB/NPHI (with a Gardner slowness estimate when no sonic log exists), mirroring `quick_pp.machine_learning.feature_engineering.mn_lithology_parameters`.
+          * **Porosity provenance** — because the correlation overrides the mineral-model $\rho_{ma}$ fed to the density porosity, the porosity response reports how many points were replaced, the mean $\rho_{ma}$ and the mean $\Delta\rho_{ma}$ vs. the mineral model, and the result is persisted as the `RHOM` curve. Lithology & Porosity displays this as a "Grain-density correlation applied in Porosity" panel.
 
     * **Input Data:** Core plugs table (`DEPTH`, `CPORE`, `CPERM`, `CGRAIN_DENSITY`), Overburden stress parameters, Lab IFT and contact angle, driver logs (`GR`, `CGR`, `SGR`, `RHOB`, `NPHI`, `M_LITH`, `N_LITH`, `AI`)  
     * **Output Data:** `CPOR_SHIFTED`, `CPERM_SHIFTED`, `SV_EST`, `PP_EST`, `NU_DYN`, `NCS_EST`, Stress-corrected core properties, Scaled $P_c$ curves, Calibrated grain density correlation (project-scoped)

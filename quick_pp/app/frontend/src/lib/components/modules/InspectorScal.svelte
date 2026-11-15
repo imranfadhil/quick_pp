@@ -712,13 +712,74 @@
 		'rhog'
 	];
 		const GD_CGD_CURVES = ['CGD', 'GRDEN', 'RHOMAA', 'CGRAIN_DENSITY', 'RHOMA'];
+	// Burke M-N lithology parameters are derived (not stored) curves: offer them as drivers and
+	// generate them on demand from RHOB/NPHI (+sonic, else a Gardner estimate).
+		const GD_GENERATED_DRIVERS = ['M_LITH', 'N_LITH'];
+	const GD_DTC_ALIASES = ['DTC', 'DT', 'DTCO', 'AC', 'DT4P'];
 
 	const gdDriverCurves = $derived(
 			Object.keys(wellData.curves).filter((c) => GD_CANDIDATE_PATTERN.test(c))
 		);
+		/** Burke M/N chips, shown even before they exist so they can be generated on demand. */
+		const gdGeneratedDriverCurves = $derived(
+			wellData.curves['RHOB'] && wellData.curves['NPHI'] ? GD_GENERATED_DRIVERS : []
+		);
+		const gdDriverChips = $derived(
+			[...new Set([...gdDriverCurves, ...gdGeneratedDriverCurves])].sort((a, b) => {
+				const ga = GD_CANDIDATE_PATTERN.test(a) ? 0 : 1;
+				const gb = GD_CANDIDATE_PATTERN.test(b) ? 0 : 1;
+				return ga - gb || a.localeCompare(b);
+			})
+		);
 		const gdSingleDriverCurves = $derived(
 		Object.keys(wellData.curves).filter((c) => /^(CGR|SGR|GR|GAMMA)$/i.test(c))
 	);
+
+	/**
+	 * Generate Burke M/N lithology parameters from RHOB/NPHI (sonic optional, Gardner fallback)
+	 * and merge them into the well curves so they become selectable/spottable drivers. Mirrors
+	 * `quick_pp.machine_learning.feature_engineering.mn_lithology_parameters`.
+	 */
+	function ensureGdGeneratedDrivers() {
+		const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
+		const rhob = wellData.curves['RHOB'];
+		const nphi = wellData.curves['NPHI'];
+		if (!rhob || !nphi || dept.length === 0) return;
+		let dtc: number[] | null = null;
+		for (const alias of GD_DTC_ALIASES) {
+			const c = wellData.curves[alias];
+			if (c && c.some((v) => Number.isFinite(v) && v > 20)) {
+				dtc = c;
+				break;
+			}
+		}
+		const dtFluid = 189.0;
+		const rhoFluid = 1.0;
+		const gardnerDtc = (r: number) => {
+			const safe = Math.min(Math.max(r, 1.5), 3.1);
+			const vp = Math.pow(safe / 0.23, 4);
+			return Math.min(Math.max(1e6 / Math.min(Math.max(vp, 3500), 25000), 40), 220);
+		};
+		const m = new Array<number>(dept.length).fill(Number.NaN);
+		const n = new Array<number>(dept.length).fill(Number.NaN);
+		for (let i = 0; i < dept.length; i++) {
+			const r = Number(rhob[i]);
+			const phi = Number(nphi[i]);
+			if (!Number.isFinite(r) || !Number.isFinite(phi)) continue;
+			const raw = dtc ? Number(dtc[i]) : Number.NaN;
+			const dt = Number.isFinite(raw) && raw > 20 ? raw : gardnerDtc(r);
+			let denom = r - rhoFluid;
+			if (Math.abs(denom) < 0.1) denom = denom >= 0 ? 0.1 : -0.1;
+			m[i] = Math.min(Math.max(((dtFluid - dt) / denom) * 0.01, -0.5), 2.0);
+			n[i] = Math.min(Math.max((1.0 - phi) / denom, -0.5), 2.0);
+		}
+		if (!m.some(Number.isFinite)) return;
+		wellData.mergeComputedCurves({ DEPTH: dept, M_LITH: m, N_LITH: n });
+	}
+
+	function isGdGeneratedDriver(curve: string): boolean {
+		return GD_GENERATED_DRIVERS.some((c) => c.toUpperCase() === curve.toUpperCase());
+	}
 
 	function resolveGdDriverCol(): string | null {
 		const curveNames = Object.keys(wellData.curves);
@@ -743,13 +804,58 @@
 		}
 
 		function toggleGdDriverCol(curve: string) {
+			if (isGdGeneratedDriver(curve) && !wellData.curves[curve]) ensureGdGeneratedDrivers();
 			const cols = [...workbench.scalParams.gd_driver_cols];
 			const idx = cols.findIndex((c) => c.toUpperCase() === curve.toUpperCase());
 			if (idx >= 0) cols.splice(idx, 1);
 			else cols.push(curve);
 			workbench.scalParams.gd_driver_cols = cols;
+			if (
+				!cols.some(
+					(c) =>
+						c.toUpperCase() ===
+						(workbench.scalParams.gd_plot_driver_col ?? '').toUpperCase()
+				)
+			) {
+				workbench.scalParams.gd_plot_driver_col = cols[0] ?? null;
+			}
 			scalPendingSave = true;
 		}
+
+		/**
+		 * Per-driver impact on ρ_ma in g/cc: the swing in predicted matrix density across the
+		 * observed interquartile range of that driver, |β_j·(q75−q25)|/scale_j. Ranks the drivers
+		 * by how much they actually move the prediction (VIF tells you collinearity, this tells
+		 * you weightage).
+		 */
+	function gdDriverImpacts(): Array<{ name: string; impulse: number; share: number }> {
+		const sp = workbench.scalParams;
+		const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
+		const raw = sp.gd_driver_cols.map((name, j) => {
+			const curve = wellData.curves[name] ?? [];
+			const vals: number[] = [];
+			if (curve.length === dept.length) {
+				for (const i of wellData.visibleIndices) {
+					const v = Number(curve[i]);
+					if (Number.isFinite(v)) vals.push(v);
+				}
+			}
+			let iqr = 1;
+			if (vals.length >= 4) {
+				vals.sort((a, b) => a - b);
+				const q = (p: number) =>
+					vals[Math.min(vals.length - 1, Math.max(0, Math.round(p * (vals.length - 1))))];
+				iqr = Math.abs(q(0.75) - q(0.25)) || 0;
+			}
+			const scale = sp.gd_scale[j] || 1;
+			const beta = sp.gd_coef[j] ?? 0;
+			return { name, impulse: Math.abs((beta * iqr) / scale) };
+		});
+		const total = raw.reduce((acc, r) => acc + r.impulse, 0);
+		return raw
+			.map((r) => ({ ...r, share: total > 1e-12 ? r.impulse / total : 0 }))
+			.sort((a, b) => b.impulse - a.impulse);
+	}
 
 		/** Build paired core grain-density records with all selected driver values. */
 		function buildGrainDensityRecords(driverCols: string[]): Array<Record<string, number>> {
@@ -829,6 +935,11 @@
 		try {
 				const multivariate = sp.gd_mode !== 'single';
 				if (multivariate) {
+					if (
+						sp.gd_driver_cols.some((c) => isGdGeneratedDriver(c) && !wellData.curves[c])
+					) {
+						ensureGdGeneratedDrivers();
+					}
 					const driverCols = resolveGdDriverCols();
 					if (driverCols.length === 0) {
 						throw new Error(
@@ -860,6 +971,12 @@
 					sp.gd_mode = 'multivariate';
 					sp.gd_driver_cols = driverCols;
 					sp.gd_coef = fit.coef;
+					sp.gd_native_slopes = Array.isArray(fit.native_slopes)
+						? fit.native_slopes.map(Number)
+						: [];
+					sp.gd_plot_driver_col = driverCols.includes(sp.gd_plot_driver_col ?? '')
+						? sp.gd_plot_driver_col
+						: driverCols[0];
 					sp.gd_center = fit.center;
 					sp.gd_scale = fit.scale;
 					sp.gd_intercept = fit.intercept;
@@ -963,7 +1080,9 @@
 															gd_mode: sp.gd_mode,
 								gd_driver_col: sp.gd_driver_col,
 															gd_driver_cols: sp.gd_driver_cols,
+															gd_plot_driver_col: sp.gd_plot_driver_col,
 															gd_coef: sp.gd_coef,
+															gd_native_slopes: sp.gd_native_slopes,
 															gd_center: sp.gd_center,
 															gd_scale: sp.gd_scale,
 															gd_intercept: sp.gd_intercept,
@@ -1513,26 +1632,38 @@
 								<span>{resolveGdDriverCols().length} selected</span>
 							</div>
 							<div class="mt-1 flex flex-wrap gap-1">
-								{#each gdDriverCurves as curve (curve)}
+								{#each gdDriverChips as curve (curve)}
 									{@const active = workbench.scalParams.gd_driver_cols.some(
 										(c) => c.toUpperCase() === curve.toUpperCase()
 									)}
+									{@const pending = isGdGeneratedDriver(curve) && !wellData.curves[curve]}
 									<button
 										type="button"
+										title={pending
+											? `${curve} is not stored yet — clicking generates it from RHOB/NPHI (+sonic or Gardner estimate)`
+											: curve}
 										onclick={() => toggleGdDriverCol(curve)}
 										class="h-5 rounded-xs border px-1.5 text-[9.5px] font-medium transition-colors {active
 											? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
-											: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)]'}"
+											: pending
+												? 'border-dashed border-amber-400 bg-amber-50 text-amber-800'
+												: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)]'}"
 									>
-										{curve}
+										{curve}{pending ? '+' : ''}
 									</button>
 								{/each}
-						{#if gdDriverCurves.length === 0}
+						{#if gdDriverChips.length === 0}
 									<span class="text-[9px] text-amber-700"
 										>No driver curves loaded (GR/CGR/SGR, RHOB, NPHI, M_LITH, N_LITH, AI).</span
 									>
 						{/if}
 							</div>
+							{#if gdDriverChips.some((c) => isGdGeneratedDriver(c))}
+								<p class="mt-0.5 text-[8.5px] leading-snug text-[var(--text-muted)]">
+									<span class="text-amber-700">M_LITH+/N_LITH+</span>: Burke M-N parameters, generated
+									from RHOB/NPHI with a Gardner sonic estimate when DTC is absent.
+								</p>
+							{/if}
 							<div class="mt-1 grid grid-cols-3 gap-1">
 								<NumericScrubber
 									label="Ridge α"
@@ -1660,17 +1791,48 @@
 					</div>
 							{#if workbench.scalParams.gd_mode === 'multivariate'}
 								<div class="mt-0.5 space-y-0.5 border-t border-blue-200/70 pt-0.5 text-[9px] text-blue-800">
-									{#each workbench.scalParams.gd_driver_cols as name, j (name)}
-										<div class="mono-num flex items-center justify-between">
-											<span>{name}</span>
-											<span>
-												β = {fmtNum(workbench.scalParams.gd_coef[j] ?? 0, 4)}
-												{#if Object.keys(workbench.scalParams.gd_vif).length > 0}
-													· VIF = {fmtNum(workbench.scalParams.gd_vif[name] ?? 1, 1)}
-												{/if}
+									<div
+										class="mono-num break-words font-semibold text-blue-900"
+										title="Same model expressed in raw log units: ρma = b₀ + Σ (native slope)·log"
+									>
+										ρ<sub>ma</sub> = {fmtNum(workbench.scalParams.gd_intercept ?? workbench.scalParams.gd_rho_ma_clean, 3)}
+										{#each workbench.scalParams.gd_driver_cols as name, j (name)}
+											{@const raw = workbench.scalParams.gd_native_slopes[j] ?? 0}
+											{raw >= 0 ? ' + ' : ' − '}{fmtNum(Math.abs(raw), Math.abs(raw) < 0.01 ? 5 : 4)}·{name}
+										{/each}
+									</div>
+									{#each gdDriverImpacts() as row (row.name)}
+										{@const j = workbench.scalParams.gd_driver_cols.indexOf(row.name)}
+										<div class="mono-num flex items-center justify-between gap-1">
+											<span class="truncate">{row.name}</span>
+											<span class="flex shrink-0 items-center gap-1">
+												<span class="inline-block h-1 w-10 overflow-hidden rounded-full bg-blue-200/70">
+													<span
+														class="block h-full rounded-full bg-[var(--accent-primary)]"
+														style="width: {Math.round(row.share * 100)}%"
+													></span>
+												</span>
+												<span>
+													β = {fmtNum(workbench.scalParams.gd_coef[j] ?? 0, 4)}{#if Object.keys(workbench.scalParams.gd_vif).length > 0} · VIF = {fmtNum(
+														workbench.scalParams.gd_vif[row.name] ?? 1,
+														1
+													)}{/if}{row.impulse > 0 ? ` · Δρ ${fmtNum(row.impulse, 3)}` : ''}
+												</span>
 											</span>
 										</div>
 									{/each}
+									<p class="text-[8.5px] leading-snug text-blue-700/80">
+										Native equation uses raw log units. Bar/Δρ = swing in ρ<sub>ma</sub> across each
+										driver's observed IQR — the actual weightage; β is the standardized coefficient.
+									</p>
+									{#if (workbench.scalParams.gd_r2 ?? 1) < 0.15}
+										<p class="text-[8.5px] leading-snug font-semibold text-amber-800">
+											⚠ R² is near zero — none of the selected logs control grain density in this
+											interval (common in carbonates). The correlation is effectively a constant
+											ρ<sub>ma</sub> ≈ {fmtNum(workbench.scalParams.gd_intercept ?? 2.65, 3)} g/cc; consider
+											disabling it or a different driver set.
+										</p>
+									{/if}
 								</div>
 							{/if}
 				</div>

@@ -173,6 +173,70 @@ def test_workspace_porosity_methods_use_lithology_and_fluid(client_and_project, 
     assert result["PHIT"][0] == pytest.approx(np.clip(expected, 0, 1), abs=1e-6)
 
 
+def test_grain_density_correlation_provenance_reported(client_and_project):
+    """The porosity endpoint reports that the correlation replaced the mineral-model rho_ma."""
+    client, pid = client_and_project
+    base = f"/quick_pp/workspace/projects/{pid}/wells/Well-A"
+    assert client.post(f"{base}/lithology", json={"model": "ssc"}).status_code == 200
+
+    payload = {
+        "method": "den",
+        "lithology_model": "ssc",
+        "fluid_point": [1.0, 1.0],
+        "grain_density_correlation": {
+            "enabled": True,
+            "driver_col": "GR",
+            "driver_cols": ["GR"],
+            "coef": [0.05],
+            "center": [70.0],
+            "scale": [25.0],
+            "intercept": 2.70,
+            "rho_ma_clean": 2.65,
+            "rho_ma_min": 2.55,
+            "rho_ma_max": 3.0,
+        },
+    }
+    result = client.post(f"{base}/porosity", json=payload)
+    assert result.status_code == 200, result.text
+    body = result.json()
+    provenance = body["grain_density_correlation"]
+    assert provenance["applied"] is True
+    assert provenance["mode"] == "multivariate"
+    assert provenance["drivers"] == ["GR"]
+    assert provenance["points_replaced"] == provenance["points_total"] > 0
+    # The correlation anchors near 2.70 while the SSC mineral model is lighter, so the
+    # applied matrix density must differ from the pure mineral-model value.
+    assert provenance["rho_ma_mean"] == pytest.approx(2.70, abs=0.05)
+    assert provenance["delta_abs_mean"] > 0.0
+
+
+def test_grain_density_correlation_disabled_leaves_mineral_model(client_and_project):
+    """An absent/disabled correlation must not report provenance and must leave RHOM untouched."""
+    client, pid = client_and_project
+    base = f"/quick_pp/workspace/projects/{pid}/wells/Well-A"
+    assert client.post(f"{base}/lithology", json={"model": "ssc"}).status_code == 200
+
+    baseline = client.post(
+        f"{base}/porosity",
+        json={"method": "den", "lithology_model": "ssc", "fluid_point": [1.0, 1.0]},
+    )
+    assert baseline.status_code == 200, baseline.text
+    assert baseline.json()["grain_density_correlation"] is None
+
+    disabled = client.post(
+        f"{base}/porosity",
+        json={
+            "method": "den",
+            "lithology_model": "ssc",
+            "fluid_point": [1.0, 1.0],
+            "grain_density_correlation": {"enabled": False, "driver_col": "GR"},
+        },
+    )
+    assert disabled.status_code == 200, disabled.text
+    assert disabled.json()["grain_density_correlation"] is None
+    assert disabled.json()["data"]["RHOM"] == baseline.json()["data"]["RHOM"]
+
+
 def test_sonic_missing_samples_stay_null_and_missing_curve_is_rejected(client_and_project, monkeypatch):
     client, pid = client_and_project
     base = f"/quick_pp/workspace/projects/{pid}/wells/Well-A"

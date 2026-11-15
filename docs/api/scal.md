@@ -24,7 +24,9 @@ Core-calibrated matrix density trends that override the mineral-model $\rho_{ma}
     - **`robust_rmse` / `robust_mae` / `resid_mad`** — outlier-resistant residual spread.
     - **`vif`** — variance inflation factor per driver; values above ~10 flag collinear channels (e.g. GR vs. CGR vs. SGR).
     - **`breusch_pagan_stat` / `breusch_pagan_p`** — heteroscedasticity test; a small $p$ confirms non-constant residual variance.
-    - **`native_slopes`** — coefficients re-expressed in g/cc per driver unit.
+    - **`native_slopes`** — coefficients re-expressed in g/cc per driver unit, so the fit can be reported as a native-unit regression equation (e.g. $\hat{\rho}_{ma} = b_0 + \beta_1 \cdot \text{CGR} + \beta_2 \cdot \text{RHOB} + \beta_3 \cdot M_{\text{lith}}$).
+
+    Applying the correlation is reported back to the caller: the porosity response includes a `grain_density_correlation` provenance block (`mode`, `drivers`, `points_replaced`, `rho_ma_mean`, `rho_ma_mineral_mean`, `delta_mean`, `delta_abs_mean`) when the override actually replaced mineral-model points. The final matrix density is saved as the `RHOM` curve.
 
 ::: quick_pp.scal
 

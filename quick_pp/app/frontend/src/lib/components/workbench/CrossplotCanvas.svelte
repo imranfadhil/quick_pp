@@ -241,6 +241,29 @@
 	/** Gamma-log fallback order used when no multi-log driver is selected. */
 	const GD_GAMMA_FALLBACKS = ['CGR', 'SGR', 'GR', 'GAMMA'];
 
+	/**
+	 * Drivers offered on the grain-density crossplot X axis: the calibrated multi-log drivers,
+	 * the single driver, gamma fallbacks, and any other candidate log present in the well.
+	 */
+	const gdPlotDriverOptions = $derived.by(() => {
+		const sp = workbench.scalParams;
+		const result: string[] = [];
+		const add = (name: string | null | undefined) => {
+			if (!name) return;
+			const hit = Object.keys(wellData.curves).find(
+				(c) => c.toUpperCase() === String(name).toUpperCase()
+			);
+			if (hit && !result.some((c) => c.toUpperCase() === hit.toUpperCase())) result.push(hit);
+		};
+		(sp.gd_driver_cols ?? []).forEach(add);
+		add(sp.gd_driver_col);
+		GD_GAMMA_FALLBACKS.forEach(add);
+		Object.keys(wellData.curves)
+			.filter((c) => /^(CGR|SGR|GR|GAMMA|RHOB|NPHI|M_LITH|N_LITH|AI|DPHI|VSH|DTC|DTS)$/i.test(c))
+			.forEach(add);
+		return result;
+	});
+
 	const MW_PALETTE = [
 		'#2563EB',
 		'#0D9488',
@@ -395,13 +418,15 @@
 					const multivariate =
 						sp.gd_mode === 'multivariate' && sp.gd_driver_cols.length > 0 && sp.gd_coef.length > 0;
 
-					// Resolve the x-axis driver: the first selected multi-log driver when multivariate,
-					// else the calibrated/single gamma driver with CGR/GR fallbacks.
+					// Resolve the x-axis driver: the explicit crossplot selection when it is available,
+					// else the first selected multi-log driver (multivariate), else the
+					// calibrated/single gamma driver with CGR/GR fallbacks.
 			const curveNames = Object.keys(wellData.curves);
 			const upperMap = new Map(curveNames.map((c) => [c.toUpperCase(), c]));
+					const plotChoice = sp.gd_plot_driver_col ?? null;
 					const driverCandidates = multivariate
-						? [...sp.gd_driver_cols, sp.gd_driver_col]
-						: [sp.gd_driver_col, ...GD_GAMMA_FALLBACKS];
+						? [plotChoice, ...sp.gd_driver_cols, sp.gd_driver_col]
+						: [plotChoice, sp.gd_driver_col, ...GD_GAMMA_FALLBACKS];
 			let driverCol: string | null = null;
 			for (const cand of driverCandidates) {
 				const hit = upperMap.get(String(cand || '').toUpperCase());
@@ -452,7 +477,8 @@
 					if (wellData.hasActiveFilter && !wellData.isCorePlugInActiveFilter(dRaw, dCur)) return;
 					const cgd = readCgd(s);
 					if (!Number.isFinite(cgd)) return;
-					const driver = Number(s[driverCol ?? ''] ?? s.CGR ?? s.GR ?? nearestDriver(dCur));
+					const sampleVal = Number(s[driverCol ?? '']);
+					const driver = Number.isFinite(sampleVal) ? sampleVal : nearestDriver(dCur);
 					if (!Number.isFinite(driver)) return;
 					xPts.push(driver);
 					yPts.push(cgd);
@@ -5224,6 +5250,7 @@
 			void wellData.curves['GR'];
 			void wellData.curves[workbench.scalParams.gd_driver_col];
 			void workbench.scalParams.gd_driver_col;
+					void workbench.scalParams.gd_plot_driver_col;
 					void workbench.scalParams.gd_mode;
 			void workbench.scalParams.gd_calibrated;
 			void workbench.scalParams.gd_k;
@@ -5734,6 +5761,22 @@
 				{/each}
 			</select>
 		</div>
+
+		{#if effectiveMode === 'grain-density'}
+			<div class="flex items-center gap-1">
+				<span class="text-[10px] text-[var(--text-muted)]">X axis:</span>
+				<select
+					bind:value={workbench.scalParams.gd_plot_driver_col}
+					class="h-5 max-w-[200px] truncate rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-[11px] font-medium text-[var(--text-primary)] focus:outline-none"
+				>
+					{#each gdPlotDriverOptions as opt (opt)}
+						<option value={opt}
+							>{opt}{workbench.scalParams.gd_driver_cols.includes(opt) ? ' (driver)' : ''}</option
+						>
+					{/each}
+				</select>
+			</div>
+		{/if}
 
 		{#if effectiveMode === 'mn-plot'}
 			<div class="flex items-center gap-1">
