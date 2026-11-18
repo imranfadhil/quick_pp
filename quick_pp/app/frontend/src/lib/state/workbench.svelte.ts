@@ -150,6 +150,10 @@ export interface LithoEndpointParams {
 	minerals: string[];
 	/** Log curves fed to the multi-mineral inversion; empty means "all available". */
 	inputLogs: string[];
+	/** Maximum physical total porosity ceiling (v/v) for multi-mineral simplex. */
+	phiMax: number;
+	/** Whether to linearize Photoelectric Factor via volumetric cross-section U = PEF * RHOB. */
+	linearizePef: boolean;
 	enableCoalFlagging: boolean;
 	coalRhobMax: number;
 	coalNphiMin: number;
@@ -822,6 +826,8 @@ class WorkbenchState {
 		grClay: 115.0,
 		minerals: ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE'],
 		inputLogs: [],
+		phiMax: 0.40,
+		linearizePef: false,
 		enableCoalFlagging: true,
 		coalRhobMax: 2.0,
 		coalNphiMin: 0.3,

@@ -172,6 +172,13 @@
 		mean_abs_drhob: number;
 	} | null>(null);
 
+	let mmSummary = $state<{
+		chi2_mean: number | null;
+		chi2_p50: number | null;
+		avg_error_mean: number | null;
+		success_rate: number | null;
+	} | null>(null);
+
 	function setLogCorrectionMode(mode: 'none' | 'hc' | 'den') {
 		workbench.lithoParams.logCorrectionMode = mode;
 		workbench.lithoParams.enableHcCorrection = mode !== 'none';
@@ -513,6 +520,8 @@
 						gr_clay: lp.grClay,
 						minerals: lp.minerals,
 						input_logs: lp.model === 'multi_mineral' ? lp.inputLogs : undefined,
+						phi_max: lp.model === 'multi_mineral' ? lp.phiMax : undefined,
+						linearize_pef: lp.model === 'multi_mineral' ? lp.linearizePef : undefined,
 						porosity_method: lp.porosityMethod,
 						...gammaArgs,
 						...coalArgs,
@@ -525,6 +534,23 @@
 			if (lithData) {
 				if (lithData.data) Object.assign(batchedCurves, lithData.data);
 				if (lithData.stats) Object.assign(batchedStats, lithData.stats);
+				if (lp.model === 'multi_mineral') {
+					if ((lithData as any).multi_mineral_summary) {
+						mmSummary = (lithData as any).multi_mineral_summary;
+					} else if (lithData.stats?.['CHI2_ERROR']) {
+						mmSummary = {
+							chi2_mean: lithData.stats['CHI2_ERROR'].mean,
+							chi2_p50: lithData.stats['CHI2_ERROR'].p50,
+							avg_error_mean: lithData.stats['AVG_ERROR']?.mean,
+							success_rate:
+								lithData.stats['OPTIMIZER_SUCCESS']?.mean != null
+									? lithData.stats['OPTIMIZER_SUCCESS'].mean * 100
+									: null
+						};
+					}
+				} else {
+					mmSummary = null;
+				}
 			}
 
 			// 3. Porosity Estimation
@@ -1062,6 +1088,75 @@
 							Auto
 						</button>
 					{/if}
+				</div>
+
+				{#if mmSummary}
+					<div class="mb-2.5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-2">
+						<div class="mb-1 flex items-center justify-between text-[11px] font-semibold text-[var(--text-primary)]">
+							<span>Inversion Quality QC</span>
+							{#if mmSummary.success_rate !== null && mmSummary.success_rate !== undefined}
+								<span
+									class="rounded-xs px-1 py-0.5 text-[9px] font-bold {mmSummary.success_rate >= 95
+										? 'bg-emerald-500/15 text-emerald-600'
+										: 'bg-amber-500/15 text-amber-600'}"
+								>
+									{fmtNum(mmSummary.success_rate, 0)}% converged
+								</span>
+							{/if}
+						</div>
+						<div class="grid grid-cols-2 gap-2 text-[10px]">
+							<div class="flex flex-col">
+								<span class="text-[var(--text-muted)]">Reduced χ² Misfit</span>
+								<span
+									class="mono-num text-xs font-semibold {mmSummary.chi2_mean !== null && mmSummary.chi2_mean <= 1.5
+										? 'text-emerald-600'
+										: mmSummary.chi2_mean !== null && mmSummary.chi2_mean <= 3.0
+											? 'text-amber-600'
+											: 'text-rose-600'}"
+								>
+									{mmSummary.chi2_mean !== null ? fmtNum(mmSummary.chi2_mean, 2) : '—'}
+									{#if mmSummary.chi2_mean !== null && mmSummary.chi2_mean <= 1.5}
+										<span class="text-[9px] font-normal text-emerald-600">(Optimal ~1.0)</span>
+									{/if}
+								</span>
+							</div>
+							<div class="flex flex-col">
+								<span class="text-[var(--text-muted)]">Avg Tool Error</span>
+								<span class="mono-num text-xs font-semibold text-[var(--text-primary)]">
+									{mmSummary.avg_error_mean !== null ? `${fmtNum(mmSummary.avg_error_mean, 1)}%` : '—'}
+								</span>
+							</div>
+						</div>
+					</div>
+				{/if}
+
+				<NumericScrubber
+					label="Porosity Ceiling (φ_max)"
+					bind:value={workbench.lithoParams.phiMax}
+					unit="v/v"
+					min={0.05}
+					max={0.60}
+					step={0.01}
+					decimals={2}
+					onrun={() => executeLithoPoro(false)}
+				/>
+				<p class="mb-2 text-[10px] text-[var(--text-secondary)]">
+					Simplex total porosity ceiling (default 0.40). Prevents porosity runaway in tight sands and carbonates.
+				</p>
+
+				<div class="mb-2.5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
+					<label class="flex items-center gap-2 cursor-pointer text-xs font-medium text-[var(--text-primary)]">
+						<input
+							type="checkbox"
+							bind:checked={workbench.lithoParams.linearizePef}
+							onchange={() => executeLithoPoro(false)}
+							class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+						/>
+						<span>Linearize PEF (U = PEF × RHOB)</span>
+					</label>
+					<p class="mt-1 text-[10px] text-[var(--text-secondary)]">
+						Converts non-linear PEF (b/e) into volumetric cross-section U (b/cm³) for exact physical superposition.
+					</p>
 				</div>
 			{/if}
 

@@ -31,8 +31,8 @@ def test_vectorized_multimineral_and_optim_active_set_and_nonlinear_conductivity
     Y = raw_v @ C.T
     gr, nphi, rhob, pef, dtc = Y[:, 0], Y[:, 1], Y[:, 2], Y[:, 3], Y[:, 4]
 
-    # 1. Fast vectorized MultiMineral.estimate_lithology() on linear system
-    res_df = mm.estimate_lithology(gr=gr, nphi=nphi, rhob=rhob, pef=pef, dtc=dtc)
+    # 1. Fast vectorized MultiMineral.estimate_lithology() on linear system (legacy multi-fluid mode)
+    res_df = mm.estimate_lithology(gr=gr, nphi=nphi, rhob=rhob, pef=pef, dtc=dtc, two_stage=False)
     vol_cols = ["VSAND", "VCALC", "VDOLO", "VCLAY", "VOIL", "VGAS", "VWATER"]
     V_est = res_df[vol_cols].to_numpy()
 
@@ -324,3 +324,114 @@ def test_borehole_washout_weighting():
     assert res_df["PHIT_CONSTRUCTED"].iloc[1] < 0.05
     assert res_df["RHOB_RECONSTRUCTED"].iloc[1] > 2.60
     assert res_df["OPTIMIZER_SUCCESS"].iloc[1]
+
+
+def test_two_stage_decoupled_solver_prevents_porosity_overcompensation():
+    """Verify that the default two-stage decoupled solver excludes VOIL and VGAS
+    from the linear stage, preventing porosity overcompensation in under-determined intervals.
+    """
+    mm = MultiMineral(minerals=["QUARTZ", "CALCITE", "DOLOMITE", "SHALE"])
+
+    # Synthetic clean sandstone: 90% Quartz, 5% Calcite, 5% Water
+    v_true = np.array([[0.90, 0.05, 0.0, 0.0, 0.05]])
+    log_names = ["GR", "NPHI", "RHOB"]
+    C_1f = mm._build_response_matrix(log_names, fluids=["WATER"])
+    logs = v_true @ C_1f.T
+
+    # 1. Default two-stage solver (two_stage=True)
+    res_df = mm.estimate_lithology(gr=logs[:, 0], nphi=logs[:, 1], rhob=logs[:, 2])
+
+    # In two-stage mode, porosity must remain tightly accurate without blowing up
+    assert np.isclose(res_df["PHIT_CONSTRUCTED"].iloc[0], 0.05, atol=0.005)
+    assert np.isclose(res_df["VSAND"].iloc[0], 0.90, atol=0.01)
+    assert res_df["VOIL"].iloc[0] == 0.0
+    assert res_df["VGAS"].iloc[0] == 0.0
+    assert np.isclose(res_df["VWATER"].iloc[0], 0.05, atol=0.005)
+    assert "CHI2_ERROR" in res_df.columns
+    assert res_df["CHI2_ERROR"].iloc[0] < 1e-4
+
+    # 2. Compare against legacy simultaneous multi-fluid mode (two_stage=False)
+    # Legacy mode allows VOIL/VGAS injection, causing porosity blowout and diminishing VSAND
+    res_legacy = mm.estimate_lithology(
+        gr=logs[:, 0], nphi=logs[:, 1], rhob=logs[:, 2], two_stage=False
+    )
+    # Legacy mode overcompensates porosity and inflates VOIL
+    assert res_legacy["PHIT_CONSTRUCTED"].iloc[0] > res_df["PHIT_CONSTRUCTED"].iloc[0]
+    assert res_legacy["VOIL"].iloc[0] > 0.001
+
+
+def test_two_stage_fluid_saturation_partitioning_with_rt():
+    """Verify Stage 2 correctly calculates Sw from Waxman-Smits and partitions
+    PHIT into VWATER and VOIL when RT is supplied.
+    """
+    mm = MultiMineral(
+        minerals=["QUARTZ", "SHALE"],
+        conductivity_model="sandsiltclay_waxman_smits",
+        conductivity_params={"rw": 0.05, "m": 2.0, "n": 2.0, "a": 1.0},
+    )
+
+    # True rock: 75% Quartz, 5% Shale, 20% total porosity with Sw = 0.35 (oil zone)
+    phit_true = 0.20
+    sw_true = 0.35
+    vclay_true = 0.05
+    v_true = np.array([[0.75, 0.05, phit_true]])
+    C_1f = mm._build_response_matrix(["GR", "NPHI", "RHOB", "DTC"], fluids=["WATER"])
+    logs = v_true @ C_1f.T
+
+    # Synthetic deep resistivity corresponding to Sw = 0.35
+    ct_true = sandsiltclay_waxman_smits_conductivity(
+        phit=phit_true, swt=sw_true, vclay=vclay_true, rw=0.05
+    )
+    rt_true = np.array([1.0 / ct_true])
+
+    res = mm.estimate_lithology(
+        gr=logs[:, 0],
+        nphi=logs[:, 1],
+        rhob=logs[:, 2],
+        dtc=logs[:, 3],
+        rt=rt_true,
+    )
+
+    # Porosity should match 0.20
+    assert np.isclose(res["PHIT_CONSTRUCTED"].iloc[0], phit_true, atol=0.005)
+    # VWATER should match Sw * PHIT = 0.35 * 0.20 = 0.07
+    assert np.isclose(res["VWATER"].iloc[0], 0.07, atol=0.01)
+    # VOIL should match (1 - Sw) * PHIT = 0.65 * 0.20 = 0.13
+    assert np.isclose(res["VOIL"].iloc[0], 0.13, atol=0.01)
+    assert res["VGAS"].iloc[0] == 0.0
+
+
+def test_phi_max_constraint_clamps_porosity():
+    """Verify that phi_max bounds the total porosity unknown on the simplex,
+    preventing porosity blowouts in severe bad-hole or corrupted log intervals.
+    """
+    mm = MultiMineral(minerals=["QUARTZ", "SHALE"], phi_max=0.30)
+
+    # Corrupted low density log (rhob = 1.30 g/cc) that would otherwise predict phi > 0.80
+    gr = np.array([15.0])
+    nphi = np.array([0.70])
+    rhob = np.array([1.30])
+
+    res_df = mm.estimate_lithology(gr=gr, nphi=nphi, rhob=rhob)
+
+    # Must be strictly clamped to phi_max
+    assert res_df["PHIT_CONSTRUCTED"].iloc[0] <= 0.30 + 1e-4
+
+
+def test_phit_guide_prior_weights_solution():
+    """Verify that providing an external phit guide anchors porosity inversion."""
+    mm = MultiMineral(minerals=["QUARTZ", "CALCITE", "SHALE"])
+
+    # Ambiguous log response
+    gr = np.array([45.0])
+    nphi = np.array([0.22])
+    rhob = np.array([2.45])
+
+    # Provide high-confidence core porosity guide of 12%
+    phit_core = np.array([0.12])
+    res_guided = mm.estimate_lithology(
+        gr=gr, nphi=nphi, rhob=rhob, phit=phit_core, phit_uncertainty=0.005
+    )
+
+    assert np.isclose(res_guided["PHIT_CONSTRUCTED"].iloc[0], 0.12, atol=0.01)
+

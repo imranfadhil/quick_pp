@@ -2006,3 +2006,42 @@ def test_hc_correction_angle_and_den_correction_protects_hc_rows(client_and_proj
         np.asarray(den_data["RHOB_HC"], dtype=float)[hc_rows], rhob_hc[hc_rows]
     )
     assert den_body["den_summary"]["hc_protected_count"] == int(hc_rows.sum())
+
+
+def test_workspace_multi_mineral_phi_max_and_pef_linearization(client_and_project):
+    client, pid = client_and_project
+    base = f"/quick_pp/workspace/projects/{pid}/wells/Well-A"
+
+    payload = {
+        "model": "multi_mineral",
+        "minerals": ["QUARTZ", "CALCITE", "SHALE"],
+        "phi_max": 0.35,
+        "linearize_pef": True,
+        "save": False,
+    }
+    r = client.post(f"{base}/lithology", json=payload)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["model"] == "multi_mineral"
+    assert "data" in body
+    data = body["data"]
+    assert "PHIT_CONSTRUCTED" in data
+    assert "VSAND" in data
+    assert "VCALC" in data
+    assert "VCLAY" in data
+
+    # Verify phi_max ceiling was honoured
+    phit_c = [v for v in data["PHIT_CONSTRUCTED"] if v is not None and not np.isnan(v)]
+    assert len(phit_c) > 0
+    assert all(v <= 0.35001 for v in phit_c)
+
+    # Verify quality metrics & summary
+    assert "multi_mineral_summary" in body
+    mm_sum = body["multi_mineral_summary"]
+    assert mm_sum is not None
+    assert "chi2_mean" in mm_sum
+    assert "avg_error_mean" in mm_sum
+    assert "success_rate" in mm_sum
+    assert "CHI2_ERROR" in body["stats"]
+    assert "AVG_ERROR" in body["stats"]
+

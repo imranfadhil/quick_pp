@@ -1275,6 +1275,16 @@ class WorkspaceLithologyRequest(WorkspaceFilterBase, GammaParameters):
             "Use this to exclude logs affected by heavy minerals or hot sand (e.g. drop GR/NPHI/RHOB)."
         ),
     )
+    phi_max: float = Field(
+        0.40,
+        description="Maximum total porosity ceiling (v/v) for multi-mineral simplex",
+        ge=0.05,
+        le=0.60,
+    )
+    linearize_pef: bool = Field(
+        False,
+        description="Linearize PEF via volumetric cross-section U = PEF * RHOB",
+    )
     porosity_method: str = Field("density")
     gr_clean: Optional[float] = Field(None, description="Clean sand GR endpoint (API)")
     gr_clay: Optional[float] = Field(None, description="Shale GR endpoint (API)")
@@ -4259,6 +4269,8 @@ def workspace_lithology(
 
             mm_model = MultiMineral(
                 minerals=selected_minerals,
+                phi_max=req.phi_max,
+                linearize_pef=req.linearize_pef,
             )
             # Apply user GR clean / GR clay endpoints to instance-local mineral responses without mutating global Config
             mm_model.responses = {
@@ -4284,6 +4296,8 @@ def workspace_lithology(
                     for name, series in input_logs.items()
                 },
                 auto_scale=req.auto_scale,
+                phi_max=req.phi_max,
+                linearize_pef=req.linearize_pef,
             )
 
             for col in res_df.columns:
@@ -4295,7 +4309,11 @@ def workspace_lithology(
                     col_vals, errors="coerce"
                 ).to_numpy(dtype=float)
                 out_df[col] = col_series
-                if col.startswith("V") or col == "PHIT_CONSTRUCTED":
+                if (
+                    col.startswith("V")
+                    or col == "PHIT_CONSTRUCTED"
+                    or col in ("AVG_ERROR", "CHI2_ERROR", "OPTIMIZER_SUCCESS")
+                ):
                     save_cols.append(col)
 
             # Explicitly zero out all unselected mineral volume columns (including VSILT) so deselected minerals clear cleanly
@@ -4597,6 +4615,8 @@ def workspace_lithology(
                 "litho_input_logs": (
                     requested_logs if model == "multi_mineral" else None
                 ),
+                "phi_max": req.phi_max if model == "multi_mineral" else None,
+                "linearize_pef": req.linearize_pef if model == "multi_mineral" else None,
                 "porosity_method_key": req.porosity_method,
                 "use_hc_corrected": req.use_hc_corrected,
                 "gr_clean": req.gr_clean,
@@ -4619,6 +4639,17 @@ def workspace_lithology(
             persist_db=bool(req.save),
         )
         stats = {col: _curve_summary_stats(out_df[col]) for col in save_cols}
+        mm_summary = None
+        if model == "multi_mineral" and "CHI2_ERROR" in out_df:
+            chi2_valid = pd.to_numeric(out_df["CHI2_ERROR"], errors="coerce").dropna()
+            avg_valid = pd.to_numeric(out_df.get("AVG_ERROR"), errors="coerce").dropna()
+            opt_valid = pd.to_numeric(out_df.get("OPTIMIZER_SUCCESS"), errors="coerce").dropna()
+            mm_summary = {
+                "chi2_mean": round(float(chi2_valid.mean()), 3) if not chi2_valid.empty else None,
+                "chi2_p50": round(float(chi2_valid.median()), 3) if not chi2_valid.empty else None,
+                "avg_error_mean": round(float(avg_valid.mean()), 2) if not avg_valid.empty else None,
+                "success_rate": round(float(opt_valid.mean()) * 100.0, 1) if not opt_valid.empty else None,
+            }
         return {
             "well_name": well_name,
             "model": model,
@@ -4628,6 +4659,7 @@ def workspace_lithology(
             "saved_rows": saved_rows,
             "crossplot": crossplot_meta,
             "stats": stats,
+            "multi_mineral_summary": mm_summary,
             **dataframe_to_columnar(out_df),
         }
     except ValueError as e:
