@@ -1708,6 +1708,8 @@ def build_report_context(
         resolved_litho_key = "multi_mineral"
     elif raw_litho_key in ("ssc", "sand_silt_clay", "kuttan"):
         resolved_litho_key = "ssc"
+    elif raw_litho_key in ("sand_shale", "vsh_nd", "ss"):
+        resolved_litho_key = "sand_shale"
     elif raw_litho_key in ("vsh_gr", "gr", "gamma_ray"):
         resolved_litho_key = "vsh_gr"
     elif raw_litho_key == "vsh_bulk":
@@ -1749,6 +1751,8 @@ def build_report_context(
         litho_model_display = f"Multi-Mineral Optimization Solver ({min_str})"
         if log_str:
             litho_model_display += f" — input logs: {log_str}"
+    elif resolved_litho_key == "sand_shale":
+        litho_model_display = "Binary Sand-Shale Neutron-Density Crossplot Model (Vsh from N-D)"
     elif resolved_litho_key == "vsh_gr":
         litho_model_display = "Gamma Ray Shale Volume Index (Vsh,GR) Model"
     elif resolved_litho_key == "vsh_bulk":

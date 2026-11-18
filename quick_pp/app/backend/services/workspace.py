@@ -63,6 +63,7 @@ from quick_pp.fluid_type import estimate_fluid_properties
 from quick_pp.las_handler import extract_las_metadata
 from quick_pp.lithology import gr_index, spectral_cgr
 from quick_pp.lithology.multi_mineral import MultiMineral
+from quick_pp.lithology.sand_shale import SandShale
 from quick_pp.lithology.sand_silt_clay import SandSiltClay
 from quick_pp.lithology.thin_beds import ThinBeds
 from quick_pp.machine_learning.feature_engineering import coal_flagging
@@ -1248,7 +1249,7 @@ class GammaParameters(BaseModel):
 
 class WorkspaceLithologyRequest(WorkspaceFilterBase, GammaParameters):
     model: str = Field(
-        "ssc", description="Lithology model: 'ssc', 'multi_mineral', or 'vsh_gr'"
+        "ssc", description="Lithology model: 'ssc', 'sand_shale', 'multi_mineral', or 'vsh_gr'"
     )
     use_hc_corrected: bool = Field(
         False, description="Use NPHI_HC and RHOB_HC curves if present"
@@ -1394,7 +1395,7 @@ class WorkspacePorosityRequest(WorkspaceFilterBase, GammaParameters):
 
     lithology_model: Optional[str] = Field(
         None,
-        description="Active lithology model ('ssc', 'multi_mineral', 'vsh_gr') so porosity uses matching mineral volumes",
+        description="Active lithology model ('ssc', 'sand_shale', 'multi_mineral', 'vsh_gr') so porosity uses matching mineral volumes",
     )
     crossplot_model: str = Field(
         "ssc", description="Crossplot model passed to neu_den_xplot_poro"
@@ -4156,6 +4157,68 @@ def workspace_lithology(
                 "fluid_point": list(ssc_model.fluid_point),
             }
 
+        elif model in ("sand_shale", "vsh_nd"):
+            nphi, rhob = _select_nphi_rhob(
+                df,
+                use_hc_corrected=req.use_hc_corrected,
+                use_enhanced=req.use_enhanced_logs,
+            )
+            valid_mask = nphi.notna() & rhob.notna()
+            if not valid_mask.any():
+                raise ValueError(
+                    "No valid NPHI and RHOB pairs found in the selected interval"
+                )
+
+            ss_model = SandShale(
+                dry_sand_point=req.dry_sand_point,
+                dry_clay_point=req.dry_clay_point,
+                fluid_point=req.fluid_point,
+                wet_clay_point=req.wet_clay_point,
+            )
+            vsand, vclay, (proj_x, proj_y) = ss_model.estimate_lithology(
+                nphi[valid_mask].reset_index(drop=True),
+                rhob[valid_mask].reset_index(drop=True),
+            )
+
+            vsand_s = pd.Series(np.nan, index=df.index, dtype=float)
+            vclay_s = pd.Series(np.nan, index=df.index, dtype=float)
+            px_s = pd.Series(np.nan, index=df.index, dtype=float)
+            py_s = pd.Series(np.nan, index=df.index, dtype=float)
+
+            vsand_s.loc[valid_mask] = np.clip(np.asarray(vsand, dtype=float), 0.0, 1.0)
+            vclay_s.loc[valid_mask] = np.clip(np.asarray(vclay, dtype=float), 0.0, 1.0)
+            if proj_x is not None:
+                px_s.loc[valid_mask] = np.asarray(proj_x, dtype=float)
+            if proj_y is not None:
+                py_s.loc[valid_mask] = np.asarray(proj_y, dtype=float)
+
+            out_df["VSAND"] = vsand_s
+            out_df["VCLAY"] = vclay_s
+            out_df["VSH_DN"] = vclay_s
+            out_df["PROJ_NPHI"] = px_s
+            out_df["PROJ_RHOB"] = py_s
+            vsh_gr_s = _compute_vsh_gr_series(
+                df, req.gr_clean, req.gr_clay, use_enhanced=req.use_enhanced_logs
+            )
+            if vsh_gr_s.notna().any():
+                out_df["VSH_GR"] = vsh_gr_s
+
+            # Zero out any non-SandShale mineral columns (including VSILT) so stale volumes do not persist
+            for mcol in ALL_LITHOLOGY_VOL_COLS:
+                if mcol not in ("VSAND", "VCLAY"):
+                    zero_s = pd.Series(np.nan, index=df.index, dtype=float)
+                    zero_s.loc[valid_mask] = 0.0
+                    out_df[mcol] = zero_s
+            save_cols = list(ALL_LITHOLOGY_VOL_COLS) + [
+                c for c in ("VSH_GR", "VSH_DN") if c in out_df.columns
+            ]
+
+            crossplot_meta = {
+                "dry_sand_point": list(ss_model.dry_sand_point),
+                "dry_clay_point": list(ss_model.dry_clay_point),
+                "fluid_point": list(ss_model.fluid_point),
+            }
+
         elif model == "multi_mineral":
             requested_logs = [
                 str(name).strip().upper() for name in (req.input_logs or []) if name
@@ -4508,12 +4571,15 @@ def workspace_lithology(
         saved_rows = 0
         if save_cols:
             valid_save_mask = out_df[save_cols].notna().any(axis=1) | active_badhole
-            if model == "vsh_gr":
+            if model in ("vsh_gr", "sand_shale", "vsh_nd"):
                 valid_save_mask = pd.Series(True, index=df.index)
             save_df = out_df.loc[valid_save_mask, ["DEPTH"] + save_cols]
             if req.save:
                 saved_rows = _save_curves_to_well(
-                    project_id, well_name, save_df, clear_nulls=model == "vsh_gr"
+                    project_id,
+                    well_name,
+                    save_df,
+                    clear_nulls=model in ("vsh_gr", "sand_shale", "vsh_nd"),
                 )
             else:
                 _update_in_memory_well_cache(project_id, well_name, save_df)
@@ -4975,7 +5041,7 @@ def workspace_porosity(
         lith_model = (req.lithology_model or "").lower()
         if lith_model == "ssc":
             candidate_min_cols = ("VSAND", "VSILT", "VCLAY", "VCOAL")
-        elif lith_model == "vsh_gr":
+        elif lith_model in ("vsh_gr", "sand_shale", "vsh_nd"):
             candidate_min_cols = ("VSAND", "VCLAY", "VCOAL")
         else:
             candidate_min_cols = tuple(
@@ -5003,29 +5069,49 @@ def workspace_porosity(
             for k, v in vol_kwargs.items()
         }
 
-        # Fallback to SandSiltClay lithology estimation where no mineral volumes exist yet
-        need_ssc_fallback = total_min_vol <= 1e-6
-        if np.any(need_ssc_fallback) or req.method.lower() == "neu_den":
-            vsand_m, vsilt_m, vclay_m, _ = ssc_model.estimate_lithology(nphi_s, rhob_s)
-            if np.any(need_ssc_fallback):
-                vsand_fb = np.asarray(vsand_m, dtype=float)
-                vsilt_fb = np.asarray(vsilt_m, dtype=float)
-                vclay_fb = np.asarray(vclay_m, dtype=float)
-                norm_kwargs["vsand"] = np.where(
-                    need_ssc_fallback,
-                    vsand_fb,
-                    norm_kwargs.get("vsand", np.zeros(n_valid, dtype=float)),
+        # Fallback to lithology estimation where no mineral volumes exist yet
+        need_fallback = total_min_vol <= 1e-6
+        if np.any(need_fallback) or req.method.lower() == "neu_den":
+            if lith_model in ("sand_shale", "vsh_nd"):
+                ss_model = SandShale(
+                    dry_sand_point=req.dry_sand_point,
+                    dry_clay_point=req.dry_clay_point,
+                    fluid_point=req.fluid_point,
+                    wet_clay_point=req.wet_clay_point,
                 )
-                norm_kwargs["vsilt"] = np.where(
-                    need_ssc_fallback,
-                    vsilt_fb,
-                    norm_kwargs.get("vsilt", np.zeros(n_valid, dtype=float)),
-                )
-                norm_kwargs["vclay"] = np.where(
-                    need_ssc_fallback,
-                    vclay_fb,
-                    norm_kwargs.get("vclay", np.zeros(n_valid, dtype=float)),
-                )
+                vsand_m, vclay_m, _ = ss_model.estimate_lithology(nphi_s, rhob_s)
+                if np.any(need_fallback):
+                    norm_kwargs["vsand"] = np.where(
+                        need_fallback,
+                        np.asarray(vsand_m, dtype=float),
+                        norm_kwargs.get("vsand", np.zeros(n_valid, dtype=float)),
+                    )
+                    norm_kwargs["vclay"] = np.where(
+                        need_fallback,
+                        np.asarray(vclay_m, dtype=float),
+                        norm_kwargs.get("vclay", np.zeros(n_valid, dtype=float)),
+                    )
+            else:
+                vsand_m, vsilt_m, vclay_m, _ = ssc_model.estimate_lithology(nphi_s, rhob_s)
+                if np.any(need_fallback):
+                    vsand_fb = np.asarray(vsand_m, dtype=float)
+                    vsilt_fb = np.asarray(vsilt_m, dtype=float)
+                    vclay_fb = np.asarray(vclay_m, dtype=float)
+                    norm_kwargs["vsand"] = np.where(
+                        need_fallback,
+                        vsand_fb,
+                        norm_kwargs.get("vsand", np.zeros(n_valid, dtype=float)),
+                    )
+                    norm_kwargs["vsilt"] = np.where(
+                        need_fallback,
+                        vsilt_fb,
+                        norm_kwargs.get("vsilt", np.zeros(n_valid, dtype=float)),
+                    )
+                    norm_kwargs["vclay"] = np.where(
+                        need_fallback,
+                        vclay_fb,
+                        norm_kwargs.get("vclay", np.zeros(n_valid, dtype=float)),
+                    )
 
         # Calculate matrix density from unnormalized mineral fractions and density porosity
         rho_ma = np.asarray(rho_matrix(**norm_kwargs), dtype=float)
@@ -5123,14 +5209,24 @@ def workspace_porosity(
             }
 
         if req.method.lower() == "neu_den":
+            xplot_model = (
+                "ss"
+                if lith_model in ("sand_shale", "vsh_nd")
+                else req.crossplot_model
+            )
+            dry_clay_pt = (
+                ss_model.dry_clay_point
+                if (lith_model in ("sand_shale", "vsh_nd") and "ss_model" in locals())
+                else ssc_model.dry_clay_point
+            )
             phit_v = np.asarray(
                 neu_den_xplot_poro(
                     nphi_s,
                     rhob_s,
-                    model=req.crossplot_model,
+                    model=xplot_model,
                     dry_min1_point=req.dry_sand_point,
                     dry_silt_point=ssc_model.dry_silt_point,
-                    dry_clay_point=ssc_model.dry_clay_point,
+                    dry_clay_point=dry_clay_pt,
                     fluid_point=req.fluid_point,
                 ),
                 dtype=float,

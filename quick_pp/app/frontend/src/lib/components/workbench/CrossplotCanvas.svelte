@@ -844,40 +844,65 @@
 				}
 
 				const lp = workbench.lithoParams;
-				traces.push({
-					type: 'scatter',
-					mode: 'lines',
-					name: 'Silt Line',
-					x: [lp.fluidNphi, lp.drySiltNphi],
-					y: [lp.fluidRhob, lp.drySiltRhob],
-					line: { color: '#EA580C', width: 1.5, dash: 'dash' },
-					hovertemplate: 'Silt Line (θ=%{text}°)<extra></extra>',
-					text: [lp.siltLineAngle.toFixed(1), lp.siltLineAngle.toFixed(1)]
-				});
-				traces.push({
-					type: 'scatter',
-					mode: 'lines+markers+text',
-					name: 'SSC Endpoints',
-					x: [
-						lp.drySandNphi,
-						lp.drySiltNphi,
-						lp.dryClayNphi,
-						lp.fluidNphi,
-						lp.drySandNphi
-					],
-					y: [
-						lp.drySandRhob,
-						lp.drySiltRhob,
-						lp.dryClayRhob,
-						lp.fluidRhob,
-						lp.drySandRhob
-					],
-					text: ['Sand', 'Silt', 'Clay', 'Fluid', ''],
-					textposition: 'top center',
-					textfont: { family: 'Inter', size: 10, color: '#0F172A' },
-					line: { color: '#0F172A', width: 1.5, dash: 'dot' },
-					marker: { size: 8, color: '#0F172A', symbol: 'diamond' }
-				});
+				if (lp.model === 'sand_shale') {
+					traces.push({
+						type: 'scatter',
+						mode: 'lines+markers+text',
+						name: 'Sand-Shale Endpoints',
+						x: [
+							lp.drySandNphi,
+							lp.dryClayNphi,
+							lp.fluidNphi,
+							lp.drySandNphi
+						],
+						y: [
+							lp.drySandRhob,
+							lp.dryClayRhob,
+							lp.fluidRhob,
+							lp.drySandRhob
+						],
+						text: ['Sand', 'Clay', 'Fluid', ''],
+						textposition: 'top center',
+						textfont: { family: 'Inter', size: 10, color: '#0F172A' },
+						line: { color: '#0F172A', width: 1.5, dash: 'dot' },
+						marker: { size: 8, color: '#0F172A', symbol: 'diamond' }
+					});
+				} else {
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: 'Silt Line',
+						x: [lp.fluidNphi, lp.drySiltNphi],
+						y: [lp.fluidRhob, lp.drySiltRhob],
+						line: { color: '#EA580C', width: 1.5, dash: 'dash' },
+						hovertemplate: 'Silt Line (θ=%{text}°)<extra></extra>',
+						text: [lp.siltLineAngle.toFixed(1), lp.siltLineAngle.toFixed(1)]
+					});
+					traces.push({
+						type: 'scatter',
+						mode: 'lines+markers+text',
+						name: 'SSC Endpoints',
+						x: [
+							lp.drySandNphi,
+							lp.drySiltNphi,
+							lp.dryClayNphi,
+							lp.fluidNphi,
+							lp.drySandNphi
+						],
+						y: [
+							lp.drySandRhob,
+							lp.drySiltRhob,
+							lp.dryClayRhob,
+							lp.fluidRhob,
+							lp.drySandRhob
+						],
+						text: ['Sand', 'Silt', 'Clay', 'Fluid', ''],
+						textposition: 'top center',
+						textfont: { family: 'Inter', size: 10, color: '#0F172A' },
+						line: { color: '#0F172A', width: 1.5, dash: 'dot' },
+						marker: { size: 8, color: '#0F172A', symbol: 'diamond' }
+					});
+				}
 
 				baseLayout.dragmode = 'zoom';
 				baseLayout.xaxis.title = { text: 'NPHI (v/v)' };
@@ -1415,6 +1440,34 @@
 					marker: {
 						size: 9.5,
 						color: mColors,
+						symbol: 'diamond',
+						line: { color: '#FFFFFF', width: 1.5 }
+					}
+				});
+			} else if (lp.model === 'sand_shale') {
+				traces.push({
+					type: 'scatter',
+					mode: 'lines+markers+text',
+					name: 'Sand-Shale Endpoints',
+					x: [
+						lp.drySandNphi,
+						lp.dryClayNphi,
+						lp.fluidNphi,
+						lp.drySandNphi
+					],
+					y: [
+						lp.drySandRhob,
+						lp.dryClayRhob,
+						lp.fluidRhob,
+						lp.drySandRhob
+					],
+					text: ['Sand', 'Clay', 'Fluid', ''],
+					textposition: 'top center',
+					textfont: { family: 'Inter', size: 10, color: '#0F172A' },
+					line: { color: '#2563EB', width: 1.5, dash: 'dot' },
+					marker: {
+						size: 9,
+						color: ['#CA8A04', '#475569', '#2563EB', '#CA8A04'],
 						symbol: 'diamond',
 						line: { color: '#FFFFFF', width: 1.5 }
 					}

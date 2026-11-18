@@ -358,7 +358,7 @@ function legacyWellEntry(
 		const [cN, cR] = pt(cfg.dry_clay_point);
 		const [fN, fR] = pt(cfg.fluid_point);
 		const litho = strip({
-			model: ['ssc', 'multi_mineral', 'vsh_gr', 'vsh_bulk'].includes(cfg.litho_model_key)
+			model: ['ssc', 'sand_shale', 'vsh_nd', 'multi_mineral', 'vsh_gr', 'vsh_bulk'].includes(cfg.litho_model_key)
 				? (cfg.litho_model_key === 'vsh_bulk' ? 'vsh_gr' : cfg.litho_model_key)
 				: undefined,
 			porosityMethod:

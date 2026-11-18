@@ -773,6 +773,7 @@
 					class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
 				>
 					<option value="ssc">Sand-Silt-Clay</option>
+					<option value="sand_shale">Vsh from N-D</option>
 					<option value="multi_mineral">Multi-Mineral</option>
 					<option value="vsh_gr">Vsh from GR</option>
 				</select>
@@ -1103,26 +1104,28 @@
 				step={0.01}
 				onrun={() => executeLithoPoro(false)}
 			/>
-			<NumericScrubber
-				label="NPHI Dry Silt"
-				bind:value={workbench.lithoParams.drySiltNphi}
-				unit="v/v"
-				disabled={true}
-				min={-0.05}
-				max={0.45}
-				step={0.005}
-				onrun={() => executeLithoPoro(false)}
-			/>
-			<NumericScrubber
-				label="RHOB Dry Silt"
-				bind:value={workbench.lithoParams.drySiltRhob}
-				unit="g/cc"
-				disabled={true}
-				min={2.4}
-				max={2.9}
-				step={0.01}
-				onrun={() => executeLithoPoro(false)}
-			/>
+			{#if workbench.lithoParams.model === 'ssc'}
+				<NumericScrubber
+					label="NPHI Dry Silt"
+					bind:value={workbench.lithoParams.drySiltNphi}
+					unit="v/v"
+					disabled={true}
+					min={-0.05}
+					max={0.45}
+					step={0.005}
+					onrun={() => executeLithoPoro(false)}
+				/>
+				<NumericScrubber
+					label="RHOB Dry Silt"
+					bind:value={workbench.lithoParams.drySiltRhob}
+					unit="g/cc"
+					disabled={true}
+					min={2.4}
+					max={2.9}
+					step={0.01}
+					onrun={() => executeLithoPoro(false)}
+				/>
+			{/if}
 			<NumericScrubber
 				label="NPHI Dry Clay"
 				bind:value={workbench.lithoParams.dryClayNphi}
@@ -1141,16 +1144,18 @@
 				step={0.01}
 				onrun={() => executeLithoPoro(false)}
 			/>
-			<NumericScrubber
-				label="Silt Line Angle"
-				bind:value={workbench.lithoParams.siltLineAngle}
-				unit="deg"
-				min={95}
-				max={160}
-				step={0.5}
-				onchange={() => workbench.updateSiltEndpointFromAngle()}
-				onrun={() => executeLithoPoro(false)}
-			/>
+			{#if workbench.lithoParams.model === 'ssc'}
+				<NumericScrubber
+					label="Silt Line Angle"
+					bind:value={workbench.lithoParams.siltLineAngle}
+					unit="deg"
+					min={95}
+					max={160}
+					step={0.5}
+					onchange={() => workbench.updateSiltEndpointFromAngle()}
+					onrun={() => executeLithoPoro(false)}
+				/>
+			{/if}
 		</ParameterSection>
 
 		{#if workbench.lithoParams.model === 'vsh_gr' || (workbench.lithoParams.model !== 'vsh_bulk' && wellData.vshComparison.allGood.count > 0)}

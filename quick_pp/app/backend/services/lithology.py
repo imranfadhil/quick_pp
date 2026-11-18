@@ -25,11 +25,15 @@ from quick_pp.app.backend.schemas.lithology_hc_correction import (
 from quick_pp.app.backend.schemas.lithology_multi_mineral import (
     LithologyMultiMineralInput,
 )
+from quick_pp.app.backend.schemas.lithology_sand_shale import (
+    LithologySandShaleInput,
+)
 from quick_pp.app.backend.schemas.lithology_ssc import LithologySSCInput
 from quick_pp.app.backend.schemas.lithology_vsh_gr import LithologyVshGRInput
 from quick_pp.config import Config
 from quick_pp.lithology import gr_index
 from quick_pp.lithology.multi_mineral import MultiMineral
+from quick_pp.lithology.sand_shale import SandShale
 from quick_pp.lithology.sand_silt_clay import SandSiltClay
 from quick_pp.qaqc import neu_den_xplot_hc_correction
 
@@ -158,6 +162,35 @@ async def estimate_ssc(inputs: LithologySSCInput):
     vsand, vsilt, vcld, _ = ssc_model.estimate_lithology(df["nphi"], df["rhob"])
     return pd.DataFrame(
         {"VSAND": vsand, "VSILT": vsilt, "VCLAY": vcld}, index=df.index
+    ).to_dict(orient="records")
+
+
+@router.post(
+    "/sand_shale",
+    summary="Estimate Sand and Clay (Sand-Shale) Volume Fractions",
+    description=(
+        """
+        Estimate sand and clay (Vsh from N-D) volume fractions using binary SandShale crossplot model.
+
+        Input model: LithologySandShaleInput (see quick_pp.app.backend.schemas.lithology_sand_shale.LithologySandShaleInput).
+        """
+    ),
+    operation_id="estimate_sand_shale_lithology",
+)
+async def estimate_sand_shale(inputs: LithologySandShaleInput):
+    """Estimate binary sand-shale lithology volumetrics from NPHI and RHOB."""
+    input_dict = inputs.model_dump()
+    _validate_points(input_dict, required_points=["dry_sand_point", "fluid_point"])
+    df = _to_dataframe(input_dict["data"], columns=["nphi", "rhob"])
+    ss_model = SandShale(
+        dry_sand_point=input_dict["dry_sand_point"],
+        dry_clay_point=input_dict["dry_clay_point"],
+        fluid_point=input_dict["fluid_point"],
+        wet_clay_point=input_dict["wet_clay_point"],
+    )
+    vsand, vcld, _ = ss_model.estimate_lithology(df["nphi"], df["rhob"])
+    return pd.DataFrame(
+        {"VSAND": vsand, "VCLAY": vcld, "VSHALE": vcld}, index=df.index
     ).to_dict(orient="records")
 
 

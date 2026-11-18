@@ -92,7 +92,7 @@ export interface BadholeFlaggingParams {
 }
 
 export interface LithoEndpointParams {
-	model: 'ssc' | 'multi_mineral' | 'vsh_gr' | 'vsh_bulk';
+	model: 'ssc' | 'sand_shale' | 'vsh_nd' | 'multi_mineral' | 'vsh_gr' | 'vsh_bulk';
 	gammaSource: 'gr' | 'cgr' | 'derived_cgr';
 	gammaCurve: string;
 	thoriumCurve: string;
