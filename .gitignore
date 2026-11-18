@@ -103,6 +103,7 @@ ENV/
 # IDE settings
 .vscode/
 .idea/
+.vite/
 
 # Folders
 notebooks/outputs**

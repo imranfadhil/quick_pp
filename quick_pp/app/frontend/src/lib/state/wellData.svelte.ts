@@ -857,21 +857,28 @@ class WellDataState {
 		const xdiff0 = A[0] - C[0];
 		const ydiff0 = A[1] - C[1];
 		const d0 = A[0] * C[1] - A[1] * C[0];
-		const xdiff1 = D[0] - B[0];
-		const ydiff1 = D[1] - B[1];
-		const d1 = D[0] * B[1] - D[1] * B[0];
-		const resDiv = xdiff0 * ydiff1 - xdiff1 * ydiff0;
-		if (Math.abs(resDiv) < 1e-12) {
-			throw new Error(
-				'Cannot calculate live VSH preview: fluid-silt line does not intersect the sand-clay line'
-			);
-		}
-		const resIntersectionX = (d0 * xdiff1 - d1 * xdiff0) / resDiv;
-		const resIntersectionY = (d0 * ydiff1 - d1 * ydiff0) / resDiv;
-		const resLen = Math.hypot(A[0] - resIntersectionX, A[1] - resIntersectionY);
-		const resRatio = Math.max(0.05, Math.min(0.95, resLen / rockLen));
-		const nonResLen = Math.max(1e-6, rockLen * (1 - resRatio));
+		const isSandShale = lp.model === 'sand_shale' || lp.model === 'vsh_nd';
+		let resLen = rockLen;
+		let resRatio = 0.5;
+		let nonResLen = rockLen * 0.5;
 		const siltClayRatio = 0.25;
+
+		if (!isSandShale) {
+			const xdiff1 = D[0] - B[0];
+			const ydiff1 = D[1] - B[1];
+			const d1 = D[0] * B[1] - D[1] * B[0];
+			const resDiv = xdiff0 * ydiff1 - xdiff1 * ydiff0;
+			if (Math.abs(resDiv) < 1e-12) {
+				throw new Error(
+					'Cannot calculate live VSH preview: fluid-silt line does not intersect the sand-clay line'
+				);
+			}
+			const resIntersectionX = (d0 * xdiff1 - d1 * xdiff0) / resDiv;
+			const resIntersectionY = (d0 * ydiff1 - d1 * ydiff0) / resDiv;
+			resLen = Math.hypot(A[0] - resIntersectionX, A[1] - resIntersectionY);
+			resRatio = Math.max(0.05, Math.min(0.95, resLen / rockLen));
+			nonResLen = Math.max(1e-6, rockLen * (1 - resRatio));
+		}
 
 		const shaleCut = workbench.vshShaleCutoff;
 		const sandCut = workbench.vshSandCutoff;
@@ -919,11 +926,11 @@ class WellDataState {
 			const projClamped = Math.max(0.0, Math.min(rockLen, projLen));
 			const ptRatio = projClamped / rockLen;
 
-			const vshDnRaw =
-				ptRatio >= 1.0 - resRatio
-					? (-(1.0 - siltClayRatio) / resLen) * projClamped +
-						(rockLen * (1.0 - siltClayRatio)) / resLen
-					: (-siltClayRatio / nonResLen) * projClamped + 1.0;
+			const vshDnRaw = isSandShale
+				? 1.0 - ptRatio
+				: (ptRatio >= 1.0 - resRatio
+					? (rockLen - projClamped) / resLen
+					: 1.0);
 			const vshDn = Math.round(Math.max(0.0, Math.min(1.0, vshDnRaw)) * 10000) / 10000;
 
 			const isBadhole = Number.isFinite(badholeArr[idx]) && badholeArr[idx] >= 0.5;

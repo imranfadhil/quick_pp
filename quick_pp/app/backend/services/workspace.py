@@ -4141,7 +4141,7 @@ def workspace_lithology(
             out_df["VSAND"] = vsand_s
             out_df["VSILT"] = vsilt_s
             out_df["VCLAY"] = vclay_s
-            out_df["VSH_DN"] = vclay_s
+            out_df["VSH_DN"] = (vclay_s + vsilt_s).clip(0.0, 1.0)
             out_df["PROJ_NPHI"] = px_s
             out_df["PROJ_RHOB"] = py_s
             vsh_gr_s = _compute_vsh_gr_series(
