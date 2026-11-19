@@ -33,6 +33,8 @@ export const PETRO_COLORS = {
 	vshLamStroke: '#1E293B',
 	vshDisFill: '#CBD5E1',
 	vshDisStroke: '#64748B',
+	vshStrFill: '#B91C1C',
+	vshStrStroke: '#7F1D1D',
 
 	// Extended minerals
 	illiFill: '#A1A1AA',
@@ -83,6 +85,9 @@ export const PETRO_COLORS = {
 	perm: '#0284C7',
 	phie: '#2563EB',
 	phit: '#2563EB',
+	phid: '#1D4ED8',
+	rhoFl: '#0891B2',
+	rhoMf: '#7C3AED',
 	phitSand: '#047857',
 	pota: '#EC4899',
 	thor: '#06B6D4',
@@ -573,6 +578,12 @@ export const STANDARD_CURVE_META: Record<string, CurveMeta> = {
 	VCOAL: { mnemonic: 'VCOAL', label: 'Coal Volume', unit: 'v/v', min: 0, max: 1, color: PETRO_COLORS.coalStroke },
 	PHIT: { mnemonic: 'PHIT', label: 'Total Porosity', unit: 'v/v', min: 0, max: 0.4, color: PETRO_COLORS.phit, reversed: true },
 	PHIE: { mnemonic: 'PHIE', label: 'Effective Porosity', unit: 'v/v', min: 0, max: 0.4, color: PETRO_COLORS.phie, reversed: true },
+	PHID: { mnemonic: 'PHID', label: 'Density Porosity', unit: 'v/v', min: 0, max: 0.4, color: PETRO_COLORS.phid, reversed: true },
+	PHID_RAW_100: { mnemonic: 'PHID_RAW_100', label: 'Density Porosity (rho_fl = 1.0)', unit: 'v/v', min: 0, max: 0.4, color: '#94A3B8', reversed: true },
+	RHO_FL: { mnemonic: 'RHO_FL', label: 'Apparent Fluid Density', unit: 'g/cc', min: 0.5, max: 1.2, color: PETRO_COLORS.rhoFl },
+	RHO_MF: { mnemonic: 'RHO_MF', label: 'Mud Filtrate Density', unit: 'g/cc', min: 0.5, max: 1.2, color: PETRO_COLORS.rhoMf },
+	SXO_EST: { mnemonic: 'SXO_EST', label: 'Estimated Flushed-Zone Saturation', unit: 'v/v', min: 0, max: 1, color: '#7C3AED', reversed: true },
+	RHO_FL_TIER: { mnemonic: 'RHO_FL_TIER', label: 'RHO_FL Solver Tier', unit: 'flag', min: 1, max: 3, color: '#0EA5E9' },
 	PERM: {
 		mnemonic: 'PERM',
 		label: 'Permeability',
@@ -590,13 +601,24 @@ export const STANDARD_CURVE_META: Record<string, CurveMeta> = {
 	BADHOLE: { mnemonic: 'BADHOLE', label: 'Badhole Flag', unit: 'flag', min: 0, max: 1, color: '#DC2626' },
 	VSH_LAM: { mnemonic: 'VSH_LAM', label: 'Laminated Shale Volume', unit: 'v/v', min: 0, max: 1, color: PETRO_COLORS.vshLamStroke },
 	VSH_DIS: { mnemonic: 'VSH_DIS', label: 'Dispersed Shale Volume', unit: 'v/v', min: 0, max: 1, color: PETRO_COLORS.vshDisStroke },
+	VSH_STR: { mnemonic: 'VSH_STR', label: 'Structural Shale Volume', unit: 'v/v', min: 0, max: 1, color: PETRO_COLORS.vshStrStroke },
 	PHIT_SAND: { mnemonic: 'PHIT_SAND', label: 'Sand Lamina Porosity', unit: 'v/v', min: 0, max: 0.45, color: PETRO_COLORS.phitSand },
+	PHISAND_TS: { mnemonic: 'PHISAND_TS', label: 'Sand Lamina Porosity (TS)', unit: 'v/v', min: 0, max: 0.45, color: PETRO_COLORS.phitSand },
+	PHIT_TS: { mnemonic: 'PHIT_TS', label: 'Total Porosity (TS)', unit: 'v/v', min: 0, max: 0.45, color: PETRO_COLORS.phit },
+	PHIE_TS: { mnemonic: 'PHIE_TS', label: 'Effective Porosity (TS)', unit: 'v/v', min: 0, max: 0.45, color: PETRO_COLORS.phie },
 	RT_MOD: { mnemonic: 'RT_MOD', label: 'Hagiwara Modeled Resistivity', unit: 'ohm.m', min: 0.2, max: 2000, color: PETRO_COLORS.rtMod, logScale: true },
 	ROCK_FLAG: { mnemonic: 'ROCK_FLAG', label: 'Discrete Rock Type (DRT)', unit: 'flag', min: 1, max: 8, color: '#2563EB' },
 	FZI: { mnemonic: 'FZI', label: 'Flow Zone Indicator', unit: 'μm', min: 0.01, max: 50, color: '#0284C7', logScale: true },
 	R35: { mnemonic: 'R35', label: 'Winland Pore Throat Radius R35', unit: 'μm', min: 0.01, max: 100, color: '#0D9488', logScale: true },
 	RFN: { mnemonic: 'RFN', label: 'Lucia Rock Fabric Number', unit: 'RFN', min: 0.5, max: 4.0, color: '#D97706' },
-	VDL: { mnemonic: 'VDL', label: 'Velocity Deviation Log', unit: 'm/s', min: -1500, max: 1500, color: '#7C3AED' }
+	VDL: { mnemonic: 'VDL', label: 'Velocity Deviation Log', unit: 'm/s', min: -1500, max: 1500, color: '#7C3AED' },
+	GR_ENH: { mnemonic: 'GR_ENH', label: 'GR (Resolution Enhanced)', unit: 'API', min: 0, max: 200, color: '#16A34A' },
+	NPHI_ENH: { mnemonic: 'NPHI_ENH', label: 'NPHI (Resolution Enhanced)', unit: 'v/v', min: 0.45, max: -0.15, color: '#2563EB', reversed: true },
+	RHOB_ENH: { mnemonic: 'RHOB_ENH', label: 'RHOB (Resolution Enhanced)', unit: 'g/cc', min: 1.95, max: 2.95, color: '#DC2626', reversed: true },
+	GR_RECON: { mnemonic: 'GR_RECON', label: 'GR Forward Reconstruction', unit: 'API', min: 0, max: 200, color: '#86EFAC' },
+	NPHI_RECON: { mnemonic: 'NPHI_RECON', label: 'NPHI Forward Reconstruction', unit: 'v/v', min: 0.45, max: -0.15, color: '#93C5FD', reversed: true },
+	RHOB_RECON: { mnemonic: 'RHOB_RECON', label: 'RHOB Forward Reconstruction', unit: 'g/cc', min: 1.95, max: 2.95, color: '#FCA5A5', reversed: true },
+	DECONV_WEIGHT: { mnemonic: 'DECONV_WEIGHT', label: 'Deconvolution Reliability Weight', unit: 'frac', min: 0, max: 1, color: '#7C3AED' }
 };
 
 export function getCurveUnit(mnemonic: string): string {

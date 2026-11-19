@@ -1,4 +1,5 @@
 import io
+import math
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor
@@ -531,6 +532,7 @@ class Project(object):
         data: pd.DataFrame,
         group_by: str = "WELL_NAME",
         well_configs: Optional[dict] = None,
+        clear_nulls: bool = False,
     ):
         """Updates data for multiple wells in the project from a single DataFrame.
 
@@ -543,6 +545,7 @@ class Project(object):
             group_by (str): The column name to group the DataFrame by. Defaults to "WELL_NAME".
             well_configs (Optional[dict]): A dictionary where keys are well names and values
                                            are configuration dictionaries to apply.
+            clear_nulls (bool): Remove existing values at explicitly supplied null depths.
         """
         logger.info(
             f"Updating project data with {len(data)} records, grouped by {group_by}"
@@ -570,7 +573,7 @@ class Project(object):
 
             if orm_well:
                 well_obj = Well(self.db_session, well_id=orm_well.well_id)
-                well_obj.update_data(well_data)
+                well_obj.update_data(well_data, clear_nulls=clear_nulls)
                 if well_configs is not None:
                     well_obj.update_config(well_configs.get(well_name, {}))
                 # Don't call save() here - will flush once at the end
@@ -1493,7 +1496,7 @@ class Well(object):
         )
         return merge_summary
 
-    def update_data(self, data: pd.DataFrame):
+    def update_data(self, data: pd.DataFrame, clear_nulls: bool = False):
         """Updates or inserts curve data for the well from a DataFrame ("upsert").
 
         This method performs an "upsert" (update or insert) operation. For each
@@ -1507,6 +1510,7 @@ class Well(object):
         Args:
             data (pd.DataFrame): DataFrame containing the data to update. Must include
                                  a 'DEPTH' column to be used as the index.
+            clear_nulls (bool): Remove existing values at explicitly supplied null depths.
         """
         logger.debug(f"Updating well data for '{self.name}': {len(data)} records")
         data = data.set_index("DEPTH")
@@ -1564,7 +1568,11 @@ class Well(object):
                         )
                 else:
                     # Collect depths for this curve that need deletion
-                    depths_to_update = data.index[data[mnemonic].notna()].tolist()
+                    depths_to_update = (
+                        data.index.tolist()
+                        if clear_nulls
+                        else data.index[data[mnemonic].notna()].tolist()
+                    )
                     if depths_to_update:
                         all_depths_to_delete[orm_curve.curve_id] = depths_to_update
 
@@ -3037,8 +3045,16 @@ class Well(object):
             meas_list: List[Dict[str, Any]] = list(s.get("measurements") or [])
             poro = s.get("porosity", s.get("cpore"))
             perm = s.get("permeability", s.get("cperm"))
+            grain_density = s.get(
+                "grain_density", s.get("cgd", s.get("CGD", s.get("rhog")))
+            )
             poro_amb = s.get("porosity_amb", s.get("cpore_amb", s.get("cpore_ori")))
             perm_air = s.get("perm_air", s.get("cperm_air", s.get("cperm_ori")))
+            perm_vert = s.get(
+                "permeability_vertical", s.get("cpermv", s.get("CPERMV", s.get("kv")))
+            )
+            sw_val = s.get("sw", s.get("csat_water", s.get("CSAT_WATER")))
+            so_val = s.get("so", s.get("csat_oil", s.get("CSAT_OIL")))
             raw_depth_val = s.get("raw_depth", s.get("driller_depth"))
             shift_m_val = s.get("shift_m")
             if poro is not None and str(poro).strip() != "":
@@ -3052,6 +3068,17 @@ class Well(object):
                 try:
                     meas_list.append(
                         {"property_name": "CPERM", "value": float(perm), "unit": "mD"}
+                    )
+                except (TypeError, ValueError):
+                    pass
+            if grain_density is not None and str(grain_density).strip() != "":
+                try:
+                    meas_list.append(
+                        {
+                            "property_name": "CGRAIN_DENSITY",
+                            "value": float(grain_density),
+                            "unit": "g/cc",
+                        }
                     )
                 except (TypeError, ValueError):
                     pass
@@ -3073,6 +3100,39 @@ class Well(object):
                             "property_name": "CPERM_AIR",
                             "value": float(perm_air),
                             "unit": "mD",
+                        }
+                    )
+                except (TypeError, ValueError):
+                    pass
+            if perm_vert is not None and str(perm_vert).strip() != "":
+                try:
+                    meas_list.append(
+                        {
+                            "property_name": "CPERMV",
+                            "value": float(perm_vert),
+                            "unit": "mD",
+                        }
+                    )
+                except (TypeError, ValueError):
+                    pass
+            if sw_val is not None and str(sw_val).strip() != "":
+                try:
+                    meas_list.append(
+                        {
+                            "property_name": "CSAT_WATER",
+                            "value": float(sw_val),
+                            "unit": "v/v",
+                        }
+                    )
+                except (TypeError, ValueError):
+                    pass
+            if so_val is not None and str(so_val).strip() != "":
+                try:
+                    meas_list.append(
+                        {
+                            "property_name": "CSAT_OIL",
+                            "value": float(so_val),
+                            "unit": "v/v",
                         }
                     )
                 except (TypeError, ValueError):
@@ -3150,27 +3210,38 @@ class Well(object):
             if sname in grouped and abs(grouped[sname]["depth"] - depth_val) >= 1e-2:
                 sname = f"{sname}@{depth_val:.2f}m"
 
+            def _extract_prop(r: dict, keys: tuple):
+                for k in keys:
+                    v = r.get(k)
+                    if v is not None and str(v).strip() != "":
+                        try:
+                            fv = float(v)
+                            if math.isfinite(fv):
+                                return fv
+                        except (TypeError, ValueError):
+                            pass
+                return None
+
+            por_val = _extract_prop(row, ("porosity", "cpore", "CPORE", "POR", "por"))
+            if por_val is not None and por_val > 1.0:
+                por_val = por_val / 100.0
+            perm_val = _extract_prop(row, ("permeability", "cperm", "CPERM", "PERM", "perm"))
+
             entry = grouped.setdefault(
                 sname,
                 {
                     "depth": depth_val,
                     "raw_depth": row.get("raw_depth"),
-                    "porosity": row.get("porosity", row.get("cpore")),
-                    "permeability": row.get("permeability", row.get("cperm")),
+                    "porosity": por_val,
+                    "permeability": perm_val,
                     "pc_data": [],
                     "description": row.get("description"),
                 },
             )
-            if (
-                entry.get("porosity") is None
-                and row.get("porosity", row.get("cpore")) is not None
-            ):
-                entry["porosity"] = row.get("porosity", row.get("cpore"))
-            if (
-                entry.get("permeability") is None
-                and row.get("permeability", row.get("cperm")) is not None
-            ):
-                entry["permeability"] = row.get("permeability", row.get("cperm"))
+            if entry.get("porosity") is None and por_val is not None:
+                entry["porosity"] = por_val
+            if entry.get("permeability") is None and perm_val is not None:
+                entry["permeability"] = perm_val
             if entry.get("raw_depth") is None and row.get("raw_depth") is not None:
                 entry["raw_depth"] = row.get("raw_depth")
             # Support both nested `pc_data` and flat `(pc, sw)` row formats
@@ -3283,21 +3354,71 @@ class Well(object):
         self.db_session.flush()
 
     def get_scal_pc_data(self) -> List[Dict[str, Any]]:
-        """Retrieves all SCAL capillary pressure pairs for the well as a flat list of dicts."""
+        """Retrieves all SCAL capillary pressure pairs for the well as a flat list of dicts, including CPORE & CPERM."""
         stmt = (
             select(ORMCoreSample)
             .where(ORMCoreSample.well_id == self.well_id)
-            .options(selectinload(ORMCoreSample.capillary_pressure_data))
+            .options(
+                selectinload(ORMCoreSample.capillary_pressure_data),
+                selectinload(ORMCoreSample.measurements),
+            )
             .order_by(ORMCoreSample.depth)
         )
         samples = self.db_session.scalars(stmt).all()
+        # Build fallback lookup from companion RCA samples by name or depth if measurements are on another sample
+        rca_por_by_name: Dict[str, float] = {}
+        rca_perm_by_name: Dict[str, float] = {}
+        rca_por_by_depth: Dict[float, float] = {}
+        rca_perm_by_depth: Dict[float, float] = {}
+        for s in samples:
+            sn_key = str(s.sample_name or "").strip()
+            sd_key = round(float(s.depth), 2)
+            for m in (s.measurements or []):
+                pname = str(m.property_name).upper()
+                try:
+                    val = float(m.value)
+                    if pname in ("CPORE", "POR", "POROSITY") and val > 0:
+                        if val > 1.0:
+                            val = val / 100.0
+                        if sn_key:
+                            rca_por_by_name[sn_key] = val
+                        rca_por_by_depth[sd_key] = val
+                    elif pname in ("CPERM", "PERM", "PERMEABILITY") and val > 0:
+                        if sn_key:
+                            rca_perm_by_name[sn_key] = val
+                        rca_perm_by_depth[sd_key] = val
+                except (TypeError, ValueError):
+                    pass
+
         rows: List[Dict[str, Any]] = []
         for sample in samples:
+            poro_val = None
+            perm_val = None
+            for m in (sample.measurements or []):
+                pname = str(m.property_name).upper()
+                try:
+                    val = float(m.value)
+                    if pname in ("CPORE", "POR", "POROSITY"):
+                        poro_val = val / 100.0 if val > 1.0 else val
+                    elif pname in ("CPERM", "PERM", "PERMEABILITY"):
+                        perm_val = val
+                except (TypeError, ValueError):
+                    pass
+
+            sn = str(sample.sample_name or "").strip()
+            sd = round(float(sample.depth), 2)
+            if poro_val is None:
+                poro_val = rca_por_by_name.get(sn) or rca_por_by_depth.get(sd)
+            if perm_val is None:
+                perm_val = rca_perm_by_name.get(sn) or rca_perm_by_depth.get(sd)
+
             for p in sample.capillary_pressure_data:
                 rows.append(
                     {
                         "sample_name": sample.sample_name,
                         "depth": float(sample.depth),
+                        "porosity": poro_val,
+                        "permeability": perm_val,
                         "pc": float(p.pressure),
                         "sw": float(p.saturation),
                         "experiment_type": p.experiment_type or "micp",

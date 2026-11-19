@@ -266,7 +266,6 @@
 					<span>{step.label}</span>
 				</button>
 			{/each}
-
 			<!-- Standalone Module Divider + Core & Pc Prep -->
 			<div class="mx-1.5 h-4 w-[1px] shrink-0 bg-[var(--border-hairline)]"></div>
 			<span

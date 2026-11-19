@@ -349,6 +349,191 @@ def test_mnemonic_mapper_and_unit_standardization():
     assert np.isclose(std_df["DTC"].iloc[0], 80.0, atol=1e-2)
 
 
+def test_las_curve_lineage_preserves_original_values_and_collision_names(tmp_path):
+    path = tmp_path / "lineage.las"
+    path.write_text("""~Version
+VERS. 2.0 : VERSION
+WRAP. NO : WRAPPED
+~Well
+STRT.M 1000 : START
+STOP.M 1001 : STOP
+STEP.M 1 : STEP
+NULL. -999.25 : NULL
+WELL. TEST : WELL
+~Curve
+DEPT.M : DEPTH
+TNPH.% : NEUTRON
+NPHI.V/V : EXISTING NEUTRON
+~Ascii
+1000 20 0.1
+1001 30 0.2
+""")
+    result = _parse_single_log_file_worker({
+        "file_path": str(path),
+        "mnemonic_map": {"TNPH": "NPHI", "NPHI": "NPHI"},
+    })
+    data = result["well_data"]
+    assert data["NPHI"].tolist() == pytest.approx([0.2, 0.3])
+    assert data["NPHI_1"].tolist() == pytest.approx([0.1, 0.2])
+    assert data["TNPH"].tolist() == pytest.approx([20, 30])
+    assert data["RAW_NPHI"].tolist() == pytest.approx([0.1, 0.2])
+    entries = {item["source_mnemonic"]: item for item in result["curve_lineage"]}
+    assert entries["DEPT"]["stored_curve"] == "DEPTH"
+    assert entries["TNPH"] == {
+        "source_mnemonic": "TNPH", "source_unit": "%",
+        "stored_curve": "NPHI", "raw_curve": "TNPH", "stored_unit": "v/v",
+    }
+    assert entries["NPHI"]["stored_curve"] == "NPHI_1"
+    assert entries["NPHI"]["raw_curve"] == "RAW_NPHI"
+
+
+def test_las_lineage_respects_excluded_source_curve(tmp_path):
+    path = tmp_path / "exclude.las"
+    path.write_text("""~Version
+VERS. 2.0 : VERSION
+WRAP. NO : WRAPPED
+~Well
+STRT.M 1000 : START
+STOP.M 1001 : STOP
+STEP.M 1 : STEP
+NULL. -999.25 : NULL
+WELL. TEST : WELL
+~Curve
+DEPT.M : DEPTH
+TNPH.% : NEUTRON
+~Ascii
+1000 20
+1001 30
+""")
+    result = _parse_single_log_file_worker({
+        "file_path": str(path), "excluded_curves": ["TNPH"],
+    })
+    assert "TNPH" not in result["well_data"]
+    assert "NPHI" not in result["well_data"]
+    assert all(item["source_mnemonic"] != "TNPH" for item in result["curve_lineage"])
+
+
+def test_las_lineage_persists_across_run_merges_and_workspace(tmp_path, monkeypatch):
+    from quick_pp.app.backend.services import workspace as workspace_service
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(log_import_service, "STAGING_DIR", tmp_path / "staging")
+    monkeypatch.setattr(log_import_service, "is_demo_mode", lambda: False)
+    engine = create_engine(f"sqlite:///{(tmp_path / 'lineage.db').as_posix()}")
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(bind=engine)
+
+    @contextmanager
+    def test_db():
+        with session_factory() as session:
+            try:
+                yield session
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+
+    monkeypatch.setattr(log_import_service, "get_db", test_db)
+    monkeypatch.setattr(database_service, "get_db", test_db)
+    monkeypatch.setattr(workspace_service, "get_db", test_db)
+    with test_db() as session:
+        project_id = Project(session, name="LineageTest").project_id
+
+    def commit(values, filename):
+        las = f"""~Version
+VERS. 2.0 : VERSION
+WRAP. NO : WRAPPED
+~Well
+STRT.M 1000 : START
+STOP.M 1001 : STOP
+STEP.M 1 : STEP
+NULL. -999.25 : NULL
+WELL. TEST : WELL
+~Curve
+DEPT.M : DEPTH
+TNPH.% : NEUTRON
+~Ascii
+1000 {values[0]}
+1001 {values[1]}
+"""
+        inspected = client.post(
+            "/api/v1/import/logs/inspect",
+            files=[("files", (filename, las.encode(), "text/plain"))],
+        )
+        assert inspected.status_code == 200, inspected.text
+        info = inspected.json()["files"][0]
+        response = client.post("/api/v1/import/logs/commit", json={
+            "project_id": project_id,
+            "files": [{"file_id": info["file_id"], "filename": filename}],
+        })
+        assert response.status_code == 200, response.text
+        return response.json()["wells"][0]
+
+    first = commit([20, 30], "first.las")
+    second = commit([40, 50], "second.las")
+    repeated = commit([40, 50], "repeated.las")
+    for result, name, raw in (
+        (first, "NPHI", "TNPH"),
+        (second, "NPHI_1", "TNPH_1"),
+        (repeated, "NPHI_1", "TNPH_1"),
+    ):
+        entry = next(item for item in result["curve_lineage"] if item["source_mnemonic"] == "TNPH")
+        assert (entry["stored_curve"], entry["raw_curve"]) == (name, raw)
+
+    def batch_las(first, second):
+        return f"""~Version
+VERS. 2.0 : VERSION
+WRAP. NO : WRAPPED
+~Well
+STRT.M 1000 : START
+STOP.M 1001 : STOP
+STEP.M 1 : STEP
+NULL. -999.25 : NULL
+WELL. TEST : WELL
+~Curve
+DEPT.M : DEPTH
+TNPH.% : NEUTRON
+~Ascii
+1000 {first}
+1001 {second}
+""".encode()
+
+    inspected = client.post("/api/v1/import/logs/inspect", files=[
+        ("files", ("batch-a.las", batch_las(60, 70), "text/plain")),
+        ("files", ("batch-b.las", batch_las(80, 90), "text/plain")),
+    ])
+    assert inspected.status_code == 200, inspected.text
+    response = client.post("/api/v1/import/logs/commit", json={
+        "project_id": project_id,
+        "files": [
+            {"file_id": info["file_id"], "filename": info["filename"]}
+            for info in inspected.json()["files"]
+        ],
+    })
+    assert response.status_code == 200, response.text
+    batch = response.json()["wells"][0]["curve_lineage"]
+    batch_entries = [item for item in batch if item["source_mnemonic"] == "TNPH"]
+    assert [(item["filename"], item["stored_curve"], item["raw_curve"]) for item in batch_entries] == [
+        ("batch-a.las", "NPHI_2", "TNPH_2"),
+        ("batch-b.las", "NPHI_1_1", "TNPH_1_1"),
+    ]
+    with test_db() as session:
+        project = Project.load(session, project_id=project_id)
+        well = project.get_well("TEST")
+        assert len(well.header_data["curve_lineage"]) == 10
+        units = {curve.mnemonic: curve.unit for curve in well._orm_well.curves}
+        assert units["NPHI_1"] == "v/v"
+        assert units["TNPH_1"] == "%"
+        data = project.get_well_data_optimized("TEST")
+        assert data["NPHI_1"].tolist() == pytest.approx([0.4, 0.5])
+        assert data["TNPH_1"].tolist() == pytest.approx([40, 50])
+
+    bundle = client.get(f"/quick_pp/workspace/projects/{project_id}/wells/TEST/bundle")
+    assert bundle.status_code == 200, bundle.text
+    assert len(bundle.json()["header"]["curve_lineage"]) == 10
+    engine.dispose()
+
+
 # ==============================================================================
 # Phase 2 Tests: Excel/CSV Parser, 3-Stage Column Resolver, Minimum Curvature, Core Shift
 # ==============================================================================
@@ -799,6 +984,96 @@ TNPH.%      : Thermal Neutron Porosity
     res_scal_commit = client.post("/api/v1/import/ancillary/commit", json=scal_commit_payload)
     assert res_scal_commit.status_code == 200
     assert res_scal_commit.json()["total_committed"] == 5
+
+
+def test_rca_bulk_import_grain_density_reaches_bundle():
+    """CGRAIN_DENSITY imported via the bulk RCA path must surface on the well bundle."""
+    res_proj = client.post(
+        "/quick_pp/database/projects", json={"name": "RcaGrainDensityTestProj"}
+    )
+    assert res_proj.status_code == 200
+    pid = res_proj.json()["project_id"]
+    well_name = "RCA-GD-WELL"
+    res_well = client.post(
+        f"/quick_pp/database/projects/{pid}/wells",
+        json={"name": well_name, "uwi": "RCA-GD-UWI"},
+    )
+    assert res_well.status_code == 200
+
+    # The bundle endpoint requires curve data for the well, so seed a minimal log first.
+    las_bytes = (
+        "~Version\n"
+        "VERS. 2.0 : CWLS LOG ASCII STANDARD\n"
+        "WRAP. NO  : ONE LINE PER DEPTH STEP\n"
+        "~Well\n"
+        "STRT.M 2000.0 : START DEPTH\n"
+        "STOP.M 2001.0 : STOP DEPTH\n"
+        "STEP.M 0.5 : STEP\n"
+        "NULL. -999.25 : NULL VALUE\n"
+        f"WELL. {well_name} : WELL\n"
+        "~Curve\n"
+        "DEPT.M : Depth\n"
+        "GR.GAPI : Gamma Ray\n"
+        "~Ascii\n"
+        "2000.0 45.0\n"
+        "2000.5 50.0\n"
+        "2001.0 55.0\n"
+    ).encode("utf-8")
+    res_inspect = client.post(
+        "/api/v1/import/logs/inspect",
+        files=[("files", ("rca_gd_well.las", las_bytes, "text/plain"))],
+    )
+    assert res_inspect.status_code == 200
+    f_info = res_inspect.json()["files"][0]
+    res_log_commit = client.post(
+        "/api/v1/import/logs/commit",
+        json={
+            "project_id": pid,
+            "files": [
+                {
+                    "file_id": f_info["file_id"],
+                    "filename": "rca_gd_well.las",
+                    "metadata": f_info["metadata"],
+                    "curve_mappings": {"DEPT": "DEPTH", "GR": "GR"},
+                    "unit_overrides": {"DEPT": "m", "GR": "gAPI"},
+                }
+            ],
+        },
+    )
+    assert res_log_commit.status_code == 200, res_log_commit.text
+
+    rca_csv = (
+        b"Sample,Depth (m),Porosity (%),Permeability (mD),Grain Density (g/cc)\n"
+        b"P-1,2000.05,21.5,140.0,2.71\n"
+        b"P-2,2000.52,19.0,85.0,2.68\n"
+    )
+    res_prev = client.post(
+        "/api/v1/import/ancillary/preview",
+        files={"file": ("rca_gd.csv", rca_csv, "text/csv")},
+        data={"data_type": "rca"},
+    )
+    assert res_prev.status_code == 200
+    prev_json = res_prev.json()
+    assert prev_json["detected"]["cgrain_density"] == "Grain Density (g/cc)"
+
+    commit_payload = {
+        "project_id": pid,
+        "well_name": well_name,
+        "data_type": "rca",
+        "column_mappings": prev_json["column_mappings"],
+        "file_content_base64": base64.b64encode(rca_csv).decode("ascii"),
+        "filename": "rca_gd.csv",
+        "core_snap_tolerance_m": 0.08,
+    }
+    res_commit = client.post("/api/v1/import/ancillary/commit", json=commit_payload)
+    assert res_commit.status_code == 200, res_commit.text
+    assert res_commit.json()["total_committed"] == 2
+
+    bundle = client.get(f"/quick_pp/workspace/projects/{pid}/wells/{well_name}/bundle")
+    assert bundle.status_code == 200, bundle.text
+    core = {s["sample_name"]: s for s in bundle.json()["core_samples"]}
+    assert core["P-1"]["grain_density"] == pytest.approx(2.71)
+    assert core["P-2"]["grain_density"] == pytest.approx(2.68)
 
 
 def test_well_header_dms_coords_and_bundle_metadata():

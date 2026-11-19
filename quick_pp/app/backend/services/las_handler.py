@@ -252,6 +252,7 @@ def _parse_single_log_file_worker(task_spec: Dict[str, Any]) -> Dict[str, Any]:
     ext = file_path.suffix.lower()
     embedded_core_rows: List[Dict[str, Any]] = []
     embedded_tops_rows: List[Dict[str, Any]] = []
+    curve_lineage: List[Dict[str, Any]] = []
 
     if ext == ".dlis":
         info = inspect_dlis(file_path)
@@ -375,7 +376,13 @@ def _parse_single_log_file_worker(task_spec: Dict[str, Any]) -> Dict[str, Any]:
             curve_units=raw_units,
             target_depth_uom=target_depth_uom,
             custom_mnemonic_map=custom_mnemonic_map,
+            curve_lineage=curve_lineage,
         )
+        if first_col != index_mnemonic:
+            for entry in curve_lineage:
+                if entry["source_mnemonic"].upper() == first_col:
+                    entry["source_mnemonic"] = str(las_header.curves[0].mnemonic).strip()
+                    break
         header_df = _las_header_to_dataframe(las_header)
 
         # Extract embedded LAS 3.0 Core_Data and Tops_Data if present
@@ -436,6 +443,35 @@ def _parse_single_log_file_worker(task_spec: Dict[str, Any]) -> Dict[str, Any]:
 
     # Drop excluded curves (never drop DEPTH)
     if excluded_curves:
+        excluded_targets = {
+            entry["stored_curve"] for entry in curve_lineage
+            if entry["source_mnemonic"].upper() in excluded_curves
+            or entry["stored_curve"].upper() in excluded_curves
+        }
+        retained_targets = {
+            entry["stored_curve"] for entry in curve_lineage
+            if entry["source_mnemonic"].upper() not in excluded_curves
+            and entry["stored_curve"].upper() not in excluded_curves
+        }
+        for entry in curve_lineage:
+            if (
+                entry["source_mnemonic"].upper() in excluded_curves
+                or entry["stored_curve"].upper() in excluded_curves
+            ) and entry["stored_curve"].upper() != "DEPTH":
+                if entry["raw_curve"]:
+                    df = df.drop(columns=[entry["raw_curve"]], errors="ignore")
+        df = df.drop(
+            columns=[c for c in excluded_targets - retained_targets if c.upper() != "DEPTH"],
+            errors="ignore",
+        )
+        curve_lineage = [
+            entry for entry in curve_lineage
+            if entry["stored_curve"].upper() == "DEPTH"
+            or (
+                entry["source_mnemonic"].upper() not in excluded_curves
+                and entry["stored_curve"].upper() not in excluded_curves
+            )
+        ]
         drop_c = [
             c
             for c in df.columns
@@ -453,6 +489,8 @@ def _parse_single_log_file_worker(task_spec: Dict[str, Any]) -> Dict[str, Any]:
     else:
         df["UWI"] = uwi
 
+    for entry in curve_lineage:
+        entry["stored_unit"] = std_units.get(entry["stored_curve"], "")
     qaqc_stats = compute_curve_qaqc(df, curve_units=std_units)
 
     return {
@@ -464,6 +502,7 @@ def _parse_single_log_file_worker(task_spec: Dict[str, Any]) -> Dict[str, Any]:
         "well_data": df,
         "header_df": header_df,
         "units": std_units,
+        "curve_lineage": curve_lineage,
         "qaqc": qaqc_stats,
         "embedded_core": embedded_core_rows,
         "embedded_tops": embedded_tops_rows,
@@ -705,6 +744,7 @@ async def commit_log_files(request: Request) -> Dict[str, Any]:
             batch_appended: List[str] = []
             batch_skipped: List[str] = []
             batch_renamed: Dict[str, str] = {}
+            lineage: List[Dict[str, Any]] = []
 
             if len(well_runs) == 1:
                 first_df = well_runs[0]["well_data"]
@@ -722,6 +762,10 @@ async def commit_log_files(request: Request) -> Dict[str, Any]:
                     for c in spliced_df.columns
                     if str(c).upper() not in ("DEPTH", "DEPT", "WELL_NAME", "UWI")
                 ]
+                lineage = [
+                    {**entry, "filename": well_runs[0]["filename"]}
+                    for entry in well_runs[0].get("curve_lineage", [])
+                ]
             else:
                 spliced_df = None
                 for idx, r in enumerate(well_runs):
@@ -736,6 +780,14 @@ async def commit_log_files(request: Request) -> Dict[str, Any]:
                     spliced_df, step_summary = merge_well_curves_with_dedup(
                         spliced_df, run_df, incoming_units=merged_units
                     )
+                    resolved = step_summary.get("resolved_curves", {})
+                    for entry in r.get("curve_lineage", []):
+                        lineage.append({
+                            **entry,
+                            "filename": r["filename"],
+                            "stored_curve": resolved.get(entry["stored_curve"], entry["stored_curve"]),
+                            "raw_curve": resolved.get(entry["raw_curve"], entry["raw_curve"]),
+                        })
                     batch_appended.extend(step_summary.get("appended_curves", []))
                     if idx > 0:
                         batch_skipped.extend(step_summary.get("skipped_curves", []))
@@ -777,6 +829,10 @@ async def commit_log_files(request: Request) -> Dict[str, Any]:
                         final_appended = list(demo_summary.get("appended_curves", []))
                         final_skipped.extend(demo_summary.get("skipped_curves", []))
                         final_renamed.update(demo_summary.get("renamed_curves", {}))
+                        resolved = demo_summary.get("resolved_curves", {})
+                        for entry in lineage:
+                            entry["stored_curve"] = resolved.get(entry["stored_curve"], entry["stored_curve"])
+                            entry["raw_curve"] = resolved.get(entry["raw_curve"], entry["raw_curve"])
                         final_curves = [
                             c
                             for c in spliced_df.columns
@@ -792,6 +848,7 @@ async def commit_log_files(request: Request) -> Dict[str, Any]:
                     for mk, mv in primary_meta.items():
                         if mv is not None or mk not in merged_demo_hdr:
                             merged_demo_hdr[mk] = mv
+                    merged_demo_hdr["curve_lineage"] = list(merged_demo_hdr.get("curve_lineage") or []) + lineage
                     _ephemeral_well_headers[(project_id, well_name)] = merged_demo_hdr
                     _merged_data_cache[f"{project_id}_{well_name}_0.16"] = (
                         time.time(),
@@ -823,6 +880,24 @@ async def commit_log_files(request: Request) -> Dict[str, Any]:
                             primary_header_df,
                             metadata_override=primary_meta,
                         )
+                        resolved = db_merge_summary.get("resolved_curves", {})
+                        for entry in lineage:
+                            entry["stored_curve"] = resolved.get(entry["stored_curve"], entry["stored_curve"])
+                            entry["raw_curve"] = resolved.get(entry["raw_curve"], entry["raw_curve"])
+                        appended = set(db_merge_summary.get("appended_curves", []))
+                        for curve in well_obj._orm_well.curves:
+                            if curve.mnemonic not in appended:
+                                continue
+                            for entry in lineage:
+                                if curve.mnemonic == entry["raw_curve"]:
+                                    curve.unit = entry["source_unit"]
+                                    break
+                                if curve.mnemonic == entry["stored_curve"]:
+                                    curve.unit = entry["stored_unit"]
+                                    break
+                        header = dict(well_obj.header_data or {})
+                        header["curve_lineage"] = list(header.get("curve_lineage") or []) + lineage
+                        well_obj.header_data = header
                         if is_existing_well and isinstance(db_merge_summary, dict):
                             final_appended = list(
                                 db_merge_summary.get("appended_curves", [])
@@ -863,6 +938,7 @@ async def commit_log_files(request: Request) -> Dict[str, Any]:
                     "appended_curves": final_appended,
                     "skipped_curves": final_skipped,
                     "renamed_curves": final_renamed,
+                    "curve_lineage": lineage,
                     "metadata": primary_meta,
                     "qaqc": merged_qaqc,
                 }

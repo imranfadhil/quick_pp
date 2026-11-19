@@ -1588,13 +1588,33 @@ def get_well_data(
                     measurements = []
                     if hasattr(s.get("measurements"), "to_dict"):
                         measurements = s.get("measurements").to_dict(orient="records")
-                    core_samples.append(
-                        {
-                            "sample_name": name,
-                            "depth": s.get("depth"),
-                            "measurements": measurements,
-                        }
-                    )
+                    # Flatten common point measurements onto the sample so the frontend RCA
+                    # table can surface them directly (porosity/permeability/grain density).
+                    meas_by_prop = {}
+                    for m in measurements:
+                        prop = str(m.get("property") or m.get("property_name") or "").upper()
+                        if prop and m.get("value") is not None:
+                            meas_by_prop[prop] = m.get("value")
+                    sample_entry = {
+                        "sample_name": name,
+                        "depth": s.get("depth"),
+                        "measurements": measurements,
+                    }
+                    # Canonical flattened keys (first match wins).
+                    _flatten_map = {
+                        "porosity": ("CPORE", "POR", "POROSITY"),
+                        "permeability": ("CPERM", "PERM", "PERMEABILITY"),
+                        "permeability_vertical": ("CPERMV",),
+                        "grain_density": ("CGRAIN_DENSITY", "RHOMA", "RHOG"),
+                        "sw": ("CSAT_WATER",),
+                        "so": ("CSAT_OIL",),
+                    }
+                    for flat_key, prop_names in _flatten_map.items():
+                        for pn in prop_names:
+                            if pn in meas_by_prop:
+                                sample_entry[flat_key] = meas_by_prop[pn]
+                                break
+                    core_samples.append(sample_entry)
 
                 return {
                     "data": records,

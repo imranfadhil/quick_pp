@@ -92,8 +92,23 @@ export interface BadholeFlaggingParams {
 }
 
 export interface LithoEndpointParams {
-	model: 'ssc' | 'multi_mineral' | 'vsh_gr';
-	porosityMethod: 'neu_den' | 'den';
+	model: 'ssc' | 'sand_shale' | 'vsh_nd' | 'multi_mineral' | 'vsh_gr' | 'vsh_bulk';
+	gammaSource: 'gr' | 'cgr' | 'derived_cgr';
+	gammaCurve: string;
+	thoriumCurve: string;
+	potassiumCurve: string;
+	gammaClean: number;
+	gammaShale: number;
+	gammaEndpoints: Record<string, { clean: number; shale: number }>;
+	bulkGrClean: number;
+	bulkGrShale: number;
+	cgrThCoefficient: number;
+	cgrKCoefficient: number;
+	shaleSolidDensity: number;
+	shalePorosity: number;
+	shaleIneffectiveFraction: number;
+	porosityMethod: 'neu_den' | 'den' | 'sonic_wyllie' | 'sonic_hunt_raymer' | 'avg_weighted' | 'avg_arithmetic' | 'avg_gaymard';
+	sonicFluidDt: number;
 	logCorrectionMode: 'none' | 'hc' | 'den';
 	useHcCorrected: boolean;
 	enableHcCorrection: boolean;
@@ -133,12 +148,30 @@ export interface LithoEndpointParams {
 	grClean: number;
 	grClay: number;
 	minerals: string[];
+	/** Log curves fed to the multi-mineral inversion; empty means "all available". */
+	inputLogs: string[];
+	/** Maximum physical total porosity ceiling (v/v) for multi-mineral simplex. */
+	phiMax: number;
+	/** Whether to linearize Photoelectric Factor via volumetric cross-section U = PEF * RHOB. */
+	linearizePef: boolean;
 	enableCoalFlagging: boolean;
 	coalRhobMax: number;
 	coalNphiMin: number;
 	coalWindowSize: number;
 	coalTrendFactor: number;
 	badholeTreatment: BadholeTreatmentMode;
+	/** Continuous apparent fluid density (RHO_FL) engine mode. */
+	fluidDensityMode: 'static' | 'zonal_coupled' | 'iterative_sxo';
+	fluidDensityMudType: 'WBM' | 'OBM' | 'SBM';
+	fluidDensitySalinityPpm: number;
+	fluidDensityRmf: number;
+	fluidDensityRmfTempC: number;
+	fluidDensityObmBase: number;
+	fluidDensityRxoCurve: string;
+	fluidDensityRtCurve: string;
+	fluidDensityFlushExponent: number;
+	fluidDensityShrGas: number;
+	fluidDensityShrOil: number;
 }
 
 export interface ThomasStieberParams {
@@ -151,6 +184,20 @@ export interface ThomasStieberParams {
 	rvShale: number;
 	rhShale: number;
 	theta: number;
+}
+
+export interface ResolutionEnhancementParams {
+	/** Opt in to feeding <CURVE>_ENH into downstream non-linear transforms. */
+	useEnhancedLogs: boolean;
+	mode: 'enhance_all' | 'match_finest';
+	method: 'constrained_huber' | 'wiener';
+	targetFwhm: number | null;
+	nyquistFactor: number;
+	lambdaVol: number;
+	morozovTau: number;
+	huberDeltaMult: number;
+	volumeWindow: number;
+	noiseCapMult: number;
 }
 
 export interface SaturationModelParams {
@@ -232,6 +279,35 @@ export interface ScalModelParams {
 	pc_res_output: number | null;
 	pc_scale_factor: number | null;
 	pc_scaling_applied: boolean;
+	// Project-scoped Grain / Matrix Density Correlation
+		// Single driver: rho_ma(z) = gd_rho_ma_clean + gd_k * (driver(z) - gd_driver_clean)
+		// Multi-log:    rho_ma(z) = gd_intercept + sum_j gd_coef_j * (driver_j - gd_center_j)/gd_scale_j
+	gd_enabled: boolean;
+		gd_mode: 'single' | 'multivariate';
+	gd_driver_col: string;
+		gd_driver_cols: string[];
+		/** Driver plotted on the crossplot X axis; null = auto (first selected driver). */
+		gd_plot_driver_col: string | null;
+		gd_coef: number[];
+		/** Per-driver slopes re-expressed in g/cc per native log unit. */
+		gd_native_slopes: number[];
+		gd_center: number[];
+		gd_scale: number[];
+		gd_intercept: number | null;
+		gd_alpha: number;
+		gd_robust: boolean;
+		gd_vif: Record<string, number>;
+		gd_breusch_pagan_p: number | null;
+		gd_resid_mad: number | null;
+	gd_rho_ma_clean: number;
+	gd_k: number;
+	gd_driver_clean: number;
+	gd_rho_ma_min: number;
+	gd_rho_ma_max: number;
+	gd_r2: number | null;
+	gd_rmse: number | null;
+	gd_count: number | null;
+	gd_calibrated: boolean;
 }
 
 export interface ScalComputedResult {
@@ -585,6 +661,9 @@ class WorkbenchState {
 	}
 	crossplotTemplateOverride = $state<CrossplotId | 'auto'>('auto');
 
+	/** Curve focused by the 'enhanced-vs-raw' crossplot; null shows every enhanced curve. */
+	enhanceCompareCurve = $state<string | null>(null);
+
 	get crossplotContext(): CrossplotContext {
 		return this.scope === 'single-well'
 			? { scope: 'single-well', step: this.singleWellStep }
@@ -608,7 +687,7 @@ class WorkbenchState {
 		kind: 'math' | 'splice';
 	} | null>(null);
 	scalSubMode = $state<'static' | 'relperm'>('static');
-	swirrCrossplotTab = $state<'swirr-corr' | 'pc-qc' | 'scal-fit' | 'relperm'>('swirr-corr');
+	swirrCrossplotTab = $state<'swirr-corr' | 'pc-qc' | 'scal-fit' | 'pore-throat' | 'relperm'>('swirr-corr');
 	coreQcView = $state<'dual' | 'poro' | 'perm' | 'depth-error'>('dual');
 	vshQcView = $state<'dual' | 'gr-fit' | 'depth-error'>('dual');
 	vshCalibScope = $state<'shale_sand' | 'shale_only' | 'all' | 'brushed'>('shale_sand');
@@ -681,7 +760,7 @@ class WorkbenchState {
 	}
 
 	// Single-well left pane section collapse / expand / focus controls
-	sectionFocusMode = $state<boolean>(false);
+	sectionFocusMode = $state<boolean>(true);
 	focusedSectionTitle = $state<string | null>(null);
 	sectionBulkAction = $state<{
 		type: 'expand-all' | 'collapse-all' | 'focus';
@@ -691,7 +770,22 @@ class WorkbenchState {
 	// Shared interactive parameters between Left Pane Inspectors & Right Pane Crossplot
 	lithoParams = $state<LithoEndpointParams>({
 		model: 'ssc',
+		gammaSource: 'gr',
+		gammaCurve: 'CGR',
+		thoriumCurve: 'THOR',
+		potassiumCurve: 'POTA',
+		gammaClean: 20,
+		gammaShale: 120,
+		gammaEndpoints: {},
+		bulkGrClean: 20,
+		bulkGrShale: 120,
+		cgrThCoefficient: 4,
+		cgrKCoefficient: 16,
+		shaleSolidDensity: 2.7,
+		shalePorosity: 0.2,
+		shaleIneffectiveFraction: 1,
 		porosityMethod: 'den',
+		sonicFluidDt: 190,
 		logCorrectionMode: 'none',
 		useHcCorrected: false,
 		enableHcCorrection: false,
@@ -731,12 +825,26 @@ class WorkbenchState {
 		grClean: 15.0,
 		grClay: 115.0,
 		minerals: ['QUARTZ', 'CALCITE', 'DOLOMITE', 'SHALE'],
+		inputLogs: [],
+		phiMax: 0.40,
+		linearizePef: false,
 		enableCoalFlagging: true,
 		coalRhobMax: 2.0,
 		coalNphiMin: 0.3,
 		coalWindowSize: 41,
 		coalTrendFactor: 0.05,
-		badholeTreatment: 'vsh_gr'
+		badholeTreatment: 'vsh_gr',
+		fluidDensityMode: 'static',
+		fluidDensityMudType: 'WBM',
+		fluidDensitySalinityPpm: 30000,
+		fluidDensityRmf: 0.5,
+		fluidDensityRmfTempC: 25,
+		fluidDensityObmBase: 0.82,
+		fluidDensityRxoCurve: '',
+		fluidDensityRtCurve: 'RT',
+		fluidDensityFlushExponent: 0.2,
+		fluidDensityShrGas: 0.25,
+		fluidDensityShrOil: 0.15
 	});
 
 	tsParams = $state<ThomasStieberParams>({
@@ -749,6 +857,19 @@ class WorkbenchState {
 		rvShale: 4.0,
 		rhShale: 1.5,
 		theta: 0.0
+	});
+
+	enhanceParams = $state<ResolutionEnhancementParams>({
+		useEnhancedLogs: false,
+		mode: 'enhance_all',
+		method: 'constrained_huber',
+		targetFwhm: null,
+		nyquistFactor: 2.0,
+		lambdaVol: 0.05,
+		morozovTau: 1.05,
+		huberDeltaMult: 2.0,
+		volumeWindow: 3.0,
+		noiseCapMult: 3.0
 	});
 
 	badholeParams = $state<BadholeFlaggingParams>({
@@ -845,7 +966,31 @@ class WorkbenchState {
 		theta_res: 30.0,
 		pc_res_output: null,
 		pc_scale_factor: null,
-		pc_scaling_applied: false
+		pc_scaling_applied: false,
+		gd_enabled: false,
+				gd_mode: 'multivariate',
+		gd_driver_col: 'CGR',
+				gd_driver_cols: ['CGR', 'GR', 'RHOB', 'NPHI'],
+				gd_plot_driver_col: null,
+				gd_coef: [],
+				gd_native_slopes: [],
+				gd_center: [],
+				gd_scale: [],
+				gd_intercept: null,
+				gd_alpha: 1.0,
+				gd_robust: true,
+				gd_vif: {},
+				gd_breusch_pagan_p: null,
+				gd_resid_mad: null,
+		gd_rho_ma_clean: 2.65,
+		gd_k: 0.0,
+		gd_driver_clean: 0.0,
+		gd_rho_ma_min: 2.55,
+		gd_rho_ma_max: 3.0,
+		gd_r2: null,
+		gd_rmse: null,
+		gd_count: null,
+		gd_calibrated: false
 	});
 
 	scalResult = $state<ScalComputedResult | null>(null);
@@ -1105,6 +1250,10 @@ class WorkbenchState {
 		this.brushedDepthIndices = new Set(indices);
 		if (this.brushedDepthIndices.size === 0) {
 			this.useBrushedCalculationFilter = false;
+		} else if (this.scope === 'single-well') {
+			// Selecting an interval implies the user wants calculations scoped to it,
+			// so turn "Apply to selection" on by default. They can still opt out.
+			this.useBrushedCalculationFilter = true;
 		}
 	}
 

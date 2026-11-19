@@ -1,7 +1,11 @@
 import numpy as np
 import pytest
 
-from quick_pp.fluid_type import estimate_fluid_properties
+from quick_pp.fluid_type import (
+    brine_density,
+    estimate_fluid_properties,
+    obm_filtrate_density,
+)
 
 
 def test_normal_reservoir_gas_properties_and_methane_hydrogen_index():
@@ -111,3 +115,37 @@ def test_depth_profiles_and_explicit_pressure_temperature_curves():
 def test_invalid_fluid_model_inputs_are_rejected(kwargs, message):
     with pytest.raises(ValueError, match=message):
         estimate_fluid_properties(tvd=np.array([100.0, 200.0]), **kwargs)
+
+
+def test_brine_density_matches_batzle_wang_reference_points():
+    # Pure water at 20 degC / 0.1 MPa is ~0.998 g/cc
+    assert float(brine_density(20.0, 0.1, 0.0)) == pytest.approx(0.998, abs=0.003)
+    # 200,000 ppm brine at 180 degC / 35 MPa is ~1.05 g/cc
+    assert float(brine_density(180.0, 35.0, 200000.0)) == pytest.approx(1.05, abs=0.01)
+    # Salinity monotonically increases density at fixed P-T
+    assert float(brine_density(100.0, 25.0, 150000.0)) > float(
+        brine_density(100.0, 25.0, 5000.0)
+    )
+
+
+def test_brine_density_is_consistent_with_estimate_fluid_properties():
+    fluids = estimate_fluid_properties(
+        tvd=np.array([0.0, 1000.0]),
+        temp_grad=30.0,
+        surf_temp=25.0,
+        pres_grad=10.2,
+        surf_pres=0.1013,
+        salinity_ppm=120000.0,
+    )
+    expected = brine_density(fluids["TEMP_FL"], fluids["PRES_FL"], 120000.0)
+    np.testing.assert_allclose(fluids["RHO_W"], expected)
+
+
+def test_obm_filtrate_density_thermal_expansion_and_pressure():
+    surface = float(obm_filtrate_density(15.0, 0.1, 0.82))
+    downhole = float(obm_filtrate_density(120.0, 35.0, 0.82))
+    # Downhole OBM filtrate sits in the 0.78-0.83 g/cc band
+    assert 0.76 <= downhole <= 0.84
+    assert downhole < surface
+    with pytest.raises(ValueError, match="base_oil_density"):
+        obm_filtrate_density(100.0, 20.0, 0.0)

@@ -170,6 +170,12 @@
 		const ts = workbench.tsParams;
 		const pp = workbench.permParams;
 		const sp = workbench.saturationParams;
+		if (lp.model === 'vsh_bulk') {
+			throw new Error('Bulk-shale evaluation is currently supported only in the single-well workflow.');
+		}
+		if (!['den', 'neu_den'].includes(lp.porosityMethod)) {
+			throw new Error('Sonic and averaging porosity methods are currently supported only in the single-well workflow.');
+		}
 		if (lp.logCorrectionMode === 'hc' && lp.hcCorrectionMethod === 'invaded_zone_standard') {
 			throw new Error(
 				'Invaded-zone correction requires per-well mud-filtrate metadata and is not supported in batch evaluation.'
@@ -202,8 +208,17 @@
 			zones: [...zones],
 			lithology: {
 				...common,
+				gamma_source: lp.gammaSource,
+				gamma_curve: lp.gammaCurve,
+				thorium_curve: lp.thoriumCurve,
+				potassium_curve: lp.potassiumCurve,
+				gamma_clean: lp.gammaClean,
+				gamma_shale: lp.gammaShale,
+				cgr_th_coefficient: lp.cgrThCoefficient,
+				cgr_k_coefficient: lp.cgrKCoefficient,
 				model: lp.model,
 				minerals: [...lp.minerals],
+				input_logs: lp.model === 'multi_mineral' ? [...lp.inputLogs] : undefined,
 				porosity_method: lp.porosityMethod === 'den' ? 'density' : 'neutron_density'
 			},
 			porosity: { ...common, method: lp.porosityMethod, lithology_model: lp.model },
@@ -241,6 +256,7 @@
 				lp.logCorrectionMode === 'hc'
 					? {
 							...common,
+							model: lp.model,
 							water_point: [lp.fluidNphi, lp.fluidRhob],
 							rho_water: lp.rhoWater,
 							rho_hc: lp.rhoHc,

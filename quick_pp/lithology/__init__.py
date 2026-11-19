@@ -95,3 +95,18 @@ def gr_index(gr):
     igr = minmax_scale(dtr_gr.reshape(-1, 1))
     logger.debug(f"Gamma ray index range: {igr.min():.3f} - {igr.max():.3f}")
     return igr
+
+
+def spectral_cgr(thorium, potassium, thorium_coefficient, potassium_coefficient):
+    """Calculate an estimated uranium-free gamma response from Th (ppm) and K (%)."""
+    th = np.asarray(thorium, dtype=float)
+    k = np.asarray(potassium, dtype=float)
+    if not (
+        np.isfinite(thorium_coefficient)
+        and np.isfinite(potassium_coefficient)
+        and thorium_coefficient > 0
+        and potassium_coefficient > 0
+    ):
+        raise ValueError("CGR coefficients must be finite and positive")
+    valid = np.isfinite(th) & np.isfinite(k) & (th >= 0) & (k >= 0)
+    return np.where(valid, th * thorium_coefficient + k * potassium_coefficient, np.nan)

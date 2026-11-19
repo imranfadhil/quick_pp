@@ -82,6 +82,16 @@ class WellHeaderMetadata(BaseModel):
     mud_filtrate_density: Optional[float] = Field(
         None, gt=0, description="Mud-filtrate density in g/cc"
     )
+    mud_type: Optional[str] = Field(
+        None,
+        description="Mud system: 'WBM', 'OBM', or 'SBM'. Drives the filtrate density model.",
+    )
+    obm_base_density: Optional[float] = Field(
+        None,
+        gt=0,
+        le=1.5,
+        description="Surface base-oil density for OBM/SBM filtrate in g/cc",
+    )
     # Raw fallback for unmapped headers
     raw_well_header: Dict[str, Any] = Field(default_factory=dict)
     raw_parameters: Dict[str, Any] = Field(default_factory=dict)

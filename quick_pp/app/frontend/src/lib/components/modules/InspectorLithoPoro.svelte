@@ -5,14 +5,59 @@
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
 	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
 	import VshCalibrationPanel from '$lib/components/workbench/VshCalibrationPanel.svelte';
+	import GammaSource from '$lib/components/workbench/GammaSource.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench, computeSiltIntersection } from '$lib/state/workbench.svelte';
 	import { fmtNum } from '$lib/utils/formatters';
+	import { calculateMethodComparison } from '$lib/utils/methodComparison';
+	import { gammaParameters, fluidDensityParameters } from '$lib/utils/lithology';
+	import {
+		gorMetricToScfStb,
+		gorScfStbToMetric,
+		pressureGradientMpaKmToPsiFt,
+		pressureGradientPsiFtToMpaKm,
+		pressureMpaToPsi,
+		pressurePsiToMpa,
+		saturationTemperatureToMetric
+	} from '$lib/utils/fluidUnits';
 	import {
 		ALL_LITHOLOGY_CURVES,
 		LITHOLOGY_TRACK_SPECS,
 		MINERAL_TO_CURVE_MNEMONIC
 	} from '$lib/utils/petrophysicsColors';
+
+	/**
+	 * Project-scoped grain density correlation payload for the porosity endpoint. Returns the
+	 * calibrated coefficients only when the correlation has been fit and enabled (in the LAB:
+	 * Core & Pc Prep step); otherwise undefined so the mineral-model rho_ma is used.
+	 */
+	function grainDensityCorrelationBody() {
+		const sp = workbench.scalParams;
+		if (!sp.gd_enabled || !sp.gd_calibrated) return undefined;
+			if (sp.gd_mode === 'multivariate' && sp.gd_driver_cols.length > 0 && sp.gd_coef.length > 0) {
+				return {
+					enabled: true,
+					driver_col: sp.gd_driver_col,
+					driver_cols: sp.gd_driver_cols,
+					coef: sp.gd_coef,
+					center: sp.gd_center,
+					scale: sp.gd_scale,
+					intercept: sp.gd_intercept,
+					rho_ma_clean: sp.gd_rho_ma_clean,
+					rho_ma_min: sp.gd_rho_ma_min,
+					rho_ma_max: sp.gd_rho_ma_max
+				};
+			}
+		return {
+			enabled: true,
+			driver_col: sp.gd_driver_col,
+			rho_ma_clean: sp.gd_rho_ma_clean,
+			k: sp.gd_k,
+			driver_clean: sp.gd_driver_clean,
+			rho_ma_min: sp.gd_rho_ma_min,
+			rho_ma_max: sp.gd_rho_ma_max
+		};
+	}
 
 	const AVAILABLE_MINERALS = [
 		'QUARTZ',
@@ -46,6 +91,19 @@
 			])
 		);
 
+	// Canonical multi-mineral inversion logs. An empty selection means "use every curve
+	// present in the well", preserving the historical default behaviour.
+	const AVAILABLE_INPUT_LOGS = [
+		{ mnemonic: 'GR', label: 'Gamma Ray' },
+		{ mnemonic: 'NPHI', label: 'Neutron Porosity' },
+		{ mnemonic: 'RHOB', label: 'Bulk Density' },
+		{ mnemonic: 'PEF', label: 'Photoelectric Factor' },
+		{ mnemonic: 'DTC', label: 'Sonic (DTC)' },
+		{ mnemonic: 'POTA', label: 'Potassium' },
+		{ mnemonic: 'THOR', label: 'Thorium' },
+		{ mnemonic: 'URAN', label: 'Uranium' }
+	];
+
 	interface MlModelSuiteOption {
 		key: string;
 		label: string;
@@ -78,7 +136,9 @@
 	let tsSummary = $state<{
 		mean_vsh_lam: number;
 		mean_vsh_dis: number;
+		mean_vsh_str: number;
 		mean_phit_sand: number;
+		mean_phie_ts: number;
 		mean_porosity_uplift_vv: number;
 		rt_rmse_decade: number | null;
 	} | null>(null);
@@ -112,6 +172,13 @@
 		mean_abs_drhob: number;
 	} | null>(null);
 
+	let mmSummary = $state<{
+		chi2_mean: number | null;
+		chi2_p50: number | null;
+		avg_error_mean: number | null;
+		success_rate: number | null;
+	} | null>(null);
+
 	function setLogCorrectionMode(mode: 'none' | 'hc' | 'den') {
 		workbench.lithoParams.logCorrectionMode = mode;
 		workbench.lithoParams.enableHcCorrection = mode !== 'none';
@@ -120,11 +187,45 @@
 	}
 
 	function syncFluidPtFromSaturation() {
-		workbench.lithoParams.fluidTempGrad = workbench.saturationParams.tempGradient;
-		workbench.lithoParams.fluidSurfTemp = workbench.saturationParams.surfaceTemp;
+		const temperature = saturationTemperatureToMetric(
+			workbench.saturationParams.tempGradient,
+			workbench.saturationParams.surfaceTemp,
+			workbench.saturationParams.measSystem
+		);
+		workbench.lithoParams.fluidTempGrad = temperature.gradient;
+		workbench.lithoParams.fluidSurfTemp = temperature.surface;
 		workbench.lithoParams.fluidSalinityPpm = workbench.saturationParams.waterSalinity;
 		executeLithoPoro(false);
 	}
+
+	function fluidUnitBinding(
+		key: 'fluidPresGrad' | 'fluidSurfPres' | 'fluidGor',
+		toDisplay: (value: number) => number,
+		toMetric: (value: number) => number,
+		decimals: number,
+		min: number,
+		max: number
+	) {
+		const get = () => Number(toDisplay(workbench.lithoParams[key]).toFixed(decimals));
+		return {
+			get,
+			set: (value: number) => {
+				if (value !== get()) {
+					workbench.lithoParams[key] = Math.max(min, Math.min(max, toMetric(value)));
+				}
+			}
+		};
+	}
+
+	const fluidPressureGradient = fluidUnitBinding(
+		'fluidPresGrad', pressureGradientMpaKmToPsiFt, pressureGradientPsiFtToMpaKm, 4, 5, 25
+	);
+	const fluidSurfacePressure = fluidUnitBinding(
+		'fluidSurfPres', pressureMpaToPsi, pressurePsiToMpa, 2, 0, 5
+	);
+	const fluidSolutionGor = fluidUnitBinding(
+		'fluidGor', gorMetricToScfStb, gorScfStbToMetric, 1, 0, 5000
+	);
 
 	function medianVisibleCurve(mnemonic: string): number | null {
 		const curve = wellData.curves[mnemonic];
@@ -222,6 +323,26 @@
 		}
 	}
 
+	/** Mirrors the backend alias resolution: raw, hydrocarbon-corrected, or enhanced curve. */
+	function inputLogLoaded(mnemonic: string): boolean {
+		const keys = Object.keys(wellData.curves);
+		return [mnemonic, `${mnemonic}_HC`, `${mnemonic}_ENH`].some((k) => keys.includes(k));
+	}
+
+	/** Logs actually sent to the inversion: the explicit selection, or all loaded curves. */
+	const effectiveInputLogs = $derived.by(() => {
+		const selected = workbench.lithoParams.inputLogs;
+		if (selected.length > 0) return selected;
+		return AVAILABLE_INPUT_LOGS.map((l) => l.mnemonic).filter(inputLogLoaded);
+	});
+
+	function toggleInputLog(mnemonic: string) {
+		const current = workbench.lithoParams.inputLogs;
+		workbench.lithoParams.inputLogs = current.includes(mnemonic)
+			? current.filter((x) => x !== mnemonic)
+			: [...current, mnemonic];
+	}
+
 	function collectZeroedUnselectedMineralCurves(): Record<string, number[]> {
 		const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
 		if (dept.length === 0) return {};
@@ -252,7 +373,6 @@
 	}
 
 	let lithoPoroRunId = 0;
-
 	async function executeLithoPoro(persist: boolean = false) {
 		if (!workbench.projectId || !workbench.wellId) return;
 		const selectionIndices = wellData.getBrushedCalculationIndices();
@@ -262,6 +382,9 @@
 		}
 		const selectionMode = selectionIndices !== null;
 		const runId = ++lithoPoroRunId;
+		const wellGeneration = wellData.wellLoadGeneration;
+		wellData.porosityComparison = null;
+		wellData.porosityComparisonError = null;
 		wellData.isCalculating = true;
 		wellData.lastError = null;
 		const lp = workbench.lithoParams;
@@ -287,6 +410,7 @@
 			coal_trend_factor: lp.coalTrendFactor,
 			badhole_treatment: lp.badholeTreatment
 		};
+		const gammaArgs = gammaParameters(lp);
 
 		try {
 			// 1. Mutually exclusive NPHI/RHOB Log Correction: HC Correction OR Density Correction
@@ -296,8 +420,10 @@
 					`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/wells/${encodeURIComponent(workbench.wellId)}/hc_correction`,
 					{
 						dry_sand_point: [lp.drySandNphi, lp.drySandRhob],
+						dry_silt_point: [lp.drySiltNphi, lp.drySiltRhob],
 						dry_clay_point: [lp.dryClayNphi, lp.dryClayRhob],
 						water_point: [lp.fluidNphi, lp.fluidRhob],
+						model: lp.model,
 						rho_water: lp.rhoWater,
 						rho_hc: lp.rhoHc,
 						hi_hc: lp.hiHc,
@@ -386,6 +512,7 @@
 					body: {
 						model: lp.model,
 						use_hc_corrected: useCorrected,
+						use_enhanced_logs: workbench.enhanceParams.useEnhancedLogs,
 						dry_sand_point: [lp.drySandNphi, lp.drySandRhob],
 						dry_silt_point: [lp.drySiltNphi, lp.drySiltRhob],
 						dry_clay_point: [lp.dryClayNphi, lp.dryClayRhob],
@@ -394,7 +521,11 @@
 						gr_clean: lp.grClean,
 						gr_clay: lp.grClay,
 						minerals: lp.minerals,
-						porosity_method: lp.porosityMethod === 'den' ? 'density' : 'neutron_density',
+						input_logs: lp.model === 'multi_mineral' ? lp.inputLogs : undefined,
+						phi_max: lp.model === 'multi_mineral' ? lp.phiMax : undefined,
+						linearize_pef: lp.model === 'multi_mineral' ? lp.linearizePef : undefined,
+						porosity_method: lp.porosityMethod,
+						...gammaArgs,
 						...coalArgs,
 						...filterArgs
 					} as any
@@ -405,6 +536,23 @@
 			if (lithData) {
 				if (lithData.data) Object.assign(batchedCurves, lithData.data);
 				if (lithData.stats) Object.assign(batchedStats, lithData.stats);
+				if (lp.model === 'multi_mineral') {
+					if ((lithData as any).multi_mineral_summary) {
+						mmSummary = (lithData as any).multi_mineral_summary;
+					} else if (lithData.stats?.['CHI2_ERROR']) {
+						mmSummary = {
+							chi2_mean: lithData.stats['CHI2_ERROR'].mean,
+							chi2_p50: lithData.stats['CHI2_ERROR'].p50,
+							avg_error_mean: lithData.stats['AVG_ERROR']?.mean,
+							success_rate:
+								lithData.stats['OPTIMIZER_SUCCESS']?.mean != null
+									? lithData.stats['OPTIMIZER_SUCCESS'].mean * 100
+									: null
+						};
+					}
+				} else {
+					mmSummary = null;
+				}
 			}
 
 			// 3. Porosity Estimation
@@ -416,15 +564,20 @@
 					},
 					body: {
 						method: lp.porosityMethod,
+						sonic_fluid_dt: lp.sonicFluidDt,
 						lithology_model: lp.model,
 						use_hc_corrected: useCorrected,
+						use_enhanced_logs: workbench.enhanceParams.useEnhancedLogs,
 						dry_sand_point: [lp.drySandNphi, lp.drySandRhob],
 						dry_silt_point: [lp.drySiltNphi, lp.drySiltRhob],
 						dry_clay_point: [lp.dryClayNphi, lp.dryClayRhob],
 						fluid_point: [lp.fluidNphi, lp.fluidRhob],
+						fluid_density: fluidDensityParameters(lp),
 						silt_line_angle: lp.siltLineAngle,
 						gr_clean: lp.grClean,
 						gr_clay: lp.grClay,
+						grain_density_correlation: grainDensityCorrelationBody(),
+						...gammaArgs,
 						...coalArgs,
 						...filterArgs
 					} as any
@@ -436,6 +589,8 @@
 				if (poroData.data) Object.assign(batchedCurves, poroData.data);
 				if (poroData.stats) Object.assign(batchedStats, poroData.stats);
 				wellData.poroCoreMetrics = poroData.core_metrics;
+				wellData.poroGrainDensityProvenance =
+					(poroData as any).grain_density_correlation ?? null;
 			}
 
 			// 4. Optional Thomas-Stieber Laminated Shaly-Sand (batched into same single merge)
@@ -455,6 +610,7 @@
 						rv_shale: ts.rvShale,
 						rh_shale: ts.rhShale,
 						theta: ts.theta,
+						use_enhanced_logs: workbench.enhanceParams.useEnhancedLogs,
 						...filterArgs
 					}
 				);
@@ -468,6 +624,19 @@
 			if (Object.keys(batchedCurves).length > 0) {
 				wellData.mergeComputedCurves(batchedCurves, batchedStats, selectionIndices);
 				wellData.markModuleComputed('litho-poro', batchedCurves);
+			}
+
+			if (!selectionMode) {
+				try {
+					const comparison = await calculateMethodComparison('porosity');
+					if (runId !== lithoPoroRunId || wellGeneration !== wellData.wellLoadGeneration) return;
+					wellData.porosityComparison = comparison.data;
+					wellData.porosityComparisonKey = comparison.key;
+				} catch (e: unknown) {
+					if (runId !== lithoPoroRunId || wellGeneration !== wellData.wellLoadGeneration) return;
+					wellData.porosityComparisonError = `Porosity comparison failed: ${e instanceof Error ? e.message : String(e)}`;
+					wellData.lastError = wellData.porosityComparisonError;
+				}
 			}
 
 			if (persist) {
@@ -520,6 +689,7 @@
 					rv_shale: ts.rvShale,
 					rh_shale: ts.rhShale,
 					theta: ts.theta,
+					use_enhanced_logs: workbench.enhanceParams.useEnhancedLogs,
 					min_depth: workbench.depthFilter?.min ?? null,
 					max_depth: workbench.depthFilter?.max ?? null,
 					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
@@ -631,6 +801,7 @@
 					class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
 				>
 					<option value="ssc">Sand-Silt-Clay</option>
+					<option value="sand_shale">Vsh from N-D</option>
 					<option value="multi_mineral">Multi-Mineral</option>
 					<option value="vsh_gr">Vsh from GR</option>
 				</select>
@@ -645,7 +816,191 @@
 				>
 					<option value="den">Density (ρma from Litho)</option>
 					<option value="neu_den">NPHI-RHOB Xplot</option>
+					<option value="sonic_wyllie">Sonic Wyllie</option>
+					<option value="sonic_hunt_raymer">Sonic Hunt-Raymer</option>
+					<option value="avg_weighted">N-D Weighted</option>
+					<option value="avg_arithmetic">N-D Arithmetic</option>
+					<option value="avg_gaymard">N-D RMS (Gaymard/gas)</option>
 				</select>
+			</div>
+			{#if workbench.lithoParams.porosityMethod.startsWith('sonic_')}
+				<NumericScrubber label="Fluid sonic transit time" bind:value={workbench.lithoParams.sonicFluidDt} unit="µs/ft" min={1} max={1000} step={1} onrun={() => executeLithoPoro(false)} />
+				<p class="text-[10px] text-[var(--text-secondary)]">Matrix transit time is weighted by lithology; DTC or DT is required.</p>
+			{/if}
+
+			<div class="mt-1.5 border-t border-[var(--border-hairline)] pt-1.5">
+				<div class="mb-1 flex items-center justify-between">
+					<span class="text-xs font-medium text-[var(--text-primary)]">Fluid Density (ρ<sub>fl</sub>)</span>
+					<span class="mono-num text-[10px] text-[var(--text-muted)]">
+						{workbench.lithoParams.fluidDensityMode === 'static'
+							? `${fmtNum(workbench.lithoParams.fluidRhob, 2)} g/cc`
+							: workbench.lithoParams.fluidDensityMode === 'zonal_coupled'
+								? 'Zonal'
+								: 'Iterative'}
+					</span>
+				</div>
+				<div class="grid grid-cols-3 gap-1">
+					{#each [
+						['static', 'Static'],
+						['zonal_coupled', 'Mud & Zonal'],
+						['iterative_sxo', 'Auto Iterative']
+					] as [mode, label]}
+						<button
+							type="button"
+							onclick={() => {
+								workbench.lithoParams.fluidDensityMode = mode as
+									| 'static'
+									| 'zonal_coupled'
+									| 'iterative_sxo';
+								executeLithoPoro(false);
+							}}
+							class="h-6 rounded-xs border px-1 text-[10px] font-semibold transition-colors {workbench.lithoParams
+								.fluidDensityMode === mode
+								? 'border-emerald-700 bg-emerald-700 text-white'
+								: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+						>
+							{label}
+						</button>
+					{/each}
+				</div>
+
+				{#if workbench.lithoParams.fluidDensityMode === 'static'}
+					<p class="mt-1 text-[10px] text-[var(--text-secondary)]">
+						Uses the scalar fluid density from the NPHI/RHOB fluid point ({fmtNum(
+							workbench.lithoParams.fluidRhob,
+							2
+						)} g/cc).
+					</p>
+				{:else}
+					<div class="mt-1.5 grid grid-cols-2 gap-1">
+						{#each [
+							['WBM', 'WBM'],
+							['OBM', 'OBM / SBM']
+						] as [mud, label]}
+							<button
+								type="button"
+								onclick={() => {
+									workbench.lithoParams.fluidDensityMudType = mud as 'WBM' | 'OBM' | 'SBM';
+									executeLithoPoro(false);
+								}}
+								class="h-6 rounded-xs border px-1.5 text-[10px] font-semibold transition-colors {workbench
+									.lithoParams.fluidDensityMudType === mud
+									? 'border-emerald-700 bg-emerald-700 text-white'
+									: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+							>
+								{label}
+							</button>
+						{/each}
+					</div>
+
+					{#if wellData.header?.mud_type || wellData.header?.mud_filtrate_density != null}
+						<p class="mt-1 text-[10px] text-[var(--text-secondary)]">
+							Well metadata:
+							{#if wellData.header?.mud_type}<span class="font-semibold">{wellData.header.mud_type}</span>{/if}
+							{#if wellData.header?.mud_filtrate_density != null}
+								• ρ<sub>mf</sub> {fmtNum(wellData.header.mud_filtrate_density, 3)} g/cc
+							{/if}
+							{#if wellData.header?.mud_filtrate_salinity != null}
+								• {fmtNum(wellData.header.mud_filtrate_salinity, 0)} ppm
+							{/if}
+						</p>
+					{/if}
+
+					{#if workbench.lithoParams.fluidDensityMudType === 'WBM'}
+						<NumericScrubber
+							label="Mud Salinity"
+							bind:value={workbench.lithoParams.fluidDensitySalinityPpm}
+							unit="ppm"
+							min={0}
+							max={350000}
+							step={1000}
+							onrun={() => executeLithoPoro(false)}
+						/>
+						<NumericScrubber
+							label="Rmf @ Temp (fallback)"
+							bind:value={workbench.lithoParams.fluidDensityRmf}
+							unit="ohm.m"
+							min={0.001}
+							max={10}
+							step={0.001}
+							decimals={3}
+							onrun={() => executeLithoPoro(false)}
+						/>
+						<NumericScrubber
+							label="Rmf Measurement Temp"
+							bind:value={workbench.lithoParams.fluidDensityRmfTempC}
+							unit="°C"
+							min={0}
+							max={200}
+							step={1}
+							onrun={() => executeLithoPoro(false)}
+						/>
+					{:else}
+						<NumericScrubber
+							label="Base Oil Density"
+							bind:value={workbench.lithoParams.fluidDensityObmBase}
+							unit="g/cc"
+							min={0.65}
+							max={0.95}
+							step={0.01}
+							onrun={() => executeLithoPoro(false)}
+						/>
+					{/if}
+
+					<div class="mt-1 grid grid-cols-[1fr_118px] items-center gap-x-2 py-0.5">
+						<span class="text-xs font-medium text-[var(--text-primary)]">Rxo Curve</span>
+						<select
+							bind:value={workbench.lithoParams.fluidDensityRxoCurve}
+							onchange={() => executeLithoPoro(false)}
+							class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
+						>
+							<option value="">None — use Sw^c</option>
+							{#each ['RXO', 'RXOZ', 'MSFL', 'RSHA', 'RSHAL', 'LLS', 'SFL'] as curve}
+								{#if wellData.curves[curve]}
+									<option value={curve}>{curve}</option>
+								{/if}
+							{/each}
+						</select>
+					</div>
+					<NumericScrubber
+						label="Flushing Exponent c"
+						bind:value={workbench.lithoParams.fluidDensityFlushExponent}
+						unit="Sxo = Sw^c"
+						min={0.05}
+						max={0.5}
+						step={0.01}
+						decimals={2}
+						onrun={() => executeLithoPoro(false)}
+					/>
+					{#if workbench.lithoParams.fluidDensityMode === 'zonal_coupled'}
+						<NumericScrubber
+							label="Residual Gas Saturation"
+							bind:value={workbench.lithoParams.fluidDensityShrGas}
+							unit="v/v"
+							min={0}
+							max={1}
+							step={0.01}
+							decimals={2}
+							onrun={() => executeLithoPoro(false)}
+						/>
+						<NumericScrubber
+							label="Residual Oil Saturation"
+							bind:value={workbench.lithoParams.fluidDensityShrOil}
+							unit="v/v"
+							min={0}
+							max={1}
+							step={0.01}
+							decimals={2}
+							onrun={() => executeLithoPoro(false)}
+						/>
+					{/if}
+					<p class="mt-1 text-[10px] text-[var(--text-secondary)]">
+						Emits <span class="mono-num">RHO_FL</span>, <span class="mono-num">RHO_MF</span>,
+						<span class="mono-num">SXO_EST</span>, <span class="mono-num">PHID_RAW_100</span> and
+											<span class="mono-num">RHO_FL_TIER</span> as QC curves in the Porosity Methods vs
+											Core comparison plot. Fluid zones come from GOC/OWC/GWC contacts.
+					</p>
+				{/if}
 			</div>
 		</ParameterSection>
 
@@ -685,8 +1040,131 @@
 						</label>
 					{/each}
 				</div>
+
+				<div class="mb-1.5 flex items-center justify-between text-[11px] font-medium text-[var(--text-secondary)]">
+					<span>Input Logs:</span>
+					<span class="mono-num text-[10px] text-[var(--text-muted)]">
+						{workbench.lithoParams.inputLogs.length === 0
+							? `auto (${effectiveInputLogs.length})`
+							: `${workbench.lithoParams.inputLogs.length} selected`}
+					</span>
+				</div>
+				<div class="mb-1 grid grid-cols-2 gap-1">
+					{#each AVAILABLE_INPUT_LOGS as log}
+						{@const loaded = inputLogLoaded(log.mnemonic)}
+						{@const isSelected = workbench.lithoParams.inputLogs.includes(log.mnemonic)}
+						<label
+							class="flex items-center gap-1.5 rounded-xs border px-1.5 py-1 text-xs transition-colors {loaded
+								? 'cursor-pointer'
+								: 'cursor-not-allowed opacity-40'} {isSelected
+								? 'border-[var(--border-hairline)] bg-[var(--bg-app)] font-medium text-[var(--text-primary)]'
+								: 'border-transparent text-[var(--text-muted)] opacity-75 hover:opacity-100'}"
+							title={loaded ? log.label : `${log.label} (not loaded)`}
+						>
+							<input
+								type="checkbox"
+								checked={isSelected}
+								disabled={!loaded}
+								onchange={() => {
+									toggleInputLog(log.mnemonic);
+								}}
+								class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+							/>
+							<span class="truncate">{log.mnemonic}</span>
+						</label>
+					{/each}
+				</div>
+				<div class="mb-2 flex items-center justify-between gap-2">
+					<p class="text-[10px] text-[var(--text-secondary)]">
+						Leave all unchecked to auto-use every loaded curve. Exclude logs distorted by heavy minerals or hot sand.
+					</p>
+					{#if workbench.lithoParams.inputLogs.length > 0}
+						<button
+							type="button"
+							class="shrink-0 rounded-xs border border-[var(--border-hairline)] px-1.5 py-0.5 text-[10px] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+							onclick={() => {
+								workbench.lithoParams.inputLogs = [];
+								executeLithoPoro(false);
+							}}
+						>
+							Auto
+						</button>
+					{/if}
+				</div>
+
+				{#if mmSummary}
+					<div class="mb-2.5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-2">
+						<div class="mb-1 flex items-center justify-between text-[11px] font-semibold text-[var(--text-primary)]">
+							<span>Inversion Quality QC</span>
+							{#if mmSummary.success_rate !== null && mmSummary.success_rate !== undefined}
+								<span
+									class="rounded-xs px-1 py-0.5 text-[9px] font-bold {mmSummary.success_rate >= 95
+										? 'bg-emerald-500/15 text-emerald-600'
+										: 'bg-amber-500/15 text-amber-600'}"
+								>
+									{fmtNum(mmSummary.success_rate, 0)}% converged
+								</span>
+							{/if}
+						</div>
+						<div class="grid grid-cols-2 gap-2 text-[10px]">
+							<div class="flex flex-col">
+								<span class="text-[var(--text-muted)]">Reduced χ² Misfit</span>
+								<span
+									class="mono-num text-xs font-semibold {mmSummary.chi2_mean !== null && mmSummary.chi2_mean <= 1.5
+										? 'text-emerald-600'
+										: mmSummary.chi2_mean !== null && mmSummary.chi2_mean <= 3.0
+											? 'text-amber-600'
+											: 'text-rose-600'}"
+								>
+									{mmSummary.chi2_mean !== null ? fmtNum(mmSummary.chi2_mean, 2) : '—'}
+									{#if mmSummary.chi2_mean !== null && mmSummary.chi2_mean <= 1.5}
+										<span class="text-[9px] font-normal text-emerald-600">(Optimal ~1.0)</span>
+									{/if}
+								</span>
+							</div>
+							<div class="flex flex-col">
+								<span class="text-[var(--text-muted)]">Avg Tool Error</span>
+								<span class="mono-num text-xs font-semibold text-[var(--text-primary)]">
+									{mmSummary.avg_error_mean !== null ? `${fmtNum(mmSummary.avg_error_mean, 1)}%` : '—'}
+								</span>
+							</div>
+						</div>
+					</div>
+				{/if}
+
+				<NumericScrubber
+					label="Porosity Ceiling (φ_max)"
+					bind:value={workbench.lithoParams.phiMax}
+					unit="v/v"
+					min={0.05}
+					max={0.60}
+					step={0.01}
+					decimals={2}
+					onrun={() => executeLithoPoro(false)}
+				/>
+				<p class="mb-2 text-[10px] text-[var(--text-secondary)]">
+					Simplex total porosity ceiling (default 0.40). Prevents porosity runaway in tight sands and carbonates.
+				</p>
+
+				<div class="mb-2.5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
+					<label class="flex items-center gap-2 cursor-pointer text-xs font-medium text-[var(--text-primary)]">
+						<input
+							type="checkbox"
+							bind:checked={workbench.lithoParams.linearizePef}
+							onchange={() => executeLithoPoro(false)}
+							class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+						/>
+						<span>Linearize PEF (U = PEF × RHOB)</span>
+					</label>
+					<p class="mt-1 text-[10px] text-[var(--text-secondary)]">
+						Converts non-linear PEF (b/e) into volumetric cross-section U (b/cm³) for exact physical superposition.
+					</p>
+				</div>
 			{/if}
 
+			{#if workbench.lithoParams.model === 'vsh_gr' && workbench.lithoParams.gammaSource !== 'gr'}
+				<p class="text-[10px] text-[var(--text-secondary)]">GR endpoints below are used for GR-based log corrections and badhole fallback, not the selected gamma calibration.</p>
+			{/if}
 			<NumericScrubber
 				label="GR Clean (Vsh=0)"
 				bind:value={workbench.lithoParams.grClean}
@@ -723,26 +1201,28 @@
 				step={0.01}
 				onrun={() => executeLithoPoro(false)}
 			/>
-			<NumericScrubber
-				label="NPHI Dry Silt"
-				bind:value={workbench.lithoParams.drySiltNphi}
-				unit="v/v"
-				disabled={true}
-				min={-0.05}
-				max={0.45}
-				step={0.005}
-				onrun={() => executeLithoPoro(false)}
-			/>
-			<NumericScrubber
-				label="RHOB Dry Silt"
-				bind:value={workbench.lithoParams.drySiltRhob}
-				unit="g/cc"
-				disabled={true}
-				min={2.4}
-				max={2.9}
-				step={0.01}
-				onrun={() => executeLithoPoro(false)}
-			/>
+			{#if workbench.lithoParams.model === 'ssc'}
+				<NumericScrubber
+					label="NPHI Dry Silt"
+					bind:value={workbench.lithoParams.drySiltNphi}
+					unit="v/v"
+					disabled={true}
+					min={-0.05}
+					max={0.45}
+					step={0.005}
+					onrun={() => executeLithoPoro(false)}
+				/>
+				<NumericScrubber
+					label="RHOB Dry Silt"
+					bind:value={workbench.lithoParams.drySiltRhob}
+					unit="g/cc"
+					disabled={true}
+					min={2.4}
+					max={2.9}
+					step={0.01}
+					onrun={() => executeLithoPoro(false)}
+				/>
+			{/if}
 			<NumericScrubber
 				label="NPHI Dry Clay"
 				bind:value={workbench.lithoParams.dryClayNphi}
@@ -761,24 +1241,35 @@
 				step={0.01}
 				onrun={() => executeLithoPoro(false)}
 			/>
-			<NumericScrubber
-				label="Silt Line Angle"
-				bind:value={workbench.lithoParams.siltLineAngle}
-				unit="deg"
-				min={95}
-				max={160}
-				step={0.5}
-				onchange={() => workbench.updateSiltEndpointFromAngle()}
-				onrun={() => executeLithoPoro(false)}
-			/>
+			{#if workbench.lithoParams.model === 'ssc'}
+				<NumericScrubber
+					label="Silt Line Angle"
+					bind:value={workbench.lithoParams.siltLineAngle}
+					unit="deg"
+					min={95}
+					max={160}
+					step={0.5}
+					onchange={() => workbench.updateSiltEndpointFromAngle()}
+					onrun={() => executeLithoPoro(false)}
+				/>
+			{/if}
 		</ParameterSection>
 
-		{#if wellData.vshComparison.allGood.count > 0}
+		{#if workbench.lithoParams.model === 'vsh_gr' || (workbench.lithoParams.model !== 'vsh_bulk' && wellData.vshComparison.allGood.count > 0)}
 			{@const vStat = wellData.vshComparison.active}
 			<ParameterSection
 				title="Vshale Calibration (VSH_GR × VSH_DN)"
 				badge={vStat.rmse !== null ? `RMSE=${fmtNum(vStat.rmse, 3)} · n=${vStat.count}` : `n=${vStat.count}`}
 			>
+				{#if workbench.lithoParams.model === 'vsh_gr'}
+					<GammaSource onchange={() => {
+						wellData.applyLiveVshGr();
+						executeLithoPoro(false);
+					}} />
+				{/if}
+				{#if wellData.vshComparison.allGood.count === 0}
+					<p class="mb-1 text-[10px] text-amber-700">No paired gamma and NPHI/RHOB samples are available for calibration.</p>
+				{/if}
 				<div class="grid grid-cols-4 gap-1 text-center">
 					<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1">
 						<div class="text-[9.5px] text-[var(--text-muted)]">RMSE</div>
@@ -860,9 +1351,11 @@
 			{#if workbench.lithoParams.logCorrectionMode === 'hc'}
 				<div class="my-1.5 rounded-xs border border-emerald-200 bg-emerald-50/70 px-2 py-1 text-[10px] leading-snug text-emerald-950">
 					{#if workbench.lithoParams.hcCorrectionMethod === 'invaded_zone_standard'}
-						Applies the invaded-zone correction equations and selects S<sub>hi</sub> (0–1) in 0.01 increments to match the binary solid-relative clay fraction to VSH<sub>GR</sub>.
+						Applies the invaded-zone correction equations and selects S<sub>hi</sub> (0–1) in 0.01 increments to match the solid-relative clay fraction to VSH<sub>GR</sub>.
+					{:else if workbench.lithoParams.model === 'ssc'}
+						Shifts HC-flagged <span class="mono-num font-semibold">(NPHI, RHOB)</span> points along the fluid correction angle toward SSC non-sand fraction matching calibrated <span class="mono-num font-semibold">VSH_GR</span> (<span class="mono-num font-semibold">{fmtNum(workbench.lithoParams.grClean, 1)}–{fmtNum(workbench.lithoParams.grClay, 1)} gAPI</span>) spanning Sand to Silt line.
 					{:else}
-						Shifts HC-flagged <span class="mono-num font-semibold">(NPHI, RHOB)</span> points along the fluid correction angle toward a binary solid-relative clay fraction matching calibrated <span class="mono-num font-semibold">VSH_GR</span> (<span class="mono-num font-semibold">{fmtNum(workbench.lithoParams.grClean, 1)}–{fmtNum(workbench.lithoParams.grClay, 1)} gAPI</span>). This target differs from SSC VSH<sub>DN</sub>.
+						Shifts HC-flagged <span class="mono-num font-semibold">(NPHI, RHOB)</span> points along the fluid correction angle toward a binary solid-relative clay fraction matching calibrated <span class="mono-num font-semibold">VSH_GR</span> (<span class="mono-num font-semibold">{fmtNum(workbench.lithoParams.grClean, 1)}–{fmtNum(workbench.lithoParams.grClay, 1)} gAPI</span>).
 					{/if}
 				</div>
 				<div class="grid grid-cols-2 gap-1">
@@ -979,20 +1472,22 @@
 					/>
 					<NumericScrubber
 						label="Pressure Gradient"
-						bind:value={workbench.lithoParams.fluidPresGrad}
-						unit="MPa/km"
-						min={5}
-						max={25}
-						step={0.1}
+						bind:value={fluidPressureGradient.get, fluidPressureGradient.set}
+						unit="psi/ft"
+						min={pressureGradientMpaKmToPsiFt(5)}
+						max={pressureGradientMpaKmToPsiFt(25)}
+						step={0.001}
+						decimals={4}
 						onrun={() => executeLithoPoro(false)}
 					/>
 					<NumericScrubber
 						label="Surface Pressure"
-						bind:value={workbench.lithoParams.fluidSurfPres}
-						unit="MPa"
+						bind:value={fluidSurfacePressure.get, fluidSurfacePressure.set}
+						unit="psia"
 						min={0}
-						max={5}
-						step={0.01}
+						max={pressureMpaToPsi(5)}
+						step={0.1}
+						decimals={2}
 						onrun={() => executeLithoPoro(false)}
 					/>
 					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 py-1 text-[10px] font-semibold uppercase text-[var(--text-secondary)]">
@@ -1018,11 +1513,12 @@
 					/>
 					<NumericScrubber
 						label="Solution GOR"
-						bind:value={workbench.lithoParams.fluidGor}
-						unit="Sm³/Sm³"
+						bind:value={fluidSolutionGor.get, fluidSolutionGor.set}
+						unit="scf/STB"
 						min={0}
-						max={5000}
+						max={gorMetricToScfStb(5000)}
 						step={10}
+						decimals={1}
 						onrun={() => executeLithoPoro(false)}
 					/>
 					<NumericScrubber
@@ -1383,7 +1879,7 @@
 		>
 			<div class="mb-1.5 flex items-center justify-between rounded-xs border border-teal-200 bg-teal-50/70 px-2 py-1 text-[10px] text-teal-950">
 				<span class="font-medium">
-					Partitions <span class="mono-num font-semibold">VCLAY</span> into <span class="mono-num font-semibold">VSH_LAM + VSH_DIS</span> &amp; models <span class="mono-num font-semibold">RT_MOD</span>
+					Partitions <span class="mono-num font-semibold">VCLAY</span> into <span class="mono-num font-semibold">VSH_LAM + VSH_DIS + VSH_STR</span> &amp; models <span class="mono-num font-semibold">RT_MOD</span>
 				</span>
 				<button
 					type="button"
@@ -1487,7 +1983,7 @@
 			<div class="mt-1.5 flex items-center gap-1.5">
 				<button
 					type="button"
-					disabled={wellData.isCalculating}
+					disabled={wellData.isCalculating || workbench.lithoParams.model === 'vsh_bulk'}
 					onclick={() => executeThomasStieber(false)}
 					class="h-7 flex-1 rounded-sm border border-teal-700 bg-teal-700 px-2 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-50"
 				>
@@ -1511,7 +2007,7 @@
 
 			{#if workbench.tsParams.enabled && tsSummary}
 				<div class="mt-1.5 rounded-sm border border-teal-200 bg-teal-50/50 p-1.5 text-[10px]">
-					<div class="grid grid-cols-4 gap-1 text-center">
+					<div class="grid grid-cols-6 gap-1 text-center">
 						<div>
 							<div class="text-[var(--text-muted)]">Vsh,lam</div>
 							<div class="mono-num font-bold text-slate-800">
@@ -1522,6 +2018,18 @@
 							<div class="text-[var(--text-muted)]">Vsh,dis</div>
 							<div class="mono-num font-bold text-slate-600">
 								{fmtNum(tsSummary.mean_vsh_dis, 3)}
+							</div>
+						</div>
+						<div>
+							<div class="text-[var(--text-muted)]">Vsh,str</div>
+							<div class="mono-num font-bold text-red-800">
+								{fmtNum(tsSummary.mean_vsh_str, 3)}
+							</div>
+						</div>
+						<div>
+							<div class="text-[var(--text-muted)]">Φe (TS)</div>
+							<div class="mono-num font-bold text-blue-800">
+								{fmtNum(tsSummary.mean_phie_ts, 3)}
 							</div>
 						</div>
 						<div>
@@ -1716,6 +2224,34 @@
 		{/if}
 
 		-->
+		{#if wellData.poroGrainDensityProvenance?.applied}
+			{@const gd = wellData.poroGrainDensityProvenance}
+			<div
+				class="mx-2 mt-1 rounded-sm border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] text-emerald-900"
+			>
+				<div class="flex items-center justify-between font-semibold">
+					<span>Grain-density correlation applied in Porosity</span>
+					<span class="mono-num">ρ<sub>ma</sub> = {fmtNum(gd.rho_ma_mean, 4)} g/cc</span>
+				</div>
+				<div class="mt-0.5 text-[9.5px] text-emerald-800">
+					{gd.mode === 'multivariate' ? 'Multi-log' : 'Single gamma'} ρ<sub>ma</sub> replaced the
+					mineral-model value at
+					<span class="mono-num">{gd.points_replaced}</span>/<span class="mono-num"
+						>{gd.points_total}</span
+					> points
+					{#if Array.isArray(gd.drivers) && gd.drivers.length > 0}
+						· drivers: <span class="mono-num">{gd.drivers.filter(Boolean).join(', ')}</span>
+					{/if}
+					· Δρ<sub>ma</sub> mean {gd.delta_mean >= 0 ? '+' : ''}{fmtNum(gd.delta_mean, 4)} g/cc
+					(|Δ| {fmtNum(gd.delta_abs_mean, 4)})
+				</div>
+				<div class="mt-0.5 text-[9px] text-emerald-700/80">
+					Saved as the <span class="mono-num">RHOM</span> curve — open the Porosity Methods
+					comparison to plot it against the mineral-model matrix density.
+				</div>
+			</div>
+		{/if}
+
 		{#if wellData.lastError}
 			<div class="m-2 rounded-sm border border-red-200 bg-red-50 p-2 text-xs text-[var(--status-error)]">
 				{wellData.lastError}

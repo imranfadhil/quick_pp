@@ -18,6 +18,7 @@
 	} from '$lib/utils/petrophysicsColors';
 	import { fmtNum, fmtPerm } from '$lib/utils/formatters';
 	import { depthAxisTicks, depthFromMeters } from '$lib/utils/depthUnits';
+	import { scaleLithologyForPlot } from '$lib/utils/lithologyPlot';
 	import {
 		buildMobilityPoints,
 		buildMobilityTrace,
@@ -175,11 +176,22 @@
 	let hasTsComputed = $derived.by(() => {
 		const vlam = wellData.curves['VSH_LAM'];
 		const psand = wellData.curves['PHIT_SAND'];
+		const vstr = wellData.curves['VSH_STR'];
 		return Boolean(
 			(vlam && vlam.some((v) => Number.isFinite(v))) ||
-			(psand && psand.some((v) => Number.isFinite(v)))
+			(psand && psand.some((v) => Number.isFinite(v))) ||
+			(vstr && vstr.some((v) => Number.isFinite(v)))
 		);
 	});
+
+	const ENHANCED_CURVES = ['GR_ENH', 'NPHI_ENH', 'RHOB_ENH'] as const;
+	let hasEnhancedLogs = $derived.by(() =>
+		ENHANCED_CURVES.some((mnemonic) =>
+			wellData.curves[mnemonic]?.some((value) => Number.isFinite(value))
+		)
+	);
+	let showEnhancedOverlay = $state(true);
+	let enhancedOverlayActive = $derived(hasEnhancedLogs && showEnhancedOverlay);
 
 	let tsOverlayActive = $derived(workbench.tsParams.enabled && showTsOverlay && hasTsComputed);
 	let mobilityData = $derived.by(() =>
@@ -384,7 +396,7 @@
 				continue;
 			}
 			if (
-				activeModel === 'vsh_gr' &&
+				(activeModel === 'sand_shale' || activeModel === 'vsh_nd' || activeModel === 'vsh_gr' || activeModel === 'vsh_bulk') &&
 				!hasCarbonateCols &&
 				!hasComplexCols &&
 				!['VCLAY', 'VSAND', ...(coalEnabled ? ['VCOAL'] : [])].includes(spec.mnemonic)
@@ -416,14 +428,32 @@
 				continue;
 			}
 
-			// When Thomas-Stieber is estimated and active, split VCLAY fill into VSH_LAM + VSH_DIS
+			// When Thomas-Stieber is estimated and active, split VCLAY fill into VSH_LAM + VSH_DIS + VSH_STR
 			if (spec.mnemonic === 'VCLAY' && tsOverlayActive) {
 				const vlam = pick('VSH_LAM');
 				const vdis = pick('VSH_DIS');
-				if (
-					vlam.some((v) => v !== null && v > 1e-4) ||
-					vdis.some((v) => v !== null && v > 1e-4)
-				) {
+				const vstr = pick('VSH_STR');
+				const hasLam = vlam.some((v) => v !== null && v > 1e-4);
+				const hasDis = vdis.some((v) => v !== null && v > 1e-4);
+				const hasStr = vstr.some((v) => v !== null && v > 1e-4);
+				if (hasLam || hasDis || hasStr) {
+					// Stack laminated (innermost) first, then dispersed, then structural so
+					// the fills sum back to the bulk VCLAY thickness
+					if (hasStr) {
+						out.push({
+							spec: {
+								mnemonic: 'VSH_STR',
+								mineralName: 'SHALE_STR',
+								shortLabel: 'Structural Shale',
+								fillRgba: 'rgba(185, 28, 28, 0.55)',
+								fillHex: PETRO_COLORS.vshStrFill,
+								strokeHex: PETRO_COLORS.vshStrStroke,
+								nphiEndpoint: 0.3,
+								rhobEndpoint: 2.55
+							},
+							arr: vstr
+						});
+					}
 					out.push({
 						spec: {
 							mnemonic: 'VSH_LAM',
@@ -437,19 +467,21 @@
 						},
 						arr: vlam
 					});
-					out.push({
-						spec: {
-							mnemonic: 'VSH_DIS',
-							mineralName: 'SHALE_DIS',
-							shortLabel: 'Dispersed Clay',
-							fillRgba: 'rgba(203, 213, 225, 0.65)',
-							fillHex: PETRO_COLORS.vshDisFill,
-							strokeHex: PETRO_COLORS.vshDisStroke,
-							nphiEndpoint: 0.3,
-							rhobEndpoint: 2.55
-						},
-						arr: vdis
-					});
+					if (hasDis) {
+						out.push({
+							spec: {
+								mnemonic: 'VSH_DIS',
+								mineralName: 'SHALE_DIS',
+								shortLabel: 'Dispersed Clay',
+								fillRgba: 'rgba(203, 213, 225, 0.65)',
+								fillHex: PETRO_COLORS.vshDisFill,
+								strokeHex: PETRO_COLORS.vshDisStroke,
+								nphiEndpoint: 0.3,
+								rhobEndpoint: 2.55
+							},
+							arr: vdis
+						});
+					}
 					continue;
 				}
 			}
@@ -1008,6 +1040,20 @@
 					hovertemplate: 'GR_ENV_CORR: %{x:.1f} gAPI<extra></extra>'
 				});
 			}
+			const grEnh = pick('GR_ENH');
+			if (enhancedOverlayActive && grEnh.some((v) => v !== null)) {
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'GR_ENH',
+					x: decimateSvg(grEnh),
+					y: svgDepth,
+					xaxis: 'x',
+					yaxis: 'y',
+					line: { color: '#16A34A', width: 1.1 },
+					hovertemplate: 'GR_ENH: %{x:.1f} gAPI<extra></extra>'
+				});
+			}
 		}
 
 		// Track 1 Spectral GR overlay (POTA: 0-10%, THOR: 0-50 ppm, URAN: 0-20 ppm, CGR: 0-200 gAPI)
@@ -1040,14 +1086,7 @@
 					}
 				}
 				if (potaData.length > 0) {
-					// If POTA is stored as decimal fraction (e.g. 0.02 for 2%), normalize to percentage
-					const maxPota = potaData.reduce<number>(
-						(m, v) => (v !== null && v > m ? v : m),
-						0
-					);
-					const potaScaleToPct = maxPota > 0 && maxPota <= 0.5 ? 100.0 : 1.0;
-					const potaPct = potaData.map((v) => (v !== null ? v * potaScaleToPct : null));
-					const potaDec = decimateSvg(potaPct);
+					const potaDec = decimateSvg(potaData);
 					traces.push({
 						type: 'scatter',
 						mode: 'lines',
@@ -1475,6 +1514,20 @@
 				hovertemplate: 'NPHI_ENV_CORR: %{x:.3f} v/v<extra></extra>'
 			});
 		}
+		const nphiEnh = pick('NPHI_ENH');
+		if (enhancedOverlayActive && nphiEnh.some((v) => v !== null)) {
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'NPHI_ENH',
+				x: decimateSvg(nphiEnh),
+				y: svgDepth,
+				xaxis: 'x3',
+				yaxis: 'y',
+				line: { color: '#2563EB', width: 1.1 },
+				hovertemplate: 'NPHI_ENH: %{x:.3f} v/v<extra></extra>'
+			});
+		}
 		if (rhob.length) {
 			traces.push({
 				type: 'scatter',
@@ -1504,6 +1557,24 @@
 				yaxis: 'y',
 				line: { color: PETRO_COLORS.rhob, width: 1.7, dash: 'dash' },
 				hovertemplate: 'RHOB_ENV_CORR: %{customdata:.3f} g/cc<extra></extra>'
+			});
+		}
+		const rhobEnh = pick('RHOB_ENH');
+		if (enhancedOverlayActive && rhobEnh.some((v) => v !== null)) {
+			const rhobEnhDec = decimateSvg(rhobEnh);
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'RHOB_ENH',
+				x: rhobEnhDec.map((r) =>
+					r !== null ? 0.45 - ((r - 1.95) / (2.95 - 1.95)) * 0.6 : null
+				),
+				customdata: rhobEnhDec,
+				y: svgDepth,
+				xaxis: 'x3',
+				yaxis: 'y',
+				line: { color: '#DC2626', width: 1.1 },
+				hovertemplate: 'RHOB_ENH: %{customdata:.3f} g/cc<extra></extra>'
 			});
 		}
 		if (showDtc && dtc.some((v) => v !== null && v > 0)) {
@@ -1562,7 +1633,8 @@
 		const isMultiMineral = workbench.lithoParams.model === 'multi_mineral';
 		const lithoToPlot = activeLithoSpecs;
 		if (lithoToPlot.length > 0) {
-			const decLithArrs = lithoToPlot.map(({ arr }) => decimateSvg(arr));
+			const rawLithArrs = lithoToPlot.map(({ arr }) => decimateSvg(arr));
+			const decLithArrs = scaleLithologyForPlot(rawLithArrs, decimateSvg(phit));
 			const hasLithAt = (idx: number) =>
 				idx >= 0 &&
 				idx < svgDepth.length &&
@@ -1610,6 +1682,7 @@
 				);
 
 				const decArr = decLithArrs[m];
+				const rawArr = rawLithArrs[m];
 				const rawStrokeVals = svgDepth.map((_, i) => {
 					const v = decArr[i];
 					return v !== null && Number.isFinite(v) && v > 0 ? v : 0;
@@ -1637,7 +1710,7 @@
 					mode: 'lines',
 					name: spec.mnemonic,
 					x: svgDepth.map((_, i) => (hasLithAt(i) ? nextStrokeCum[i] : null)),
-					customdata: rawStrokeVals,
+					customdata: rawArr,
 					y: svgDepth,
 					xaxis: 'x4',
 					yaxis: 'y',
@@ -2578,7 +2651,12 @@
 		'SHF',
 		'SW_SHF',
 		'SWIRR',
-		'PAY_FLAGS'
+		'PAY_FLAGS',
+		// Resolution-enhanced overlays: track their data so re-running the
+		// enhancement (e.g. on a new selection) forces a Plotly re-render.
+		'GR_ENH',
+		'NPHI_ENH',
+		'RHOB_ENH'
 	] as const;
 
 	let lastBaseTrackDeps: unknown[] | null = null;
@@ -2607,6 +2685,7 @@
 			showTopLabels,
 			depthDisplay.unit,
 			tsOverlayActive,
+			enhancedOverlayActive,
 			workbench.lithoParams.enableHcCorrection,
 			workbench.lithoParams.model,
 			workbench.lithoParams.minerals,
@@ -3134,6 +3213,19 @@
 						class="h-3 w-3 rounded-xs border-teal-300 text-teal-700 focus:ring-0"
 					/>
 					<span>TS Overlay</span>
+				</label>
+			{/if}
+			{#if hasEnhancedLogs}
+				<label
+					class="flex cursor-pointer items-center gap-1 rounded-xs border border-indigo-200 bg-indigo-50/70 px-1.5 py-0.5 text-[10.5px] font-medium text-indigo-900"
+					title="Show or hide the resolution-enhanced GR, NPHI, and RHOB overlays"
+				>
+					<input
+						type="checkbox"
+						bind:checked={showEnhancedOverlay}
+						class="h-3 w-3 rounded-xs border-indigo-300 text-indigo-700 focus:ring-0"
+					/>
+					<span>Enhanced Logs</span>
 				</label>
 			{/if}
 			{#if hasDtc}

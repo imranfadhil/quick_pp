@@ -12,7 +12,10 @@
 	} from '$lib/utils/petrophysicsColors';
 	import { fmtDepth, fmtNum } from '$lib/utils/formatters';
 	import { crossplotGroups, crossplotLabel, resolveCrossplot } from '$lib/utils/crossplots';
-	import { curveDepthSeries } from '$lib/utils/curveDepth';
+	import { spectralCrossplotPoints, spectralPlotNote, spectralYAxisRange } from '$lib/utils/spectralCrossplot';
+	import { curveDepthSeries, enhancedVsRawSeries, ENHANCED_CURVE_PAIRS } from '$lib/utils/curveDepth';
+	import { gammaEndpoints, gammaLabel } from '$lib/utils/lithology';
+	import { normalizedScalSaturation, poreThroatDistribution } from '$lib/utils/poreThroat';
 	import {
 		estimateBqvReferenceRw,
 		fillMissingCurve,
@@ -23,6 +26,9 @@
 	} from '$lib/utils/saturation';
 	import CoreDepthShiftPanel from '$lib/components/workbench/CoreDepthShiftPanel.svelte';
 	import VshCalibrationPanel from '$lib/components/workbench/VshCalibrationPanel.svelte';
+	import PorosityComparisonCanvas from '$lib/components/workbench/PorosityComparisonCanvas.svelte';
+	import PermeabilityComparisonCanvas from '$lib/components/workbench/PermeabilityComparisonCanvas.svelte';
+	import { getJson } from '$lib/api/client';
 
 	let plotEl = $state<HTMLDivElement | null>(null);
 	let PlotlyLib: any = $state(null);
@@ -35,13 +41,40 @@
 	let shfView = $state<'scal_fit' | 'height_profile'>('height_profile');
 	let shfLogScale = $state<boolean>(false);
 	let swirrLogY = $state<boolean>(false);
+	// Mud/fluid system for the M-N plot: freshwater (WBM) vs saltwater mud.
+	// Drives the fluid endpoints (DT_fluid, rho_fluid) used to auto-calculate M and N.
+	let mnMudType = $state<'fresh' | 'salt'>('fresh');
 	let showCoreShiftDrawer = $state<boolean>(false);
 	let showVshCalibDrawer = $state<boolean>(false);
 	let emptyPlotMessage = $state<string | null>(null);
+	let spectralReferences = $state<Record<string, { POTA: number; THOR: number; PEF: number }>>({});
+	let spectralReferenceError = $state<string | null>(null);
+
+	$effect(() => {
+		const projectId = workbench.projectId;
+		if (!browser || !projectId) return;
+		let cancelled = false;
+		spectralReferenceError = null;
+		getJson<Record<string, { POTA: number; THOR: number; PEF: number }>>(
+			`/quick_pp/workspace/projects/${encodeURIComponent(projectId)}/spectral_mineral_references`
+		).then((data) => { if (!cancelled) spectralReferences = data; }).catch((error: unknown) => {
+			if (!cancelled) spectralReferenceError = error instanceof Error ? error.message : String(error);
+		});
+		return () => { cancelled = true; };
+	});
 
 	let effectiveMode = $derived(workbench.effectiveCrossplot);
 	let autoMode = $derived(resolveCrossplot(workbench.crossplotContext, 'auto'));
 	let plotGroups = $derived(crossplotGroups(workbench.crossplotContext));
+	let spectralNote = $derived.by(() => {
+		if (effectiveMode !== 'th-k' && effectiveMode !== 'pef-k' && effectiveMode !== 'pef-th-k') return null;
+		const points = spectralCrossplotPoints(effectiveMode, {
+			...wellData.curves,
+			POTA: wellData.curves[workbench.lithoParams.potassiumCurve] ?? [],
+			THOR: wellData.curves[workbench.lithoParams.thoriumCurve] ?? []
+		}, wellData.visibleIndices);
+		return spectralPlotNote(effectiveMode, points.y);
+	});
 
 	function plotLabel(id: NonNullable<typeof effectiveMode>) {
 		return crossplotLabel(id, workbench.scope === 'multi-well' ? projectData.drtMethod : 'fzi');
@@ -55,6 +88,12 @@
 					(Array.isArray(trace.x) ? trace.x.length > 0 : Array.isArray(trace.y) && trace.y.length > 0)
 			);
 		switch (mode) {
+		case 'enhanced-vs-raw':
+			return traces.some((trace) =>
+				trace.x?.some((value: number | null) => value !== null)
+			)
+				? null
+				: 'No resolution-enhanced curves found. Run Raw Log Resolution Enhancement in Data & QAQC first.';
 		case 'curve-depth':
 			return traces.some((trace) => trace.x?.some((value: number | null) => value !== null))
 				? null
@@ -69,6 +108,10 @@
 				return hasTrace((name) => name.startsWith('Log Data') || name.startsWith('Coal Flagged') || name.startsWith('Badhole Flagged'))
 					? null
 					: 'No paired NPHI and RHOB values in the current selection. Load the curves or adjust the filters.';
+			case 'mn-plot':
+				return hasTrace((name) => name === 'Log Data (M-N)')
+					? null
+					: 'No paired NPHI and RHOB values in the current selection. M-N auto-calculates from RHOB, NPHI and sonic (DTC); load the curves or adjust the filters.';
 			case 'thomas-stieber':
 				return hasTrace((name) => name.startsWith('Log Data'))
 					? null
@@ -93,6 +136,16 @@
 				return wellData.vshComparison.rows.length
 					? null
 					: 'No Vsh calibration data in the current selection. Check GR, NPHI and RHOB curves and filters.';
+			case 'th-k':
+			case 'pef-k':
+			case 'pef-th-k':
+				return hasTrace((name) => name === 'Spectral log samples')
+					? null
+					: 'No valid paired spectral log values in the selection. Check POTA (%), THOR (ppm), PEF and the depth filters; Th/K requires positive K and Th.';
+			case 'grain-density':
+				return hasTrace((name) => name === 'Core grain density')
+					? null
+					: 'No core grain density (CGD) paired with a GR/CGR driver in the selection. Add grain density in Tops & Ancillary → RCA and check the driver log.';
 			default:
 				return null;
 		}
@@ -185,6 +238,32 @@
 		};
 	});
 
+	/** Gamma-log fallback order used when no multi-log driver is selected. */
+	const GD_GAMMA_FALLBACKS = ['CGR', 'SGR', 'GR', 'GAMMA'];
+
+	/**
+	 * Drivers offered on the grain-density crossplot X axis: the calibrated multi-log drivers,
+	 * the single driver, gamma fallbacks, and any other candidate log present in the well.
+	 */
+	const gdPlotDriverOptions = $derived.by(() => {
+		const sp = workbench.scalParams;
+		const result: string[] = [];
+		const add = (name: string | null | undefined) => {
+			if (!name) return;
+			const hit = Object.keys(wellData.curves).find(
+				(c) => c.toUpperCase() === String(name).toUpperCase()
+			);
+			if (hit && !result.some((c) => c.toUpperCase() === hit.toUpperCase())) result.push(hit);
+		};
+		(sp.gd_driver_cols ?? []).forEach(add);
+		add(sp.gd_driver_col);
+		GD_GAMMA_FALLBACKS.forEach(add);
+		Object.keys(wellData.curves)
+			.filter((c) => /^(CGR|SGR|GR|GAMMA|RHOB|NPHI|M_LITH|N_LITH|AI|DPHI|VSH|DTC|DTS)$/i.test(c))
+			.forEach(add);
+		return result;
+	});
+
 	const MW_PALETTE = [
 		'#2563EB',
 		'#0D9488',
@@ -262,6 +341,342 @@
 				titlefont: { family: 'Inter', size: 11, color: '#0F172A' }
 			}
 		};
+
+		if (effectiveMode === 'th-k' || effectiveMode === 'pef-k' || effectiveMode === 'pef-th-k') {
+			baseLayout.margin.t = 70;
+			const points = spectralCrossplotPoints(effectiveMode, {
+				...wellData.curves,
+				POTA: wellData.curves[workbench.lithoParams.potassiumCurve] ?? [],
+				THOR: wellData.curves[workbench.lithoParams.thoriumCurve] ?? []
+			}, indices);
+			traces.push({
+				type: 'scatter',
+				mode: 'markers',
+				name: 'Spectral log samples',
+				x: points.x,
+				y: points.y,
+				customdata: points.customdata,
+				text: points.depths.map((depth) => depth === null ? 'Depth unavailable' : `Depth: ${fmtNum(depth, 2)} m`),
+				marker: {
+					size: 5.5,
+					color: points.depths,
+					colorscale: 'Viridis',
+					opacity: 0.82,
+					colorbar: { title: { text: 'Depth (m)' }, thickness: 10 }
+				},
+				hovertemplate: '%{text}<br>X: %{x:.3g}<br>Y: %{y:.3g}<extra></extra>'
+			});
+			const refX: number[] = [];
+			const refY: number[] = [];
+			const refNames: string[] = [];
+			for (const [name, ref] of Object.entries(spectralReferences)) {
+				const x = effectiveMode === 'pef-th-k' ? ref.THOR / ref.POTA : ref.POTA;
+				const y = effectiveMode === 'th-k' ? ref.THOR : ref.PEF;
+				if (!Number.isFinite(x) || !Number.isFinite(y) || (effectiveMode === 'pef-th-k' && x <= 0)) continue;
+				refX.push(x); refY.push(y); refNames.push(name);
+			}
+			if (refX.length) traces.push({
+				type: 'scatter', mode: 'markers+text', name: 'Illustrative mineral endpoints',
+				x: refX, y: refY, text: refNames, textposition: 'top center',
+				textfont: { size: 9, color: '#334155' },
+				marker: { size: 9, color: '#FFFFFF', symbol: 'diamond', line: { color: '#334155', width: 1.5 } },
+				hovertemplate: '%{text}<br>X: %{x:.3g}<br>Y: %{y:.3g}<extra>Configured endpoint; not a classification</extra>'
+			});
+			baseLayout.xaxis.title = {
+				text: effectiveMode === 'pef-th-k' ? 'Th/K (ppm / %)' : 'Potassium (%)'
+			};
+			baseLayout.yaxis.title = {
+				text: effectiveMode === 'th-k' ? 'Thorium (ppm)' : 'Photoelectric factor (b/e)'
+			};
+			if (effectiveMode === 'pef-th-k') baseLayout.xaxis.type = 'log';
+			const yRange = spectralYAxisRange(effectiveMode);
+			if (yRange) baseLayout.yaxis.range = yRange;
+			if (effectiveMode === 'th-k') {
+				const maxK = points.x.reduce((max, value) => Math.max(max, value), 5);
+				const maxTh = points.y.reduce((max, value) => Math.max(max, value), 25);
+				for (const ratio of [0.3, 0.6, 2, 3.5, 12, 25]) {
+					const xEnd = Math.min(maxK, maxTh / ratio);
+					shapes.push({
+						type: 'line', x0: 0, y0: 0, x1: xEnd, y1: xEnd * ratio,
+						line: { color: '#94A3B8', width: 1, dash: 'dot' }
+					});
+					traces.push({
+						type: 'scatter', mode: 'text', x: [xEnd], y: [xEnd * ratio],
+						text: [`${ratio}`], textposition: 'top left',
+						textfont: { size: 9, color: '#64748B' }, hoverinfo: 'skip',
+						showlegend: false
+					});
+				}
+				baseLayout.shapes = shapes;
+			}
+			return { traces, layout: baseLayout };
+		}
+
+		if (effectiveMode === 'grain-density') {
+			baseLayout.margin.t = 70;
+			const sp = workbench.scalParams;
+					const multivariate =
+						sp.gd_mode === 'multivariate' && sp.gd_driver_cols.length > 0 && sp.gd_coef.length > 0;
+
+					// Resolve the x-axis driver: the explicit crossplot selection when it is available,
+					// else the first selected multi-log driver (multivariate), else the
+					// calibrated/single gamma driver with CGR/GR fallbacks.
+			const curveNames = Object.keys(wellData.curves);
+			const upperMap = new Map(curveNames.map((c) => [c.toUpperCase(), c]));
+					const plotChoice = sp.gd_plot_driver_col ?? null;
+					const driverCandidates = multivariate
+						? [plotChoice, ...sp.gd_driver_cols, sp.gd_driver_col]
+						: [plotChoice, sp.gd_driver_col, ...GD_GAMMA_FALLBACKS];
+			let driverCol: string | null = null;
+			for (const cand of driverCandidates) {
+				const hit = upperMap.get(String(cand || '').toUpperCase());
+				if (hit) {
+					driverCol = hit;
+					break;
+				}
+			}
+			const driverCurve = driverCol ? (wellData.curves[driverCol] ?? []) : [];
+			const cgdCurve =
+				wellData.curves['CGD'] ??
+				wellData.curves['GRDEN'] ??
+				wellData.curves['RHOMAA'] ??
+				wellData.curves['CGRAIN_DENSITY'] ??
+				[];
+
+			// Collect (driver, CGD) pairs: prefer discrete core plug samples, then a CGD curve.
+			const xPts: number[] = [];
+			const yPts: number[] = [];
+			const depthPts: Array<number | null> = [];
+
+			const nearestDriver = (depth: number): number => {
+				if (deptAll.length === 0 || driverCurve.length !== deptAll.length) return Number.NaN;
+				let lo = 0;
+				let hi = deptAll.length - 1;
+				while (lo < hi) {
+					const mid = (lo + hi) >> 1;
+					if (deptAll[mid] < depth) lo = mid + 1;
+					else hi = mid;
+				}
+				if (lo > 0 && Math.abs(deptAll[lo - 1] - depth) < Math.abs(deptAll[lo] - depth)) lo = lo - 1;
+				return Math.abs(deptAll[lo] - depth) <= 0.5 ? driverCurve[lo] : Number.NaN;
+			};
+
+			const readCgd = (s: Record<string, any>): number => {
+				for (const key of ['grain_density', 'CGD', 'grainDensity', 'GRDEN', 'RHOG', 'rhog', 'rhoma', 'RHOMA']) {
+					const v = Number(s[key]);
+					if (Number.isFinite(v) && v > 0) return v;
+				}
+				return Number.NaN;
+			};
+
+			if (wellData.coreSamples.length > 0) {
+				wellData.coreSamples.forEach((s, idx) => {
+					const origS = wellData.originalCoreSamples[idx];
+					const dCur = Number(s.depth ?? s.DEPTH ?? origS?.depth);
+					const dRaw = Number(s.raw_depth ?? origS?.raw_depth ?? dCur);
+					if (wellData.hasActiveFilter && !wellData.isCorePlugInActiveFilter(dRaw, dCur)) return;
+					const cgd = readCgd(s);
+					if (!Number.isFinite(cgd)) return;
+					const sampleVal = Number(s[driverCol ?? '']);
+					const driver = Number.isFinite(sampleVal) ? sampleVal : nearestDriver(dCur);
+					if (!Number.isFinite(driver)) return;
+					xPts.push(driver);
+					yPts.push(cgd);
+					depthPts.push(Number.isFinite(dCur) ? dCur : null);
+				});
+			}
+			if (xPts.length === 0 && cgdCurve.length === deptAll.length && driverCurve.length === deptAll.length) {
+				for (const i of indices) {
+					const cgd = Number(cgdCurve[i]);
+					const driver = Number(driverCurve[i]);
+					if (Number.isFinite(cgd) && cgd > 0 && Number.isFinite(driver)) {
+						xPts.push(driver);
+						yPts.push(cgd);
+						depthPts.push(Number.isFinite(deptAll[i]) ? deptAll[i] : null);
+					}
+				}
+			}
+
+			if (xPts.length > 0) {
+				traces.push({
+					type: 'scatter',
+					mode: 'markers',
+					name: 'Core grain density',
+					x: xPts,
+					y: yPts,
+					text: depthPts.map((d) => (d === null ? 'Depth unavailable' : `Depth: ${fmtNum(d, 2)} m`)),
+					marker: {
+						size: 7,
+						color: depthPts.map((d) => (d === null ? 0 : d)),
+						colorscale: 'Viridis',
+						opacity: 0.85,
+						colorbar: { title: { text: 'Depth (m)' }, thickness: 10 }
+					},
+					hovertemplate: '%{text}<br>Driver: %{x:.3g}<br>CGD: %{y:.4g} g/cc<extra></extra>'
+				});
+
+						const clamp = (v: number) =>
+							Math.min(sp.gd_rho_ma_max, Math.max(sp.gd_rho_ma_min, v));
+						const xMin = Math.min(...xPts);
+						const xMax = Math.max(...xPts);
+						const lineX = [xMin, xMax];
+
+						if (multivariate) {
+							// Sweep the plotted driver while holding the other drivers at their fitted
+							// centers (z = 0), which is the marginal 1-D slice of the multi-log model.
+							const xIdx = sp.gd_driver_cols.findIndex(
+								(c) => c.toUpperCase() === (driverCol ?? '').toUpperCase()
+							);
+							if (xIdx >= 0 && sp.gd_intercept !== null) {
+								const lineY = lineX.map((x) => {
+									const z = (x - (sp.gd_center[xIdx] ?? 0)) / (sp.gd_scale[xIdx] || 1);
+									return clamp((sp.gd_intercept ?? 0) + (sp.gd_coef[xIdx] ?? 0) * z);
+								});
+								traces.push({
+									type: 'scatter',
+									mode: 'lines',
+									name: `Multi-log fit (${sp.gd_driver_cols.length} drivers)`,
+									x: lineX,
+									y: lineY,
+									line: { color: '#DC2626', width: 2 },
+									hovertemplate:
+										'Driver: %{x:.3g}<br>ρma: %{y:.4g} g/cc<extra>Multi-log fit</extra>'
+								});
+							}
+						} else if (sp.gd_calibrated && Number.isFinite(sp.gd_k)) {
+					const lineY = lineX.map((x) =>
+						clamp(sp.gd_rho_ma_clean + sp.gd_k * (x - sp.gd_driver_clean))
+					);
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: `Fit: ρma = ${fmtNum(sp.gd_rho_ma_clean, 2)} + ${fmtNum(sp.gd_k, 5)}·(driver − ${fmtNum(sp.gd_driver_clean, 1)})`,
+						x: lineX,
+						y: lineY,
+						line: { color: '#DC2626', width: 2 },
+						hovertemplate: 'Driver: %{x:.3g}<br>ρma: %{y:.4g} g/cc<extra>Calibrated fit</extra>'
+					});
+				}
+			}
+
+			baseLayout.xaxis.title = {
+							text: `${driverCol ?? 'GR/CGR'} (${multivariate ? 'driver unit' : 'GAPI'})`
+						};
+			baseLayout.yaxis.title = { text: 'Grain / Matrix Density (g/cc)' };
+			return { traces, layout: baseLayout };
+		}
+
+		if (effectiveMode === 'enhanced-vs-raw') {
+			const series = enhancedVsRawSeries(
+				wellData.curves,
+				deptAll,
+				indices,
+				workbench.enhanceCompareCurve ?? undefined			);
+			const colorFor = (raw: string) =>
+				raw === 'GR' ? '#16A34A' : raw === 'NPHI' ? '#2563EB' : '#DC2626';
+			// Each curve family (GR, NPHI, RHOB) gets its own side-by-side track with
+			// an independent x-axis scale, all sharing a single depth (y) axis. The
+			// tracks are laid out as horizontal subplots across the plot width.
+			const trackCount = Math.max(series.length, 1);
+			const gap = 0.045;
+			const trackWidth = (1 - gap * (trackCount - 1)) / trackCount;
+			const xAxisKey = (index: number) => (index === 0 ? 'x' : `x${index + 1}`);
+			const yAxisKey = (index: number) => (index === 0 ? 'y' : `y${index + 1}`);
+			const xAxisLayoutKey = (index: number) => (index === 0 ? 'xaxis' : `xaxis${index + 1}`);
+			const yAxisLayoutKey = (index: number) => (index === 0 ? 'yaxis' : `yaxis${index + 1}`);
+
+			series.forEach((item, index) => {
+				const xref = xAxisKey(index);
+				const yref = yAxisKey(index);
+				const color = colorFor(item.raw);
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: `${item.raw} (raw)`,
+					x: item.rawPoints.x,
+					y: item.rawPoints.y,
+					xaxis: xref,
+					yaxis: yref,
+					connectgaps: false,
+					line: { color, width: 1, dash: 'dot' },
+					opacity: 0.65,
+					legendgroup: item.raw,
+					hovertemplate: `${item.raw} raw<br>Value: %{x:.4g}<br>Depth: %{y:.2f} m<extra></extra>`
+				});
+				if (item.reconPoints) {
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: `${item.raw}_RECON`,
+						x: item.reconPoints.x,
+						y: item.reconPoints.y,
+						xaxis: xref,
+						yaxis: yref,
+						connectgaps: false,
+						line: { color, width: 1, dash: 'dash' },
+						opacity: 0.5,
+						legendgroup: item.raw,
+						hovertemplate: `${item.raw}_RECON<br>Value: %{x:.4g}<br>Depth: %{y:.2f} m<extra></extra>`
+					});
+				}
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: `${item.enhanced} (enhanced)`,
+					x: item.enhPoints.x,
+					y: item.enhPoints.y,
+					xaxis: xref,
+					yaxis: yref,
+					connectgaps: false,
+					line: { color, width: 1.8 },
+					legendgroup: item.raw,
+					hovertemplate: `${item.enhanced}<br>Value: %{x:.4g}<br>Depth: %{y:.2f} m<extra></extra>`
+				});
+			});
+
+			series.forEach((item, index) => {
+				const color = colorFor(item.raw);
+				const start = index * (trackWidth + gap);
+				const end = start + trackWidth;
+				baseLayout[xAxisLayoutKey(index)] = {
+					domain: [start, Math.min(1, end)],
+					anchor: yAxisKey(index),
+					showgrid: true,
+					gridcolor: '#E2E8F0',
+					zeroline: false,
+					automargin: true,
+					fixedrange: true,
+					side: 'top',
+					title: {
+						text: `${item.label} (${getCurveUnit(item.enhanced)})`,
+						font: { family: 'Inter', size: 11, color }
+					},
+					tickfont: { family: 'JetBrains Mono', size: 9, color },
+					linecolor: color,
+					tickcolor: color
+				};
+				// First track keeps the depth tick labels; the rest share the scale
+				// via matches but hide duplicate labels to save horizontal space.
+				baseLayout[yAxisLayoutKey(index)] = {
+					anchor: xAxisKey(index),
+					autorange: 'reversed',
+					showgrid: true,
+					gridcolor: '#E2E8F0',
+					zeroline: false,
+					automargin: true,
+					...(index === 0
+						? { title: { text: 'Depth (m)' } }
+						: { matches: 'y', showticklabels: false }),
+					tickfont: { family: 'JetBrains Mono', size: 10, color: '#64748B' }
+				};
+			});
+
+			baseLayout.dragmode = 'zoom';
+			baseLayout.margin = { ...baseLayout.margin, t: 52 };
+			baseLayout.legend = { orientation: 'h', y: -0.12, font: { size: 9 } };
+			baseLayout.uirevision = `enhanced-vs-raw-${workbench.projectId}-${workbench.wellId}`;
+			return { traces, layout: baseLayout };
+		}
 
 		if (effectiveMode === 'curve-depth') {
 			const selected = workbench.selectedQaqcCurve;
@@ -429,40 +844,65 @@
 				}
 
 				const lp = workbench.lithoParams;
-				traces.push({
-					type: 'scatter',
-					mode: 'lines',
-					name: 'Silt Line',
-					x: [lp.fluidNphi, lp.drySiltNphi],
-					y: [lp.fluidRhob, lp.drySiltRhob],
-					line: { color: '#EA580C', width: 1.5, dash: 'dash' },
-					hovertemplate: 'Silt Line (θ=%{text}°)<extra></extra>',
-					text: [lp.siltLineAngle.toFixed(1), lp.siltLineAngle.toFixed(1)]
-				});
-				traces.push({
-					type: 'scatter',
-					mode: 'lines+markers+text',
-					name: 'SSC Endpoints',
-					x: [
-						lp.drySandNphi,
-						lp.drySiltNphi,
-						lp.dryClayNphi,
-						lp.fluidNphi,
-						lp.drySandNphi
-					],
-					y: [
-						lp.drySandRhob,
-						lp.drySiltRhob,
-						lp.dryClayRhob,
-						lp.fluidRhob,
-						lp.drySandRhob
-					],
-					text: ['Sand', 'Silt', 'Clay', 'Fluid', ''],
-					textposition: 'top center',
-					textfont: { family: 'Inter', size: 10, color: '#0F172A' },
-					line: { color: '#0F172A', width: 1.5, dash: 'dot' },
-					marker: { size: 8, color: '#0F172A', symbol: 'diamond' }
-				});
+				if (lp.model === 'sand_shale') {
+					traces.push({
+						type: 'scatter',
+						mode: 'lines+markers+text',
+						name: 'Sand-Shale Endpoints',
+						x: [
+							lp.drySandNphi,
+							lp.dryClayNphi,
+							lp.fluidNphi,
+							lp.drySandNphi
+						],
+						y: [
+							lp.drySandRhob,
+							lp.dryClayRhob,
+							lp.fluidRhob,
+							lp.drySandRhob
+						],
+						text: ['Sand', 'Clay', 'Fluid', ''],
+						textposition: 'top center',
+						textfont: { family: 'Inter', size: 10, color: '#0F172A' },
+						line: { color: '#0F172A', width: 1.5, dash: 'dot' },
+						marker: { size: 8, color: '#0F172A', symbol: 'diamond' }
+					});
+				} else {
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: 'Silt Line',
+						x: [lp.fluidNphi, lp.drySiltNphi],
+						y: [lp.fluidRhob, lp.drySiltRhob],
+						line: { color: '#EA580C', width: 1.5, dash: 'dash' },
+						hovertemplate: 'Silt Line (θ=%{text}°)<extra></extra>',
+						text: [lp.siltLineAngle.toFixed(1), lp.siltLineAngle.toFixed(1)]
+					});
+					traces.push({
+						type: 'scatter',
+						mode: 'lines+markers+text',
+						name: 'SSC Endpoints',
+						x: [
+							lp.drySandNphi,
+							lp.drySiltNphi,
+							lp.dryClayNphi,
+							lp.fluidNphi,
+							lp.drySandNphi
+						],
+						y: [
+							lp.drySandRhob,
+							lp.drySiltRhob,
+							lp.dryClayRhob,
+							lp.fluidRhob,
+							lp.drySandRhob
+						],
+						text: ['Sand', 'Silt', 'Clay', 'Fluid', ''],
+						textposition: 'top center',
+						textfont: { family: 'Inter', size: 10, color: '#0F172A' },
+						line: { color: '#0F172A', width: 1.5, dash: 'dot' },
+						marker: { size: 8, color: '#0F172A', symbol: 'diamond' }
+					});
+				}
 
 				baseLayout.dragmode = 'zoom';
 				baseLayout.xaxis.title = { text: 'NPHI (v/v)' };
@@ -1004,6 +1444,34 @@
 						line: { color: '#FFFFFF', width: 1.5 }
 					}
 				});
+			} else if (lp.model === 'sand_shale') {
+				traces.push({
+					type: 'scatter',
+					mode: 'lines+markers+text',
+					name: 'Sand-Shale Endpoints',
+					x: [
+						lp.drySandNphi,
+						lp.dryClayNphi,
+						lp.fluidNphi,
+						lp.drySandNphi
+					],
+					y: [
+						lp.drySandRhob,
+						lp.dryClayRhob,
+						lp.fluidRhob,
+						lp.drySandRhob
+					],
+					text: ['Sand', 'Clay', 'Fluid', ''],
+					textposition: 'top center',
+					textfont: { family: 'Inter', size: 10, color: '#0F172A' },
+					line: { color: '#2563EB', width: 1.5, dash: 'dot' },
+					marker: {
+						size: 9,
+						color: ['#CA8A04', '#475569', '#2563EB', '#CA8A04'],
+						symbol: 'diamond',
+						line: { color: '#FFFFFF', width: 1.5 }
+					}
+				});
 			} else {
 				traces.push({
 					type: 'scatter',
@@ -1118,6 +1586,10 @@
 			const A: [number, number] = [0, phiSand];
 			const B: [number, number] = [1, phiShale];
 			const C: [number, number] = [phiSand, Number((phiSand * phiShale).toFixed(4))];
+			const D: [number, number] = [
+				Number((1 - phiSand).toFixed(4)),
+				Number((phiSand + (1 - phiSand) * phiShale).toFixed(4))
+			];
 
 			// Laminated & Φsand isolines inside the A-B-C triangle
 			for (const t of [0.2, 0.4, 0.6, 0.8]) {
@@ -1172,7 +1644,16 @@
 			traces.push({
 				type: 'scatter',
 				mode: 'lines',
-				name: 'Grain-Replacing Envelope',
+				name: 'Structural (Grain-Replacing)',
+				x: [A[0], D[0]],
+				y: [A[1], D[1]],
+				line: { color: '#DC2626', width: 2.0 },
+				hoverinfo: 'skip'
+			});
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'Clay-Supported Envelope',
 				x: [C[0], B[0], 0],
 				y: [C[1], B[1], 0],
 				line: { color: '#475569', width: 1.4, dash: 'dash' },
@@ -1182,18 +1663,19 @@
 				type: 'scatter',
 				mode: 'markers+text',
 				name: 'TS Endpoints',
-				x: [A[0], B[0], C[0]],
-				y: [A[1], B[1], C[1]],
+				x: [A[0], B[0], C[0], D[0]],
+				y: [A[1], B[1], C[1], D[1]],
 				text: [
 					`Clean Sand (${phiSand.toFixed(2)})`,
 					`Pure Shale (${phiShale.toFixed(2)})`,
-					`Dispersed (${C[0].toFixed(2)}, ${C[1].toFixed(3)})`
+					`Dispersed (${C[0].toFixed(2)}, ${C[1].toFixed(3)})`,
+					`Structural (${D[0].toFixed(2)}, ${D[1].toFixed(3)})`
 				],
-				textposition: ['top right', 'top left', 'bottom right'],
+				textposition: ['top right', 'top left', 'bottom right', 'top left'],
 				textfont: { family: 'Inter', size: 10, color: '#0F172A' },
 				marker: {
 					size: 9.5,
-					color: ['#CA8A04', '#475569', '#0D9488'],
+					color: ['#CA8A04', '#475569', '#0D9488', '#DC2626'],
 					symbol: 'diamond',
 					line: { color: '#FFFFFF', width: 1.5 }
 				}
@@ -1202,7 +1684,7 @@
 			baseLayout.xaxis.title = { text: 'Vshale (v/v)' };
 			baseLayout.xaxis.range = [-0.04, 1.05];
 			baseLayout.yaxis.title = { text: 'Total Porosity PHIT (v/v)' };
-			baseLayout.yaxis.range = [0, Math.max(0.42, phiSand + 0.08)];
+			baseLayout.yaxis.range = [0, Math.max(0.42, phiSand + (1 - phiSand) * phiShale + 0.08)];
 			baseLayout.shapes = shapes;
 			return { traces, layout: baseLayout };
 		}
@@ -2258,6 +2740,174 @@
 				text: `1 / (${rtKey} · ${phiKey}<sup>${m}</sup>) (1 / ohm·m)`
 			};
 			baseLayout.yaxis.range = [0, 50];
+			return { traces, layout: baseLayout };
+		}
+
+		if (effectiveMode === 'mn-plot') {
+			// Burke's M-N mineral-identification crossplot. M and N are fully
+			// auto-calculated from RHOB, NPHI and sonic (DTC) — no manual picking
+			// is needed to place the points. Mirrors the backend formula in
+			// quick_pp.machine_learning.feature_engineering.mn_lithology_parameters:
+			//   M = ((DT_fluid - DT) / (RHOB - rho_fluid)) * 0.01
+			//   N = (NPHI_fluid - NPHI) / (RHOB - rho_fluid)
+			// Sonic is optional: where DTC is missing we fall back to a
+			// Gardner density-derived synthetic slowness so the N axis still
+			// discriminates minerals even in density/neutron-only wells.
+			const rhobArr = wellData.curves['RHOB'] ?? [];
+			const nphiArr = wellData.curves['NPHI'] ?? [];
+			const DTC_ALIASES = ['DTC', 'DT', 'DTCO', 'AC', 'DT4P'];
+			let dtcArr: number[] = [];
+			for (const alias of DTC_ALIASES) {
+				const c = wellData.curves[alias];
+				if (c && c.some((v) => Number.isFinite(v) && v > 20)) {
+					dtcArr = c;
+					break;
+				}
+			}
+			const colorCurve = wellData.curves['VCLAY'] !== undefined ? 'VCLAY' : 'GR';
+			const vclArr = wellData.curves['VCLAY'] ?? wellData.curves['GR'] ?? [];
+
+			// Fluid endpoints (Schlumberger Lith-7). Freshwater mud (WBM):
+			// DT_fluid=189 µs/ft, rho_fluid=1.0. Saltwater mud: DT_fluid=185 µs/ft,
+			// and rho_fluid tracks the well's actual filtrate density rather than a
+			// fixed chart value: the explicit rhoWater from the lithology params if
+			// the user set it, otherwise a salinity-derived brine density
+			// (ρ_brine ≈ 1.0 + 0.695·(ppm/1e6), the standard surface approximation).
+			// NPHI_fluid stays at 1.0 for both systems.
+			const isSalt = mnMudType === 'salt';
+			const lp = workbench.lithoParams;
+			const brineFromSalinity = 1.0 + 0.695 * ((lp.fluidSalinityPpm ?? 0) / 1e6);
+			const saltRhoFluid =
+				Number.isFinite(lp.rhoWater) && lp.rhoWater > 1.0 ? lp.rhoWater : brineFromSalinity;
+			const dtFluid = isSalt ? 185.0 : 189.0;
+			const rhoFluid = isSalt ? saltRhoFluid : 1.0;
+			const nphiFluid = 1.0;
+
+			const gardnerDtc = (rhob: number): number => {
+				const rhobSafe = Math.min(Math.max(rhob, 1.5), 3.1);
+				const vp = Math.pow(rhobSafe / 0.23, 4);
+				const dtc = 1e6 / Math.min(Math.max(vp, 3500), 25000);
+				return Math.min(Math.max(dtc, 40), 220);
+			};
+
+			const xs: number[] = [];
+			const ys: number[] = [];
+			const cols: number[] = [];
+			const customIdx: number[] = [];
+			let sonicMeasured = 0;
+			let total = 0;
+
+			for (const idx of indices) {
+				const rhob = rhobArr[idx];
+				const nphi = nphiArr[idx];
+				if (!Number.isFinite(rhob) || !Number.isFinite(nphi)) continue;
+				total++;
+				const rawDtc = dtcArr[idx];
+				const hasSonic = Number.isFinite(rawDtc) && rawDtc > 20;
+				const dtc = hasSonic ? rawDtc : gardnerDtc(rhob);
+				if (hasSonic) sonicMeasured++;
+
+				let denom = rhob - rhoFluid;
+				if (Math.abs(denom) < 0.1) denom = denom >= 0 ? 0.1 : -0.1;
+
+				let m = ((dtFluid - dtc) / denom) * 0.01;
+				let n = (nphiFluid - nphi) / denom;
+				m = Math.min(Math.max(m, -0.5), 2.0);
+				n = Math.min(Math.max(n, -0.5), 2.0);
+
+				xs.push(n);
+				ys.push(m);
+				cols.push(Number.isFinite(vclArr[idx]) ? vclArr[idx] : 0.2);
+				customIdx.push(idx);
+			}
+
+			traces.push({
+				type: 'scatter',
+				mode: 'markers',
+				name: 'Log Data (M-N)',
+				x: xs,
+				y: ys,
+				customdata: customIdx,
+				marker: {
+					size: 5.5,
+					color: cols,
+					colorscale: 'YlGnBu',
+					showscale: true,
+					opacity: 0.85,
+					colorbar: {
+						title: { text: colorCurve, font: { size: 9 } },
+						thickness: 10,
+						len: 0.75,
+						tickfont: { family: 'JetBrains Mono', size: 8 }
+					}
+				},
+				hovertemplate: 'N: %{x:.3f}<br>M: %{y:.3f}<extra></extra>'
+			});
+
+			// Mineral identification endpoints, derived from canonical matrix
+			// properties (rho_ma, NPHI_ma, DT_ma) so they track the selected mud
+			// system via the same M/N definition used for the log data:
+			//   M = ((DT_fluid - DT_ma) / (rho_ma - rho_fluid)) * 0.01
+			//   N = (NPHI_fluid - NPHI_ma) / (rho_ma - rho_fluid)
+			const MINERAL_MATRIX: Array<{
+				name: string;
+				rhoMa: number;
+				nphiMa: number;
+				dtMa: number;
+			}> = [
+				{ name: 'Quartz sandstone', rhoMa: 2.65, nphiMa: -0.035, dtMa: 55.5 },
+				{ name: 'Calcite (limestone)', rhoMa: 2.71, nphiMa: 0.0, dtMa: 47.6 },
+				{ name: 'Dolomite', rhoMa: 2.87, nphiMa: 0.02, dtMa: 43.5 },
+				{ name: 'Anhydrite', rhoMa: 2.98, nphiMa: -0.005, dtMa: 50.0 },
+				{ name: 'Gypsum', rhoMa: 2.35, nphiMa: 0.49, dtMa: 52.0 }
+			];
+			const MINERAL_POINTS = MINERAL_MATRIX.map((mineral) => {
+				const d = mineral.rhoMa - rhoFluid;
+				return {
+					name: mineral.name,
+					n: (nphiFluid - mineral.nphiMa) / d,
+					m: ((dtFluid - mineral.dtMa) / d) * 0.01
+				};
+			});
+			traces.push({
+				type: 'scatter',
+				mode: 'markers+text',
+				name: 'Mineral endpoints',
+				x: MINERAL_POINTS.map((p) => p.n),
+				y: MINERAL_POINTS.map((p) => p.m),
+				text: MINERAL_POINTS.map((p) => p.name),
+				textposition: 'top center',
+				textfont: { family: 'Inter', size: 9, color: '#0F172A' },
+				marker: { size: 9, color: '#0F172A', symbol: 'diamond' },
+				hovertemplate: '%{text}<br>N: %{x:.3f}<br>M: %{y:.3f}<extra>Fixed reference endpoint</extra>'
+			});
+
+			baseLayout.dragmode = 'lasso';
+			baseLayout.xaxis.title = { text: 'N  (neutron-density)' };
+			baseLayout.xaxis.range = [0.3, 0.8];
+			baseLayout.yaxis.title = { text: 'M  (sonic-density)' };
+			baseLayout.yaxis.range = [0.5, 1.1];
+			baseLayout.annotations = [
+				{
+					xref: 'paper',
+					yref: 'paper',
+					x: 0,
+					y: 1.08,
+					xanchor: 'left',
+					yanchor: 'bottom',
+					showarrow: false,
+					font: { family: 'Inter', size: 9.5, color: '#64748B' },
+					text:
+						total === 0
+							? ''
+							: `${isSalt ? `Saltwater mud (ρf=${rhoFluid.toFixed(2)}, DTf=185)` : 'Freshwater mud (ρf=1.0, DTf=189)'} · ` +
+								(sonicMeasured === total
+									? 'Sonic: measured DTC'
+									: sonicMeasured === 0
+										? 'Sonic: Gardner density estimate (no DTC)'
+										: `Sonic: ${sonicMeasured}/${total} measured DTC, remainder Gardner-estimated`)
+				}
+			];
 			return { traces, layout: baseLayout };
 		}
 
@@ -3517,6 +4167,8 @@
 			const vc = wellData.vshComparison;
 			const subView = workbench.vshQcView;
 			const lp = workbench.lithoParams;
+			const { clean: gammaClean, shale: gammaShale } = gammaEndpoints(lp);
+			const sourceLabel = gammaLabel(lp);
 			const allRows = vc.rows;
 			const sandRows = allRows.filter((r) => r.REGIME === 'clean_sand');
 			const shaleRows = allRows.filter((r) => r.REGIME === 'clean_shale');
@@ -3617,7 +4269,7 @@
 						text: g.rows.map(
 							(r) =>
 								`Depth: ${fmtNum(r.DEPTH, 2)}m (${r.ZONE}) · ${r.REGIME_LABEL}<br>` +
-								`GR: ${fmtNum(r.GR, 1)} gAPI | VSH_DN: ${fmtNum(r.VSH_DN, 3)} | VSH_GR: ${fmtNum(r.VSH_GR, 3)}<br>` +
+								`${sourceLabel}: ${fmtNum(r.GR, 1)} gAPI | VSH_DN: ${fmtNum(r.VSH_DN, 3)} | VSH_GR: ${fmtNum(r.VSH_GR, 3)}<br>` +
 								`ΔVsh (GR−DN): ${r.ERR_VSH >= 0 ? '+' : ''}${fmtNum(r.ERR_VSH, 3)} v/v`
 						),
 						hovertemplate: '%{text}<extra></extra>',
@@ -3633,9 +4285,9 @@
 
 			const buildGrCalibrationTraces = (xAxis: string, yAxis: string) => {
 				const maxGr = Math.max(
-					180,
-					lp.grClay + 25,
-					...(allRows.length > 0 ? allRows.map((r) => r.GR) : [150])
+					sourceLabel === 'GR' ? 180 : 1,
+					sourceLabel === 'GR' ? gammaShale + 25 : gammaShale * 1.15,
+					allRows.reduce((max, row) => Math.max(max, row.GR), 0)
 				);
 
 				for (const [name, subset, col, sym, sz, op] of [
@@ -3657,7 +4309,7 @@
 						text: subset.map(
 							(r) =>
 								`Depth: ${fmtNum(r.DEPTH, 2)}m (${r.ZONE}) · ${r.REGIME_LABEL}<br>` +
-								`GR: ${fmtNum(r.GR, 1)} gAPI | VSH_DN: ${fmtNum(r.VSH_DN, 3)} | VSH_GR: ${fmtNum(r.VSH_GR, 3)}`
+								`${sourceLabel}: ${fmtNum(r.GR, 1)} gAPI | VSH_DN: ${fmtNum(r.VSH_DN, 3)} | VSH_GR: ${fmtNum(r.VSH_GR, 3)}`
 						),
 						hovertemplate: '%{text}<extra></extra>',
 						marker: { size: sz, symbol: sym, color: col, opacity: op }
@@ -3669,7 +4321,7 @@
 					type: 'scatter',
 					mode: 'lines',
 					name: 'VSH_GR Calibration Line',
-					x: [0, lp.grClean, lp.grClay, maxGr],
+					x: [0, gammaClean, gammaShale, maxGr],
 					y: [0, 0, 1, 1],
 					xaxis: xAxis,
 					yaxis: yAxis,
@@ -3679,14 +4331,14 @@
 				traces.push({
 					type: 'scatter',
 					mode: 'markers+text',
-					name: 'GR Endpoints',
-					x: [lp.grClean, lp.grClay],
+					name: `${sourceLabel} Endpoints`,
+					x: [gammaClean, gammaShale],
 					y: [0, 1],
 					xaxis: xAxis,
 					yaxis: yAxis,
 					text: [
-						`GR Clean (${lp.grClean.toFixed(0)})`,
-						`GR Shale (${lp.grClay.toFixed(0)})`
+						`${sourceLabel} Clean (${gammaClean.toFixed(0)})`,
+						`${sourceLabel} Shale (${gammaShale.toFixed(0)})`
 					],
 					textposition: ['top right', 'bottom left'],
 					textfont: { family: 'Inter', size: 10, color: '#1E3A8A' },
@@ -3789,7 +4441,7 @@
 				traces.push({
 					type: 'scatter',
 					mode: 'lines',
-					name: 'VSH_GR (Calibrated GR)',
+					name: `VSH_GR (Calibrated ${sourceLabel})`,
 					x: vshGrLineX,
 					y: lineY,
 					xaxis: xAxis,
@@ -3920,7 +4572,7 @@
 
 				baseLayout.xaxis.domain = [0, 0.47];
 				baseLayout.xaxis.range = [0, Number((maxGr * 1.05).toFixed(0))];
-				baseLayout.xaxis.title = { text: 'Gamma Ray GR (gAPI)' };
+				baseLayout.xaxis.title = { text: `${sourceLabel} (gAPI)` };
 				baseLayout.yaxis.range = [-0.03, 1.05];
 				baseLayout.yaxis.title = { text: 'VSH_DN & Calibration Curve (v/v)' };
 
@@ -4054,7 +4706,7 @@
 			if (!sr || !sr.plugs || sr.plugs.length === 0) {
 				baseLayout.dragmode = 'zoom';
 				baseLayout.xaxis.title = {
-					text: 'No SCAL plugs loaded — click "Auto-Fit SCAL Swirr" in the left panel'
+					text: 'No SCAL plugs loaded — click "Reset Auto-Fit" in the left panel'
 				};
 				baseLayout.yaxis.title = { text: 'Irreducible Water Saturation Swirr (v/v)' };
 				return { traces, layout: baseLayout };
@@ -4083,6 +4735,84 @@
 				'#7C3AED',
 				'#0284C7'
 			];
+
+			if (tab === 'pore-throat') {
+				const sp = projectData.shfParams;
+				const curves = filteredPlugs.flatMap((plug, index) => {
+					const phi = Math.max(1e-4, plug.cpore || 0.15);
+					const perm = Math.max(1e-4, plug.cperm || 10);
+					const rt = plug.rt ?? 1;
+					const fitRt = plug.cpore && plug.cperm
+						? (projectData.classifyRockType(plug.cpore, plug.cperm) ?? rt)
+						: rt;
+					const sw = plug.sw_curve ?? [];
+					const swMin = sw.length ? Math.min(...sw) : (plug.sw_at_max_pc ?? 0.12);
+					const swirr = sp.swirrSource === 'poro_perm'
+						? Math.min(0.85, Math.max(0.01, projectData.evalSwirrValue(phi, perm, fitRt)))
+						: Math.min(0.85, Math.max(0.01, swMin * 0.96));
+					const points = poreThroatDistribution(
+						plug.pc_curve ?? [],
+						sw.map((value) => Number.isFinite(value) ? normalizedScalSaturation(value, swirr) : NaN),
+						sp.ift,
+						sp.theta
+					);
+					return points.length ? [{ plug, index, rt, points }] : [];
+				});
+				const rockTypes = [...new Set(curves.map((curve) => curve.rt))].sort((a, b) => a - b);
+				const columns = Math.min(3, rockTypes.length);
+				const rows = Math.ceil(rockTypes.length / columns);
+				baseLayout.annotations = [];
+				baseLayout.dragmode = 'zoom';
+				rockTypes.forEach((rt, index) => {
+					const column = index % columns;
+					const row = Math.floor(index / columns);
+					const xDomain = [column / columns + 0.04 / columns, (column + 1) / columns - 0.04 / columns];
+					const yDomain = [1 - (row + 1) / rows + 0.12 / rows, 1 - row / rows - 0.12 / rows];
+					const suffix = index === 0 ? '' : String(index + 1);
+					baseLayout[`xaxis${suffix}`] = {
+						...baseLayout.xaxis, domain: xDomain, anchor: `y${suffix}`,
+						title: { text: 'Log₁₀ radius (µm)' }
+					};
+					baseLayout[`yaxis${suffix}`] = {
+						...baseLayout.yaxis, domain: yDomain, anchor: `x${suffix}`,
+						title: { text: 'dSwn / dLog₁₀R' }
+					};
+					baseLayout.annotations.push({
+						text: `PRT ${rt}`, x: (xDomain[0] + xDomain[1]) / 2,
+						y: yDomain[1] + 0.04 / rows, xref: 'paper', yref: 'paper',
+						showarrow: false, font: { size: 12, color: '#334155' }
+					});
+				});
+				curves.forEach(({ plug, index, rt, points }) => {
+					const axisIndex = rockTypes.indexOf(rt);
+					const suffix = axisIndex === 0 ? '' : String(axisIndex + 1);
+					const id = projectData.normalizeScalPlugId(plug.plug_id, plug.well, plug.sample);
+					const focused = focusedPlugId === id;
+					const color = projectData.scalGroupMode === 'sample'
+						? SAMPLE_PALETTE_PLUGS[index % SAMPLE_PALETTE_PLUGS.length]
+						: getRockTypeColor(rt);
+					traces.push({
+						type: 'scatter', mode: 'lines+markers',
+						name: `${plug.sample} (${plug.well}) [PRT ${rt}]`,
+						xaxis: `x${suffix}`, yaxis: `y${suffix}`,
+						x: points.map((point) => point.logRadius),
+						y: points.map((point) => point.distribution),
+						fill: 'tozeroy', fillcolor: color,
+						line: { color, width: focused ? 2.5 : 1.5, dash: plug.included ? 'solid' : 'dot' },
+						marker: { color, size: focused ? 6 : 4 },
+						opacity: focusedPlugId && !focused ? 0.15 : plug.included ? 0.7 : 0.3,
+						hovertemplate: `<b>${plug.well} · Sample ${plug.sample}</b> (PRT ${rt})<br>` +
+							`Log₁₀ radius: %{x:.3f} | dSwn/dLog₁₀R: %{y:.3f}<extra></extra>`
+					});
+				});
+				if (!curves.length) {
+					baseLayout.annotations.push({
+						text: 'No valid pore-throat curves. Check filters, IFT, contact angle, and at least two distinct positive Pc points per sample.',
+						x: 0.5, y: 0.5, xref: 'paper', yref: 'paper', showarrow: false
+					});
+				}
+				return { traces, layout: baseLayout };
+			}
 
 			if (tab === 'pc-qc') {
 				const seenRt = new Set<number>();
@@ -4546,14 +5276,48 @@
 	$effect(() => {
 		if (!PlotlyLib || !plotEl) return;
 		const mode = effectiveMode;
+		if (mode === 'porosity-comparison' || mode === 'permeability-comparison') return;
 		void wellData.visibleIndices;
 		void workbench.selectedZones;
 		void workbench.depthFilter;
 		void workbench.brushedDepthIndices;
 
-		if (mode === 'core-qc') {
+		if (mode === 'th-k' || mode === 'pef-k' || mode === 'pef-th-k') {
+			void spectralReferences;
+			void wellData.curves['POTA'];
+			void wellData.curves['THOR'];
+			void wellData.curves['PEF'];
+			void wellData.curves[workbench.lithoParams.potassiumCurve];
+			void wellData.curves[workbench.lithoParams.thoriumCurve];
+			void workbench.lithoParams.potassiumCurve;
+			void workbench.lithoParams.thoriumCurve;
+			void wellData.curves['DEPT'];
+			void wellData.curves['DEPTH'];
+		} else if (mode === 'core-qc') {
 			void wellData.coreComparison;
 			void workbench.coreQcView;
+		} else if (mode === 'grain-density') {
+			void wellData.coreSamples;
+			void wellData.curves['CGD'];
+			void wellData.curves['CGR'];
+			void wellData.curves['GR'];
+			void wellData.curves[workbench.scalParams.gd_driver_col];
+			void workbench.scalParams.gd_driver_col;
+					void workbench.scalParams.gd_plot_driver_col;
+					void workbench.scalParams.gd_mode;
+			void workbench.scalParams.gd_calibrated;
+			void workbench.scalParams.gd_k;
+			void workbench.scalParams.gd_rho_ma_clean;
+			void workbench.scalParams.gd_driver_clean;
+					void workbench.scalParams.gd_intercept;
+					void workbench.scalParams.gd_coef;
+					void workbench.scalParams.gd_center;
+					void workbench.scalParams.gd_scale;
+					for (const col of workbench.scalParams.gd_driver_cols) {
+						void wellData.curves[col];
+					}
+			void wellData.curves['DEPT'];
+			void wellData.curves['DEPTH'];
 		} else if (mode === 'vsh-qc') {
 			void wellData.vshComparison;
 			void workbench.vshQcView;
@@ -4669,6 +5433,7 @@
 			void workbench.scalParams.mu_o;
 		} else if (mode === 'swirr-fit') {
 			void projectData.swirrResult;
+			void projectData.selectedWellNames;
 			void projectData.swirrConfig.equationType;
 			void projectData.swirrConfig.fitScope;
 			void projectData.swirrConfig.extractionMode;
@@ -4703,6 +5468,12 @@
 			void projectData.scalFilterRockType;
 			void projectData.shfParams.swirrSource;
 			void projectData.shfParams.jSatMode;
+			void projectData.shfParams.ift;
+			void projectData.shfParams.theta;
+			void projectData.drtMethod;
+			void projectData.fziCutoffs;
+			void projectData.winlandCutoffs;
+			void projectData.luciaCutoffs;
 		} else {
 			void wellData.curves;
 			void projectData.selectedWellNames;
@@ -5044,9 +5815,61 @@
 			</select>
 		</div>
 
+		{#if effectiveMode === 'grain-density'}
+			<div class="flex items-center gap-1">
+				<span class="text-[10px] text-[var(--text-muted)]">X axis:</span>
+				<select
+					bind:value={workbench.scalParams.gd_plot_driver_col}
+					class="h-5 max-w-[200px] truncate rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-[11px] font-medium text-[var(--text-primary)] focus:outline-none"
+				>
+					{#each gdPlotDriverOptions as opt (opt)}
+						<option value={opt}
+							>{opt}{workbench.scalParams.gd_driver_cols.includes(opt) ? ' (driver)' : ''}</option
+						>
+					{/each}
+				</select>
+			</div>
+		{/if}
+
+		{#if effectiveMode === 'mn-plot'}
+			<div class="flex items-center gap-1">
+				<span class="text-[10px] text-[var(--text-muted)]">Mud:</span>
+				<div class="inline-flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]">
+					{#each [['fresh', 'Freshwater (WBM)', 'Freshwater mud: ρf=1.0 g/cc, DTf=189 µs/ft'], ['salt', 'Saltwater', 'Saltwater mud: DTf=185 µs/ft; ρf tracks the well filtrate density (rhoWater / salinity)']] as [mKey, mLbl, mTip]}
+						<button
+							type="button"
+							title={mTip}
+							onclick={() => (mnMudType = mKey as 'fresh' | 'salt')}
+							class="h-5 px-1.5 text-[10px] font-medium whitespace-nowrap transition-colors first:border-r first:border-[var(--border-hairline)] {mnMudType ===
+							mKey
+								? 'bg-blue-600 font-semibold text-white'
+								: 'text-[var(--text-secondary)] hover:bg-slate-100'}"
+						>
+							{mLbl}
+						</button>
+					{/each}
+				</div>
+			</div>
+		{/if}
+
+		{#if effectiveMode === 'enhanced-vs-raw'}
+			<div class="flex items-center gap-1">
+				<span class="text-[10px] text-[var(--text-muted)]">Curve:</span>
+				<select
+					bind:value={workbench.enhanceCompareCurve}
+					class="h-5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-[11px] font-medium text-[var(--text-primary)] focus:outline-none"
+				>
+					<option value={null}>All</option>
+					{#each ENHANCED_CURVE_PAIRS as pair (pair.raw)}
+						<option value={pair.raw}>{pair.raw}</option>
+					{/each}
+				</select>
+			</div>
+		{/if}
+
 		{#if effectiveMode === 'swirr-fit'}
 			<div class="flex items-center gap-1">
-				{#each [['swirr-corr', 'Swirr vs. √(k/φ)'], ['pc-qc', 'Pc vs. Sw (Plug QC)'], ['scal-fit', 'J / Pc Curve Fit'], ['relperm', 'Rel-Perm & fw']] as [tKey, tLbl]}
+				{#each [['swirr-corr', 'Swirr vs. √(k/φ)'], ['pc-qc', 'Pc vs. Sw (Plug QC)'], ['scal-fit', 'J / Pc Curve Fit'], ['pore-throat', 'Pore Throat by PRT'], ['relperm', 'Rel-Perm & fw']] as [tKey, tLbl]}
 					<button
 						type="button"
 						onclick={() => {
@@ -5054,6 +5877,7 @@
 								| 'swirr-corr'
 								| 'pc-qc'
 								| 'scal-fit'
+								| 'pore-throat'
 								| 'relperm';
 							workbench.scalSubMode = tKey === 'relperm' ? 'relperm' : 'static';
 						}}
@@ -5194,14 +6018,14 @@
 				{/each}
 				<button
 					type="button"
-					title="Open GRClean / GRClay Calibration Drawer"
+					title="Open gamma calibration drawer"
 					onclick={() => (showVshCalibDrawer = !showVshCalibDrawer)}
 					class="h-5 shrink-0 rounded-xs border px-1.5 text-[10px] font-semibold whitespace-nowrap transition-colors {showVshCalibDrawer
 						? 'border-emerald-600 bg-emerald-50 text-emerald-900'
 						: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-primary)] hover:bg-slate-100'}"
 				>
-					Calibrate GR ({fmtNum(workbench.lithoParams.grClean, 0)}–{fmtNum(
-						workbench.lithoParams.grClay,
+					Calibrate {gammaLabel(workbench.lithoParams)} ({fmtNum(gammaEndpoints(workbench.lithoParams).clean, 0)}–{fmtNum(
+						gammaEndpoints(workbench.lithoParams).shale,
 						0
 					)})
 				</button>
@@ -5366,6 +6190,7 @@
 					{/each}
 				</div>
 
+				{#if workbench.swirrCrossplotTab !== 'pore-throat' || effectiveMode !== 'swirr-fit'}
 				<button
 					type="button"
 					onclick={() => (projectData.scalConnectPlugs = !projectData.scalConnectPlugs)}
@@ -5387,8 +6212,9 @@
 				>
 					Labels
 				</button>
+				{/if}
 
-				{#if ((effectiveMode === 'swirr-fit' && workbench.swirrCrossplotTab === 'scal-fit') || (effectiveMode === 'shf' && shfView === 'scal_fit')) && (projectData.shfParams.jSatMode ?? 'swn') === 'swn'}
+				{#if (effectiveMode === 'swirr-fit' && workbench.swirrCrossplotTab === 'pore-throat') || (((effectiveMode === 'swirr-fit' && workbench.swirrCrossplotTab === 'scal-fit') || (effectiveMode === 'shf' && shfView === 'scal_fit')) && (projectData.shfParams.jSatMode ?? 'swn') === 'swn')}
 					<div
 						class="inline-flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]"
 						title="Choose how Swn is normalized: per-plug Lab Terminal Sw (each sample uses its own lab min Sw) or Poro-Perm Correlation Swirr(φ,k)"
@@ -5465,6 +6291,14 @@
 					</span>
 				{/if}
 			</div>
+		</div>
+	{/if}
+
+	{#if effectiveMode === 'swirr-fit' && workbench.swirrCrossplotTab === 'pore-throat'}
+		<div class="shrink-0 border-b border-[var(--border-hairline)] bg-slate-50 px-2 py-1 text-[10px] text-slate-700">
+			Washburn: IFT {fmtNum(projectData.shfParams.ift, 1)} dyn/cm, θ {fmtNum(projectData.shfParams.theta, 1)}°.
+			Uses reservoir Pc and normalized Swn; plugs not included in the Swirr fit remain visible as dotted curves.
+			Set IFT and θ in SCAL J / Pc Curve Fit; use Reset Auto-Fit after changing them to reload converted Pc and reset the Swirr fit.
 		</div>
 	{/if}
 
@@ -5597,8 +6431,14 @@
 		</div>
 	{/if}
 
-	<div class="relative min-h-0 flex-1 overflow-hidden">
+	{#if spectralNote}
+		<p class="shrink-0 px-2 py-1 text-[10px] leading-snug text-[var(--text-secondary)]">{spectralNote}</p>
+	{/if}
+	<div class="relative min-h-0 flex-1 overflow-hidden" style:display={effectiveMode === 'porosity-comparison' || effectiveMode === 'permeability-comparison' ? 'none' : undefined}>
 		<div bind:this={plotEl} class="absolute inset-0 h-full w-full"></div>
+		{#if (effectiveMode === 'th-k' || effectiveMode === 'pef-k' || effectiveMode === 'pef-th-k') && spectralReferenceError}
+			<div role="status" class="absolute bottom-1 left-2 rounded-xs bg-amber-50 px-2 py-1 text-[10px] text-amber-900">Mineral references unavailable: {spectralReferenceError}</div>
+		{/if}
 		{#if effectiveMode !== null && emptyPlotMessage}
 			<div role="status" class="pointer-events-none absolute inset-x-2 top-1 rounded-xs border border-amber-200 bg-amber-50/95 px-2 py-1 text-center text-[10px] text-amber-900">
 				{emptyPlotMessage}
@@ -5610,6 +6450,11 @@
 			</div>
 		{/if}
 	</div>
+	{#if effectiveMode === 'porosity-comparison'}
+		<div class="min-h-0 flex-1"><PorosityComparisonCanvas /></div>
+	{:else if effectiveMode === 'permeability-comparison'}
+		<div class="min-h-0 flex-1"><PermeabilityComparisonCanvas /></div>
+	{/if}
 
 	{#if projectData.selectedScalPointIds.length > 0}
 		<div

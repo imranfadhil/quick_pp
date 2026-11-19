@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { gammaParameters } from '$lib/utils/lithology';
 	import { API_BASE, generateProjectReport, getJson, postJson } from '$lib/api/client';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
@@ -177,8 +178,12 @@
 				max_depth: workbench.depthFilter ? workbench.depthFilter.max : undefined,
 				model_params: {
 					litho_model_key: workbench.lithoParams.model,
+					gamma: workbench.lithoParams.model === 'vsh_gr'
+						? gammaParameters(workbench.lithoParams) : undefined,
 					litho_minerals: workbench.lithoParams.minerals,
+					litho_input_logs: workbench.lithoParams.inputLogs,
 					porosity_method_key: workbench.lithoParams.porosityMethod,
+					sonic_fluid_dt: workbench.lithoParams.sonicFluidDt,
 					use_hc_corrected: workbench.lithoParams.useHcCorrected,
 					gr_clean: workbench.lithoParams.grClean,
 					gr_clay: workbench.lithoParams.grClay,

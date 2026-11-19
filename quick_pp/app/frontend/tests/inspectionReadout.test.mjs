@@ -70,9 +70,13 @@ test('inspection boxes show available HC-corrected values only when the overlay 
 		workbench.cursorDepth = 1050;
 		const spectral = render(LogTrackCanvas).body;
 		const track1 = spectral.slice(spectral.indexOf('T1 · LITH'), spectral.indexOf('T2 · RES'));
-		assert.match(track1, /POTA[\s\S]*?2\.00[\s\S]*?%/);
+		assert.match(track1, /POTA[\s\S]*?0\.02[\s\S]*?%/);
 		assert.match(track1, /THOR[\s\S]*?5\.0[\s\S]*?ppm/);
 		assert.match(track1, /URAN[\s\S]*?8\.0[\s\S]*?ppm/);
+
+		wellData.curves.POTA = [0.01, 0.02, 0.03];
+		assert.equal(wellData.getReadoutAtDepth(1050).POTA, 0.02);
+		assert.match(render(LogTrackCanvas).body, /POTA[\s\S]*?0\.02[\s\S]*?%/);
 	} finally {
 		await server.close();
 		globalThis.cancelAnimationFrame = previousCancelAnimationFrame;

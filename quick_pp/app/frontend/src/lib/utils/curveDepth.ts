@@ -4,6 +4,72 @@ export type CurveDepthComparison = {
 	kind: 'math' | 'splice';
 };
 
+/** Curves that have a resolution-enhanced counterpart written by `harmonize_nuclear_logs`. */
+export const ENHANCED_CURVE_PAIRS: ReadonlyArray<{ raw: string; enhanced: string; label: string }> = [
+	{ raw: 'GR', enhanced: 'GR_ENH', label: 'Gamma Ray' },
+	{ raw: 'NPHI', enhanced: 'NPHI_ENH', label: 'Neutron Porosity' },
+	{ raw: 'RHOB', enhanced: 'RHOB_ENH', label: 'Bulk Density' }
+];
+
+/**
+ * Build raw-vs-enhanced depth series for each nuclear curve present in the well.
+ * Returns one entry per curve, carrying the raw trace, the enhanced trace, and
+ * (when available) the forward-convolved `*_RECON` parity trace.
+ */
+export function enhancedVsRawSeries(
+	curves: Record<string, number[]>,
+	depths: number[],
+	indices: number[],
+	only?: string
+) {
+	const series: Array<{
+		raw: string;
+		enhanced: string;
+		label: string;
+		rawPoints: { x: Array<number | null>; y: Array<number | null> };
+		enhPoints: { x: Array<number | null>; y: Array<number | null> };
+		reconPoints: { x: Array<number | null>; y: Array<number | null> } | null;
+	}> = [];
+
+	const project = (values: number[] | undefined) => {
+		const x: Array<number | null> = [];
+		const y: Array<number | null> = [];
+		let previous = -2;
+		for (const index of indices) {
+			if (previous !== -2 && index !== previous + 1) {
+				x.push(null);
+				y.push(null);
+			}
+			const depth = depths[index];
+			const value = values ? values[index] : undefined;
+			x.push(Number.isFinite(value as number) && Number.isFinite(depth) ? (value as number) : null);
+			y.push(Number.isFinite(depth) ? depth : null);
+			previous = index;
+		}
+		return { x, y };
+	};
+
+	for (const pair of ENHANCED_CURVE_PAIRS) {
+		if (only && pair.raw !== only) continue;
+		const enhancedValues = curves[pair.enhanced];
+		if (!enhancedValues || enhancedValues.length === 0) continue;
+		if (!enhancedValues.some((value) => Number.isFinite(value))) continue;
+		const reconValues = curves[`${pair.raw}_RECON`];
+		series.push({
+			raw: pair.raw,
+			enhanced: pair.enhanced,
+			label: pair.label,
+			rawPoints: project(curves[pair.raw]),
+			enhPoints: project(enhancedValues),
+			reconPoints:
+				reconValues && reconValues.some((value) => Number.isFinite(value))
+					? project(reconValues)
+					: null
+		});
+	}
+	return series;
+}
+
 export function curveDepthSeries(
 	curves: Record<string, number[]>,
 	depths: number[],

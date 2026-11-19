@@ -2,6 +2,12 @@ import { api, postJson, saveAncillaryItems } from '$lib/api/client';
 import type { CoreComparisonMetrics, CurveSummaryStats } from '$lib/api/schema';
 import { appStatus } from './status.svelte';
 import { workbench } from './workbench.svelte';
+import { calibrateGamma, gammaEndpoints, gammaKey, gammaLabel, selectedGamma, setGammaEndpoints } from '$lib/utils/lithology';
+import {
+	selectSpliceInterval,
+	validateSpliceInterval,
+	type SpliceInterval
+} from '$lib/utils/spliceIntervals';
 import {
 	isParamModuleKey,
 	moduleParams,
@@ -72,7 +78,14 @@ export const CALCULATED_CURVE_GROUPS: Record<
 			'HC_FLAG',
 			'SHC_INV',
 			'RHOB_DEN_CORR',
-			'DEN_CORR_FLAG'
+			'DEN_CORR_FLAG',
+			'GR_ENH',
+			'NPHI_ENH',
+			'RHOB_ENH',
+			'GR_RECON',
+			'NPHI_RECON',
+			'RHOB_RECON',
+			'DECONV_WEIGHT'
 		]
 	},
 	litho_poro: {
@@ -101,7 +114,11 @@ export const CALCULATED_CURVE_GROUPS: Record<
 			'PHIT_SH',
 			'VSH_LAM',
 			'VSH_DIS',
+			'VSH_STR',
 			'PHIT_SAND',
+			'PHISAND_TS',
+			'PHIT_TS',
+			'PHIE_TS',
 			'RSAND_TS',
 			'RT_MOD',
 			'PHIT_P10',
@@ -245,6 +262,12 @@ function computeSummaryStats(arr: number[], deptArr?: number[]): CurveSummarySta
 }
 
 class WellDataState {
+	porosityComparison = $state.raw<import('$lib/utils/methodComparison').MethodComparison | null>(null);
+	permeabilityComparison = $state.raw<import('$lib/utils/methodComparison').MethodComparison | null>(null);
+	porosityComparisonKey = $state('');
+	permeabilityComparisonKey = $state('');
+	porosityComparisonError = $state<string | null>(null);
+	permeabilityComparisonError = $state<string | null>(null);
 	isLoading = $state<boolean>(false);
 	isCalculating = $state<boolean>(false);
 	isSaving = $state<boolean>(false);
@@ -292,6 +315,8 @@ class WellDataState {
 	zonalSummary = $state.raw<Record<string, any>[]>([]);
 	zonalSummarySource = $state<{ projectId: string; wellId: string } | null>(null);
 	poroCoreMetrics = $state<CoreComparisonMetrics | null>(null);
+	/** Provenance of the applied grain-density correlation in the last porosity run. */
+	poroGrainDensityProvenance = $state<Record<string, any> | null>(null);
 	permCoreMetrics = $state<CoreComparisonMetrics | null>(null);
 
 	// Unsaved computed curve mnemonics per single-well module (cleared on well load or after saving that module)
@@ -793,8 +818,8 @@ class WellDataState {
 	// and across CPORE/CPERM core depth shifts because it only reads fine-grained curve selectors).
 	private vshDnBaseRows = $derived.by(() => {
 		const dept = this.deptCurve;
-		const grArr = this.grCurve;
 		const lp = workbench.lithoParams;
+		const grArr = selectedGamma(lp, this.curves);
 		const useHc = lp.logCorrectionMode === 'hc' && (lp.enableHcCorrection || lp.useHcCorrected);
 		const nphiHc = this.nphiHcCurve;
 		const rhobHc = this.rhobHcCurve;
@@ -832,21 +857,28 @@ class WellDataState {
 		const xdiff0 = A[0] - C[0];
 		const ydiff0 = A[1] - C[1];
 		const d0 = A[0] * C[1] - A[1] * C[0];
-		const xdiff1 = D[0] - B[0];
-		const ydiff1 = D[1] - B[1];
-		const d1 = D[0] * B[1] - D[1] * B[0];
-		const resDiv = xdiff0 * ydiff1 - xdiff1 * ydiff0;
-		if (Math.abs(resDiv) < 1e-12) {
-			throw new Error(
-				'Cannot calculate live VSH preview: fluid-silt line does not intersect the sand-clay line'
-			);
-		}
-		const resIntersectionX = (d0 * xdiff1 - d1 * xdiff0) / resDiv;
-		const resIntersectionY = (d0 * ydiff1 - d1 * ydiff0) / resDiv;
-		const resLen = Math.hypot(A[0] - resIntersectionX, A[1] - resIntersectionY);
-		const resRatio = Math.max(0.05, Math.min(0.95, resLen / rockLen));
-		const nonResLen = Math.max(1e-6, rockLen * (1 - resRatio));
+		const isSandShale = lp.model === 'sand_shale' || lp.model === 'vsh_nd';
+		let resLen = rockLen;
+		let resRatio = 0.5;
+		let nonResLen = rockLen * 0.5;
 		const siltClayRatio = 0.25;
+
+		if (!isSandShale) {
+			const xdiff1 = D[0] - B[0];
+			const ydiff1 = D[1] - B[1];
+			const d1 = D[0] * B[1] - D[1] * B[0];
+			const resDiv = xdiff0 * ydiff1 - xdiff1 * ydiff0;
+			if (Math.abs(resDiv) < 1e-12) {
+				throw new Error(
+					'Cannot calculate live VSH preview: fluid-silt line does not intersect the sand-clay line'
+				);
+			}
+			const resIntersectionX = (d0 * xdiff1 - d1 * xdiff0) / resDiv;
+			const resIntersectionY = (d0 * ydiff1 - d1 * ydiff0) / resDiv;
+			resLen = Math.hypot(A[0] - resIntersectionX, A[1] - resIntersectionY);
+			resRatio = Math.max(0.05, Math.min(0.95, resLen / rockLen));
+			nonResLen = Math.max(1e-6, rockLen * (1 - resRatio));
+		}
 
 		const shaleCut = workbench.vshShaleCutoff;
 		const sandCut = workbench.vshSandCutoff;
@@ -894,11 +926,11 @@ class WellDataState {
 			const projClamped = Math.max(0.0, Math.min(rockLen, projLen));
 			const ptRatio = projClamped / rockLen;
 
-			const vshDnRaw =
-				ptRatio >= 1.0 - resRatio
-					? (-(1.0 - siltClayRatio) / resLen) * projClamped +
-						(rockLen * (1.0 - siltClayRatio)) / resLen
-					: (-siltClayRatio / nonResLen) * projClamped + 1.0;
+			const vshDnRaw = isSandShale
+				? 1.0 - ptRatio
+				: (ptRatio >= 1.0 - resRatio
+					? (rockLen - projClamped) / resLen
+					: 1.0);
 			const vshDn = Math.round(Math.max(0.0, Math.min(1.0, vshDnRaw)) * 10000) / 10000;
 
 			const isBadhole = Number.isFinite(badholeArr[idx]) && badholeArr[idx] >= 0.5;
@@ -951,8 +983,7 @@ class WellDataState {
 	vshComparison = $derived.by(() => {
 		const baseRows = this.vshDnBaseRows;
 		const lp = workbench.lithoParams;
-		const grClean = lp.grClean;
-		const grClay = lp.grClay;
+		const { clean: grClean, shale: grClay } = gammaEndpoints(lp);
 		const grSpan = Math.abs(grClay - grClean) > 1e-4 ? grClay - grClean : 100.0;
 		const scope = workbench.vshCalibScope;
 		const brushed = scope === 'brushed' ? workbench.brushedDepthIndices : null;
@@ -1111,6 +1142,10 @@ class WellDataState {
 	async loadWellBundle(projectId: string | number, wellName: string) {
 		if (!projectId || !wellName) return;
 		const gen = ++this.wellLoadGeneration;
+		this.porosityComparison = null;
+		this.permeabilityComparison = null;
+		this.porosityComparisonError = null;
+		this.permeabilityComparisonError = null;
 		this.cancelPendingWellLoadTask();
 		this.isLoading = true;
 		this.lastError = null;
@@ -1417,10 +1452,38 @@ class WellDataState {
 				raw_depth: Number(s.raw_depth ?? s.depth ?? s.DEPTH)
 			}));
 			this.originalCoreSamples = this.coreSamples.map((s: any) => ({ ...s }));
-			this.originalScalPc = ((data as any).scal_pc || []).map((s: any) => ({
-				...s,
-				raw_depth: Number(s.raw_depth ?? s.depth ?? s.DEPTH)
-			}));
+
+			const corePoroBySample = new Map<string, number>();
+			const corePermBySample = new Map<string, number>();
+			const corePoroByDepth = new Map<number, number>();
+			const corePermByDepth = new Map<number, number>();
+			for (const cs of this.coreSamples) {
+				const sn = String(cs.sample_name || '').trim();
+				const cd = Number(cs.depth ?? cs.raw_depth);
+				const cp = Number(cs.porosity ?? cs.CPORE ?? cs.porosity_amb);
+				const ck = Number(cs.permeability ?? cs.CPERM ?? cs.perm_air);
+				if (sn && Number.isFinite(cp) && cp > 0) corePoroBySample.set(sn, cp > 1.0 ? cp / 100 : cp);
+				if (sn && Number.isFinite(ck) && ck > 0) corePermBySample.set(sn, ck);
+				if (Number.isFinite(cd) && Number.isFinite(cp) && cp > 0) corePoroByDepth.set(Math.round(cd * 100) / 100, cp > 1.0 ? cp / 100 : cp);
+				if (Number.isFinite(cd) && Number.isFinite(ck) && ck > 0) corePermByDepth.set(Math.round(cd * 100) / 100, ck);
+			}
+
+			this.scalPc = ((data as any).scal_pc || []).map((s: any) => {
+				const sn = String(s.sample_name || '').trim();
+				const sd = Number(s.depth ?? s.raw_depth);
+				const sdKey = Math.round(sd * 100) / 100;
+				const rawP = s.porosity ?? s.cpore ?? s.CPORE ?? corePoroBySample.get(sn) ?? corePoroByDepth.get(sdKey);
+				const rawK = s.permeability ?? s.cperm ?? s.CPERM ?? corePermBySample.get(sn) ?? corePermByDepth.get(sdKey);
+				const pNum = Number(rawP);
+				const kNum = Number(rawK);
+				return {
+					...s,
+					raw_depth: Number(s.raw_depth ?? s.depth ?? s.DEPTH),
+					porosity: Number.isFinite(pNum) && pNum > 0 ? (pNum > 1.0 ? pNum / 100 : pNum) : null,
+					permeability: Number.isFinite(kNum) && kNum > 0 ? kNum : null
+				};
+			});
+			this.originalScalPc = this.scalPc.map((s: any) => ({ ...s }));
 			const initCfg = (data.config || {}) as Record<string, any>;
 			this.coreShiftMode = initCfg.core_shift_mode === 'tie-points' ? 'tie-points' : 'affine';
 			this.coreShiftDelta =
@@ -1476,6 +1539,22 @@ class WellDataState {
 				const v = savedScal[key] ?? cfgAny[key];
 				return typeof v === 'number' && Number.isFinite(v) ? v : fallback;
 			};
+						const pickVal = (key: string, fallback: any): any => {
+							const v = savedScal[key] ?? cfgAny[key];
+							return v === undefined || v === null ? fallback : v;
+						};
+						const pickStr = (key: string, fallback: string): string => {
+							const v = savedScal[key] ?? cfgAny[key];
+							return typeof v === 'string' && v.length > 0 ? v : fallback;
+						};
+						const pickNullableStr = (key: string, fallback: string | null): string | null => {
+							const v = savedScal[key] ?? cfgAny[key];
+							return typeof v === 'string' && v.length > 0 ? v : fallback;
+						};
+						const pickBooleanVal = (key: string, fallback: boolean): boolean => {
+							const v = savedScal[key] ?? cfgAny[key];
+							return typeof v === 'boolean' ? v : Boolean(v ?? fallback);
+						};
 			workbench.scalParams.model = (savedScal.model ??
 				cfgAny.scal_model ??
 				workbench.scalParams.model) as any;
@@ -1597,6 +1676,85 @@ class WellDataState {
 			workbench.scalParams.pc_scaling_applied = Boolean(
 				savedScal.pc_scaling_applied ?? cfgAny.pc_scaling_applied ?? false
 			);
+
+						// Restore the project-scoped grain / matrix density correlation (single or multi-log).
+						workbench.scalParams.gd_enabled = Boolean(
+							pickBooleanVal('gd_enabled', workbench.scalParams.gd_enabled)
+						);
+						workbench.scalParams.gd_mode =
+							pickStr('gd_mode', workbench.scalParams.gd_mode) === 'single'
+								? 'single'
+								: 'multivariate';
+						workbench.scalParams.gd_driver_col = pickStr(
+							'gd_driver_col',
+							workbench.scalParams.gd_driver_col
+						);
+						const savedCols = pickVal('gd_driver_cols', workbench.scalParams.gd_driver_cols);
+						if (Array.isArray(savedCols) && savedCols.length > 0) {
+							workbench.scalParams.gd_driver_cols = savedCols.map((c: unknown) => String(c));
+						}
+						const savedCoef = pickVal('gd_coef', workbench.scalParams.gd_coef);
+						if (Array.isArray(savedCoef)) workbench.scalParams.gd_coef = savedCoef.map(Number);
+						const savedNative = pickVal('gd_native_slopes', workbench.scalParams.gd_native_slopes);
+						if (Array.isArray(savedNative)) {
+							workbench.scalParams.gd_native_slopes = savedNative.map(Number);
+						}
+						workbench.scalParams.gd_plot_driver_col = pickNullableStr(
+							'gd_plot_driver_col',
+							workbench.scalParams.gd_plot_driver_col
+						);
+						const savedCenter = pickVal('gd_center', workbench.scalParams.gd_center);
+						if (Array.isArray(savedCenter)) workbench.scalParams.gd_center = savedCenter.map(Number);
+						const savedScale = pickVal('gd_scale', workbench.scalParams.gd_scale);
+						if (Array.isArray(savedScale)) workbench.scalParams.gd_scale = savedScale.map(Number);
+						workbench.scalParams.gd_intercept = pickNullableNum(
+							'gd_intercept',
+							workbench.scalParams.gd_intercept
+						);
+						workbench.scalParams.gd_alpha = pickNum('gd_alpha', workbench.scalParams.gd_alpha);
+						workbench.scalParams.gd_robust = Boolean(
+							pickBooleanVal('gd_robust', workbench.scalParams.gd_robust)
+						);
+						const savedVif = pickVal('gd_vif', workbench.scalParams.gd_vif);
+						if (savedVif && typeof savedVif === 'object' && !Array.isArray(savedVif)) {
+							const vifMap: Record<string, number> = {};
+							for (const [k, v] of Object.entries(savedVif as Record<string, unknown>)) {
+								const num = Number(v);
+								if (Number.isFinite(num)) vifMap[k] = num;
+							}
+							workbench.scalParams.gd_vif = vifMap;
+						}
+						workbench.scalParams.gd_breusch_pagan_p = pickNullableNum(
+							'gd_breusch_pagan_p',
+							workbench.scalParams.gd_breusch_pagan_p
+						);
+						workbench.scalParams.gd_resid_mad = pickNullableNum(
+							'gd_resid_mad',
+							workbench.scalParams.gd_resid_mad
+						);
+						workbench.scalParams.gd_rho_ma_clean = pickNum(
+							'gd_rho_ma_clean',
+							workbench.scalParams.gd_rho_ma_clean
+						);
+						workbench.scalParams.gd_k = pickNum('gd_k', workbench.scalParams.gd_k);
+						workbench.scalParams.gd_driver_clean = pickNum(
+							'gd_driver_clean',
+							workbench.scalParams.gd_driver_clean
+						);
+						workbench.scalParams.gd_rho_ma_min = pickNum(
+							'gd_rho_ma_min',
+							workbench.scalParams.gd_rho_ma_min
+						);
+						workbench.scalParams.gd_rho_ma_max = pickNum(
+							'gd_rho_ma_max',
+							workbench.scalParams.gd_rho_ma_max
+						);
+						workbench.scalParams.gd_r2 = pickNullableNum('gd_r2', workbench.scalParams.gd_r2);
+						workbench.scalParams.gd_rmse = pickNullableNum('gd_rmse', workbench.scalParams.gd_rmse);
+						workbench.scalParams.gd_count = pickNullableNum('gd_count', workbench.scalParams.gd_count);
+						workbench.scalParams.gd_calibrated = Boolean(
+							pickBooleanVal('gd_calibrated', workbench.scalParams.gd_calibrated)
+						);
 
 			// Restore persistent working Top/Bottom depth interval for this specific well (if configured)
 			let focusMin: number | null =
@@ -2534,9 +2692,14 @@ class WellDataState {
 			}
 			if (groupSet.has('litho_poro') || clearedSet.has('PHIT')) {
 				this.poroCoreMetrics = null;
+				this.poroGrainDensityProvenance = null;
+				this.porosityComparison = null;
+				this.porosityComparisonError = null;
 			}
 			if (groupSet.has('perm') || clearedSet.has('PERM')) {
 				this.permCoreMetrics = null;
+				this.permeabilityComparison = null;
+				this.permeabilityComparisonError = null;
 			}
 
 			if (clearedSet.has(workbench.selectedQaqcCurve)) {
@@ -2703,6 +2866,7 @@ class WellDataState {
 	 */
 	async spliceCurves(opts: {
 		sourceCurves: string[];
+		sourceIntervals?: Record<string, SpliceInterval>;
 		targetCurve: string;
 		overlapMode?: CurveSpliceOverlapMode;
 		spliceDepth?: number | null;
@@ -2737,16 +2901,19 @@ class WellDataState {
 				this.originalCurves[dst] ?? [...existingDst])
 			: null;
 
+		for (const source of validSources) {
+			const values = source === dst && origDstArr ? origDstArr : this.curves[source];
+			validateSpliceInterval(source, deptArr, values, opts.sourceIntervals?.[source]);
+		}
+
 		if (existingDst && origDstArr && !this.originalCurves[dst]) {
 			this.originalCurves = { ...this.originalCurves, [dst]: [...origDstArr] };
 		}
 
 		// Use un-spliced base snapshot when dst is one of the source curves so repeated previews are idempotent
 		const getRunArray = (col: string): number[] => {
-			if (col === dst && origDstArr) {
-				return [...origDstArr];
-			}
-			return [...(this.curves[col] ?? [])];
+			const values = col === dst && origDstArr ? origDstArr : (this.curves[col] ?? []);
+			return selectSpliceInterval(deptArr, values, opts.sourceIntervals?.[col]);
 		};
 
 		const ovMode: CurveSpliceOverlapMode = opts.overlapMode ?? 'blend';
@@ -3734,6 +3901,33 @@ class WellDataState {
 			}
 		}
 
+		// Also populate from scalPc where coreSamples didn't cover
+		for (const s of this.scalPc) {
+			const sd = Number(s.depth ?? s.DEPTH);
+			if (!Number.isFinite(sd)) continue;
+			const pRaw = Number(s.porosity ?? s.CPORE ?? s.cpore);
+			const kRaw = Number(s.permeability ?? s.CPERM ?? s.cperm);
+			const pVal =
+				Number.isFinite(pRaw) && pRaw > 0 ? (pRaw > 1.0 ? pRaw / 100.0 : pRaw) : null;
+			const kVal = Number.isFinite(kRaw) && kRaw > 0 ? kRaw : null;
+			if (pVal === null && kVal === null) continue;
+
+			let lo = 0;
+			let hi = dept.length - 1;
+			while (lo < hi) {
+				const mid = (lo + hi) >> 1;
+				if (dept[mid] < sd) lo = mid + 1;
+				else hi = mid;
+			}
+			if (lo > 0 && Math.abs(dept[lo - 1] - sd) < Math.abs(dept[lo] - sd)) {
+				lo = lo - 1;
+			}
+			if (Math.abs(dept[lo] - sd) <= 0.5) {
+				if (pVal !== null && Number.isNaN(newCpore[lo])) newCpore[lo] = pVal;
+				if (kVal !== null && Number.isNaN(newCperm[lo])) newCperm[lo] = kVal;
+			}
+		}
+
 		const nextCurves: Record<string, number[]> = {
 			...this.curves,
 			CPORE: newCpore,
@@ -3777,14 +3971,18 @@ class WellDataState {
 	 */
 	applyLiveVshGr() {
 		const dept = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
-		const grArr = this.curves['GR'] ?? [];
-		if (dept.length === 0 || grArr.length === 0) return;
-
 		const lp = workbench.lithoParams;
-		const span = Math.abs(lp.grClay - lp.grClean) > 1e-4 ? lp.grClay - lp.grClean : 100.0;
-		const vshGrArr = grArr.map((g) =>
-			Number.isFinite(g) ? Math.max(0.0, Math.min(1.0, (g - lp.grClean) / span)) : Number.NaN
-		);
+		const grArr = selectedGamma(lp, this.curves);
+		if (dept.length === 0) return;
+
+		const { clean, shale } = gammaEndpoints(lp);
+		const span = Math.abs(shale - clean) > 1e-4 ? shale - clean : 100.0;
+		const vshGrArr = dept.map((_, i) => {
+			const g = grArr[i];
+			return (
+			Number.isFinite(g) ? Math.max(0.0, Math.min(1.0, (g - clean) / span)) : Number.NaN
+			);
+		});
 
 		const vshDnArr = this.curves['VSH_DN']
 			? [...this.curves['VSH_DN']]
@@ -3816,7 +4014,24 @@ class WellDataState {
 
 		if (goodRows.length < 3) {
 			appStatus.info(
-				'Not enough valid GR & NPHI-RHOB points to calibrate',
+				`Not enough valid ${gammaLabel(workbench.lithoParams)} & NPHI-RHOB points to calibrate`,
+				workbench.wellId ?? undefined
+			);
+			return;
+		}
+
+		if (gammaKey(workbench.lithoParams) !== 'gr') {
+			const holdClean = scope === 'shale_only' || (scope === 'shale_sand' && sandRows.length < 3);
+			const groups = holdClean
+				? [{ points: shaleRows.length >= 3 ? shaleRows : goodRows, weight: 1 }]
+				: scope === 'shale_sand' && shaleRows.length >= 3 && sandRows.length >= 3
+					? [{ points: shaleRows, weight: 0.5 }, { points: sandRows, weight: 0.5 }]
+					: [{ points: scope === 'brushed' && brushedRows.length >= 3 ? brushedRows : goodRows, weight: 1 }];
+			const fitted = calibrateGamma(groups, gammaEndpoints(workbench.lithoParams), holdClean);
+			setGammaEndpoints(workbench.lithoParams, fitted.clean, fitted.shale);
+			this.applyLiveVshGr();
+			appStatus.success(
+				`Calibrated ${gammaLabel(workbench.lithoParams)}: clean = ${fitted.clean} gAPI, shale = ${fitted.shale} gAPI (RMSE = ${this.vshComparison.active.rmse ?? '—'})`,
 				workbench.wellId ?? undefined
 			);
 			return;
@@ -3839,8 +4054,7 @@ class WellDataState {
 			return sq / pts.length;
 		};
 
-		let bestClean = workbench.lithoParams.grClean;
-		let bestClay = workbench.lithoParams.grClay;
+		let { clean: bestClean, shale: bestClay } = gammaEndpoints(workbench.lithoParams);
 
 		if (scope === 'shale_only' || (scope === 'shale_sand' && sandRows.length < 3)) {
 			// Calibrate GR_clay on Clean Shale while holding GR_clean anchored
@@ -3957,12 +4171,11 @@ class WellDataState {
 			}
 		}
 
-		workbench.lithoParams.grClean = Number(bestClean.toFixed(1));
-		workbench.lithoParams.grClay = Number(bestClay.toFixed(1));
+		setGammaEndpoints(workbench.lithoParams, Number(bestClean.toFixed(1)), Number(bestClay.toFixed(1)));
 		this.applyLiveVshGr();
 
 		appStatus.success(
-			`Calibrated VSH_GR → VSH_DN: GR Clean = ${workbench.lithoParams.grClean.toFixed(1)} gAPI, GR Shale = ${workbench.lithoParams.grClay.toFixed(1)} gAPI (RMSE = ${this.vshComparison.active.rmse ?? '—'})`,
+			`Calibrated ${gammaLabel(workbench.lithoParams)} → VSH_DN: clean = ${bestClean.toFixed(1)} gAPI, shale = ${bestClay.toFixed(1)} gAPI (RMSE = ${this.vshComparison.active.rmse ?? '—'})`,
 			workbench.wellId ?? undefined
 		);
 	}
@@ -4019,6 +4232,7 @@ class WellDataState {
 			'VSH_GR',
 			'VSH_LAM',
 			'VSH_DIS',
+			'VSH_STR',
 			'VCALC',
 			'VDOLO',
 			'VSAND',
@@ -4064,11 +4278,18 @@ class WellDataState {
 			}
 		}
 
-		// Normalize POTA to percent (%) if stored as decimal fraction (max <= 0.5 v/v)
-		if (out['POTA'] !== null && out['POTA'] !== undefined) {
-			const potaArr = this.curves['POTA'] ?? this.curves['POTA.'];
-			if (potaArr && !potaArr.some((v) => Number.isFinite(v) && v > 0.5)) {
-				out['POTA'] = out['POTA'] * 100.0;
+		for (const [curve, aliases] of Object.entries({
+			POTA: ['POTA.', 'HFKO', 'HFKO.', 'POT', 'POT.', 'K', 'K.', 'POTA_NORM'],
+			THOR: ['THOR.', 'HTHO', 'HTHO.', 'TH', 'TH.', 'THO'],
+			URAN: ['URAN.', 'HURA', 'HURA.', 'U', 'U.', 'URA']
+		})) {
+			if (out[curve] !== null && out[curve] !== undefined) continue;
+			for (const alias of aliases) {
+				const value = this.curves[alias]?.[lo];
+				if (typeof value === 'number' && Number.isFinite(value)) {
+					out[curve] = value;
+					break;
+				}
 			}
 		}
 

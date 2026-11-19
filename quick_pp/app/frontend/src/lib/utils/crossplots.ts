@@ -2,19 +2,27 @@ import type { MultiWellStep, SingleWellStep } from '../state/workbench.svelte';
 
 export type CrossplotId =
 	| 'nphi-rhob'
+	| 'mn-plot'
 	| 'thomas-stieber'
 	| 'phi-k'
 	| 'pickett'
 	| 'sw-comparison'
+	| 'porosity-comparison'
+	| 'permeability-comparison'
 	| 'bqv'
 	| 'histogram'
 	| 'curve-depth'
+	| 'enhanced-vs-raw'
 	| 'mw-distribution'
 	| 'swirr-fit'
 	| 'shf'
 	| 'relperm'
 	| 'core-qc'
-	| 'vsh-qc';
+	| 'vsh-qc'
+	| 'th-k'
+	| 'pef-k'
+	| 'pef-th-k'
+	| 'grain-density';
 
 export type CrossplotContext =
 	| { scope: 'single-well'; step: SingleWellStep }
@@ -45,6 +53,11 @@ export const CROSSPLOTS: readonly CrossplotDefinition[] = [
 		single: { group: 'Step 1 · Data & QAQC', steps: ['qaqc'] }
 	},
 	{
+		id: 'enhanced-vs-raw',
+		label: 'Resolution Enhanced vs. Raw',
+		single: { group: 'Step 1 · Data & QAQC', steps: ['qaqc'] }
+	},
+	{
 		id: 'nphi-rhob',
 		label: 'NPHI vs. RHOB (SSC)',
 		single: {
@@ -54,8 +67,33 @@ export const CROSSPLOTS: readonly CrossplotDefinition[] = [
 		}
 	},
 	{
+		id: 'mn-plot',
+		label: 'M-N Plot (Mineral ID)',
+		single: { group: 'Step 3 · Lithology & Porosity', steps: ['litho-poro'] }
+	},
+	{
 		id: 'vsh-qc',
 		label: 'Vsh Calibration (VSH_GR × VSH_DN)',
+		single: { group: 'Step 3 · Lithology & Porosity', steps: ['litho-poro'] }
+	},
+	{
+		id: 'porosity-comparison',
+		label: 'Porosity Methods vs Depth + Core',
+		single: { group: 'Step 3 · Lithology & Porosity', steps: ['litho-poro'] }
+	},
+	{
+		id: 'th-k',
+		label: 'Thorium vs. Potassium',
+		single: { group: 'Step 3 · Lithology & Porosity', steps: ['litho-poro'] }
+	},
+	{
+		id: 'pef-k',
+		label: 'PEF vs. Potassium',
+		single: { group: 'Step 3 · Lithology & Porosity', steps: ['litho-poro'] }
+	},
+	{
+		id: 'pef-th-k',
+		label: 'PEF vs. Th/K',
 		single: { group: 'Step 3 · Lithology & Porosity', steps: ['litho-poro'] }
 	},
 	{
@@ -79,6 +117,11 @@ export const CROSSPLOTS: readonly CrossplotDefinition[] = [
 		single: { group: 'Step 5 · Saturation', steps: ['saturation'], autoFor: ['saturation'] }
 	},
 	{
+		id: 'permeability-comparison',
+		label: 'Permeability Methods vs Depth + Core',
+		single: { group: 'Step 4 · Permeability', steps: ['perm'] }
+	},
+	{
 		id: 'pickett',
 		label: 'Pickett Plot (Rt vs Φ)',
 		single: { group: 'Step 5 · Saturation', steps: ['saturation'] }
@@ -95,6 +138,14 @@ export const CROSSPLOTS: readonly CrossplotDefinition[] = [
 			group: 'Standalone · Core & Pc Prep',
 			steps: ['scal', 'litho-poro', 'perm'],
 			autoFor: ['scal']
+		}
+	},
+	{
+		id: 'grain-density',
+		label: 'Grain Density vs. GR/CGR',
+		single: {
+			group: 'Standalone · Core & Pc Prep',
+			steps: ['scal', 'litho-poro']
 		}
 	},
 	{

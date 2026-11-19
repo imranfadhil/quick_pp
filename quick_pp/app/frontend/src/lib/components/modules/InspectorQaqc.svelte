@@ -25,11 +25,32 @@
 	import { fmtDepth, fmtNum } from '$lib/utils/formatters';
 	import { depthDisplay } from '$lib/state/depthDisplay.svelte';
 	import { depthFromMeters, depthToMeters } from '$lib/utils/depthUnits';
+	import { selectSpliceInterval, type SpliceInterval } from '$lib/utils/spliceIntervals';
 
 	const REQUIRED_STANDARD = ['GR', 'RT', 'NPHI', 'RHOB', 'CALI', 'DTC', 'PEF'];
 	const EVALUATED_CURVES = ALL_CALCULATED_CURVE_MNEMONICS;
 
 	let curveList = $derived(wellData.availableCurves);
+
+	// Raw = as-loaded logs (incl. *_ORI backups); Edited = raw curves overwritten in place
+	// (have a *_ORI backup); Computed = derived petrophysical curves.
+	let curveGroups = $derived.by(() => {
+		const calc = new Set(wellData.calculatedCurvesPresent);
+		const raw: string[] = [];
+		const edited: string[] = [];
+		const computed: string[] = [];
+		for (const c of curveList) {
+			if (calc.has(c)) computed.push(c);
+			else if (!c.endsWith('_ORI') && wellData.curves[`${c}_ORI`]) edited.push(c);
+			else raw.push(c);
+		}
+		return { raw, edited, computed };
+	});
+	let statGroups = $derived([
+		{ key: 'raw', label: 'Raw', hint: 'Curves as loaded (including _ORI backups)', curves: curveGroups.raw },
+		{ key: 'edited', label: 'Edited', hint: 'Curves modified in place (original kept as _ORI)', curves: curveGroups.edited },
+		{ key: 'computed', label: 'Computed', hint: 'Derived petrophysical curves', curves: curveGroups.computed }
+	]);
 
 	// Keep selectedQaqcCurve valid when well changes
 	$effect(() => {
@@ -52,12 +73,18 @@
 
 	// Curve Splicing (Merge Multiple Log Runs) state
 	let spliceRuns = $state<string[]>(['', '']);
+	let spliceIntervals = $state<Record<string, SpliceInterval>>({});
 	let spliceOverlapMode = $state<CurveSpliceOverlapMode>('blend');
 	let spliceDepth = $state<number>(1500);
 	let spliceAutoLevel = $state<boolean>(false);
 	let spliceInterpGaps = $state<boolean>(false);
 	let spliceMaxGapM = $state<number>(2.0);
 	let spliceTargetName = $state<string>('');
+
+	$effect(() => {
+		wellData.wellLoadGeneration;
+		spliceIntervals = {};
+	});
 
 	$effect(() => {
 		workbench.qaqcEditorMode = editorMode;
@@ -69,6 +96,141 @@
 	let renameTargetName = $state<string>('');
 	let confirmDeleteCurve = $state<boolean>(false);
 	let editStatusMsg = $state<string | null>(null);
+
+	// --- Resolution Enhancement (1D constrained deconvolution) State ---
+	let enhSummary = $state<{
+		target_fwhm_m: number;
+		depth_step_m: number;
+		depth_uom: string;
+		enhanced_curves: string[];
+		diagnostics: Record<
+			string,
+			{
+				intrinsic_fwhm_m: number;
+				effective_fwhm_m: number;
+				estimated_noise_std: number;
+				lambda_reg: number;
+				weighted_recon_rmse: number;
+				relative_volume_bias_pct: number;
+				converged: boolean;
+				iterations: number;
+			}
+		>;
+		alignment_lags_samples: Record<string, number>;
+		warnings: string[];
+	} | null>(null);
+
+	async function runResolutionEnhancement(persist: boolean = false) {
+		if (!workbench.projectId || !workbench.wellId) return;
+		const ep = workbench.enhanceParams;
+
+		// Deconvolution needs a contiguous depth-ordered window. When the user has an
+		// active lasso selection and "Apply to selection" is enabled, constrain the run
+		// to the selected depth interval instead of the whole (depth-filtered) well.
+		let minDepth = workbench.depthFilter?.min ?? null;
+		let maxDepth = workbench.depthFilter?.max ?? null;
+		let zones: string[] | null =
+			workbench.selectedZones.length > 0 ? workbench.selectedZones : null;
+		const brushed = workbench.brushedDepthIndices;
+		if (workbench.useBrushedCalculationFilter && brushed.size > 0) {
+			const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
+			const selDepths = Array.from(brushed)
+				.map((i) => dept[i])
+				.filter((d) => Number.isFinite(d)) as number[];
+			if (selDepths.length > 0) {
+				minDepth = Math.min(...selDepths);
+				maxDepth = Math.max(...selDepths);
+				// Zones would further subset the selection; the lasso interval is explicit.
+				zones = null;
+			}
+		}
+
+		wellData.isCalculating = true;
+		wellData.lastError = null;
+		try {
+			const res = await postJson<any>(
+				`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/wells/${encodeURIComponent(workbench.wellId)}/resolution_enhancement`,
+				{
+					mode: ep.mode,
+					method: ep.method,
+					target_fwhm_m: ep.targetFwhm,
+					nyquist_factor: ep.nyquistFactor,
+					lambda_vol: ep.lambdaVol,
+					morozov_tau: ep.morozovTau,
+					huber_delta_mult: ep.huberDeltaMult,
+					volume_window_m: ep.volumeWindow,
+					noise_cap_mult: ep.noiseCapMult > 0 ? ep.noiseCapMult : null,
+					min_depth: minDepth,
+					max_depth: maxDepth,
+					zones,
+					save: persist
+				}
+			);
+			if (res.data) {
+				const mergeIndices =
+					workbench.useBrushedCalculationFilter && brushed.size > 0
+						? wellData.getBrushedCalculationIndices()
+						: null;
+				wellData.mergeComputedCurves(res.data, res.stats, mergeIndices);
+				wellData.markModuleComputed('qaqc-enhance', res.data);
+			}
+			enhSummary = {
+				target_fwhm_m: res.target_fwhm_m,
+				depth_step_m: res.depth_step_m,
+				depth_uom: res.depth_uom,
+				enhanced_curves: res.enhanced_curves ?? [],
+				diagnostics: res.diagnostics ?? {},
+				alignment_lags_samples: res.alignment_lags_samples ?? {},
+				warnings: res.warnings ?? []
+			};
+			if (persist) {
+				await wellData.saveModuleComputed('qaqc-enhance', 'Resolution Enhancement Saved ✓');
+			}
+		} catch (e: any) {
+			wellData.lastError = e?.message || 'Resolution enhancement failed';
+		} finally {
+			wellData.isCalculating = false;
+		}
+	}
+
+	/** Curves written by the resolution-enhancement run (raw curves are never touched). */
+	const ENHANCEMENT_CURVES = [
+		'GR_ENH',
+		'NPHI_ENH',
+		'RHOB_ENH',
+		'GR_RECON',
+		'NPHI_RECON',
+		'RHOB_RECON',
+		'DECONV_WEIGHT'
+	];
+
+	async function revertResolutionEnhancement() {
+		// Stop feeding enhanced logs downstream first so dependent modules fall back
+		// to the raw curves before the enhanced columns disappear.
+		workbench.enhanceParams.useEnhancedLogs = false;
+
+		const present = ENHANCEMENT_CURVES.filter((c) => Boolean(wellData.curves[c]));
+		if (present.length > 0) {
+			wellData.isCalculating = true;
+			wellData.lastError = null;
+			try {
+				// Persist only when the enhancement was already saved to the DB; otherwise
+				// just drop the in-memory columns from the pending run.
+				const persist = !wellData.hasPendingComputed('qaqc-enhance');
+				await wellData.clearCalculatedCurves({
+					scope: 'full',
+					curves: present,
+					persist
+				});
+			} catch (e: any) {
+				wellData.lastError = e?.message || 'Failed to clear enhanced curves';
+			} finally {
+				wellData.isCalculating = false;
+			}
+		}
+
+		enhSummary = null;
+	}
 
 	// Clear All Calculated Curves state (Full Well or By Formation)
 	let showClearCalcPanel = $state<boolean>(false);
@@ -186,8 +348,24 @@
 			};
 		}
 
-		const arrA = wellData.curves[validCols[0]] ?? [];
-		const arrB = wellData.curves[validCols[1]] ?? [];
+		const target = (spliceTargetName.trim() || validCols[0]).toUpperCase().replace(/\s+/g, '_');
+		const selectedRuns = validCols.map((c) => {
+			const values = c === target
+				? ((!c.endsWith('_ORI') ? wellData.curves[`${c}_ORI`] : undefined) ?? wellData.originalCurves[c] ?? wellData.curves[c])
+				: wellData.curves[c];
+			const selected = selectSpliceInterval(dept, values ?? [], spliceIntervals[c]);
+			let top = Infinity;
+			let bottom = -Infinity;
+			for (let i = 0; i < dept.length; i++) {
+				if (Number.isFinite(selected[i])) {
+					top = Math.min(top, dept[i]);
+					bottom = Math.max(bottom, dept[i]);
+				}
+			}
+			return { values: selected, top, bottom };
+		});
+		const arrA = selectedRuns[0].values;
+		const arrB = selectedRuns[1].values;
 		let ovTop = Infinity;
 		let ovBot = -Infinity;
 		let ovCount = 0;
@@ -207,28 +385,23 @@
 
 		let combTop = Infinity;
 		let combBot = -Infinity;
-		for (const c of validCols) {
-			const st = wellData.stats[c];
-			if (st?.top !== null && st?.top !== undefined && st.top < combTop) combTop = st.top;
-			if (st?.bottom !== null && st?.bottom !== undefined && st.bottom > combBot) combBot = st.bottom;
+		for (const run of selectedRuns) {
+			if (run.top < combTop) combTop = run.top;
+			if (run.bottom > combBot) combBot = run.bottom;
 		}
 
-		const stA = wellData.stats[validCols[0]];
-		const stB = wellData.stats[validCols[1]];
+		const stA = selectedRuns[0];
+		const stB = selectedRuns[1];
 		let gapTop: number | null = null;
 		let gapBottom: number | null = null;
 		let gapSpan: number | null = null;
 
 		if (
 			ovCount === 0 &&
-			stA?.top !== null &&
-			stA?.top !== undefined &&
-			stA?.bottom !== null &&
-			stA?.bottom !== undefined &&
-			stB?.top !== null &&
-			stB?.top !== undefined &&
-			stB?.bottom !== null &&
-			stB?.bottom !== undefined
+			Number.isFinite(stA.top) &&
+			Number.isFinite(stA.bottom) &&
+			Number.isFinite(stB.top) &&
+			Number.isFinite(stB.bottom)
 		) {
 			const shallowBot = Math.min(stA.bottom, stB.bottom);
 			const deepTop = Math.max(stA.top, stB.top);
@@ -280,6 +453,17 @@
 		spliceRuns = next;
 	}
 
+	function updateSpliceInterval(curve: string, bound: 'top' | 'bottom', input: HTMLInputElement) {
+		spliceIntervals = {
+			...spliceIntervals,
+			[curve]: {
+				top: spliceIntervals[curve]?.top ?? null,
+				bottom: spliceIntervals[curve]?.bottom ?? null,
+				[bound]: input.value === '' ? null : input.valueAsNumber
+			}
+		};
+	}
+
 	function addSpliceRun(curveName?: string) {
 		const used = new Set(spliceRuns);
 		const candidate =
@@ -326,6 +510,7 @@
 		try {
 			await wellData.spliceCurves({
 				sourceCurves: validCols,
+				sourceIntervals: spliceIntervals,
 				targetCurve: target,
 				overlapMode: spliceOverlapMode,
 				spliceDepth: spliceOverlapMode === 'splice_depth' ? spliceDepth : null,
@@ -652,7 +837,9 @@
 			rmf: h.rmf ?? null,
 			mud_density: h.mud_density ?? null,
 			mud_filtrate_salinity: h.mud_filtrate_salinity ?? null,
-			mud_filtrate_density: h.mud_filtrate_density ?? null
+			mud_filtrate_density: h.mud_filtrate_density ?? null,
+			mud_type: h.mud_type ?? '',
+			obm_base_density: h.obm_base_density ?? null
 		};
 		editingWellHeader = true;
 	}
@@ -827,7 +1014,7 @@
 
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
 	<div class="flex-1 overflow-y-auto">
-		<SavedParamsIndicator modules={['qaqc-badhole', 'qaqc-env']} />
+		<SavedParamsIndicator modules={['qaqc-badhole', 'qaqc-env', 'qaqc-enhance']} />
 		<ParameterSection
 			title="Well Header & Metadata"
 			badge={wellData.header?.uwi ? `UWI: ${wellData.header.uwi}` : (workbench.wellId ?? '')}
@@ -963,11 +1150,26 @@
 					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1">
 						<div class="text-[9.5px] text-[var(--text-muted)]">Mud Filtrate Density / Salinity</div>
 						<div class="mono-num truncate font-semibold text-[var(--text-primary)]">
-							{hdr.mud_filtrate_density != null ? `${fmtNum(hdr.mud_filtrate_density, 3)} g/cc` : '—'} • {hdr.mud_filtrate_salinity != null ? `${fmtNum(hdr.mud_filtrate_salinity, 0)} ppm` : '—'}
+							{hdr.mud_filtrate_density != null ? `${fmtNum(hdr.mud_filtrate_density, 3)} g/cc` : '—'} • {hdr.mud_filtrate_salinity != null ? `${fmtNum(hdr.mud_filtrate_salinity, 0)} ppm` : '—'} • {hdr.mud_type ? hdr.mud_type : '—'}
 						</div>
 					</div>
 				</div>
 
+				{#if Array.isArray(hdr.curve_lineage) && hdr.curve_lineage.length > 0}
+					<details class="mt-1.5 text-[10px] text-[var(--text-secondary)]">
+						<summary class="cursor-pointer font-semibold hover:text-[var(--text-primary)]">
+							Imported LAS curve lineage ({hdr.curve_lineage.length})
+						</summary>
+						<div class="mt-1 max-h-40 space-y-0.5 overflow-y-auto rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
+							{#each hdr.curve_lineage as entry}
+								<div>
+									{entry.filename}: {entry.source_mnemonic}{entry.source_unit ? ` (${entry.source_unit})` : ''}
+									→ {entry.stored_curve}{entry.raw_curve ? ` (raw: ${entry.raw_curve})` : ''}
+								</div>
+							{/each}
+						</div>
+					</details>
+				{/if}
 				{#if (hdr.raw_well_header && Object.keys(hdr.raw_well_header).length > 0) || (hdr.raw_parameters && Object.keys(hdr.raw_parameters).length > 0)}
 					<details class="mt-1.5 text-[10px] text-[var(--text-secondary)]">
 						<summary class="cursor-pointer font-semibold hover:text-[var(--text-primary)]">
@@ -1131,6 +1333,29 @@
 								max="2"
 								step="0.01"
 								bind:value={headerDraft.mud_filtrate_density}
+								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+							/>
+						</label>
+						<label class="flex flex-col gap-0.5">
+							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">Mud Type</span>
+							<select
+								bind:value={headerDraft.mud_type}
+								class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+							>
+								<option value="">—</option>
+								<option value="WBM">WBM (Water-Based)</option>
+								<option value="OBM">OBM (Oil-Based)</option>
+								<option value="SBM">SBM (Synthetic-Based)</option>
+							</select>
+						</label>
+						<label class="flex flex-col gap-0.5">
+							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">OBM Base Oil Density (g/cc)</span>
+							<input
+								type="number"
+								min="0.65"
+								max="0.95"
+								step="0.01"
+								bind:value={headerDraft.obm_base_density}
 								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
 							/>
 						</label>
@@ -1801,6 +2026,9 @@
 						</div>
 
 						<div class="space-y-1.5">
+							<p class="text-[9.5px] text-[var(--text-muted)]">
+								Set inclusive depth limits in metres for each run. Leave blank for the full interval.
+							</p>
 							{#each spliceRuns as runCol, idx (idx)}
 								{@const runSt = wellData.stats[runCol]}
 								<div class="flex items-center gap-1">
@@ -1853,10 +2081,37 @@
 										</span>
 									</div>
 								{/if}
+								<div class="grid grid-cols-2 gap-2 pl-12">
+									<label class="flex items-center gap-1 text-[9.5px] text-[var(--text-muted)]">
+										Top
+										<input
+											type="number"
+											step="any"
+											aria-label={`Run ${idx + 1} top depth (m)`}
+											placeholder="Full"
+											value={spliceIntervals[runCol]?.top ?? ''}
+											oninput={(e) => updateSpliceInterval(runCol, 'top', e.currentTarget)}
+											class="mono-num h-6 min-w-0 flex-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-[10px]"
+										/>
+									</label>
+									<label class="flex items-center gap-1 text-[9.5px] text-[var(--text-muted)]">
+										Bottom
+										<input
+											type="number"
+											step="any"
+											aria-label={`Run ${idx + 1} bottom depth (m)`}
+											placeholder="Full"
+											value={spliceIntervals[runCol]?.bottom ?? ''}
+											oninput={(e) => updateSpliceInterval(runCol, 'bottom', e.currentTarget)}
+											class="mono-num h-6 min-w-0 flex-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-[10px]"
+										/>
+									</label>
+								</div>
 							{/each}
 						</div>
 
 						<!-- Overlap / Gap Diagnostics Banner -->
+						<p class="mt-1 text-[9.5px] text-[var(--text-muted)]">Diagnostics compare the selected intervals of the first two runs.</p>
 						<div class="mt-2 rounded-xs border border-slate-200 bg-[var(--bg-surface)] px-2 py-1 text-[10px]">
 							{#if spliceDiagnostics.hasOverlap}
 								<div class="flex items-center justify-between text-blue-800">
@@ -2136,6 +2391,98 @@
 					{editStatusMsg}
 				</div>
 			{/if}
+		</ParameterSection>
+
+		<ParameterSection
+			title="Curve Statistical Distributions (Click to Select)"
+			badge={`${curveGroups.raw.length} raw · ${curveGroups.edited.length} edited · ${curveGroups.computed.length} computed`}
+		>
+			<div class="overflow-x-auto border border-[var(--border-hairline)]">
+				<table class="w-full border-collapse text-left text-[11px]">
+					<thead class="bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
+						<tr class="h-6 border-b border-[var(--border-hairline)]">
+							<th class="px-1.5 font-semibold">Curve</th>
+							<th class="px-1.5 text-right font-semibold" title="Shallowest valid depth (m)">Top</th>
+							<th class="px-1.5 text-right font-semibold" title="Deepest valid depth (m)">Bottom</th>
+							<th class="px-1.5 text-right font-semibold">Min</th>
+							<th class="px-1.5 text-right font-semibold">Max</th>
+							<th class="px-1.5 text-right font-semibold">Mean</th>
+							<th class="px-1.5 text-right font-semibold" title="Standard Deviation">Std</th>
+						</tr>
+					</thead>
+					{#each statGroups as grp (grp.key)}
+						{#if grp.curves.length > 0}
+							<tbody class="divide-y divide-[var(--border-hairline)]">
+								<tr class="h-5 bg-[var(--bg-subtle)]">
+									<td
+										colspan="7"
+										class="px-1.5 text-[10px] font-bold tracking-wide text-[var(--text-secondary)] uppercase"
+										title={grp.hint}
+									>
+										{grp.label} ({grp.curves.length})
+									</td>
+								</tr>
+								{#each grp.curves as c (c)}
+									{@const st = wellData.activeStats[c] ?? wellData.stats[c]}
+									{@const isSelected = workbench.selectedQaqcCurve === c}
+									{@const inSplice = editorMode === 'splice' && spliceRuns.includes(c)}
+									<tr
+										onclick={() => (workbench.selectedQaqcCurve = c)}
+										title={`${c}: ${fmtNum(st?.top, 1)}–${fmtNum(st?.bottom, 1)} m (${st?.count ?? 0} valid samples)`}
+										class="h-6 cursor-pointer transition-colors hover:bg-[var(--bg-subtle)] {isSelected
+											? 'bg-blue-50/90 font-semibold'
+											: inSplice
+												? 'bg-indigo-50/50'
+												: ''}"
+									>
+										<td class="mono-num px-1.5 font-semibold text-[var(--text-primary)] whitespace-nowrap">
+											<div class="flex items-center justify-between gap-1">
+												<span>
+													{c}
+													{#if getCurveUnit(c)}
+														<span class="text-[9px] font-normal text-[var(--text-muted)]">
+															({getCurveUnit(c)})
+														</span>
+													{/if}
+												</span>
+												{#if editorMode === 'splice'}
+													{#if inSplice}
+														<span class="rounded-xs bg-blue-100 px-1 text-[8.5px] font-bold text-blue-800">
+															R{spliceRuns.indexOf(c) + 1}
+														</span>
+													{:else}
+														<button
+															type="button"
+															onclick={(e) => {
+																e.stopPropagation();
+																addSpliceRun(c);
+															}}
+															title="Add {c} to splice runs"
+															class="rounded-xs border border-blue-200 bg-blue-50 px-1 text-[8.5px] font-semibold text-blue-700 hover:bg-blue-100"
+														>
+															+Splice
+														</button>
+													{/if}
+												{/if}
+											</div>
+										</td>
+										<td class="mono-num px-1.5 text-right text-[var(--text-secondary)]">
+											{fmtNum(st?.top, 1)}
+										</td>
+										<td class="mono-num px-1.5 text-right text-[var(--text-secondary)]">
+											{fmtNum(st?.bottom, 1)}
+										</td>
+										<td class="mono-num px-1.5 text-right">{fmtNum(st?.min, 2)}</td>
+										<td class="mono-num px-1.5 text-right">{fmtNum(st?.max, 2)}</td>
+										<td class="mono-num px-1.5 text-right">{fmtNum(st?.mean, 2)}</td>
+										<td class="mono-num px-1.5 text-right">{fmtNum(st?.std, 2)}</td>
+									</tr>
+								{/each}
+							</tbody>
+						{/if}
+					{/each}
+				</table>
+			</div>
 		</ParameterSection>
 
 		<ImputationControls />
@@ -2494,80 +2841,204 @@
 			</div>
 		</ParameterSection>
 
-		<ParameterSection title="Curve Statistical Distributions (Click to Select)">
-			<div class="overflow-x-auto border border-[var(--border-hairline)]">
-				<table class="w-full border-collapse text-left text-[11px]">
-					<thead class="bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
-						<tr class="h-6 border-b border-[var(--border-hairline)]">
-							<th class="px-1.5 font-semibold">Curve</th>
-							<th class="px-1.5 text-right font-semibold" title="Shallowest valid depth (m)">Top</th>
-							<th class="px-1.5 text-right font-semibold" title="Deepest valid depth (m)">Bottom</th>
-							<th class="px-1.5 text-right font-semibold">Min</th>
-							<th class="px-1.5 text-right font-semibold">Max</th>
-							<th class="px-1.5 text-right font-semibold">Mean</th>
-							<th class="px-1.5 text-right font-semibold" title="Standard Deviation">Std</th>
-						</tr>
-					</thead>
-					<tbody class="divide-y divide-[var(--border-hairline)]">
-						{#each curveList as c (c)}
-							{@const st = wellData.activeStats[c] ?? wellData.stats[c]}
-							{@const isSelected = workbench.selectedQaqcCurve === c}
-							{@const inSplice = editorMode === 'splice' && spliceRuns.includes(c)}
-							<tr
-								onclick={() => (workbench.selectedQaqcCurve = c)}
-								title={`${c}: ${fmtNum(st?.top, 1)}–${fmtNum(st?.bottom, 1)} m (${st?.count ?? 0} valid samples)`}
-								class="h-6 cursor-pointer transition-colors hover:bg-[var(--bg-subtle)] {isSelected
-									? 'bg-blue-50/90 font-semibold'
-									: inSplice
-										? 'bg-indigo-50/50'
-										: ''}"
-							>
-								<td class="mono-num px-1.5 font-semibold text-[var(--text-primary)] whitespace-nowrap">
-									<div class="flex items-center justify-between gap-1">
-										<span>
-											{c}
-											{#if getCurveUnit(c)}
-												<span class="text-[9px] font-normal text-[var(--text-muted)]">
-													({getCurveUnit(c)})
-												</span>
-											{/if}
-										</span>
-										{#if editorMode === 'splice'}
-											{#if inSplice}
-												<span class="rounded-xs bg-blue-100 px-1 text-[8.5px] font-bold text-blue-800">
-													R{spliceRuns.indexOf(c) + 1}
-												</span>
-											{:else}
-												<button
-													type="button"
-													onclick={(e) => {
-														e.stopPropagation();
-														addSpliceRun(c);
-													}}
-													title="Add {c} to splice runs"
-													class="rounded-xs border border-blue-200 bg-blue-50 px-1 text-[8.5px] font-semibold text-blue-700 hover:bg-blue-100"
-												>
-													+Splice
-												</button>
-											{/if}
-										{/if}
-									</div>
-								</td>
-								<td class="mono-num px-1.5 text-right text-[var(--text-secondary)]">
-									{fmtNum(st?.top, 1)}
-								</td>
-								<td class="mono-num px-1.5 text-right text-[var(--text-secondary)]">
-									{fmtNum(st?.bottom, 1)}
-								</td>
-								<td class="mono-num px-1.5 text-right">{fmtNum(st?.min, 2)}</td>
-								<td class="mono-num px-1.5 text-right">{fmtNum(st?.max, 2)}</td>
-								<td class="mono-num px-1.5 text-right">{fmtNum(st?.mean, 2)}</td>
-								<td class="mono-num px-1.5 text-right">{fmtNum(st?.std, 2)}</td>
-							</tr>
-						{/each}
-					</tbody>
-				</table>
+		<ParameterSection
+			title="Raw Log Resolution Enhancement"
+			badge={enhSummary ? (workbench.enhanceParams.useEnhancedLogs ? 'Enhanced · In Use' : 'Enhanced') : 'Not Run'}
+			defaultOpen={false}
+		>
+			<div class="mb-1.5 rounded-xs bg-[var(--bg-subtle)] px-2 py-1 text-[10px] leading-snug text-[var(--text-secondary)]">
+				1D constrained deconvolution harmonizes <span class="mono-num">GR</span>, <span class="mono-num">NPHI</span>, and <span class="mono-num">RHOB</span> onto a common vertical footprint before any non-linear transform. Raw curves are never modified; results are written as <span class="mono-num">*_ENH</span>, <span class="mono-num">*_RECON</span>, and <span class="mono-num">DECONV_WEIGHT</span>.
 			</div>
+
+			<div class="grid grid-cols-[1fr_148px] items-center gap-x-2 py-0.5">
+				<span class="text-xs font-medium text-[var(--text-primary)]">Target Resolution</span>
+				<select
+					bind:value={workbench.enhanceParams.mode}
+					class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
+				>
+					<option value="enhance_all">Enhance All (Nyquist)</option>
+					<option value="match_finest">Match Finest Tool</option>
+				</select>
+			</div>
+			<div class="mb-1 text-[10px] leading-snug text-[var(--text-muted)]">
+				Target FWHM. <span class="mono-num">Enhance All</span> = Nyquist floor (Factor × Δz). <span class="mono-num">Match Finest</span> = sharpest tool FWHM. Curves already at target pass through.
+			</div>
+
+			<div class="grid grid-cols-[1fr_148px] items-center gap-x-2 py-0.5">
+				<span class="text-xs font-medium text-[var(--text-primary)]">Solver</span>
+				<select
+					bind:value={workbench.enhanceParams.method}
+					class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
+				>
+					<option value="constrained_huber">Constrained Huber</option>
+					<option value="wiener">Wiener (preview)</option>
+				</select>
+			</div>
+			<div class="mb-1 text-[10px] leading-snug text-[var(--text-muted)]">
+				<span class="mono-num">Constrained Huber</span> = production, edge-preserving. <span class="mono-num">Wiener</span> = fast preview, smoother, ignores Huber and Morozov.
+			</div>
+
+			<NumericScrubber
+				label="Nyquist Factor"
+				bind:value={workbench.enhanceParams.nyquistFactor}
+				unit="×Δz"
+				min={1.0}
+				max={6.0}
+				step={0.1}
+				decimals={1}
+				hint="Target FWHM as a multiple of Δz. Lower sharpens more but amplifies noise; below 2 is finer than sampling resolves."
+			/>
+			<NumericScrubber
+				label="Volume Tether Weight"
+				bind:value={workbench.enhanceParams.lambdaVol}
+				unit="λv"
+				min={0}
+				max={1}
+				step={0.01}
+				decimals={2}
+				hint="Penalizes drift of the rolling mean from the raw curve. Higher keeps bulk volume unbiased but limits sharpening; 0 removes the tether."
+			/>
+			<NumericScrubber
+				label="Morozov Target"
+				bind:value={workbench.enhanceParams.morozovTau}
+				unit="τ"
+				min={0.5}
+				max={3.0}
+				step={0.05}
+				decimals={2}
+				hint="Stops regularization when the residual reaches τ × noise. Higher sharpens harder and fits noise; lower stays smoother."
+			/>
+			<NumericScrubber
+				label="Huber Threshold"
+				bind:value={workbench.enhanceParams.huberDeltaMult}
+				unit="×σ"
+				min={0.5}
+				max={6.0}
+				step={0.1}
+				decimals={1}
+				hint="Change per sample where the prior stops penalizing quadratically. Higher smooths and softens beds; lower keeps edges crisp but admits noise."
+			/>
+			<NumericScrubber
+				label="Volume Window"
+				bind:value={workbench.enhanceParams.volumeWindow}
+				unit="m"
+				min={0.5}
+				max={20}
+				step={0.5}
+				decimals={1}
+				hint="Averaging length of the volume tether; span several beds (≈4× tool FWHM). Larger preserves only long-wavelength volume."
+			/>
+			<NumericScrubber
+				label="Noise Cap"
+				bind:value={workbench.enhanceParams.noiseCapMult}
+				unit="×floor"
+				min={0}
+				max={10}
+				step={0.1}
+				decimals={1}
+				hint="Caps the MAD noise estimate at this multiple of the tool floor. Lower assumes cleaner data and sharpens harder; 0 disables the cap."
+			/>
+
+			<div class="mt-1.5 flex items-center gap-1.5">
+				<button
+					type="button"
+					disabled={wellData.isCalculating}
+					onclick={() => runResolutionEnhancement(false)}
+					class="h-7 flex-1 rounded-sm border border-indigo-700 bg-indigo-700 px-2 text-xs font-semibold text-white hover:bg-indigo-800 disabled:opacity-50"
+				>
+					{wellData.isCalculating ? 'Enhancing...' : 'Enhance Resolution'}
+				</button>
+				<button
+					type="button"
+					disabled={wellData.isCalculating || !wellData.hasPendingComputed('qaqc-enhance')}
+					onclick={() => runResolutionEnhancement(true)}
+					title={wellData.hasPendingComputed('qaqc-enhance')
+						? 'Persist the enhanced curves to the database'
+						: 'Run enhancement before saving'}
+					class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-xs font-medium text-[var(--text-secondary)] hover:bg-slate-100 disabled:opacity-50"
+				>
+					Save
+				</button>
+				{#if enhSummary}
+					<button
+						type="button"
+						disabled={wellData.isCalculating}
+						onclick={revertResolutionEnhancement}
+						title="Remove the enhanced (*_ENH, *_RECON, DECONV_WEIGHT) curves and revert downstream modules to the raw logs"
+						class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-xs font-medium text-[var(--text-secondary)] hover:bg-slate-100 disabled:opacity-50"
+					>
+						Reset
+					</button>
+				{/if}
+			</div>
+
+			{#if enhSummary}
+				<div class="mt-1.5 rounded-sm border border-indigo-200 bg-indigo-50/50 p-1.5 text-[10px]">
+					<div class="mb-1 flex items-center justify-between">
+						<span class="font-semibold text-indigo-950">
+							Target FWHM {fmtNum(enhSummary.target_fwhm_m, 3)} {enhSummary.depth_uom}
+						</span>
+						<span class="text-[var(--text-muted)]">Δz {fmtNum(enhSummary.depth_step_m, 4)}</span>
+					</div>
+					<table class="w-full text-left">
+						<thead class="text-[var(--text-muted)]">
+							<tr>
+								<th class="font-medium">Curve</th>
+								<th class="text-right font-medium">FWHM</th>
+								<th class="text-right font-medium">σ̂</th>
+								<th class="text-right font-medium">Bias</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each Object.entries(enhSummary.diagnostics) as [name, d] (name)}
+								<tr>
+									<td class="mono-num font-semibold text-slate-800">{name}</td>
+									<td class="mono-num text-right">{fmtNum(d.effective_fwhm_m, 3)}</td>
+									<td class="mono-num text-right">{fmtNum(d.estimated_noise_std, 4)}</td>
+									<td
+										class="mono-num text-right"
+										class:text-red-700={Math.abs(d.relative_volume_bias_pct) >= 0.5}
+									>
+										{fmtNum(d.relative_volume_bias_pct, 2)}%
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+					{#if Object.values(enhSummary.alignment_lags_samples).some((v) => v !== 0)}
+						<div class="mt-1 font-medium text-amber-800">
+							Depth misalignment detected:
+							{Object.entries(enhSummary.alignment_lags_samples)
+								.filter(([, v]) => v !== 0)
+								.map(([k, v]) => `${k} ${v > 0 ? '+' : ''}${v}`)
+								.join(', ')}
+							samples
+						</div>
+					{/if}
+					{#each enhSummary.warnings as w (w)}
+						<div class="mt-1 text-amber-800">{w}</div>
+					{/each}
+				</div>
+			{/if}
+
+			<label
+				class="mt-2 flex cursor-pointer items-start gap-2 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-2"
+			>
+				<input
+					type="checkbox"
+					bind:checked={workbench.enhanceParams.useEnhancedLogs}
+					class="mt-0.5 h-3.5 w-3.5 shrink-0 accent-indigo-700"
+				/>
+				<span class="text-[10px] leading-snug text-[var(--text-secondary)]">
+					<span class="font-semibold text-[var(--text-primary)]">
+						Use enhanced logs downstream
+					</span>
+					<br />
+					Feed <span class="mono-num">GR_ENH</span>/<span class="mono-num">NPHI_ENH</span>/<span class="mono-num">RHOB_ENH</span>
+					into lithology, porosity, Thomas-Stieber, and saturation instead of the raw curves. Permeability follows automatically because it consumes the
+					<span class="mono-num">PHIT</span> and <span class="mono-num">VCLAY</span> those modules produce.
+				</span>
+			</label>
 		</ParameterSection>
 
 		{#if wellData.lastError}

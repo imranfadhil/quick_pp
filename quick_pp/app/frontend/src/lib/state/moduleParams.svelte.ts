@@ -27,10 +27,37 @@ export const SINGLE_WELL_REGIONAL_DEFAULTS: Record<ParamModuleKey, Record<string
 		tempGradient: 1.5,
 		salinityPpm: 30000.0
 	},
+	'qaqc-enhance': {
+		useEnhancedLogs: false,
+		mode: 'enhance_all',
+		method: 'constrained_huber',
+		targetFwhm: null,
+		nyquistFactor: 2.0,
+		lambdaVol: 0.05,
+		morozovTau: 1.05,
+		huberDeltaMult: 2.0,
+		volumeWindow: 3.0,
+		noiseCapMult: 3.0
+	},
 	'litho-poro': {
 		litho: {
 			model: 'ssc',
+			gammaSource: 'gr',
+			gammaCurve: 'CGR',
+			thoriumCurve: 'THOR',
+			potassiumCurve: 'POTA',
+			gammaClean: 20,
+			gammaShale: 120,
+			gammaEndpoints: {},
+			bulkGrClean: 20,
+			bulkGrShale: 120,
+			cgrThCoefficient: 4,
+			cgrKCoefficient: 16,
+			shaleSolidDensity: 2.7,
+			shalePorosity: 0.2,
+			shaleIneffectiveFraction: 1,
 			porosityMethod: 'den',
+			sonicFluidDt: 190,
 			logCorrectionMode: 'none',
 			grClean: 20.0,
 			grClay: 120.0,
@@ -40,6 +67,7 @@ export const SINGLE_WELL_REGIONAL_DEFAULTS: Record<ParamModuleKey, Record<string
 			dryClayRhob: 2.78,
 			fluidNphi: 1.0,
 			fluidRhob: 1.0,
+			inputLogs: [],
 			badholeTreatment: 'interpolate'
 		},
 		ts: {
@@ -95,6 +123,7 @@ export const SINGLE_WELL_REGIONAL_DEFAULTS: Record<ParamModuleKey, Record<string
 export type ParamModuleKey =
 	| 'qaqc-badhole'
 	| 'qaqc-env'
+	| 'qaqc-enhance'
 	| 'litho-poro'
 	| 'perm'
 	| 'saturation'
@@ -104,6 +133,7 @@ export type ParamModuleKey =
 export const PARAM_MODULE_KEYS: ParamModuleKey[] = [
 	'qaqc-badhole',
 	'qaqc-env',
+	'qaqc-enhance',
 	'litho-poro',
 	'perm',
 	'saturation',
@@ -114,6 +144,7 @@ export const PARAM_MODULE_KEYS: ParamModuleKey[] = [
 export const PARAM_MODULE_LABELS: Record<ParamModuleKey, string> = {
 	'qaqc-badhole': 'Badhole',
 	'qaqc-env': 'Env. Corrections',
+	'qaqc-enhance': 'Resolution Enhancement',
 	'litho-poro': 'Litho & Poro',
 	perm: 'Permeability',
 	saturation: 'Saturation',
@@ -148,6 +179,23 @@ const DEPTH_KEY_DECIMALS = 2;
 export function isParamModuleKey(k: string): k is ParamModuleKey {
 	return (PARAM_MODULE_KEYS as string[]).includes(k);
 }
+
+/**
+ * Maps the pre-`qaqc-enhance` field names (saved under `litho-poro.ts`) onto the
+ * dedicated resolution-enhancement module so existing configs keep their tuning.
+ */
+export const ENHANCE_LEGACY_KEY_MAP: Record<string, string> = {
+	useEnhancedLogs: 'useEnhancedLogs',
+	enhanceMode: 'mode',
+	enhanceMethod: 'method',
+	enhanceTargetFwhm: 'targetFwhm',
+	enhanceNyquistFactor: 'nyquistFactor',
+	enhanceLambdaVol: 'lambdaVol',
+	enhanceMorozovTau: 'morozovTau',
+	enhanceHuberDeltaMult: 'huberDeltaMult',
+	enhanceVolumeWindow: 'volumeWindow',
+	enhanceNoiseCapMult: 'noiseCapMult'
+};
 
 export function currentSelection(): ParamSelection {
 	const zones = workbench.selectedZones.length > 0 ? [...workbench.selectedZones] : null;
@@ -223,11 +271,32 @@ const REGISTRY: Record<ParamModuleKey, ParamAccessor> = {
 		get: () => clone(workbench.envCorrParams),
 		set: (p) => assignKnown(workbench.envCorrParams, p)
 	},
+	'qaqc-enhance': {
+		get: () => clone(workbench.enhanceParams),
+		set: (p) => assignKnown(workbench.enhanceParams, p)
+	},
 	'litho-poro': {
 		get: () => ({ litho: clone(workbench.lithoParams), ts: clone(workbench.tsParams) }),
 		set: (p) => {
 			assignKnown(workbench.lithoParams, p?.litho);
+			if (p?.litho && !p.litho.gammaEndpoints) workbench.lithoParams.gammaEndpoints = {};
+			if (workbench.lithoParams.model === 'vsh_bulk') {
+				workbench.lithoParams.model = 'vsh_gr';
+				if (workbench.lithoParams.gammaSource === 'gr') {
+					workbench.lithoParams.grClean = workbench.lithoParams.bulkGrClean;
+					workbench.lithoParams.grClay = workbench.lithoParams.bulkGrShale;
+				}
+			}
 			assignKnown(workbench.tsParams, p?.ts);
+			// Enhance settings moved out of Thomas-Stieber params into their own
+			// QAQC-scoped module; forward any legacy values so saved configs survive.
+			if (p?.ts && typeof p.ts === 'object') {
+				const legacy: Record<string, any> = {};
+				for (const [key, value] of Object.entries(ENHANCE_LEGACY_KEY_MAP)) {
+					if (key in p.ts) legacy[value] = p.ts[key];
+				}
+				if (Object.keys(legacy).length > 0) assignKnown(workbench.enhanceParams, legacy);
+			}
 		}
 	},
 	perm: {
@@ -289,17 +358,28 @@ function legacyWellEntry(
 		const [cN, cR] = pt(cfg.dry_clay_point);
 		const [fN, fR] = pt(cfg.fluid_point);
 		const litho = strip({
-			model: ['ssc', 'multi_mineral', 'vsh_gr'].includes(cfg.litho_model_key)
-				? cfg.litho_model_key
+			model: ['ssc', 'sand_shale', 'vsh_nd', 'multi_mineral', 'vsh_gr', 'vsh_bulk'].includes(cfg.litho_model_key)
+				? (cfg.litho_model_key === 'vsh_bulk' ? 'vsh_gr' : cfg.litho_model_key)
 				: undefined,
 			porosityMethod:
 				cfg.porosity_method_key === 'den' || cfg.porosity_method_key === 'density'
 					? 'den'
-					: cfg.porosity_method_key
+					: ['sonic_wyllie', 'sonic_hunt_raymer', 'avg_weighted', 'avg_arithmetic', 'avg_gaymard'].includes(cfg.porosity_method_key)
+						? cfg.porosity_method_key
+						: cfg.porosity_method_key
 						? 'neu_den'
 						: undefined,
-			grClean: num(cfg.gr_clean),
-			grClay: num(cfg.gr_clay),
+			sonicFluidDt: num(cfg.sonic_fluid_dt),
+			grClean: num(cfg.gr_clean ?? (cfg.litho_model_key === 'vsh_bulk' && cfg.bulk_shale?.gamma_source === 'gr' ? cfg.bulk_shale?.gamma_clean : undefined)),
+			grClay: num(cfg.gr_clay ?? (cfg.litho_model_key === 'vsh_bulk' && cfg.bulk_shale?.gamma_source === 'gr' ? cfg.bulk_shale?.gamma_shale : undefined)),
+			gammaSource: (cfg.gamma ?? cfg.bulk_shale)?.gamma_source,
+			gammaCurve: (cfg.gamma ?? cfg.bulk_shale)?.gamma_curve,
+			thoriumCurve: (cfg.gamma ?? cfg.bulk_shale)?.thorium_curve,
+			potassiumCurve: (cfg.gamma ?? cfg.bulk_shale)?.potassium_curve,
+			gammaClean: num((cfg.gamma ?? cfg.bulk_shale)?.gamma_clean),
+			gammaShale: num((cfg.gamma ?? cfg.bulk_shale)?.gamma_shale),
+			cgrThCoefficient: num((cfg.gamma ?? cfg.bulk_shale)?.cgr_th_coefficient),
+			cgrKCoefficient: num((cfg.gamma ?? cfg.bulk_shale)?.cgr_k_coefficient),
 			drySandNphi: sN,
 			drySandRhob: sR,
 			dryClayNphi: cN,
@@ -307,6 +387,7 @@ function legacyWellEntry(
 			fluidNphi: fN,
 			fluidRhob: fR,
 			minerals: Array.isArray(cfg.litho_minerals) ? cfg.litho_minerals : undefined,
+			inputLogs: Array.isArray(cfg.litho_input_logs) ? cfg.litho_input_logs : undefined,
 			badholeTreatment: cfg.badhole_treatment
 		});
 		return { params: { litho }, selection: wellSel, label: 'Whole well (legacy)', saved_at: '' };

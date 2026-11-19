@@ -85,6 +85,48 @@ class Config:
             "min": 1.0,
             "max": 3.0,
         },
+        "GR_ENH": {
+            "name": "Resolution-Enhanced Gamma Ray",
+            "unit": "GAPI",
+            "min": 0,
+            "max": 300,
+        },
+        "NPHI_ENH": {
+            "name": "Resolution-Enhanced Neutron Porosity",
+            "unit": "v/v",
+            "min": -0.05,
+            "max": 0.65,
+        },
+        "RHOB_ENH": {
+            "name": "Resolution-Enhanced Bulk Density",
+            "unit": "g/cc",
+            "min": 1.0,
+            "max": 3.05,
+        },
+        "GR_RECON": {
+            "name": "Forward-Reconstructed Gamma Ray",
+            "unit": "GAPI",
+            "min": 0,
+            "max": 300,
+        },
+        "NPHI_RECON": {
+            "name": "Forward-Reconstructed Neutron Porosity",
+            "unit": "v/v",
+            "min": -0.05,
+            "max": 0.65,
+        },
+        "RHOB_RECON": {
+            "name": "Forward-Reconstructed Bulk Density",
+            "unit": "g/cc",
+            "min": 1.0,
+            "max": 3.05,
+        },
+        "DECONV_WEIGHT": {
+            "name": "Deconvolution Borehole Reliability Weight",
+            "unit": "unitless",
+            "min": 0,
+            "max": 1,
+        },
         "NPHI_HC": {
             "name": "HC-Corrected Neutron Porosity",
             "unit": "v/v",

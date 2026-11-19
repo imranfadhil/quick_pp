@@ -1587,7 +1587,10 @@ def add_core_sample_project(
         meas_list = payload.get("measurements")
         poro = payload.get("porosity", payload.get("cpore"))
         perm = payload.get("permeability", payload.get("cperm"))
-        if poro is not None or perm is not None:
+        grain_density = payload.get(
+            "grain_density", payload.get("cgd", payload.get("CGD", payload.get("rhog")))
+        )
+        if poro is not None or perm is not None or grain_density is not None:
             meas_list = list(meas_list or [])
             if poro is not None and str(poro).strip() != "":
                 meas_list.append(
@@ -1596,6 +1599,14 @@ def add_core_sample_project(
             if perm is not None and str(perm).strip() != "":
                 meas_list.append(
                     {"property_name": "CPERM", "value": float(perm), "unit": "mD"}
+                )
+            if grain_density is not None and str(grain_density).strip() != "":
+                meas_list.append(
+                    {
+                        "property_name": "CGRAIN_DENSITY",
+                        "value": float(grain_density),
+                        "unit": "g/cc",
+                    }
                 )
 
         with get_db() as session:

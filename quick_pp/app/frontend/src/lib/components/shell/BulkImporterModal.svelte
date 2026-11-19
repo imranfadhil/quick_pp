@@ -157,10 +157,6 @@
 
 	async function handleCommitLogs() {
 		if (!lasFiles || lasFiles.length === 0 || !workbench.projectId) return;
-		if (authState.isDemoMode) {
-			await handleQuickUpload();
-			return;
-		}
 		if (inspectedFiles.length === 0) {
 			uploadStatus = 'No files passed inspection. Fix the inspection error and re-inspect before importing.';
 			return;
@@ -244,6 +240,14 @@
 					parts.push(`+${w.appended_curves.length} curve(s)`);
 				}
 				const renamedEntries = w.renamed_curves ? Object.entries(w.renamed_curves) : [];
+				const mappings = (w.curve_lineage || []).filter(
+					(c: any) => c.source_mnemonic.toUpperCase() !== c.stored_curve.toUpperCase()
+				);
+				if (mappings.length > 0) {
+					parts.push(
+						`source: ${mappings.map((c: any) => `${c.filename}: ${c.source_mnemonic}→${c.stored_curve}${c.raw_curve ? ` (raw: ${c.raw_curve})` : ''}`).join(', ')}`
+					);
+				}
 				if (renamedEntries.length > 0) {
 					parts.push(
 						`suffixed: ${renamedEntries.map(([orig, ren]) => `${orig}→${ren}`).join(', ')}`
@@ -461,6 +465,9 @@
 												class="h-6 w-24 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
 											/>
 										</label>
+									</div>
+									<div class="text-[10px] text-[var(--text-secondary)]">
+										Renamed LAS curves keep a raw-value copy; source mappings are saved in Data &amp; QAQC.
 									</div>
 								</div>
 

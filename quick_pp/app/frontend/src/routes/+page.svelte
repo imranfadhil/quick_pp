@@ -53,6 +53,7 @@
 	} from '$lib/state/moduleParams.svelte';
 	import { projectParams, zoneSelectionKey } from '$lib/state/projectParams.svelte';
 	import { isCrossplotAvailable } from '$lib/utils/crossplots';
+	import { gammaLabel } from '$lib/utils/lithology';
 
 	$effect(() => {
 		const selected = workbench.crossplotTemplateOverride;
@@ -708,10 +709,10 @@
 						{ key: 'DEPTH', label: 'Depth', unit: 'm', numeric: true, decimals: 2 },
 						{ key: 'ZONE', label: 'Zone' },
 						{ key: 'REGIME_LABEL', label: 'Regime' },
-						{ key: 'GR', label: 'GR', unit: 'gAPI', numeric: true, decimals: 1 },
+						{ key: 'GR', label: gammaLabel(workbench.lithoParams), unit: 'gAPI', numeric: true, decimals: 1 },
 						{ key: 'VSH_DN', label: 'VSH_DN', unit: 'v/v', numeric: true, decimals: 3 },
 						{ key: 'VSH_GR', label: 'VSH_GR', unit: 'v/v', numeric: true, decimals: 3 },
-						{ key: 'ERR_VSH', label: 'ΔVsh (GR−DN)', unit: 'v/v', numeric: true, decimals: 3 },
+						{ key: 'ERR_VSH', label: `ΔVsh (${gammaLabel(workbench.lithoParams)}−DN)`, unit: 'v/v', numeric: true, decimals: 3 },
 						{ key: 'ABS_ERR_VSH', label: '|ΔVsh|', unit: 'v/v', numeric: true, decimals: 3 },
 						{ key: 'NPHI', label: 'NPHI', unit: 'v/v', numeric: true, decimals: 3 },
 						{ key: 'RHOB', label: 'RHOB', unit: 'g/cc', numeric: true, decimals: 3 }
@@ -907,12 +908,12 @@
 							<button
 								type="button"
 								onclick={() => workbench.toggleFocusMode()}
-								title="Focus mode: only open the selected section and automatically close others"
+								title="Show One: only keep the selected section open and automatically close others"
 								class="h-5 rounded-xs border px-1.5 font-medium transition-colors {workbench.sectionFocusMode
 									? 'border-[var(--accent-primary)] bg-blue-600 font-semibold text-white'
 									: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100 hover:text-[var(--text-primary)]'}"
 							>
-								Focus
+								Show One
 							</button>
 						</div>
 					</div>

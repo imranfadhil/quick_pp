@@ -4,6 +4,7 @@ import { appStatus } from './status.svelte';
 import { wellData } from './wellData.svelte';
 import { workbench, type MultiWellVolumetricResult } from './workbench.svelte';
 import { assignKnown, clone } from './moduleParams.svelte';
+import { normalizedScalSaturation } from '$lib/utils/poreThroat';
 import {
 	isProjectParamModuleKey,
 	PROJECT_PARAM_MODULE_KEYS,
@@ -1011,6 +1012,31 @@ class ProjectDataState {
 		}
 		projectParams.setCounts(this.projectModuleParams);
 		projectParams.loadGeneration += 1;
+		this.applyGrainDensityCorrelation();
+	}
+
+	/**
+	 * Apply the project-scoped grain density correlation (stored under the `grain_density`
+	 * module key) into `workbench.scalParams` so it is shared across all wells in the project
+	 * and consumed by the Lithology & Porosity density-porosity calculation.
+	 */
+	applyGrainDensityCorrelation() {
+		const modMap = (this.projectModuleParams || {})['grain_density' as ProjectParamModuleKey];
+		const resolved = resolveMatchingProjectParamsEntry(modMap, workbench.selectedZones);
+		const p = resolved?.entry?.params;
+		if (!p || typeof p !== 'object') return;
+		const sp = workbench.scalParams;
+		if (typeof p.gd_driver_col === 'string') sp.gd_driver_col = p.gd_driver_col;
+		if (Number.isFinite(Number(p.gd_rho_ma_clean))) sp.gd_rho_ma_clean = Number(p.gd_rho_ma_clean);
+		if (Number.isFinite(Number(p.gd_k))) sp.gd_k = Number(p.gd_k);
+		if (Number.isFinite(Number(p.gd_driver_clean))) sp.gd_driver_clean = Number(p.gd_driver_clean);
+		if (Number.isFinite(Number(p.gd_rho_ma_min))) sp.gd_rho_ma_min = Number(p.gd_rho_ma_min);
+		if (Number.isFinite(Number(p.gd_rho_ma_max))) sp.gd_rho_ma_max = Number(p.gd_rho_ma_max);
+		sp.gd_r2 = p.gd_r2 ?? null;
+		sp.gd_rmse = p.gd_rmse ?? null;
+		sp.gd_count = p.gd_count ?? null;
+		sp.gd_calibrated = Boolean(p.gd_calibrated);
+		sp.gd_enabled = Boolean(p.gd_enabled);
 	}
 
 	/** Apply zone-key matches (exact, bundle subset, or fallback) from saved project parameters to all multi-well modules. */
@@ -1640,6 +1666,61 @@ class ProjectDataState {
 		return Math.min(sMax, Math.max(sMin, Number.isFinite(raw) ? raw : sMin));
 	}
 
+	classifyRockType(
+		cpore: number | null | undefined,
+		cperm: number | null | undefined
+	): number | null {
+		const phi = Number(cpore);
+		const k = Number(cperm);
+		if (!Number.isFinite(phi) || !Number.isFinite(k) || phi <= 0 || phi >= 1 || k <= 0) {
+			return null;
+		}
+		let indVal = 0;
+		let higherIsBetter = true;
+		if (this.drtMethod === 'winland') {
+			indVal = Math.pow(10, 0.732 + 0.588 * Math.log10(k) - 0.864 * Math.log10(phi * 100));
+			higherIsBetter = true;
+		} else if (this.drtMethod === 'lucia') {
+			const phiEff = Math.min(0.99, Math.max(0.04, phi));
+			const logPhi = Math.log10(phiEff);
+			const logK = Math.log10(Math.max(1e-6, k));
+			const logRfn = (9.7892 + 8.6711 * logPhi - logK) / (12.0838 + 8.2965 * logPhi);
+			indVal = Math.min(10.0, Math.max(0.1, Math.pow(10, logRfn)));
+			higherIsBetter = false;
+		} else {
+			// FZI
+			const rqi = 0.0314 * Math.sqrt(k / phi);
+			const phiz = phi / (1.0 - phi);
+			indVal = phiz > 1e-6 ? rqi / phiz : 0;
+			higherIsBetter = true;
+		}
+		const cutoffs = this.activeDrtCutoffs || [0.5, 1.2, 2.5, 5.0];
+		const nCut = cutoffs.length;
+		if (nCut === 0) return 1;
+		let rt = 1;
+		if (higherIsBetter) {
+			rt = nCut + 1;
+			for (let i = 0; i < nCut; i++) {
+				if (indVal < cutoffs[i]) {
+					rt = nCut + 1 - i;
+					break;
+				}
+				if (i === nCut - 1) {
+					rt = 1;
+				}
+			}
+		} else {
+			rt = nCut + 1;
+			for (let i = 0; i < nCut; i++) {
+				if (indVal < cutoffs[i]) {
+					rt = i + 1;
+					break;
+				}
+			}
+		}
+		return rt;
+	}
+
 	normalizeScalPlugId(id: string | undefined | null, well?: string, sample?: string): string {
 		const raw = String(id || '').trim();
 		if (raw.includes('::')) return raw;
@@ -1781,10 +1862,15 @@ class ProjectDataState {
 			}
 			const isExcl = exclSet.has(normPid) || exclSet.has(p.plug_id);
 			const inFilter = this.isScalItemInActiveFilter(p.well, p.depth, resolvedZone);
+			const dynRt =
+				p.cpore && p.cperm
+					? (this.classifyRockType(p.cpore, p.cperm) ?? p.rt ?? 1)
+					: (p.rt ?? 1);
 			return {
 				...p,
 				plug_id: normPid,
 				zone: resolvedZone,
+				rt: dynRt,
 				max_pc: Number(maxPc.toFixed(2)),
 				sw_at_max_pc: Number(minSw.toFixed(4)),
 				extracted_swirr: Number(extSwirr.toFixed(4)),
@@ -2049,7 +2135,10 @@ class ProjectDataState {
 			const sCurve = p.sw_curve || [];
 			const phi = Math.max(1e-4, p.cpore || 0.15);
 			const k = Math.max(1e-4, p.cperm || 10.0);
-			const rf = p.rt ?? 1;
+			const rf =
+				p.cpore && p.cperm
+					? (this.classifyRockType(p.cpore, p.cperm) ?? p.rt ?? 1)
+					: (p.rt ?? 1);
 			const plugId = this.normalizeScalPlugId(p.plug_id, p.well, p.sample);
 			const legacyPlugId = `${p.well}:${p.sample}`;
 			const isPlugExcluded =
@@ -2068,10 +2157,7 @@ class ProjectDataState {
 				const pc = Number(pCurve[i]);
 				const sw = Number(sCurve[i]);
 				if (!Number.isFinite(pc) || !Number.isFinite(sw) || pc <= 0 || sw <= 0) continue;
-				const swn = Math.min(
-					0.99,
-					Math.max(0.005, (sw - swirrNorm) / Math.max(0.05, 1.0 - swirrNorm))
-				);
+				const swn = normalizedScalSaturation(sw, swirrNorm);
 				const j = (0.2166 * pc * Math.sqrt(k / phi)) / iftCos;
 				const h = pc / gradPsi;
 				const bvw = phi * sw;

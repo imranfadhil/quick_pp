@@ -3,6 +3,7 @@
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
 	import { fmtNum } from '$lib/utils/formatters';
+	import { gammaEndpoints, gammaLabel, selectedGamma, setGammaEndpoints } from '$lib/utils/lithology';
 
 	interface Props {
 		compact?: boolean;
@@ -11,6 +12,8 @@
 
 	let { compact = false, onapply }: Props = $props();
 	let vshRafId = 0;
+	let endpoints = $derived(gammaEndpoints(workbench.lithoParams));
+	let sourceLabel = $derived(gammaLabel(workbench.lithoParams));
 
 	function scheduleLiveVshGr() {
 		if (vshRafId) cancelAnimationFrame(vshRafId);
@@ -26,30 +29,36 @@
 
 	function handleGrCleanChange(val: number) {
 		if (!Number.isFinite(val)) return;
-		const clamped = Math.max(0, Math.min(workbench.lithoParams.grClay - 10, Number(val.toFixed(1))));
-		workbench.lithoParams.grClean = clamped;
+		const clamped = Math.max(0, Math.min(endpoints.shale - 0.1, Number(val.toFixed(1))));
+		setGammaEndpoints(workbench.lithoParams, clamped, endpoints.shale);
 		scheduleLiveVshGr();
 	}
 
 	function handleGrClayChange(val: number) {
 		if (!Number.isFinite(val)) return;
 		const clamped = Math.max(
-			workbench.lithoParams.grClean + 10,
-			Math.min(300, Number(val.toFixed(1)))
+			endpoints.clean + 0.1,
+			Number(val.toFixed(1))
 		);
-		workbench.lithoParams.grClay = clamped;
+		setGammaEndpoints(workbench.lithoParams, endpoints.clean, clamped);
 		scheduleLiveVshGr();
 	}
 
 	function resetToP5P95() {
-		const grSt = wellData.activeStats['GR'] ?? wellData.stats['GR'];
-		if (grSt && grSt.p10 !== null && grSt.p90 !== null) {
-			workbench.lithoParams.grClean = Number(Math.max(0, grSt.p10).toFixed(1));
-			workbench.lithoParams.grClay = Number(Math.max(grSt.p10 + 25, grSt.p90).toFixed(1));
-		} else {
-			workbench.lithoParams.grClean = 15.0;
-			workbench.lithoParams.grClay = 115.0;
+		const gamma = selectedGamma(workbench.lithoParams, wellData.curves);
+		const values = wellData.visibleIndices.map((i) => gamma[i]).filter(Number.isFinite).sort((a, b) => a - b);
+		if (!values.length) {
+			wellData.lastError = `No valid ${sourceLabel} samples available for calibration.`;
+			return;
 		}
+		const percentile = (fraction: number) => {
+			const index = (values.length - 1) * fraction;
+			const low = Math.floor(index);
+			return values[low] + (values[Math.ceil(index)] - values[low]) * (index - low);
+		};
+		const clean = Number(Math.max(0, percentile(0.1)).toFixed(1));
+		const shale = Number(Math.max(clean + 0.1, percentile(0.9)).toFixed(1));
+		setGammaEndpoints(workbench.lithoParams, clean, shale);
 		wellData.applyLiveVshGr();
 	}
 </script>
@@ -137,13 +146,13 @@
 		<div>
 			<div class="mb-0.5 flex items-center justify-between text-[10.5px]">
 				<span class="font-medium text-[var(--text-primary)]">
-					GR Clean <span class="text-[var(--text-muted)]">(Min GR, Vsh=0)</span>
+					{sourceLabel} Clean <span class="text-[var(--text-muted)]">(Vsh=0)</span>
 				</span>
 				<div class="flex items-center gap-0.5">
 					{#each [-5, -1, 1, 5] as step}
 						<button
 							type="button"
-							onclick={() => handleGrCleanChange(workbench.lithoParams.grClean + step)}
+							onclick={() => handleGrCleanChange(endpoints.clean + step)}
 							class="mono-num h-4 rounded-2xs border border-[var(--border-hairline)] bg-white px-1 text-[9.5px] font-medium text-[var(--text-secondary)] hover:bg-slate-100"
 						>
 							{step > 0 ? `+${step}` : step}
@@ -155,9 +164,9 @@
 				<input
 					type="range"
 					min="0"
-					max="90"
+					max={Math.max(90, endpoints.shale)}
 					step="0.5"
-					value={workbench.lithoParams.grClean}
+					value={endpoints.clean}
 					oninput={(e) =>
 						handleGrCleanChange(parseFloat((e.currentTarget as HTMLInputElement).value))}
 					class="h-1.5 min-w-0 flex-1 cursor-pointer accent-amber-600"
@@ -166,8 +175,7 @@
 					type="number"
 					step="0.5"
 					min="0"
-					max="120"
-					value={workbench.lithoParams.grClean}
+					value={endpoints.clean}
 					onchange={(e) =>
 						handleGrCleanChange(parseFloat((e.currentTarget as HTMLInputElement).value))}
 					class="mono-num h-6 w-16 rounded-xs border border-[var(--border-hairline)] bg-white px-1 text-right text-xs font-semibold"
@@ -179,13 +187,13 @@
 		<div>
 			<div class="mb-0.5 flex items-center justify-between text-[10.5px]">
 				<span class="font-medium text-[var(--text-primary)]">
-					GR Shale <span class="text-[var(--text-muted)]">(Max GR, Vsh=1)</span>
+					{sourceLabel} Shale <span class="text-[var(--text-muted)]">(Vsh=1)</span>
 				</span>
 				<div class="flex items-center gap-0.5">
 					{#each [-5, -1, 1, 5] as step}
 						<button
 							type="button"
-							onclick={() => handleGrClayChange(workbench.lithoParams.grClay + step)}
+							onclick={() => handleGrClayChange(endpoints.shale + step)}
 							class="mono-num h-4 rounded-2xs border border-[var(--border-hairline)] bg-white px-1 text-[9.5px] font-medium text-[var(--text-secondary)] hover:bg-slate-100"
 						>
 							{step > 0 ? `+${step}` : step}
@@ -196,10 +204,10 @@
 			<div class="flex items-center gap-1.5">
 				<input
 					type="range"
-					min="50"
-					max="240"
+					min={0}
+					max={Math.max(240, endpoints.shale * 1.1)}
 					step="0.5"
-					value={workbench.lithoParams.grClay}
+					value={endpoints.shale}
 					oninput={(e) =>
 						handleGrClayChange(parseFloat((e.currentTarget as HTMLInputElement).value))}
 					class="h-1.5 min-w-0 flex-1 cursor-pointer accent-emerald-700"
@@ -207,9 +215,8 @@
 				<input
 					type="number"
 					step="0.5"
-					min="40"
-					max="300"
-					value={workbench.lithoParams.grClay}
+					min="0"
+					value={endpoints.shale}
 					onchange={(e) =>
 						handleGrClayChange(parseFloat((e.currentTarget as HTMLInputElement).value))}
 					class="mono-num h-6 w-16 rounded-xs border border-[var(--border-hairline)] bg-white px-1 text-right text-xs font-semibold"
@@ -266,7 +273,7 @@
 				}}
 				class="h-5 rounded-xs bg-blue-600 px-2 text-[10px] font-semibold text-white hover:bg-blue-700"
 			>
-				Auto-Calibrate GR
+				Auto-Calibrate {sourceLabel}
 			</button>
 		</div>
 	</div>
@@ -291,7 +298,7 @@
 			<button
 				type="button"
 				onclick={resetToP5P95}
-				title="Seed GR Clean & GR Shale from GR P10 and P90"
+				title={`Seed ${sourceLabel} endpoints from P10 and P90`}
 				class="h-5 rounded-xs border border-[var(--border-hairline)] bg-white px-2 text-[10px] font-medium text-[var(--text-secondary)] hover:bg-slate-100"
 			>
 				P10/P90

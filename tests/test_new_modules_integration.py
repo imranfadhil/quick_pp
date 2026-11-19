@@ -203,3 +203,47 @@ def test_backend_router_endpoints():
     assert norm_resp.status_code == 200
     assert "GR_NORM" in norm_resp.json()["data"][0]
 
+
+def test_grain_density_correlation_resolves_driver_column():
+    """The grain density fit must locate the driver column in the supplied records.
+
+    The SCAL UI sends records keyed by the resolved driver mnemonic (e.g. ``CGR``); a generic
+    ``driver`` key is also accepted so older callers keep working.
+    """
+    app = FastAPI()
+    app.include_router(api_router)
+    client = TestClient(app)
+
+    records = [
+        {"CGR": 45.0, "CGD": 2.71},
+        {"CGR": 60.0, "CGD": 2.78},
+        {"CGR": 30.0, "CGD": 2.66},
+    ]
+    resp = client.post(
+        "/quick_pp/scal/grain_density_correlation",
+        json={
+            "driver_col": "CGR",
+            "grain_density_col": "CGD",
+            "rho_ma_clean": 2.65,
+            "data": records,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["driver_col"] == "CGR"
+    assert body["grain_density_col"] == "CGD"
+    assert body["fit"]["count"] == 3
+    assert body["fit"]["k"] > 0.0
+
+    # A generic "driver" key must still resolve rather than raising "No driver column found".
+    legacy = client.post(
+        "/quick_pp/scal/grain_density_correlation",
+        json={
+            "driver_col": "CGR",
+            "grain_density_col": "CGD",
+            "data": [{"driver": 45.0, "CGD": 2.71}, {"driver": 60.0, "CGD": 2.78}],
+        },
+    )
+    assert legacy.status_code == 200, legacy.text
+    assert legacy.json()["fit"]["count"] == 2
+

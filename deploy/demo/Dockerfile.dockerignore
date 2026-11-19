@@ -1,0 +1,67 @@
+# Build-context ignore rules for deploy/demo/Dockerfile.
+#
+# The repository-root .dockerignore excludes quick_pp/app/frontend/ because the
+# backend image (quick_pp/app/docker/Dockerfile) does not need it. The demo image
+# builds the Svelte frontend in a separate stage, so it must keep the frontend
+# sources in context. BuildKit picks up this file automatically for this Dockerfile.
+
+# VCS
+.git
+.git/**
+.env
+.env.*
+!.env.example
+
+# Python caches
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Node / frontend build output (sources are required, artifacts are not)
+node_modules/
+quick_pp/app/frontend/node_modules/
+quick_pp/app/frontend/.svelte-kit/
+quick_pp/app/frontend/.output/
+quick_pp/app/frontend/build/
+
+# Data, outputs, ML runs (very large)
+data/
+mlruns/
+uploads/
+output/
+outputs/
+notebooks/**
+!notebooks/data/01_raw/36_7-3.las
+!notebooks/data/01_raw/formation_pressure_data.csv
+!notebooks/data/01_raw/VOLVE/15-9-19-A.las
+!notebooks/data/01_raw/VOLVE/VOLVE_15-9_Surveys.csv
+!notebooks/data/01_raw/COSTA/HW-3.las
+!notebooks/data/01_raw/COSTA/HW-4.las
+!notebooks/data/01_raw/COSTA/HW-5.las
+!notebooks/data/01_raw/COSTA/HW_core_data_all.csv
+
+# postgres data
+quick_pp/app/docker/data/postgres/
+
+# Logs, temp
+*.log
+tmp/
+.cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS files
+.DS_Store
+Thumbs.db

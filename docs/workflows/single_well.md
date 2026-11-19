@@ -4,6 +4,8 @@ The Single-Well space delivers deterministic, optimization-driven, and core-cali
 
 When importing LAS logs, check the depth curve's **Source Unit** in the uploader. Feet are converted to meters by multiplying the depth values by 0.3048; edit the source unit if the LAS curve header is incorrect. Previously imported wells are not automatically corrected, and importing into an existing well merges data rather than replacing it.
 
+For LAS imports through **Review / Commit**, renamed log curves retain a separate copy of their source values and unit alongside the standardized curve. Name collisions receive a `RAW_` prefix or a numeric suffix. The import summary and Data & QAQC well header show each source file, mnemonic, stored curve, and raw copy; these records describe the import, not subsequent edits. Depth remains the shared, converted index rather than a separate raw curve. Optional grid regularization also applies to the raw copies. Existing imports are not backfilled.
+
 The same log uploader also accepts DLIS and LIS79 (`.lis`) files. LIS Enhanced LIS/LIS84 variants are not supported by the current parser.
 
 The **Log / interval** unit selector (m or ft) affects the single-well log plot and readouts, working interval and top-bar depth filter, and shared tables whose values are in meters. Table edits, pasted values, and ancillary quick-entry depths are converted back to meters for processing. The preference is saved in the browser; it does not change stored data. Other plots, reports, and exports retain their existing units.
@@ -131,18 +133,34 @@ flowchart TD
       
       $$\Delta \rho_{\text{mudcake}} = -0.015 \cdot (\text{CALI} - \text{BS}) \cdot \frac{\rho_m - 1.0}{\rho_m}$$
 
+    * **Raw Log Resolution Enhancement & Nuclear Log Harmonization:**
+      Intrinsic sensor vertical resolutions differ (`GR` ≈ 0.76 m, `NPHI` ≈ 0.55 m, `RHOB` ≈ 0.40 m FWHM for legacy strings), creating inter-sensor footprint mismatches that scatter thin-bed laminated points on the Thomas-Stieber crossplot into unphysical boomerang loops. A 1D bounded deconvolution operator harmonizes all three logs onto a common target vertical resolution $\text{FWHM}_{\text{target}}$ subject to the Shannon-Nyquist limit ($2 \cdot \Delta z$). The forward model couples true formation property $\mathbf{x}$ to log response $\mathbf{y}$ through effective Gaussian Vertical Response Function (VRF) kernels:
+      
+      $$\mathbf{y} = \mathbf{H}_{\text{eff}}\mathbf{x} + \mathbf{n}, \qquad \mathbf{H}_{\text{eff}} = \text{VRF}\!\left(\sqrt{\text{FWHM}_{\text{tool}}^2 - \text{FWHM}_{\text{target}}^2}\right)$$
+      
+      The constrained objective solves:
+      
+      $$\min_{\mathbf{x}} \; \tfrac{1}{2}\|\mathbf{W}(\mathbf{H}\mathbf{x} - \mathbf{y})\|_2^2 + \lambda \sum_i \phi_\delta\!\left((\mathbf{D}_1\mathbf{x})_i\right) + \tfrac{\lambda_v}{2}\|\mathbf{H}_v(\mathbf{x} - \mathbf{y})\|_2^2 \quad \text{s.t.} \quad \mathbf{l} \le \mathbf{x} \le \mathbf{u}$$
+      
+      with normalized Huber edge-preserving penalty $\phi_\delta$, edge-replicate boundary padding, rolling bulk-volume conservation tether $\mathbf{H}_v$, and Morozov discrepancy parameter auto-tuning based on second-difference MAD sensor noise $\hat{\sigma}_n = \operatorname{MAD}(\mathbf{D}_2\mathbf{y}) / (0.6745\sqrt{6})$, capped at `noise_cap_mult` (default 3.0×) tool noise floor to protect against dense thin-bed inflation.
+
     * **Synthetic Curve Repair:**
       Corrupted pad readings are reconstructed via multivariate regression or Random Forest models trained on in-gauge intervals ($\text{BADHOLE} = 0$) using deep-reading, borehole-insensitive logs ($\text{GR}, \text{DTC}, \ln(\text{RT})$).
 
 * **Input Curves:** `CALI`, `BS`, `GR`, `RHOB`, `NPHI`, `DTC`, `RT`  
-* **Output Curves:** `BADHOLE` (flag), `GR_ENV_CORR`, `NPHI_ENV_CORR`, `RHOB_ENV_CORR`, `RT_ENV_CORR`.
-  Environmental-correction outputs are preview curves; downstream calculations continue to use
-  their configured raw or hydrocarbon-corrected inputs until explicitly selected.
+* **Output Curves:** `BADHOLE` (flag), `GR_ENV_CORR`, `NPHI_ENV_CORR`, `RHOB_ENV_CORR`, `RT_ENV_CORR`, `GR_ENH`, `NPHI_ENH`, `RHOB_ENH`, `GR_RECON`, `NPHI_RECON`, `RHOB_RECON`, `DECONV_WEIGHT`.
+  Environmental-correction and enhanced-log outputs are non-destructive preview curves; downstream calculations use raw or enhanced inputs based on explicit selection.
 
 * **Curve editing and splicing:** In Curve Editor & Management, select **View log vs depth in
-  right pane** to compare the selected curve with its original backup or edit source. In splice
-  mode the selected runs are shown alongside the applied splice result; apply the splice to
-  update the result. The plot follows the active depth and zone filters and preserves gaps.
+  right pane** to compare the selected curve with its original backup or edit source. In **Splice
+  Runs**, optionally enter a top and/or bottom depth in metres for each run; blank limits use the
+  full run and both limits include their boundary samples. For example, set Run 1's bottom to the
+  end of its good data and Run 2's top to the start of its good data. The overlap mode resolves
+  samples covered by both intervals; uncovered depths stay empty unless gap interpolation is
+  enabled. Auto-level uses only overlap within the selected intervals. Diagnostics compare the
+  first two runs. Click **Apply Splice** after changing the settings to update the preview, then
+  **Save** to persist it. The selected runs are shown alongside the applied splice result.
+  The plot follows the active depth and zone filters and preserves gaps.
   Use the plot selector to return to the histogram or another view. Log-versus-depth plots lock
   the horizontal scale; the mouse wheel zooms depth, while selection tools remain available.
 
@@ -203,9 +221,25 @@ flowchart TD
       
       $$V_{\text{sand}} + V_{\text{silt}} + V_{\text{clay}} + \phi_t = 1$$
 
-    * **Thin-Bed Thomas-Stieber & Tensor Resistivity:**
-      Partitions shale into laminated ($V_{\text{lam}}$), dispersed ($V_{\text{disp}}$), and structural ($V_{\text{struct}}$) forms:
+    * **Neutron-Density Crossplot Shale Volume ($V_{\text{sh,ND}}$):**
+      Calculated from parametric projection along the matrix line in $(\phi_N, \rho_b)$ crossplot space from clean sand endpoint $\mathbf{A} = (\phi_{N,\text{sd}}, \rho_{\text{sd}})$ to dry clay endpoint $\mathbf{C} = (\phi_{N,\text{cl}}, \rho_{\text{cl}})$:
       
+      $$V_{\text{sh,ND}} = \text{clip}\left(\frac{(\mathbf{x}_{\text{int}} - \mathbf{A}) \cdot (\mathbf{C} - \mathbf{A})}{\|\mathbf{C} - \mathbf{A}\|^2}, 0, 1\right)$$
+      
+      where $\mathbf{x}_{\text{int}}$ is the intersection of the line from fluid point $\mathbf{D} = (\phi_{N,\text{fl}}, \rho_{\text{fl}})$ through $(\phi_N, \rho_b)$ with line $\mathbf{AC}$.
+
+    * **M-N Lithology Identification Parameters (Burke et al., 1969):**
+      Combines sonic, density, and neutron measurements into porosity-independent mineralogical indices:
+      
+      $$M = \frac{\Delta t_{\text{fl}} - \Delta t}{\rho_b - \rho_{\text{fl}}} \times 0.01, \qquad N = \frac{\phi_{N,\text{fl}} - \phi_N}{\rho_b - \rho_{\text{fl}}}$$
+      
+      Standard endpoints (Quartz: $M=0.810, N=0.898$; Calcite: $M=0.827, N=0.585$; Dolomite: $M=0.778, N=0.524$; Anhydrite: $M=0.702, N=0.505$) establish diagnostic ternary triangles and feed the dynamic `M_LITH`/`N_LITH` drivers for core grain-density calibration.
+
+    * **Thin-Bed Thomas-Stieber & Tensor Resistivity:**
+      Partitions shale into laminated ($V_{\text{lam}}$), dispersed ($V_{\text{disp}}$), and structural ($V_{\text{struct}}$) forms. On the $\phi_t$ vs. $V_{\text{sh}}$ crossplot, points below the laminated line $\phi_{\text{lam}} = \phi_{\text{sd}} + (\phi_{\text{sh}} - \phi_{\text{sd}}) V_{\text{sh}}$ fall in the dispersed triangle and split shale into $V_{\text{lam}} + V_{\text{disp}}$; points above it fall in the structural triangle bounded by the grain-replacing line $\phi_{\text{str}} = \phi_{\text{sd}} + \phi_{\text{sh}} V_{\text{sh}}$ and split shale into $V_{\text{lam}} + V_{\text{struct}}$:
+
+      $$V_{\text{lam}} = \begin{cases} \dfrac{\phi_t - \phi_{\text{sd}} + V_{\text{sh}}(1-\phi_{\text{sh}})}{1-\phi_{\text{sd}}} & \phi_t \le \phi_{\text{lam}} \\[2ex] \dfrac{\phi_{\text{sd}} + V_{\text{sh}}\,\phi_{\text{sh}} - \phi_t}{\phi_{\text{sd}}} & \phi_t > \phi_{\text{lam}} \end{cases}, \quad V_{\text{disp}} + V_{\text{struct}} = V_{\text{sh}} - V_{\text{lam}}$$
+
       $$R_h^{-1} = \frac{1 - V_{\text{lam}}}{R_{\text{sand}}} + \frac{V_{\text{lam}}}{R_{\text{shale}}}, \qquad R_v = (1 - V_{\text{lam}}) R_{\text{sand}} + V_{\text{lam}} R_{\text{shale}}$$
 
     * **Multi-Mineral Constrained Optimization (SLSQP):**
@@ -217,14 +251,113 @@ flowchart TD
       
       $$\text{Density Porosity: } \phi_{D} = \frac{\rho_{\text{ma}} - \rho_b}{\rho_{\text{ma}} - \rho_{\text{fl}}}$$
       
-      $$\text{Sonic Porosity (Wyllie): } \phi_S = \frac{\Delta t - \Delta t_{\text{ma}}}{\Delta t_{\text{fl}} - \Delta t_{\text{ma}}} \cdot \frac{1}{B_{cp}}$$
+      $$\text{Sonic Porosity (Wyllie): } \phi_S = \frac{\Delta t - \Delta t_{\text{ma}}}{\Delta t_{\text{fl}} - \Delta t_{\text{ma}}}$$
       
-      $$\text{Raymer-Hunt-Gardner (RHG): } \phi_{\text{RHG}} = C_{\text{RHG}} \cdot \frac{\Delta t - \Delta t_{\text{ma}}}{\Delta t}$$
+      $$\text{Hunt-Raymer: } \phi_S = -c - \sqrt{c^2 + \frac{\Delta t_{\text{ma}}}{\Delta t} - 1}, \quad c = \frac{\Delta t_{\text{ma}}}{2\Delta t_{\text{fl}}} - 1$$
       
       $$\phi_e = \phi_t - V_{\text{clay}} \cdot \phi_{\text{clay}} \quad \text{or} \quad \phi_e = \phi_t (1 - V_{\text{sh}})$$
 
-* **Input Curves:** `GR`, `RHOB`, `NPHI`, `PEF`, `DTC`  
+* **Input Curves:** `GR`, `RHOB`, `NPHI`, `PEF`, `DTC`, `POTA`, `THOR`, `URAN`  
 * **Output Curves:** `VSH`, `VSAND`, `VSILT`, `VCLAY`, `VCALC`, `VDOLO`, `PHIT`, `PHIE`
+
+* **Continuous fluid density ($\rho_{fl}$):** The **Fluid Density** selector offers
+  three modes. `Static` keeps the single scalar fluid density used by the classic
+  density-porosity equation. `Mud & Zonal Profile` builds a continuous
+  $\rho_{mf}(z)$ from the mud system (Batzle & Wang brine for WBM, thermal/pressure
+  corrected base oil for OBM/SBM) and applies a static zonal residual hydrocarbon
+  saturation across the fluid contacts. `Auto Iterative (Rxo / Sw^0.2)` runs the
+  full 3-tier coupled solver, iterating $\rho_{fl}$ and $\phi_D$ to convergence and
+  degrading per depth sample from shallow-resistivity $S_{xo}$ to the Poupon
+  $S_w^{c}$ fallback to a zonal $S_{hr}$ constant.
+
+  The non-static modes add diagnostic curves: `RHO_FL` (continuous apparent fluid
+    density), `RHO_MF` (filtrate profile), `SXO_EST` (estimated flushed-zone
+    saturation), `PHID_RAW_100` (density porosity at $\rho_{fl} = 1.0$), and
+    `RHO_FL_TIER` (solver tier per sample). These are QC outputs, so they are not
+    drawn on the well log: they appear in the **Porosity Methods vs Core** comparison
+    plot, where `RHO_FL` and `RHO_MF` share the density axis with `RHOM` and the
+    scalar fluid density line, while `PHID_RAW_100` and the corrected `PHID` are drawn
+    on the porosity axis so the porosity shift ($\Delta\phi_D$) is directly visible.
+
+  Mud system and base-oil density come from the QAQC Well Header (`mud_type`,
+  `obm_base_density`); filtrate salinity or surface `Rmf` and the flushing exponent
+  are set in the inspector. The engine is not available in batch evaluation.
+  See [Porosity Evaluation](../api/porosity.md#continuous-apparent-fluid-density-rho_fl)
+  for the tier logic, the physics, and the documented implementation conventions.
+
+* **Selectable input logs:** The multi-mineral inversion accepts any subset of the
+  available curves via `input_logs` (UI: *Input Logs* checkboxes). Leaving the selection
+  empty auto-uses every loaded curve among `GR`, `NPHI`, `RHOB`, `PEF`, `DTC`, `POTA`,
+  `THOR`, `URAN`. Exclude curves distorted by the mineralogy — for example drop `GR`,
+  `NPHI`, and `RHOB` in heavy-mineral or hot-sand intervals and invert on `PEF`, `THOR`,
+  and `POTA` instead. At least two curves are required, and each depth row must carry
+  enough finite measurements to constrain the solve. The selection is persisted as
+  `litho_input_logs` in the well config and reported in the generated report.
+
+* **Porosity method:** Alongside density and the neutron-density crossplot, choose
+  Wyllie or Hunt-Raymer sonic porosity, or a neutron-density weighted
+  $(2\phi_D+\phi_N)/3$, arithmetic $(\phi_D+\phi_N)/2$, or RMS
+  $\sqrt{(\phi_D^2+\phi_N^2)/2}$ average. The library's Gaymard and gas
+  averaging options use the same RMS formula. Averages use the selected fluid
+  density and lithology-derived matrix density; they are empirical corrections,
+  not substitutes for calibration to local lithology and core.
+  Sonic methods require `DTC` (or `DT`) as well as the neutron and density logs
+  required by the lithology workflow. Matrix transit time is the matrix-volume
+  weighted sum of configured mineral DTC values; silt uses quartz. The fluid
+  transit time is adjustable (default 190 µs/ft). Samples with missing or
+  non-positive sonic transit time, fluid transit time not exceeding matrix transit
+  time, or an invalid Hunt-Raymer result are null. Badhole interpolation may
+  interpolate flagged samples; coal and GR-based badhole handling retain their
+  existing special treatment. Effective porosity uses the existing shale correction.
+  The new methods are not available in batch evaluation.
+
+* **Porosity comparison:** Run Lithology & Porosity, then select **Porosity Methods
+  vs Depth + Core** from the Crossplot dropdown. The first track shows matrix
+  density (`RHOM`) and the configured fluid density; the second track overlays the
+  method curves with core markers. Toggle the methods to overlay
+  their total-porosity curves; the active method is emphasized.
+  Calculations use the current parameters and most recently calculated lithology and
+  corrected logs, but never overwrite the working or saved PHIT. Run the module
+  again after editing inputs. The fixed porosity scale is 0–0.5 v/v; use the mouse
+  wheel to zoom depth. RMSE and bias are computed
+  from depth-matched core porosity and each method's valid results, excluding flagged
+  coal and badhole samples. Core is matched to a log sample within 0.5 m, and markers
+  appear at the matched log depth. Different log/core scales, depth alignment and
+  laboratory conditions can affect the comparison. Depth and zone filters apply;
+  brushed calculation selections are not supported.
+
+* **Vsh from gamma:** Select GR, an available gamma curve such as SGR or CGR,
+  or estimated `CGR_SYN = a_Th × THOR + a_K × POTA`. Verify thorium and potassium
+  units (ppm and percent) and coefficients against the tool calibration. The
+  provisional coefficients (4 gAPI/ppm and 16 gAPI/%) are not universal.
+  Calibrate endpoints independently for each response; imported GR aliases may
+  already refer to CGR. The gamma index is a shale proxy, not a mineralogical
+  clay measurement.
+  Select the response in **Vshale Calibration** and adjust its clean and shale
+  sliders there. The calibration comparison, auto-calibration, and P10/P90 reset
+  use the selected response. GR-based log correction and badhole fallback retain
+  their separate GR endpoints.
+
+  Saved lithology fractions are matrix-relative and are not scaled by PHIT.
+  Multi-mineral inversion still jointly solves mineral and fluid volumes, then
+  reports mineral fractions relative to their sum. PHIT is computed separately;
+  the well plot scales mineral fractions to `1 − PHIT` for visualization only.
+  Recalculate previously saved lithology before comparing results or applying
+  cutoffs, because earlier versions saved PHIT-scaled volumes.
+
+* **Spectral crossplots:** The right pane also offers thorium vs potassium, PEF vs potassium,
+  and PEF vs Th/K. These use `THOR` in ppm, `POTA` in percent and `PEF` in b/e;
+  verify the input units before interpreting them. Potassium values are used as
+  stored, including values below 0.5%; no magnitude-based conversion is applied.
+  Curves stored as fractions must be converted to percent before use. The Th/K plot uses a logarithmic
+  ratio axis and excludes non-positive K or Th. Ratios are unstable at low K.
+  Th/K guide lines and the scatter are interpretive aids, not mineral classifications.
+  Diamond markers are illustrative configured mineral response endpoints, not
+  calibrated field boundaries. Selected Th and K curves are shared with the
+  derived-CGR controls.
+  PEF plots initially display 0–20 b/e and report the number of paired samples
+  above that range; zoom out to inspect them. Values are not clipped or modified.
+  The plots do not alter the GR-based shale calculation.
 
 ---
 
@@ -256,6 +389,22 @@ flowchart TD
 
 * **Input Curves:** `PHIE`, `PHIT`, `VCLAY`, `VSILT`, `SWIRR`  
 * **Output Curves:** `PERM`, `PERM_CHOO`, `PERM_COATES`, `RQI`, `FZI`
+
+* **Permeability comparison:** Run Permeability, then select **Permeability Methods
+  vs Depth + Core** from the Crossplot dropdown to overlay Choo, Kozeny-Carman, Timur,
+  Tixier and Coates-Dumanoir curves against `CPERM` on a logarithmic
+  permeability axis (fixed at 0.1–100,000 mD). The first track shows `VSHALE`
+  (clay plus silt for the SSC model), matching the saturation comparison plot.
+  Use the mouse wheel to zoom depth. Toggle methods and use the emphasized active
+  method as a reference. The comparison uses the current model parameters, porosity and
+  lithology inputs, including Thomas-Stieber inputs when enabled, without
+  changing working or saved `PERM`. Only positive values are displayed or
+  included in the matched-core metrics. RMSE and bias are in log10 permeability
+  units; bias is log10(PERM) − log10(CPERM). Coal and badhole samples are
+  excluded from metrics. Core is matched to the nearest log sample within
+  0.5 m, with markers at matched log depths. Depth and zone filters apply;
+  brushed calculation selections are not supported. Core/log scale, depth
+  alignment and measurement conditions can influence the comparison.
 
 ---
 
@@ -371,5 +520,27 @@ flowchart TD
       
       $$P_{c,\text{res}} = P_{c,\text{lab}} \cdot \frac{(\sigma \cos\theta)_{\text{res}}}{(\sigma \cos\theta)_{\text{lab}}}$$
 
-* **Input Data:** Core plugs table (`DEPTH`, `CPORE`, `CPERM`), Overburden stress parameters, Lab IFT and contact angle  
-* **Output Data:** `CPOR_SHIFTED`, `CPERM_SHIFTED`, `SV_EST`, `PP_EST`, `NU_DYN`, `NCS_EST`, Stress-corrected core properties, Scaled $P_c$ curves
+        * **Core-Calibrated Grain / Matrix Density ($\rho_{ma}$) Correlation:**
+          Calibrates a project-wide matrix density trend from core grain density (CGD) that overrides the mineral-model $\rho_{ma}$ in the Lithology & Porosity density-porosity calculation. Two forms are available:
+
+          **Single anchored gamma driver:**
+
+          $$\rho_{ma}(z) = \rho_{ma,\text{clean}} + k \cdot \left(\text{driver}(z) - \text{driver}_{\text{clean}}\right)$$
+
+          **Multi-log ridge / Huber (default):**
+
+          $$\rho_{ma}(z) = b_0 + \sum_j \beta_j \frac{\text{log}_j(z) - c_j}{s_j}$$
+
+          Gamma logs are heteroscedastic — GR, CGR and SGR mix K/Th/U sources, so a single-log OLS slope is dominated by radioactive and heavy-mineral outliers (mica, glauconite). The multi-log form jointly regresses GR/CGR/SGR with RHOB, NPHI, Burke's $M$-parameter or acoustic impedance, standardizing each driver with a robust median/IQR and fitting by ridge regression with optional Huber IRLS reweighting. The fit reports $R^2$/RMSE, robust residual spread, per-driver variance inflation factors (collinearity), a Breusch-Pagan heteroscedasticity test, and the per-driver slopes in **native log units** so the model reads as a familiar regression equation, e.g.
+
+          $$\hat{\rho}_{ma} = b_0 + \beta_1 \cdot \text{CGR} + \beta_2 \cdot \text{RHOB} + \beta_3 \cdot M_{\text{lith}}$$
+
+          Characterizing the correlation in the UI:
+
+          * **Crossplot X-axis selector** — the "Grain Density vs. GR/CGR" crossplot header exposes an *X axis* dropdown so CGD can be plotted against any calibrated driver (CGR, GR, RHOB, NPHI, M_LITH, AI, …). When a multi-log fit is active the red trend line is the marginal 1-D slice: the plotted driver is swept while the remaining drivers are held at their fitted centers.
+          * **Weightage panel** — besides the standardized $\beta_j$ and VIF, each driver row shows the swing in $\rho_{ma}$ across that driver's observed interquartile range ($|\beta_j \cdot \text{IQR}_j| / s_j$), i.e. how much each log actually moves the predicted matrix density.
+          * **Burke $M$/$N$ drivers** — `M_LITH`+ / `N_LITH`+ chips are offered whenever `RHOB` and `NPHI` are loaded; selecting one *generates* the curve from RHOB/NPHI (with a Gardner slowness estimate when no sonic log exists), mirroring `quick_pp.machine_learning.feature_engineering.mn_lithology_parameters`.
+          * **Porosity provenance** — because the correlation overrides the mineral-model $\rho_{ma}$ fed to the density porosity, the porosity response reports how many points were replaced, the mean $\rho_{ma}$ and the mean $\Delta\rho_{ma}$ vs. the mineral model, and the result is persisted as the `RHOM` curve. Lithology & Porosity displays this as a "Grain-density correlation applied in Porosity" panel.
+
+    * **Input Data:** Core plugs table (`DEPTH`, `CPORE`, `CPERM`, `CGRAIN_DENSITY`), Overburden stress parameters, Lab IFT and contact angle, driver logs (`GR`, `CGR`, `SGR`, `RHOB`, `NPHI`, `M_LITH`, `N_LITH`, `AI`)  
+    * **Output Data:** `CPOR_SHIFTED`, `CPERM_SHIFTED`, `SV_EST`, `PP_EST`, `NU_DYN`, `NCS_EST`, Stress-corrected core properties, Scaled $P_c$ curves, Calibrated grain density correlation (project-scoped)

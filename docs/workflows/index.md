@@ -71,9 +71,9 @@ The right-pane crossplot selector shows only plots supported by the active singl
 
 | Step Category | Stepper ID | UI Component | Markdown Anchor | Primary Petrophysical Function |
 | :--- | :--- | :--- | :--- | :--- |
-| **Step 1** | `qaqc` | `InspectorQaqc.svelte` | [`#sw-step-1-qaqc`](single_well.md#sw-step-1-qaqc) | Outer limits, bad-hole flagging & curve repair |
+| **Step 1** | `qaqc` | `InspectorQaqc.svelte` | [`#sw-step-1-qaqc`](single_well.md#sw-step-1-qaqc) | Outer limits, bad-hole flagging, resolution enhancement & curve repair |
 | **Step 2** | `ancillary` | `InspectorAncillary.svelte` | [`#sw-step-2-ancillary`](single_well.md#sw-step-2-ancillary) | Minimum curvature trajectory & tops ingestion |
-| **Step 3** | `litho-poro` | `InspectorLithoPoro.svelte` | [`#sw-step-3-litho-poro`](single_well.md#sw-step-3-litho-poro) | $V_{\text{sh}}$, SSC ternary, multi-mineral SLSQP, $\phi_e$ & $\phi_t$ |
+| **Step 3** | `litho-poro` | `InspectorLithoPoro.svelte` | [`#sw-step-3-litho-poro`](single_well.md#sw-step-3-litho-poro) | $V_{\text{sh}}$, SSC ternary, multi-mineral SLSQP, $\phi_e$, $\phi_t$ & $\rho_{fl}$ |
 | **Step 4** | `perm` | `InspectorPerm.svelte` | [`#sw-step-4-perm`](single_well.md#sw-step-4-perm) | Choo, Timur-Coates, Tixier & Morris-Biggs permeability |
 | **Step 5** | `saturation` | `InspectorSaturation.svelte` | [`#sw-step-5-saturation`](single_well.md#sw-step-5-saturation) | Archie, Waxman-Smits ($Q_v, B$), Dual Water & Indonesian |
 | **Step 6** | `ressum` | `InspectorResSum.svelte` | [`#sw-step-6-ressum`](single_well.md#sw-step-6-ressum) | Net Pay cutoffs, zonal summation & log blocking upscaling |

@@ -5,6 +5,7 @@
 	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
+	import { thomasStieberAvailable } from '$lib/utils/lithology';
 	import {
 		fillMissingCurve,
 		estimateBqvReferenceRw,
@@ -82,6 +83,7 @@
 		const rawVclay = wellData.curves['VCLAY'] ?? wellData.curves['VSHALE'] ?? [];
 		const phitSand = wellData.curves['PHIT_SAND'];
 		const useTs =
+			workbench.lithoParams.model !== 'vsh_bulk' &&
 			workbench.tsParams.useInSaturation &&
 			Boolean(phitSand?.some((value) => Number.isFinite(value)));
 		const fit = fitBqvCrossplot(
@@ -146,9 +148,9 @@
 
 	let hasTsAvailable = $derived.by(() => {
 		const ps = wellData.curves['PHIT_SAND'];
-		return Boolean(
+		return thomasStieberAvailable(workbench.lithoParams.model, Boolean(
 			workbench.tsParams.enabled || (ps && ps.some((v) => Number.isFinite(v)))
-		);
+		));
 	});
 
 	async function executeSaturation(persist: boolean = false) {
@@ -173,6 +175,7 @@
 		const phitSandArr = wellData.curves['PHIT_SAND'] ?? [];
 		const vshLamArr = wellData.curves['VSH_LAM'] ?? [];
 		const vshDisArr = wellData.curves['VSH_DIS'] ?? [];
+		const vshStrArr = wellData.curves['VSH_STR'] ?? [];
 		const rsandTsArr = wellData.curves['RSAND_TS'] ?? [];
 		const useTs = hasTsAvailable && workbench.tsParams.useInSaturation;
 		const cleanArr = (arr: number[]) =>
@@ -187,6 +190,8 @@
 					},
 					body: {
 						method: sp.method,
+						lithology_model: workbench.lithoParams.model,
+						vshale: cleanArr(wellData.curves['VSHALE'] ?? []),
 						rw_mode: sp.rwMode,
 						meas_system: sp.measSystem,
 						water_salinity: sp.waterSalinity,
@@ -204,12 +209,14 @@
 						swb: sp.swb,
 						rwb: sp.rwb,
 						use_thomas_stieber: useTs,
+						use_enhanced_logs: workbench.enhanceParams.useEnhancedLogs,
 						depths: cleanArr(deptArr) as number[] | undefined,
 						phit: cleanArr(phitArr),
 						vclay: cleanArr(vclayArr),
 						phit_sand: useTs ? cleanArr(phitSandArr) : undefined,
 						vsh_lam: useTs ? cleanArr(vshLamArr) : undefined,
 						vsh_dis: useTs ? cleanArr(vshDisArr) : undefined,
+						vsh_str: useTs ? cleanArr(vshStrArr) : undefined,
 						rsand_ts: useTs ? cleanArr(rsandTsArr) : undefined,
 						min_depth: workbench.depthFilter?.min ?? null,
 						max_depth: workbench.depthFilter?.max ?? null,

@@ -90,6 +90,12 @@ test('auto is specific to the current step, including steps without a recommende
 });
 
 test('manual plots survive step changes but incompatible scopes resolve to auto', () => {
+	assert.equal(resolveCrossplot({ scope: 'single-well', step: 'perm' }, 'porosity-comparison'), 'porosity-comparison');
+	assert.equal(resolveCrossplot({ scope: 'single-well', step: 'litho-poro' }, 'permeability-comparison'), 'permeability-comparison');
+	assert.equal(isCrossplotAvailable('porosity-comparison', 'multi-well'), false);
+	assert.equal(isCrossplotAvailable('permeability-comparison', 'multi-well'), false);
+	assert.ok(crossplotGroups({ scope: 'single-well', step: 'litho-poro' })[0].plots.some((plot) => plot.id === 'porosity-comparison'));
+	assert.ok(crossplotGroups({ scope: 'single-well', step: 'perm' })[0].plots.some((plot) => plot.id === 'permeability-comparison'));
 	assert.equal(resolveCrossplot({ scope: 'single-well', step: 'qaqc' }, 'core-qc'), 'core-qc');
 	assert.equal(resolveCrossplot({ scope: 'single-well', step: 'perm' }, 'core-qc'), 'core-qc');
 	assert.equal(
