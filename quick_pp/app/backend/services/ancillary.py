@@ -1710,6 +1710,20 @@ def add_scal_pc_project(
                 detail="Payload must include 'pc_data', 'scal_pc', or 'samples' list",
             )
 
+    if ("sample_name" in payload or "depth" in payload) and rows:
+        enriched_rows = []
+        for r in rows:
+            if isinstance(r, dict):
+                r_copy = dict(r)
+                if "sample_name" in payload and "sample_name" not in r_copy:
+                    r_copy["sample_name"] = payload["sample_name"]
+                if "depth" in payload and "depth" not in r_copy:
+                    r_copy["depth"] = payload["depth"]
+                enriched_rows.append(r_copy)
+            else:
+                enriched_rows.append(r)
+        rows = enriched_rows
+
     append_mode = bool(payload.get("append", False))
 
     try:
@@ -2427,6 +2441,9 @@ def commit_ancillary_data(
 ):
     effective_project_id = project_id if project_id is not None else request.project_id
     dtype = request.data_type.lower()
+    import_mode = getattr(request, "import_mode", "merge") or "merge"
+    should_replace = (import_mode == "replace")
+    should_append = (import_mode != "replace")
 
     # Build lookup from target_column -> (source_column, source_unit)
     col_map: Dict[str, Tuple[str, Optional[str]]] = {}
@@ -2552,7 +2569,7 @@ def commit_ancillary_data(
                         if t_name and d_val is not None:
                             tops_payload.append({"name": t_name, "depth": d_val})
                     if tops_payload:
-                        well.add_formation_tops(tops_payload, replace=True)
+                        well.add_formation_tops(tops_payload, replace=should_replace)
                         summary_by_well[wn] = len(tops_payload)
 
                 elif dtype == "surveys":
@@ -2569,7 +2586,7 @@ def commit_ancillary_data(
                                 {"md": md_v, "inc": inc_v, "azim": azi_v}
                             )
                     if surveys_payload:
-                        well.add_well_surveys(surveys_payload)
+                        well.add_well_surveys(surveys_payload, replace=should_replace)
                         if request.calculate_tvd:
                             _apply_survey_minimum_curvature_to_well(
                                 well,
@@ -2646,7 +2663,7 @@ def commit_ancillary_data(
                                 }
                             )
                     if tests_payload:
-                        well.add_pressure_tests(tests_payload, replace=True)
+                        well.add_pressure_tests(tests_payload, replace=should_replace)
                         summary_by_well[wn] = len(tests_payload)
 
                 elif dtype == "contacts":
@@ -2671,7 +2688,7 @@ def commit_ancillary_data(
                                 "remarks": str(r.get(rem_col, "")).strip() or None if rem_col in r else None,
                             })
                     if contacts_payload:
-                        well.add_fluid_contacts(contacts_payload, replace=True)
+                        well.add_fluid_contacts(contacts_payload, replace=should_replace)
                         summary_by_well[wn] = len(contacts_payload)
 
                 elif dtype in ("perforations", "perfs"):
@@ -2714,7 +2731,7 @@ def commit_ancillary_data(
                             }
                         )
                     if perfs_payload:
-                        well.add_perforations(perfs_payload, replace=True)
+                        well.add_perforations(perfs_payload, replace=should_replace)
                         summary_by_well[wn] = len(perfs_payload)
 
                 elif dtype == "rca":
@@ -2877,7 +2894,7 @@ def commit_ancillary_data(
                                     "measurements": meas,
                                 }
                             )
-                        well.replace_rca_samples(samples_to_save)
+                        well.replace_rca_samples(samples_to_save, append=should_append)
                         summary_by_well[wn] = len(samples_to_save)
 
                 elif dtype == "scal":
@@ -3001,7 +3018,7 @@ def commit_ancillary_data(
                                 }
                             )
                     if pc_rows:
-                        well.replace_scal_pc_data(pc_rows, append=False)
+                        well.replace_scal_pc_data(pc_rows, append=should_append)
                         summary_by_well[wn] = len(pc_rows)
 
                 invalidate_well_cache(
@@ -3011,6 +3028,7 @@ def commit_ancillary_data(
             return {
                 "status": "success",
                 "data_type": dtype,
+                "import_mode": import_mode,
                 "wells_updated": summary_by_well,
                 "total_committed": sum(summary_by_well.values()),
             }

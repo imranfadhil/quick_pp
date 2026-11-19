@@ -128,7 +128,7 @@ CREATE TABLE IF NOT EXISTS "fluid_contacts" (
     "fault_block" VARCHAR(100),
     "source" VARCHAR(100),
     "remarks" TEXT,
-    UNIQUE("well_id", "name")
+    UNIQUE("well_id", "name", "depth")
 );
 
 -- -----------------------------------------------------------------------------
@@ -150,7 +150,7 @@ CREATE TABLE IF NOT EXISTS "pressure_tests" (
     "fluid_type" VARCHAR(20) DEFAULT 'UNASSIGNED',
     "test_quality" VARCHAR(20) DEFAULT 'VALID',
     "zone" VARCHAR(255),
-    UNIQUE("well_id", "depth")
+    UNIQUE("well_id", "depth", "pressure")
 );
 
 -- -----------------------------------------------------------------------------
@@ -232,7 +232,7 @@ CREATE TABLE IF NOT EXISTS "capillary_pressure" (
     "pressure" REAL NOT NULL,
     "experiment_type" VARCHAR(50),
     "cycle" VARCHAR(50) NOT NULL DEFAULT 'drainage' CHECK (cycle IN ('drainage', 'imbibition')),
-    UNIQUE("sample_id", "saturation", "experiment_type", "cycle")
+    UNIQUE("sample_id", "pressure", "saturation", "experiment_type", "cycle")
 );
 
 -- -----------------------------------------------------------------------------

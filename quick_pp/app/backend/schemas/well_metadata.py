@@ -1,6 +1,6 @@
 """Pydantic schemas for Well Header Metadata and Two-Pass Import Workflows."""
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
@@ -365,6 +365,10 @@ class AncillaryCommitRequest(BaseModel):
         description="Maps source CSV/Excel column name to source unit",
     )
     rows: Optional[List[Dict[str, Any]]] = None
+    import_mode: Literal["merge", "append_only", "replace"] = Field(
+        default="merge",
+        description="Import mode: 'merge' (default, updates matching records and appends new ones), 'append_only' (skips existing records), 'replace' (replaces existing records)",
+    )
     # Survey options
     calculate_tvd: bool = True
     kb_elev_override: Optional[float] = None

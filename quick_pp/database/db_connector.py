@@ -168,6 +168,7 @@ class DBConnector:
             self._migrate_project_columns()
             self._migrate_pressure_test_columns()
             self._migrate_fluid_contact_columns()
+            self._migrate_unique_indices()
         except Exception as exc:
             if "readonly" in str(exc).lower() or os.environ.get("QPP_DEMO_MODE", "").lower() in ("1", "true", "yes"):
                 pass
@@ -293,6 +294,206 @@ class DBConnector:
                                 f'ALTER TABLE "pressure_tests" ADD COLUMN "{col_name}" {col_def}'
                             )
                         )
+        except Exception:
+            pass
+
+    def _migrate_unique_indices(self):
+        """Ensure composite unique indices and constraints exist for core_samples,
+        pressure_tests, formation_tops, fluid_contacts, and capillary_pressure."""
+        if DBConnector._engine is None:
+            return
+        from sqlalchemy import text
+
+        if "sqlite" in DBConnector._engine.url.drivername:
+            self._migrate_sqlite_table_unique_constraints()
+        elif "postgresql" in DBConnector._engine.url.drivername:
+            try:
+                with DBConnector._engine.begin() as conn:
+                    conn.execute(text('ALTER TABLE "formation_tops" DROP CONSTRAINT IF EXISTS "formation_tops_well_id_name_key"'))
+                    conn.execute(text('ALTER TABLE "fluid_contacts" DROP CONSTRAINT IF EXISTS "fluid_contacts_well_id_name_key"'))
+                    conn.execute(text('ALTER TABLE "pressure_tests" DROP CONSTRAINT IF EXISTS "pressure_tests_well_id_depth_key"'))
+                    conn.execute(text('ALTER TABLE "core_samples" DROP CONSTRAINT IF EXISTS "core_samples_well_id_sample_name_key"'))
+                    conn.execute(text('ALTER TABLE "core_samples" DROP CONSTRAINT IF EXISTS "core_samples_well_id_depth_key"'))
+                    conn.execute(text('ALTER TABLE "capillary_pressure" DROP CONSTRAINT IF EXISTS "capillary_pressure_sample_id_saturation_experiment_type_cycle_key"'))
+            except Exception:
+                pass
+
+        try:
+            with DBConnector._engine.begin() as conn:
+                conn.execute(
+                    text(
+                        'CREATE UNIQUE INDEX IF NOT EXISTS "uq_idx_core_samples_well_sample_depth" '
+                        'ON "core_samples"("well_id", "sample_name", "depth")'
+                    )
+                )
+                conn.execute(
+                    text(
+                        'CREATE UNIQUE INDEX IF NOT EXISTS "uq_idx_pressure_tests_well_depth_pressure" '
+                        'ON "pressure_tests"("well_id", "depth", "pressure")'
+                    )
+                )
+                conn.execute(
+                    text(
+                        'CREATE UNIQUE INDEX IF NOT EXISTS "uq_idx_formation_tops_well_name_depth" '
+                        'ON "formation_tops"("well_id", "name", "depth")'
+                    )
+                )
+                conn.execute(
+                    text(
+                        'CREATE UNIQUE INDEX IF NOT EXISTS "uq_idx_fluid_contacts_well_name_depth" '
+                        'ON "fluid_contacts"("well_id", "name", "depth")'
+                    )
+                )
+                conn.execute(
+                    text(
+                        'CREATE UNIQUE INDEX IF NOT EXISTS "uq_idx_capillary_pressure_sample_pc_sat" '
+                        'ON "capillary_pressure"("sample_id", "pressure", "saturation", "experiment_type", "cycle")'
+                    )
+                )
+        except Exception:
+            pass
+
+    def _migrate_sqlite_table_unique_constraints(self):
+        """Ensure existing SQLite tables with legacy narrow UNIQUE constraints
+        are migrated to composite unique constraints while preserving all rows."""
+        if DBConnector._engine is None or "sqlite" not in DBConnector._engine.url.drivername:
+            return
+
+        try:
+            with DBConnector._engine.connect() as conn:
+                raw_conn = conn.connection
+                cursor = raw_conn.cursor()
+
+                # 1. formation_tops
+                row = cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='formation_tops'").fetchone()
+                if row and 'UNIQUE("well_id", "name")' in row[0]:
+                    cursor.execute("PRAGMA foreign_keys=OFF;")
+                    cursor.execute("""
+                        CREATE TABLE "formation_tops_migration_tmp" (
+                            "top_id" INTEGER PRIMARY KEY AUTOINCREMENT,
+                            "well_id" INTEGER NOT NULL REFERENCES "wells"("well_id") ON DELETE CASCADE,
+                            "name" TEXT NOT NULL,
+                            "depth" REAL NOT NULL,
+                            UNIQUE("well_id", "name", "depth")
+                        );
+                    """)
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO "formation_tops_migration_tmp"("top_id", "well_id", "name", "depth")
+                        SELECT "top_id", "well_id", "name", "depth" FROM "formation_tops";
+                    """)
+                    cursor.execute('DROP TABLE "formation_tops";')
+                    cursor.execute('ALTER TABLE "formation_tops_migration_tmp" RENAME TO "formation_tops";')
+                    cursor.execute('CREATE INDEX IF NOT EXISTS "idx_formation_tops_well_id" ON "formation_tops" ("well_id");')
+                    cursor.execute("PRAGMA foreign_keys=ON;")
+                    raw_conn.commit()
+
+                # 2. fluid_contacts
+                row = cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='fluid_contacts'").fetchone()
+                if row and 'UNIQUE("well_id", "name")' in row[0]:
+                    cursor.execute("PRAGMA foreign_keys=OFF;")
+                    cols_info = [c[1] for c in cursor.execute("PRAGMA table_info('fluid_contacts')").fetchall()]
+                    cols_str = ", ".join(f'"{c}"' for c in cols_info)
+                    cursor.execute("""
+                        CREATE TABLE "fluid_contacts_migration_tmp" (
+                            "contact_id" INTEGER PRIMARY KEY AUTOINCREMENT,
+                            "well_id" INTEGER NOT NULL REFERENCES "wells"("well_id") ON DELETE CASCADE,
+                            "name" TEXT NOT NULL,
+                            "depth" REAL NOT NULL,
+                            "zone" TEXT,
+                            "contact_type" TEXT,
+                            "fault_block" TEXT,
+                            "source" TEXT,
+                            "remarks" TEXT,
+                            UNIQUE("well_id", "name", "depth")
+                        );
+                    """)
+                    cursor.execute(f'INSERT OR IGNORE INTO "fluid_contacts_migration_tmp"({cols_str}) SELECT {cols_str} FROM "fluid_contacts";')
+                    cursor.execute('DROP TABLE "fluid_contacts";')
+                    cursor.execute('ALTER TABLE "fluid_contacts_migration_tmp" RENAME TO "fluid_contacts";')
+                    cursor.execute('CREATE INDEX IF NOT EXISTS "idx_fluid_contacts_well_id" ON "fluid_contacts" ("well_id");')
+                    cursor.execute("PRAGMA foreign_keys=ON;")
+                    raw_conn.commit()
+
+                # 3. pressure_tests
+                row = cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='pressure_tests'").fetchone()
+                if row and ('UNIQUE("well_id", "depth")' in row[0] or 'UNIQUE("well_id", "depth")' in row[0].replace(" ", "")):
+                    cursor.execute("PRAGMA foreign_keys=OFF;")
+                    cols_info = [c[1] for c in cursor.execute("PRAGMA table_info('pressure_tests')").fetchall()]
+                    cols_str = ", ".join(f'"{c}"' for c in cols_info)
+                    cursor.execute("""
+                        CREATE TABLE "pressure_tests_migration_tmp" (
+                            "test_id" INTEGER PRIMARY KEY AUTOINCREMENT,
+                            "well_id" INTEGER NOT NULL REFERENCES "wells"("well_id") ON DELETE CASCADE,
+                            "depth" REAL NOT NULL,
+                            "pressure" REAL NOT NULL,
+                            "pressure_uom" TEXT DEFAULT 'psi',
+                            "mobility" REAL,
+                            "permeability" REAL,
+                            "temperature" REAL,
+                            "temperature_uom" TEXT DEFAULT 'degC',
+                            "remarks" TEXT,
+                            "tvdss" REAL,
+                            "fluid_type" TEXT DEFAULT 'UNASSIGNED',
+                            "test_quality" TEXT DEFAULT 'VALID',
+                            "zone" TEXT,
+                            UNIQUE("well_id", "depth", "pressure")
+                        );
+                    """)
+                    cursor.execute(f'INSERT OR IGNORE INTO "pressure_tests_migration_tmp"({cols_str}) SELECT {cols_str} FROM "pressure_tests";')
+                    cursor.execute('DROP TABLE "pressure_tests";')
+                    cursor.execute('ALTER TABLE "pressure_tests_migration_tmp" RENAME TO "pressure_tests";')
+                    cursor.execute('CREATE INDEX IF NOT EXISTS "idx_pressure_tests_well_id" ON "pressure_tests" ("well_id");')
+                    cursor.execute("PRAGMA foreign_keys=ON;")
+                    raw_conn.commit()
+
+                # 4. core_samples
+                row = cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='core_samples'").fetchone()
+                if row and ('UNIQUE("well_id", "sample_name")' in row[0] or 'UNIQUE("well_id", "depth")' in row[0]):
+                    cursor.execute("PRAGMA foreign_keys=OFF;")
+                    cols_info = [c[1] for c in cursor.execute("PRAGMA table_info('core_samples')").fetchall()]
+                    cols_str = ", ".join(f'"{c}"' for c in cols_info)
+                    cursor.execute("""
+                        CREATE TABLE "core_samples_migration_tmp" (
+                            "sample_id" INTEGER PRIMARY KEY AUTOINCREMENT,
+                            "well_id" INTEGER NOT NULL REFERENCES "wells"("well_id") ON DELETE CASCADE,
+                            "sample_name" TEXT NOT NULL,
+                            "depth" REAL NOT NULL,
+                            "description" TEXT,
+                            "remark" TEXT,
+                            UNIQUE("well_id", "sample_name", "depth")
+                        );
+                    """)
+                    cursor.execute(f'INSERT OR IGNORE INTO "core_samples_migration_tmp"({cols_str}) SELECT {cols_str} FROM "core_samples";')
+                    cursor.execute('DROP TABLE "core_samples";')
+                    cursor.execute('ALTER TABLE "core_samples_migration_tmp" RENAME TO "core_samples";')
+                    cursor.execute('CREATE INDEX IF NOT EXISTS "idx_core_samples_well_id" ON "core_samples" ("well_id");')
+                    cursor.execute("PRAGMA foreign_keys=ON;")
+                    raw_conn.commit()
+
+                # 5. capillary_pressure
+                row = cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='capillary_pressure'").fetchone()
+                if row and 'UNIQUE("sample_id", "saturation", "experiment_type", "cycle")' in row[0]:
+                    cursor.execute("PRAGMA foreign_keys=OFF;")
+                    cols_info = [c[1] for c in cursor.execute("PRAGMA table_info('capillary_pressure')").fetchall()]
+                    cols_str = ", ".join(f'"{c}"' for c in cols_info)
+                    cursor.execute("""
+                        CREATE TABLE "capillary_pressure_migration_tmp" (
+                            "pc_id" INTEGER PRIMARY KEY AUTOINCREMENT,
+                            "sample_id" INTEGER NOT NULL REFERENCES "core_samples"("sample_id") ON DELETE CASCADE,
+                            "saturation" REAL NOT NULL,
+                            "pressure" REAL NOT NULL,
+                            "experiment_type" TEXT,
+                            "cycle" TEXT NOT NULL DEFAULT 'drainage' CHECK (cycle IN ('drainage', 'imbibition')),
+                            UNIQUE("sample_id", "pressure", "saturation", "experiment_type", "cycle")
+                        );
+                    """)
+                    cursor.execute(f'INSERT OR IGNORE INTO "capillary_pressure_migration_tmp"({cols_str}) SELECT {cols_str} FROM "capillary_pressure";')
+                    cursor.execute('DROP TABLE "capillary_pressure";')
+                    cursor.execute('ALTER TABLE "capillary_pressure_migration_tmp" RENAME TO "capillary_pressure";')
+                    cursor.execute('CREATE INDEX IF NOT EXISTS "idx_capillary_pressure_sample_id" ON "capillary_pressure" ("sample_id");')
+                    cursor.execute("PRAGMA foreign_keys=ON;")
+                    raw_conn.commit()
+                cursor.close()
         except Exception:
             pass
 
