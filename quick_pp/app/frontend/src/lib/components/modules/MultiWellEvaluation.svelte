@@ -256,6 +256,7 @@
 				lp.logCorrectionMode === 'hc'
 					? {
 							...common,
+							model: lp.model,
 							water_point: [lp.fluidNphi, lp.fluidRhob],
 							rho_water: lp.rhoWater,
 							rho_hc: lp.rhoHc,

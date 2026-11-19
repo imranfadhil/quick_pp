@@ -420,8 +420,10 @@
 					`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/wells/${encodeURIComponent(workbench.wellId)}/hc_correction`,
 					{
 						dry_sand_point: [lp.drySandNphi, lp.drySandRhob],
+						dry_silt_point: [lp.drySiltNphi, lp.drySiltRhob],
 						dry_clay_point: [lp.dryClayNphi, lp.dryClayRhob],
 						water_point: [lp.fluidNphi, lp.fluidRhob],
+						model: lp.model,
 						rho_water: lp.rhoWater,
 						rho_hc: lp.rhoHc,
 						hi_hc: lp.hiHc,
@@ -1349,9 +1351,11 @@
 			{#if workbench.lithoParams.logCorrectionMode === 'hc'}
 				<div class="my-1.5 rounded-xs border border-emerald-200 bg-emerald-50/70 px-2 py-1 text-[10px] leading-snug text-emerald-950">
 					{#if workbench.lithoParams.hcCorrectionMethod === 'invaded_zone_standard'}
-						Applies the invaded-zone correction equations and selects S<sub>hi</sub> (0–1) in 0.01 increments to match the binary solid-relative clay fraction to VSH<sub>GR</sub>.
+						Applies the invaded-zone correction equations and selects S<sub>hi</sub> (0–1) in 0.01 increments to match the solid-relative clay fraction to VSH<sub>GR</sub>.
+					{:else if workbench.lithoParams.model === 'ssc'}
+						Shifts HC-flagged <span class="mono-num font-semibold">(NPHI, RHOB)</span> points along the fluid correction angle toward SSC non-sand fraction matching calibrated <span class="mono-num font-semibold">VSH_GR</span> (<span class="mono-num font-semibold">{fmtNum(workbench.lithoParams.grClean, 1)}–{fmtNum(workbench.lithoParams.grClay, 1)} gAPI</span>) spanning Sand to Silt line.
 					{:else}
-						Shifts HC-flagged <span class="mono-num font-semibold">(NPHI, RHOB)</span> points along the fluid correction angle toward a binary solid-relative clay fraction matching calibrated <span class="mono-num font-semibold">VSH_GR</span> (<span class="mono-num font-semibold">{fmtNum(workbench.lithoParams.grClean, 1)}–{fmtNum(workbench.lithoParams.grClay, 1)} gAPI</span>). This target differs from SSC VSH<sub>DN</sub>.
+						Shifts HC-flagged <span class="mono-num font-semibold">(NPHI, RHOB)</span> points along the fluid correction angle toward a binary solid-relative clay fraction matching calibrated <span class="mono-num font-semibold">VSH_GR</span> (<span class="mono-num font-semibold">{fmtNum(workbench.lithoParams.grClean, 1)}–{fmtNum(workbench.lithoParams.grClay, 1)} gAPI</span>).
 					{/if}
 				</div>
 				<div class="grid grid-cols-2 gap-1">

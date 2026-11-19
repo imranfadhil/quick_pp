@@ -625,7 +625,11 @@ def _resolve_fluid_zone_array(
         return zone
 
     tvdss_col = next(
-        (c for c in ("TVDSS", "TVD_SS", "DEPT_TVDSS", "DEPTH_TVDSS") if c in df.columns),
+        (
+            c
+            for c in ("TVDSS", "TVD_SS", "DEPT_TVDSS", "DEPTH_TVDSS")
+            if c in df.columns
+        ),
         None,
     )
     if tvdss_col is not None:
@@ -646,9 +650,7 @@ def _resolve_fluid_zone_array(
         if water_top is not None:
             zone = np.where(ref_arr > water_top, "WATER", zone)
         if gas_base is not None and water_top is not None:
-            zone = np.where(
-                (ref_arr >= gas_base) & (ref_arr <= water_top), "OIL", zone
-            )
+            zone = np.where((ref_arr >= gas_base) & (ref_arr <= water_top), "OIL", zone)
         elif gas_base is None and water_top is not None:
             zone = np.where(ref_arr <= water_top, "OIL", zone)
     return zone
@@ -679,7 +681,11 @@ def _compute_continuous_rho_fluid(
 
     # Depth reference for the P-T profile: prefer TVDSS/TVD, else measured depth.
     tvd_col = next(
-        (c for c in ("TVDSS", "TVD_SS", "TVD", "DEPT_TVDSS", "DEPTH_TVDSS") if c in df.columns),
+        (
+            c
+            for c in ("TVDSS", "TVD_SS", "TVD", "DEPT_TVDSS", "DEPTH_TVDSS")
+            if c in df.columns
+        ),
         None,
     )
     if tvd_col is not None:
@@ -737,16 +743,13 @@ def _compute_continuous_rho_fluid(
         oil_w = oil_w if oil_w is not None else np.zeros(n, dtype=float)
         gas_w = gas_w if gas_w is not None else np.zeros(n, dtype=float)
         total_w = oil_w + gas_w
-        oil_frac = np.divide(
-            oil_w, total_w, out=np.ones_like(oil_w), where=total_w > 0
-        )
+        oil_frac = np.divide(oil_w, total_w, out=np.ones_like(oil_w), where=total_w > 0)
         gas_frac = np.divide(
             gas_w, total_w, out=np.zeros_like(gas_w), where=total_w > 0
         )
-    rho_h_app = (
-        oil_frac * np.asarray(fluids["RHO_O_APP"], dtype=float)
-        + gas_frac * np.asarray(fluids["RHO_G_APP"], dtype=float)
-    )
+    rho_h_app = oil_frac * np.asarray(
+        fluids["RHO_O_APP"], dtype=float
+    ) + gas_frac * np.asarray(fluids["RHO_G_APP"], dtype=float)
     rho_h_app = np.where(np.isfinite(rho_h_app), rho_h_app, 0.75)
 
     # Mud-filtrate salinity: explicit config > well header > surface Rmf.
@@ -803,7 +806,9 @@ def _compute_continuous_rho_fluid(
         rw_downhole = np.full(n, float(cfg.rw), dtype=float)
     else:
         rw_downhole = np.asarray(
-            estimate_rw_temperature_salinity(temp_arr, max(cfg.water_salinity_ppm, 100.0)),
+            estimate_rw_temperature_salinity(
+                temp_arr, max(cfg.water_salinity_ppm, 100.0)
+            ),
             dtype=float,
         ).ravel()
 
@@ -819,7 +824,9 @@ def _compute_continuous_rho_fluid(
             )
         elif rmf_surface is not None and rmf_surface > 0:
             rmf_downhole = np.asarray(
-                estimate_rw_temperature_salinity(temp_arr, max(salinity_ppm or 0.0, 100.0))
+                estimate_rw_temperature_salinity(
+                    temp_arr, max(salinity_ppm or 0.0, 100.0)
+                )
                 if salinity_ppm
                 else np.full(n, rmf_surface, dtype=float),
                 dtype=float,
@@ -863,9 +870,7 @@ def _compute_continuous_rho_fluid(
     return result
 
 
-def _resolve_grain_density_driver(
-    df: pd.DataFrame, preferred: str
-) -> Optional[str]:
+def _resolve_grain_density_driver(df: pd.DataFrame, preferred: str) -> Optional[str]:
     """Resolve the grain-density correlation driver column (CGR preferred, GR fallback).
 
     Matches case-insensitively, trying the preferred column first, then CGR, SGR, GR, GAMMA.
@@ -945,16 +950,18 @@ def _apply_grain_density_correlation(
             "rho_ma_max": float(cfg.rho_ma_max),
         }
         return np.asarray(
-            grain_density_from_correlation_multivariate(matrix, fit, driver_names=names),
+            grain_density_from_correlation_multivariate(
+                matrix, fit, driver_names=names
+            ),
             dtype=float,
         )
 
     driver_col = _resolve_grain_density_driver(df, cfg.driver_col)
     if driver_col is None:
         return None
-    driver_v = (
-        pd.to_numeric(df[driver_col], errors="coerce").to_numpy(dtype=float)[selection]
-    )
+    driver_v = pd.to_numeric(df[driver_col], errors="coerce").to_numpy(dtype=float)[
+        selection
+    ]
     return np.asarray(
         grain_density_from_correlation(
             driver_v,
@@ -1106,8 +1113,12 @@ class WorkspaceBadholeRequest(WorkspaceFilterBase):
 
 class WorkspaceHCCorrectionRequest(WorkspaceFilterBase):
     dry_sand_point: Tuple[float, float] = Field((-0.02, 2.65))
+    dry_silt_point: Optional[Tuple[float, float]] = Field(None)
     dry_clay_point: Tuple[float, float] = Field((0.33, 2.7))
     water_point: Tuple[float, float] = Field((1.0, 1.0))
+    model: str = Field(
+        "sand_shale", description="Lithology model ('sand_shale' or 'ssc')"
+    )
     corr_angle: Optional[float] = Field(
         None,
         description="Explicit correction angle (degrees). If omitted, calculated from rho_water, rho_hc, hi_hc.",
@@ -1169,8 +1180,8 @@ class WorkspaceHCCorrectionRequest(WorkspaceFilterBase):
         0.05, description="Vshale tolerance used when flag_mode='vsh_gr'"
     )
     target_mode: str = Field(
-        "solid",
-        description="Interpret VSH_GR as 'solid' clay fraction of solids (default) or 'bulk' clay volume",
+        "bulk",
+        description="Interpret VSH_GR as 'bulk' clay volume (default) or 'solid' clay fraction of solids",
     )
     gr_clean: Optional[float] = Field(None, description="Clean sand GR endpoint (API)")
     gr_clay: Optional[float] = Field(None, description="Shale GR endpoint (API)")
@@ -1249,7 +1260,8 @@ class GammaParameters(BaseModel):
 
 class WorkspaceLithologyRequest(WorkspaceFilterBase, GammaParameters):
     model: str = Field(
-        "ssc", description="Lithology model: 'ssc', 'sand_shale', 'multi_mineral', or 'vsh_gr'"
+        "ssc",
+        description="Lithology model: 'ssc', 'sand_shale', 'multi_mineral', or 'vsh_gr'",
     )
     use_hc_corrected: bool = Field(
         False, description="Use NPHI_HC and RHOB_HC curves if present"
@@ -1348,10 +1360,12 @@ class GrainDensityCorrelation(BaseModel):
         description="Standardized ridge coefficients per driver (g/cc per standardized unit).",
     )
     center: List[float] = Field(
-        default_factory=list, description="Robust driver centers used for standardization."
+        default_factory=list,
+        description="Robust driver centers used for standardization.",
     )
     scale: List[float] = Field(
-        default_factory=list, description="Robust driver IQR scales used for standardization."
+        default_factory=list,
+        description="Robust driver IQR scales used for standardization.",
     )
     intercept: Optional[float] = Field(
         None,
@@ -1506,16 +1520,23 @@ class WorkspaceResolutionEnhancementRequest(WorkspaceFilterBase):
         description="'constrained_huber' (production, edge-preserving) or 'wiener' (fast preview)",
     )
     target_fwhm_m: Optional[float] = Field(
-        None, gt=0, description="Explicit target vertical resolution (m); overrides mode"
+        None,
+        gt=0,
+        description="Explicit target vertical resolution (m); overrides mode",
     )
     curves: Optional[List[str]] = Field(
-        None, description="Restrict processing to these mnemonics (default GR, NPHI, RHOB)"
+        None,
+        description="Restrict processing to these mnemonics (default GR, NPHI, RHOB)",
     )
     nyquist_factor: float = Field(
-        2.0, gt=0, description="Multiplier applied to the depth step for the target-resolution floor"
+        2.0,
+        gt=0,
+        description="Multiplier applied to the depth step for the target-resolution floor",
     )
     lambda_reg: Optional[float] = Field(
-        None, ge=0, description="Explicit Huber regularization weight; auto-tuned per curve when omitted"
+        None,
+        ge=0,
+        description="Explicit Huber regularization weight; auto-tuned per curve when omitted",
     )
     lambda_vol: float = Field(
         0.05, ge=0, description="Rolling bulk-volume conservation tether weight"
@@ -1524,7 +1545,9 @@ class WorkspaceResolutionEnhancementRequest(WorkspaceFilterBase):
         1.05, gt=0, description="Morozov discrepancy target multiplier"
     )
     huber_delta_mult: float = Field(
-        2.0, gt=0, description="Huber threshold multiplier applied to the noise estimate"
+        2.0,
+        gt=0,
+        description="Huber threshold multiplier applied to the noise estimate",
     )
     volume_window_m: float = Field(
         3.0, gt=0, description="Rolling bulk-volume averaging window (m)"
@@ -1538,10 +1561,12 @@ class WorkspaceResolutionEnhancementRequest(WorkspaceFilterBase):
         ),
     )
     resample_nonuniform: bool = Field(
-        True, description="Linearly resample onto a uniform grid when the depth step is not uniform"
+        True,
+        description="Linearly resample onto a uniform grid when the depth step is not uniform",
     )
     check_alignment: bool = Field(
-        True, description="Run the inter-log micro-depth alignment diagnostic on the outputs"
+        True,
+        description="Run the inter-log micro-depth alignment diagnostic on the outputs",
     )
 
 
@@ -2869,6 +2894,8 @@ def workspace_hc_correction(
             target_mode=req.target_mode,
             flag_mode=req.flag_mode,
             vsh_tol=req.vsh_tol,
+            dry_silt_point=req.dry_silt_point,
+            model=req.model,
         )
         correction_angles = corr_angle_for_valid
         if req.correction_method == "invaded_zone_standard":
@@ -4616,7 +4643,9 @@ def workspace_lithology(
                     requested_logs if model == "multi_mineral" else None
                 ),
                 "phi_max": req.phi_max if model == "multi_mineral" else None,
-                "linearize_pef": req.linearize_pef if model == "multi_mineral" else None,
+                "linearize_pef": req.linearize_pef
+                if model == "multi_mineral"
+                else None,
                 "porosity_method_key": req.porosity_method,
                 "use_hc_corrected": req.use_hc_corrected,
                 "gr_clean": req.gr_clean,
@@ -4643,12 +4672,22 @@ def workspace_lithology(
         if model == "multi_mineral" and "CHI2_ERROR" in out_df:
             chi2_valid = pd.to_numeric(out_df["CHI2_ERROR"], errors="coerce").dropna()
             avg_valid = pd.to_numeric(out_df.get("AVG_ERROR"), errors="coerce").dropna()
-            opt_valid = pd.to_numeric(out_df.get("OPTIMIZER_SUCCESS"), errors="coerce").dropna()
+            opt_valid = pd.to_numeric(
+                out_df.get("OPTIMIZER_SUCCESS"), errors="coerce"
+            ).dropna()
             mm_summary = {
-                "chi2_mean": round(float(chi2_valid.mean()), 3) if not chi2_valid.empty else None,
-                "chi2_p50": round(float(chi2_valid.median()), 3) if not chi2_valid.empty else None,
-                "avg_error_mean": round(float(avg_valid.mean()), 2) if not avg_valid.empty else None,
-                "success_rate": round(float(opt_valid.mean()) * 100.0, 1) if not opt_valid.empty else None,
+                "chi2_mean": round(float(chi2_valid.mean()), 3)
+                if not chi2_valid.empty
+                else None,
+                "chi2_p50": round(float(chi2_valid.median()), 3)
+                if not chi2_valid.empty
+                else None,
+                "avg_error_mean": round(float(avg_valid.mean()), 2)
+                if not avg_valid.empty
+                else None,
+                "success_rate": round(float(opt_valid.mean()) * 100.0, 1)
+                if not opt_valid.empty
+                else None,
             }
         return {
             "well_name": well_name,
@@ -4770,7 +4809,9 @@ def workspace_thomas_stieber(
         # Partition bulk VCLAY into VSH_LAM + VSH_DIS + VSH_STR == VCLAY so
         # Track 4 mineral stacking stays exact across the three-way split
         vsh_lam_norm = np.clip(vsh_lam_raw, 0.0, vsh_ts_v)
-        vsh_str_norm = np.clip(vsh_str_raw, 0.0, np.maximum(vsh_ts_v - vsh_lam_norm, 0.0))
+        vsh_str_norm = np.clip(
+            vsh_str_raw, 0.0, np.maximum(vsh_ts_v - vsh_lam_norm, 0.0)
+        )
         lam_fraction = np.where(
             vsh_ts_v > 1e-5,
             np.clip(vsh_lam_norm / vsh_ts_v, 0.0, 1.0),
@@ -4784,7 +4825,9 @@ def workspace_thomas_stieber(
         str_fraction = np.clip(str_fraction, 0.0, np.maximum(1.0 - lam_fraction, 0.0))
         vsh_lam_bulk = np.clip(vclay_bulk_v * lam_fraction, 0.0, vclay_bulk_v)
         vsh_str_bulk = np.clip(
-            vclay_bulk_v * str_fraction, 0.0, np.maximum(vclay_bulk_v - vsh_lam_bulk, 0.0)
+            vclay_bulk_v * str_fraction,
+            0.0,
+            np.maximum(vclay_bulk_v - vsh_lam_bulk, 0.0),
         )
         vsh_dis_bulk = np.clip(
             vclay_bulk_v - vsh_lam_bulk - vsh_str_bulk, 0.0, vclay_bulk_v
@@ -5124,7 +5167,9 @@ def workspace_porosity(
                         norm_kwargs.get("vclay", np.zeros(n_valid, dtype=float)),
                     )
             else:
-                vsand_m, vsilt_m, vclay_m, _ = ssc_model.estimate_lithology(nphi_s, rhob_s)
+                vsand_m, vsilt_m, vclay_m, _ = ssc_model.estimate_lithology(
+                    nphi_s, rhob_s
+                )
                 if np.any(need_fallback):
                     vsand_fb = np.asarray(vsand_m, dtype=float)
                     vsilt_fb = np.asarray(vsilt_m, dtype=float)
@@ -5232,19 +5277,13 @@ def workspace_porosity(
                 "RHO_FL": np.asarray(rho_fl_result["RHO_FL"], dtype=float),
                 "RHO_MF": np.asarray(rho_fl_result["RHO_MF"], dtype=float),
                 "SXO_EST": np.asarray(rho_fl_result["SXO_EST"], dtype=float),
-                "PHID_RAW_100": np.asarray(
-                    rho_fl_result["PHID_RAW_100"], dtype=float
-                ),
-                "RHO_FL_TIER": np.asarray(
-                    rho_fl_result["RHO_FL_TIER"], dtype=float
-                ),
+                "PHID_RAW_100": np.asarray(rho_fl_result["PHID_RAW_100"], dtype=float),
+                "RHO_FL_TIER": np.asarray(rho_fl_result["RHO_FL_TIER"], dtype=float),
             }
 
         if req.method.lower() == "neu_den":
             xplot_model = (
-                "ss"
-                if lith_model in ("sand_shale", "vsh_nd")
-                else req.crossplot_model
+                "ss" if lith_model in ("sand_shale", "vsh_nd") else req.crossplot_model
             )
             dry_clay_pt = (
                 ss_model.dry_clay_point
@@ -5655,10 +5694,7 @@ def workspace_porosity(
                 "PHIT": _curve_summary_stats(phit_s),
                 "PHIE": _curve_summary_stats(phie_s),
                 "PHID": _curve_summary_stats(phid_s),
-                **{
-                    name: _curve_summary_stats(out_df[name])
-                    for name in rho_fl_curves
-                },
+                **{name: _curve_summary_stats(out_df[name]) for name in rho_fl_curves},
             },
             **dataframe_to_columnar(out_df),
         }

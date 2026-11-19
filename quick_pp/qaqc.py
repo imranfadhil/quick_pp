@@ -13,7 +13,7 @@ from quick_pp import logger
 from quick_pp.config import Config
 from quick_pp.ressum import calc_reservoir_summary, flag_interval
 from quick_pp.rock_type import estimate_vsh_gr
-from quick_pp.utils import length_a_b, nd_triangle_coords
+from quick_pp.utils import length_a_b, line_intersection, nd_triangle_coords
 
 plt.style.use("seaborn-v0_8-paper")
 
@@ -408,6 +408,8 @@ def neu_den_xplot_hc_correction(
     flag_mode: str = "strict",
     vsh_tol: float = 0.05,
     nphi_max: float = 0.45,
+    dry_silt_point: tuple = (),
+    model: str = "sand_shale",
 ):
     """Correct neutron porosity and bulk density for light hydrocarbon effects.
 
@@ -421,6 +423,11 @@ def neu_den_xplot_hc_correction(
     frame of the matrix (A), dry clay (C) and water (D) triangle, see
     :func:`quick_pp.utils.nd_triangle_coords`. This makes the result independent
     of whether the dry clay is heavier or lighter than the matrix.
+
+    For Sand-Silt-Clay (SSC) models (``model="ssc"``), the effective 100% shale
+    endpoint terminates at the Silt line intersection on line A-C rather than
+    the Dry Clay point, because non-sand volume (VSILT + VCLAY = 1 - VSAND) reaches
+    1.0 at the Silt boundary.
 
     Flagging:
         * ``flag_mode="strict"`` (default): only points plotting beyond the
@@ -441,9 +448,6 @@ def neu_den_xplot_hc_correction(
         * ``target_mode="bulk"`` (default): ``vsh_gr`` is treated as bulk clay
           volume; the target is the iso-Vcl line through ``A + vsh_gr (C - A)``
           parallel to D-A. Consistent with :func:`den_correction`.
-
-    The solid target is a binary sand-clay projection, not the piecewise
-    sand-silt-clay (SSC) shale estimate.
 
     Corrected points never move backwards along the ray (flagged points already
     on the shaly side of the target are left unchanged) and never cross the
@@ -467,6 +471,8 @@ def neu_den_xplot_hc_correction(
         flag_mode (str, optional): 'strict' or 'vsh_gr'. Defaults to 'strict'.
         vsh_tol (float, optional): Tolerance for ``flag_mode='vsh_gr'``. Defaults to 0.05.
         nphi_max (float, optional): Points with NPHI >= nphi_max are never corrected. Defaults to 0.45.
+        dry_silt_point (tuple, optional): (NPHI, RHOB) of dry silt (B). Used when ``model='ssc'``.
+        model (str, optional): 'sand_shale' or 'ssc'. Defaults to 'sand_shale'.
 
     Returns:
         tuple[np.ndarray, np.ndarray, np.ndarray]: A tuple containing:
@@ -476,6 +482,7 @@ def neu_den_xplot_hc_correction(
     """
     target_mode = str(target_mode).strip().lower()
     flag_mode = str(flag_mode).strip().lower()
+    model_str = str(model).strip().lower()
     if target_mode not in ("bulk", "solid"):
         raise ValueError("target_mode must be 'bulk' or 'solid'")
     if flag_mode not in ("strict", "vsh_gr"):
@@ -487,6 +494,25 @@ def neu_den_xplot_hc_correction(
     rock_len = float(length_a_b(A, C))
     if rock_len <= 0:
         raise ValueError("dry_min1_point and dry_clay_point must be distinct")
+
+    # In Sand-Silt-Clay (SSC), the reservoir non-sand shale volume (VSILT + VCLAY = 1 - VSAND)
+    # reaches 1.0 at the Silt line rather than the Dry Clay point. Substitute the effective
+    # Silt line intersection on the rock line (A-C) as the 100% shale endpoint.
+    if (
+        model_str == "ssc"
+        and dry_silt_point is not None
+        and len(dry_silt_point) == 2
+        and all(v is not None for v in dry_silt_point)
+    ):
+        B = (float(dry_silt_point[0]), float(dry_silt_point[1]))
+        b_eff = line_intersection((A, C), (D, B))
+        if all(np.isfinite(coord) for coord in b_eff):
+            C = (float(b_eff[0]), float(b_eff[1]))
+            rock_len = float(length_a_b(A, C))
+            if rock_len <= 0:
+                raise ValueError(
+                    "dry_min1_point and effective silt point must be distinct"
+                )
 
     nphi = np.asarray(nphi, dtype=float)
     rhob = np.asarray(rhob, dtype=float)

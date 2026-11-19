@@ -255,6 +255,38 @@ def test_per_sample_correction_angles_are_supported():
     assert nc[0] != pytest.approx(nc[1])
 
 
+def test_ssc_hc_correction_targets_silt_endpoint():
+    from quick_pp.utils import line_intersection
+    silt = (0.09, 2.68)
+    b_eff = line_intersection((SAND, CLAY), (WATER, silt))
+    target_vsh = 0.25
+
+    # Gas sand point
+    nphi_raw = np.array([0.10])
+    rhob_raw = np.array([2.25])
+
+    nc, rc, flag = neu_den_xplot_hc_correction(
+        nphi_raw,
+        rhob_raw,
+        vsh_gr=np.array([target_vsh]),
+        dry_min1_point=SAND,
+        dry_clay_point=CLAY,
+        water_point=WATER,
+        corr_angle=GAS_ANGLE,
+        target_mode="solid",
+        model="ssc",
+        dry_silt_point=silt,
+    )
+    assert flag[0] == 1.0
+
+    # Verify that the projected solid fraction along Sand-Silt matches target_vsh exactly
+    var_pt = line_intersection((SAND, CLAY), (WATER, (float(nc[0]), float(rc[0]))))
+    res_len = np.hypot(SAND[0] - b_eff[0], SAND[1] - b_eff[1])
+    proj_from_sand = np.hypot(SAND[0] - var_pt[0], SAND[1] - var_pt[1])
+    vsh_dn_ssc = proj_from_sand / res_len
+    assert vsh_dn_ssc == pytest.approx(target_vsh, abs=1e-7)
+
+
 def test_invalid_modes_raise():
     with pytest.raises(ValueError):
         correct(np.array([0.1]), np.array([2.2]), None, flag_mode="bogus")

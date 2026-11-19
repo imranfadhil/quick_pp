@@ -178,8 +178,10 @@ export interface paths {
 				content: {
 					'application/json': {
 						dry_sand_point?: [number, number];
+						dry_silt_point?: [number, number];
 						dry_clay_point?: [number, number];
 						water_point?: [number, number];
+						model?: string;
 						corr_angle?: number | null;
 						rho_water?: number;
 						rho_hc?: number;
