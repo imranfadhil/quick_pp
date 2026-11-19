@@ -404,7 +404,7 @@ def neu_den_xplot_hc_correction(
     water_point: tuple = (1.0, 1.0),
     corr_angle: float = 50,
     buffer: float = 0.0,
-    target_mode: str = "solid",
+    target_mode: str = "bulk",
     flag_mode: str = "strict",
     vsh_tol: float = 0.05,
     nphi_max: float = 0.45,
@@ -435,10 +435,10 @@ def neu_den_xplot_hc_correction(
           gamma ray overestimates shale (e.g. radioactive/feldspathic sands).
 
     Target:
-        * ``target_mode="solid"`` (default): ``vsh_gr`` is treated as clay fraction
+        * ``target_mode="solid"``: ``vsh_gr`` is treated as clay fraction
           of the solids, i.e. the target is the line from D through
           ``C + (1 - vsh_gr)(A - C)``.
-        * ``target_mode="bulk"``: ``vsh_gr`` is treated as bulk clay
+        * ``target_mode="bulk"`` (default): ``vsh_gr`` is treated as bulk clay
           volume; the target is the iso-Vcl line through ``A + vsh_gr (C - A)``
           parallel to D-A. Consistent with :func:`den_correction`.
 
@@ -463,7 +463,7 @@ def neu_den_xplot_hc_correction(
             :func:`neu_den_xplot_hc_correction_angle`. Defaults to 50.
         buffer (float, optional): Flagging tolerance as crossplot distance along A-C. Only widens
             the strict flagging region. Defaults to 0.0.
-        target_mode (str, optional): 'bulk' or 'solid'. Defaults to 'solid'.
+        target_mode (str, optional): 'bulk' or 'solid'. Defaults to 'bulk'.
         flag_mode (str, optional): 'strict' or 'vsh_gr'. Defaults to 'strict'.
         vsh_tol (float, optional): Tolerance for ``flag_mode='vsh_gr'``. Defaults to 0.05.
         nphi_max (float, optional): Points with NPHI >= nphi_max are never corrected. Defaults to 0.45.
