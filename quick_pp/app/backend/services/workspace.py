@@ -630,6 +630,11 @@ def _resolve_fluid_zone_array(
             for c in ("TVDSS", "TVD_SS", "DEPT_TVDSS", "DEPTH_TVDSS")
             if c in df.columns
         ),
+        (
+            c
+            for c in ("TVDSS", "TVD_SS", "DEPT_TVDSS", "DEPTH_TVDSS")
+            if c in df.columns
+        ),
         None,
     )
     if tvdss_col is not None:

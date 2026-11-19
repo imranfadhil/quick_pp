@@ -18,12 +18,13 @@ how they feed the $\rho_{fl}$ solver.
 
 ## Hydrocarbon correction targets
 
-The crossplot and standard invaded-zone hydrocarbon corrections default to
-`target_mode="solid"`: `VSH_GR` is compared with the binary clay fraction of
-solids, `Vcl / (1 - porosity)`. The workbench uses this default. Explicit
-`target_mode="bulk"` retains the previous bulk-clay target and remains consistent
-with density reconstruction. Changing the mode changes both the target and the
-`vsh_gr` flagging criterion. Re-run the correction to update existing curves.
+The crossplot hydrocarbon correction defaults to `target_mode="bulk"`: `VSH_GR` is
+compared with bulk clay volume `vcl0`, consistent with density reconstruction.
+Explicit `target_mode="solid"` compares with the binary clay fraction of solids,
+`Vcl / (1 - porosity)`. In the standard invaded-zone iteration, `target_mode="solid"`
+compares the clay fraction of solids, while `target_mode="bulk"` compares bulk clay.
+Changing the mode changes both the target and the `vsh_gr` flagging criterion.
+Re-run the correction to update existing curves.
 
 The solid-relative binary projection is not the same as the piecewise
 sand-silt-clay (SSC) `VSH_DN` displayed in the workbench, so matching the target

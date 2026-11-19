@@ -142,7 +142,7 @@ def test_buffer_only_widens_flagging():
 def test_shaly_gas_sand_strict_vs_vsh_gr_mode():
     nphi, rhob = forward(0.22, 0.30, 0.6)
     nphi_wet, rhob_wet = forward(0.22, 0.30, 0.0)
-    args = (np.array([nphi]), np.array([rhob]), np.array([0.30 / 0.78]))
+    args = (np.array([nphi]), np.array([rhob]), np.array([0.30]))
 
     nc, rc, flag = correct(*args, flag_mode="strict")
     assert flag[0] == 0.0
@@ -153,14 +153,37 @@ def test_shaly_gas_sand_strict_vs_vsh_gr_mode():
     assert nc[0] == pytest.approx(float(nphi_wet), abs=1e-10)
     assert rc[0] == pytest.approx(float(rhob_wet), abs=1e-10)
 
+    # Verify solid mode target explicitly
+    nc_s, rc_s, flag_s = correct(
+        np.array([nphi]),
+        np.array([rhob]),
+        np.array([0.30 / 0.78]),
+        flag_mode="vsh_gr",
+        target_mode="solid",
+        vsh_tol=0.05,
+    )
+    assert flag_s[0] == 1.0
+    assert nc_s[0] == pytest.approx(float(nphi_wet), abs=1e-10)
+    assert rc_s[0] == pytest.approx(float(rhob_wet), abs=1e-10)
+
 
 def test_vsh_gr_mode_does_not_touch_water_bearing_points():
     nphi, rhob = forward(0.22, 0.30, 0.0)
     nc, rc, flag = correct(
-        np.array([nphi]), np.array([rhob]), np.array([0.30 / 0.78]), flag_mode="vsh_gr"
+        np.array([nphi]), np.array([rhob]), np.array([0.30]), flag_mode="vsh_gr"
     )
     assert flag[0] == 0.0
     assert rc[0] == pytest.approx(float(rhob))
+
+    nc_s, rc_s, flag_s = correct(
+        np.array([nphi]),
+        np.array([rhob]),
+        np.array([0.30 / 0.78]),
+        flag_mode="vsh_gr",
+        target_mode="solid",
+    )
+    assert flag_s[0] == 0.0
+    assert rc_s[0] == pytest.approx(float(rhob))
 
 
 def test_bulk_target_recovers_shaly_gas_and_solid_target_matches_projection():
@@ -177,23 +200,23 @@ def test_bulk_target_recovers_shaly_gas_and_solid_target_matches_projection():
     assert (vcl / (1.0 - phi))[0] == pytest.approx(0.20, abs=1e-10)
 
 
-def test_default_target_is_solid_and_differs_from_bulk():
+def test_default_target_is_bulk_and_differs_from_solid():
     nphi, rhob = forward(0.22, 0.20, 0.6)
     args = (np.array([nphi]), np.array([rhob]), np.array([0.20]))
 
     default = correct(*args)
     solid = correct(*args, target_mode="solid")
     bulk = correct(*args, target_mode="bulk")
-    for actual, expected in zip(default, solid, strict=True):
+    for actual, expected in zip(default, bulk, strict=True):
         np.testing.assert_allclose(actual, expected)
     assert default[2][0] == 1.0
     phi, vcl = nd_triangle_coords(default[0], default[1], SAND, CLAY, WATER)
-    assert (vcl / (1.0 - phi))[0] == pytest.approx(0.20, abs=1e-10)
-    assert default[0][0] < bulk[0][0]
-    assert default[1][0] < bulk[1][0]
+    assert vcl[0] == pytest.approx(0.20, abs=1e-10)
+    assert default[0][0] > solid[0][0]
+    assert default[1][0] > solid[1][0]
 
 
-def test_invaded_zone_default_target_is_solid():
+def test_invaded_zone_default_target_is_bulk():
     kwargs = {
         "nphi": np.array([0.1]),
         "rhob": np.array([2.35]),
@@ -209,9 +232,9 @@ def test_invaded_zone_default_target_is_solid():
     default = invaded_zone_hc_correction(**kwargs)
     solid = invaded_zone_hc_correction(**kwargs, target_mode="solid")
     bulk = invaded_zone_hc_correction(**kwargs, target_mode="bulk")
-    for actual, expected in zip(default, solid, strict=True):
+    for actual, expected in zip(default, bulk, strict=True):
         np.testing.assert_allclose(actual, expected)
-    assert default[2][0] != bulk[2][0]
+    assert default[2][0] != solid[2][0]
 
 
 def test_nan_vsh_gr_is_skipped():

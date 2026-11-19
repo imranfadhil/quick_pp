@@ -628,7 +628,7 @@ def invaded_zone_hc_correction(
     dry_clay_point,
     hc_flag,
     lithology_coeff=1.0,
-    target_mode="solid",
+    target_mode="bulk",
 ):
     """Correct NPHI/RHOB using the standard invaded-zone saturation iteration.
 
@@ -639,8 +639,8 @@ def invaded_zone_hc_correction(
 
     Density porosity is estimated from the dry-sand density endpoint and
     mud-filtrate density; the corrected VSH_DN is evaluated in the matrix /
-    clay / mud-filtrate crossplot triangle. ``target_mode="solid"`` (default)
-    compares the clay fraction of solids; ``"bulk"`` compares bulk clay volume.
+    clay / mud-filtrate crossplot triangle. ``target_mode="bulk"`` (default)
+    compares bulk clay volume; ``"solid"`` compares the clay fraction of solids.
     """
     target_mode = str(target_mode).strip().lower()
     if target_mode not in ("bulk", "solid"):

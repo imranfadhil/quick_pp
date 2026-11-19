@@ -98,6 +98,11 @@ def client_and_project(monkeypatch):
     monkeypatch.setattr(db_service, "get_db", lambda: DummyCtx(session))
     monkeypatch.setattr(ws_service, "get_db", lambda: DummyCtx(session))
     monkeypatch.setattr(rt_service, "get_db", lambda: DummyCtx(session))
+    from quick_pp.app.backend.utils import auth as auth_mod
+    from quick_pp.app.backend.utils import db as utils_db
+    monkeypatch.setattr(auth_mod, "get_db", lambda: DummyCtx(session))
+    monkeypatch.setattr(auth_mod, "bootstrap_default_admin", lambda: None)
+    monkeypatch.setattr(utils_db, "get_db", lambda: DummyCtx(session))
     db_service.invalidate_well_cache()
     ws_service._batch_previews.clear()
 
@@ -1480,7 +1485,7 @@ def test_dynamic_hc_correction_accepts_tvdss(client_and_project, monkeypatch):
 
 
 @pytest.mark.parametrize("method", ["crossplot", "invaded_zone_standard"])
-def test_hc_correction_defaults_to_solid_target(client_and_project, method):
+def test_hc_correction_defaults_to_bulk_target(client_and_project, method):
     client, pid = client_and_project
     endpoint = f"/quick_pp/workspace/projects/{pid}/wells/Well-A/hc_correction"
     params = {
@@ -1505,8 +1510,8 @@ def test_hc_correction_defaults_to_solid_target(client_and_project, method):
 
     default, solid, bulk = results
     for curve in ("NPHI_HC", "RHOB_HC", "HC_FLAG"):
-        np.testing.assert_allclose(default[curve], solid[curve])
-    assert not np.allclose(default["RHOB_HC"], bulk["RHOB_HC"])
+        np.testing.assert_allclose(default[curve], bulk[curve])
+    assert not np.allclose(default["RHOB_HC"], solid["RHOB_HC"])
 
 
 def test_standard_invaded_zone_correction_returns_saturation_curve(client_and_project):

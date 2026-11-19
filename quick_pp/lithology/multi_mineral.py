@@ -687,13 +687,19 @@ class MultiMineral:
             )
 
             if log_type == "NPHI":
-                response += fluid_vol * float(props.get("nphi", 1.0 if fluid == "WATER" else 0.0))
+                response += fluid_vol * float(
+                    props.get("nphi", 1.0 if fluid == "WATER" else 0.0)
+                )
             elif log_type == "RHOB":
-                response += fluid_vol * float(props.get("density", 1.0 if fluid == "WATER" else 0.8))
+                response += fluid_vol * float(
+                    props.get("density", 1.0 if fluid == "WATER" else 0.8)
+                )
             elif log_type == "DTC":
                 response += fluid_vol * float(props.get("dtc", 189.0))
             elif log_type == "PEF":
-                response += fluid_vol * float(props.get("pef", 0.36 if fluid == "WATER" else 0.0))
+                response += fluid_vol * float(
+                    props.get("pef", 0.36 if fluid == "WATER" else 0.0)
+                )
             elif log_type == "U":
                 pef_f = float(props.get("pef", 0.36 if fluid == "WATER" else 0.0))
                 rho_f = float(props.get("density", 1.0 if fluid == "WATER" else 0.8))
@@ -739,7 +745,9 @@ class MultiMineral:
                         else float(measured_value)
                     )
                     sigma_rt = self.tool_uncertainties.get("RT", 0.05)
-                    diff_log = np.log10(max(ct_meas, 1e-6)) - np.log10(max(ct_recon, 1e-6))
+                    diff_log = np.log10(max(ct_meas, 1e-6)) - np.log10(
+                        max(ct_recon, 1e-6)
+                    )
                     total_error += (diff_log / sigma_rt) ** 2
                     continue
 
@@ -1274,9 +1282,7 @@ class MultiMineral:
             phi_max_eff = float(phi_max) if phi_max is not None else self.phi_max
 
             # Resolve two-stage execution mode
-            run_two_stage = (
-                self.two_stage if two_stage is None else bool(two_stage)
-            )
+            run_two_stage = self.two_stage if two_stage is None else bool(two_stage)
             if solver_choice == "slsqp":
                 run_two_stage = False
 
@@ -1315,14 +1321,20 @@ class MultiMineral:
                             p95 = float(np.percentile(valid_data, 95))
                             log_range = p95 - p05
                             if log_range > 1e-4:
-                                self.scaling_factors[log_type] = round(1.0 / log_range, 4)
+                                self.scaling_factors[log_type] = round(
+                                    1.0 / log_range, 4
+                                )
                             else:
-                                self.scaling_factors[log_type] = round(1.0 / fallback_r, 4)
+                                self.scaling_factors[log_type] = round(
+                                    1.0 / fallback_r, 4
+                                )
                         else:
                             self.scaling_factors[log_type] = round(1.0 / fallback_r, 4)
 
                 if "PHIT_GUIDE" in solve_inputs:
-                    self.scaling_factors["PHIT_GUIDE"] = round(1.0 / float(phit_uncertainty), 4)
+                    self.scaling_factors["PHIT_GUIDE"] = round(
+                        1.0 / float(phit_uncertainty), 4
+                    )
                 self.scaling_factors["CT"] = round(
                     1.0 / self.tool_uncertainties.get("CT", 0.05), 4
                 )
@@ -1414,7 +1426,9 @@ class MultiMineral:
                 V0[:, :n_minerals] = (1.0 - phi_init) / max(n_minerals, 1)
                 V0[:, -1] = phi_init
                 V0 = _project_bounded_simplex_batch(V0, lower, upper, target_sum=1.0)
-                C_full = self._build_response_matrix(linear_log_names, fluids=stage1_fluids)
+                C_full = self._build_response_matrix(
+                    linear_log_names, fluids=stage1_fluids
+                )
             else:
                 if bounds is not None:
                     if isinstance(bounds, dict):
@@ -1438,9 +1452,13 @@ class MultiMineral:
                     upper = np.array([b[1] for b in self.bounds], dtype=float)
 
                 V0 = _project_bounded_simplex_batch(
-                    np.full((n_samples, n_vars), 1.0 / n_vars, dtype=float), lower, upper
+                    np.full((n_samples, n_vars), 1.0 / n_vars, dtype=float),
+                    lower,
+                    upper,
                 )
-                C_full = self._build_response_matrix(linear_log_names, fluids=self.fluids)
+                C_full = self._build_response_matrix(
+                    linear_log_names, fluids=self.fluids
+                )
 
             V_stage1 = np.full((n_samples, n_vars), np.nan, dtype=float)
             success_flags = np.full(n_samples, False, dtype=bool)
@@ -1511,9 +1529,8 @@ class MultiMineral:
                 voil = np.full(n_samples, np.nan, dtype=float)
                 vgas = np.full(n_samples, np.nan, dtype=float)
 
-                has_rt_and_model = (
-                    active_cond_model in CONDUCTIVITY_MODELS
-                    and np.any(np.isfinite(rt_arr) & (rt_arr > 0))
+                has_rt_and_model = active_cond_model in CONDUCTIVITY_MODELS and np.any(
+                    np.isfinite(rt_arr) & (rt_arr > 0)
                 )
 
                 if not has_rt_and_model:
@@ -1534,7 +1551,9 @@ class MultiMineral:
                             if m.upper() in CLAY_MINERAL_NAMES
                         ]
                         if clay_indices:
-                            vclay_sub = np.sum(minerals_opt[idx_rt][:, clay_indices], axis=1)
+                            vclay_sub = np.sum(
+                                minerals_opt[idx_rt][:, clay_indices], axis=1
+                            )
                         else:
                             vclay_sub = np.zeros(len(idx_rt), dtype=float)
                         vclay_sub = np.clip(vclay_sub, 0.0, 1.0)
@@ -1545,7 +1564,10 @@ class MultiMineral:
                         n = float(params.get("n", 2.0))
                         rw = max(float(params.get("rw", 0.05)), 1e-5)
 
-                        if active_cond_model in ("sandsiltclay_waxman_smits", "waxman_smits"):
+                        if active_cond_model in (
+                            "sandsiltclay_waxman_smits",
+                            "waxman_smits",
+                        ):
                             B = float(
                                 params.get("B", (1.0 - 0.83 * np.exp(-0.5 / rw)) * 3.83)
                             )
@@ -1565,23 +1587,31 @@ class MultiMineral:
                                     2.0 * np.maximum(alpha, 1e-8)
                                 )
                             else:
+                                from scipy.optimize import brentq
+
                                 sw_sub = np.empty(len(idx_rt), dtype=float)
                                 for s_i in range(len(idx_rt)):
+                                    phi_i = float(phit_sub[s_i])
+                                    vclay_i = float(vclay_sub[s_i])
+                                    ct_i = float(ct_sub[s_i])
 
-                                    def _eq(s: float) -> float:
+                                    def _eq(
+                                        s: float,
+                                        p: float = phi_i,
+                                        vc: float = vclay_i,
+                                        c: float = ct_i,
+                                    ) -> float:
                                         return float(
                                             sandsiltclay_waxman_smits_conductivity(
-                                                phit_sub[s_i],
+                                                p,
                                                 s,
-                                                vclay_sub[s_i],
+                                                vc,
                                                 **params,
                                             )
-                                            - ct_sub[s_i]
+                                            - c
                                         )
 
                                     try:
-                                        from scipy.optimize import brentq
-
                                         sw_sub[s_i] = brentq(_eq, 1e-4, 1.0)
                                     except Exception:
                                         sw_sub[s_i] = 1.0
@@ -1599,23 +1629,31 @@ class MultiMineral:
                                     2.0 * np.maximum(alpha, 1e-8)
                                 )
                             else:
+                                from scipy.optimize import brentq
+
                                 sw_sub = np.empty(len(idx_rt), dtype=float)
                                 for s_i in range(len(idx_rt)):
+                                    phi_i = float(phit_sub[s_i])
+                                    vclay_i = float(vclay_sub[s_i])
+                                    ct_i = float(ct_sub[s_i])
 
-                                    def _eq_dw(s: float) -> float:
+                                    def _eq_dw(
+                                        s: float,
+                                        p: float = phi_i,
+                                        vc: float = vclay_i,
+                                        c: float = ct_i,
+                                    ) -> float:
                                         return float(
                                             dual_water_conductivity(
-                                                phit_sub[s_i],
+                                                p,
                                                 s,
-                                                vclay_sub[s_i],
+                                                vc,
                                                 **params,
                                             )
-                                            - ct_sub[s_i]
+                                            - c
                                         )
 
                                     try:
-                                        from scipy.optimize import brentq
-
                                         sw_sub[s_i] = brentq(_eq_dw, 1e-4, 1.0)
                                     except Exception:
                                         sw_sub[s_i] = 1.0
@@ -1637,7 +1675,9 @@ class MultiMineral:
                             )
                             gas_xover = phi_d - nphi_arr[idx_rt]
                             has_gas = gas_xover > 0.03
-                            vgas_sub = np.where(has_gas, np.clip(gas_xover, 0.0, vhc_sub), 0.0)
+                            vgas_sub = np.where(
+                                has_gas, np.clip(gas_xover, 0.0, vhc_sub), 0.0
+                            )
                             voil_sub = vhc_sub - vgas_sub
                         else:
                             voil_sub = vhc_sub
@@ -1706,7 +1746,9 @@ class MultiMineral:
                 )
 
             # 10. Vectorized log reconstruction and error metrics
-            C_full_all = self._build_response_matrix(linear_log_names, fluids=active_fluids_recon)
+            C_full_all = self._build_response_matrix(
+                linear_log_names, fluids=active_fluids_recon
+            )
             recon_matrix = V_all @ C_full_all.T  # (n_samples, len(linear_log_names))
             recon_dict: Dict[str, np.ndarray] = {}
             for col_i, l_name in enumerate(linear_log_names):
@@ -1826,7 +1868,15 @@ class MultiMineral:
 
             # Extra reconstructed curves (e.g. POTA, THOR, URAN)
             for l_name in linear_log_names:
-                if l_name not in ("GR", "NPHI", "RHOB", "U", "PEF", "DTC", "PHIT_GUIDE"):
+                if l_name not in (
+                    "GR",
+                    "NPHI",
+                    "RHOB",
+                    "U",
+                    "PEF",
+                    "DTC",
+                    "PHIT_GUIDE",
+                ):
                     col_name = f"{l_name}_RECONSTRUCTED"
                     meas_val = raw_inputs.get(
                         l_name, np.full(n_samples, np.nan, dtype=float)

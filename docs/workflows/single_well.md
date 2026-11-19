@@ -133,13 +133,23 @@ flowchart TD
       
       $$\Delta \rho_{\text{mudcake}} = -0.015 \cdot (\text{CALI} - \text{BS}) \cdot \frac{\rho_m - 1.0}{\rho_m}$$
 
+    * **Raw Log Resolution Enhancement & Nuclear Log Harmonization:**
+      Intrinsic sensor vertical resolutions differ (`GR` ≈ 0.76 m, `NPHI` ≈ 0.55 m, `RHOB` ≈ 0.40 m FWHM for legacy strings), creating inter-sensor footprint mismatches that scatter thin-bed laminated points on the Thomas-Stieber crossplot into unphysical boomerang loops. A 1D bounded deconvolution operator harmonizes all three logs onto a common target vertical resolution $\text{FWHM}_{\text{target}}$ subject to the Shannon-Nyquist limit ($2 \cdot \Delta z$). The forward model couples true formation property $\mathbf{x}$ to log response $\mathbf{y}$ through effective Gaussian Vertical Response Function (VRF) kernels:
+      
+      $$\mathbf{y} = \mathbf{H}_{\text{eff}}\mathbf{x} + \mathbf{n}, \qquad \mathbf{H}_{\text{eff}} = \text{VRF}\!\left(\sqrt{\text{FWHM}_{\text{tool}}^2 - \text{FWHM}_{\text{target}}^2}\right)$$
+      
+      The constrained objective solves:
+      
+      $$\min_{\mathbf{x}} \; \tfrac{1}{2}\|\mathbf{W}(\mathbf{H}\mathbf{x} - \mathbf{y})\|_2^2 + \lambda \sum_i \phi_\delta\!\left((\mathbf{D}_1\mathbf{x})_i\right) + \tfrac{\lambda_v}{2}\|\mathbf{H}_v(\mathbf{x} - \mathbf{y})\|_2^2 \quad \text{s.t.} \quad \mathbf{l} \le \mathbf{x} \le \mathbf{u}$$
+      
+      with normalized Huber edge-preserving penalty $\phi_\delta$, edge-replicate boundary padding, rolling bulk-volume conservation tether $\mathbf{H}_v$, and Morozov discrepancy parameter auto-tuning based on second-difference MAD sensor noise $\hat{\sigma}_n = \operatorname{MAD}(\mathbf{D}_2\mathbf{y}) / (0.6745\sqrt{6})$, capped at `noise_cap_mult` (default 3.0×) tool noise floor to protect against dense thin-bed inflation.
+
     * **Synthetic Curve Repair:**
       Corrupted pad readings are reconstructed via multivariate regression or Random Forest models trained on in-gauge intervals ($\text{BADHOLE} = 0$) using deep-reading, borehole-insensitive logs ($\text{GR}, \text{DTC}, \ln(\text{RT})$).
 
 * **Input Curves:** `CALI`, `BS`, `GR`, `RHOB`, `NPHI`, `DTC`, `RT`  
-* **Output Curves:** `BADHOLE` (flag), `GR_ENV_CORR`, `NPHI_ENV_CORR`, `RHOB_ENV_CORR`, `RT_ENV_CORR`.
-  Environmental-correction outputs are preview curves; downstream calculations continue to use
-  their configured raw or hydrocarbon-corrected inputs until explicitly selected.
+* **Output Curves:** `BADHOLE` (flag), `GR_ENV_CORR`, `NPHI_ENV_CORR`, `RHOB_ENV_CORR`, `RT_ENV_CORR`, `GR_ENH`, `NPHI_ENH`, `RHOB_ENH`, `GR_RECON`, `NPHI_RECON`, `RHOB_RECON`, `DECONV_WEIGHT`.
+  Environmental-correction and enhanced-log outputs are non-destructive preview curves; downstream calculations use raw or enhanced inputs based on explicit selection.
 
 * **Curve editing and splicing:** In Curve Editor & Management, select **View log vs depth in
   right pane** to compare the selected curve with its original backup or edit source. In **Splice
@@ -210,6 +220,20 @@ flowchart TD
       Partitioning resolves the barycentric triangle of Clean Quartz Sand $(\text{NPHI}_{\text{sd}}, \rho_{\text{sd}})$, Dry Silt $(\text{NPHI}_{\text{slt}}, \rho_{\text{slt}})$, and Dry Clay $(\text{NPHI}_{\text{cl}}, \rho_{\text{cl}})$:
       
       $$V_{\text{sand}} + V_{\text{silt}} + V_{\text{clay}} + \phi_t = 1$$
+
+    * **Neutron-Density Crossplot Shale Volume ($V_{\text{sh,ND}}$):**
+      Calculated from parametric projection along the matrix line in $(\phi_N, \rho_b)$ crossplot space from clean sand endpoint $\mathbf{A} = (\phi_{N,\text{sd}}, \rho_{\text{sd}})$ to dry clay endpoint $\mathbf{C} = (\phi_{N,\text{cl}}, \rho_{\text{cl}})$:
+      
+      $$V_{\text{sh,ND}} = \text{clip}\left(\frac{(\mathbf{x}_{\text{int}} - \mathbf{A}) \cdot (\mathbf{C} - \mathbf{A})}{\|\mathbf{C} - \mathbf{A}\|^2}, 0, 1\right)$$
+      
+      where $\mathbf{x}_{\text{int}}$ is the intersection of the line from fluid point $\mathbf{D} = (\phi_{N,\text{fl}}, \rho_{\text{fl}})$ through $(\phi_N, \rho_b)$ with line $\mathbf{AC}$.
+
+    * **M-N Lithology Identification Parameters (Burke et al., 1969):**
+      Combines sonic, density, and neutron measurements into porosity-independent mineralogical indices:
+      
+      $$M = \frac{\Delta t_{\text{fl}} - \Delta t}{\rho_b - \rho_{\text{fl}}} \times 0.01, \qquad N = \frac{\phi_{N,\text{fl}} - \phi_N}{\rho_b - \rho_{\text{fl}}}$$
+      
+      Standard endpoints (Quartz: $M=0.810, N=0.898$; Calcite: $M=0.827, N=0.585$; Dolomite: $M=0.778, N=0.524$; Anhydrite: $M=0.702, N=0.505$) establish diagnostic ternary triangles and feed the dynamic `M_LITH`/`N_LITH` drivers for core grain-density calibration.
 
     * **Thin-Bed Thomas-Stieber & Tensor Resistivity:**
       Partitions shale into laminated ($V_{\text{lam}}$), dispersed ($V_{\text{disp}}$), and structural ($V_{\text{struct}}$) forms. On the $\phi_t$ vs. $V_{\text{sh}}$ crossplot, points below the laminated line $\phi_{\text{lam}} = \phi_{\text{sd}} + (\phi_{\text{sh}} - \phi_{\text{sd}}) V_{\text{sh}}$ fall in the dispersed triangle and split shale into $V_{\text{lam}} + V_{\text{disp}}$; points above it fall in the structural triangle bounded by the grain-replacing line $\phi_{\text{str}} = \phi_{\text{sd}} + \phi_{\text{sh}} V_{\text{sh}}$ and split shale into $V_{\text{lam}} + V_{\text{struct}}$:

@@ -24,17 +24,17 @@ class SandShale:
         silt_line_angle: Optional[float] = None,
         **kwargs,
     ):
-        # Initialize the endpoints
-        self.dry_sand_point = dry_sand_point or Config.SSC_ENDPOINTS["DRY_SAND_POINT"]
-        """
-        Initializes the SandShale model with specified or default endpoints.
+        """Initializes the SandShale model with specified or default endpoints.
 
         Args:
             dry_sand_point (tuple, optional): (NPHI, RHOB) for dry sand. Defaults to config values.
             dry_clay_point (tuple, optional): (NPHI, RHOB) for dry clay. Defaults to config values.
             fluid_point (tuple, optional): (NPHI, RHOB) for the formation fluid. Defaults to config values.
             wet_clay_point (tuple, optional): (NPHI, RHOB) for wet clay, used for dynamic endpoint calculation. Defaults to config values.
+            silt_line_angle (float, optional): Silt line angle in degrees. Defaults to config values.
         """
+        # Initialize the endpoints
+        self.dry_sand_point = dry_sand_point or Config.SSC_ENDPOINTS["DRY_SAND_POINT"]
         self.dry_clay_point = dry_clay_point or Config.SSC_ENDPOINTS["DRY_CLAY_POINT"]
         self.fluid_point = fluid_point or Config.SSC_ENDPOINTS["FLUID_POINT"]
         self.wet_clay_point = wet_clay_point or Config.SSC_ENDPOINTS["WET_CLAY_POINT"]
