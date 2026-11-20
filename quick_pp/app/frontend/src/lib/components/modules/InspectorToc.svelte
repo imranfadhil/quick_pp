@@ -174,8 +174,10 @@
 				'/quick_pp/workspace/projects/{project_id}/wells/{well_name}/source_rock' as any,
 				{
 					params: {
-						project_id: workbench.projectId,
-						well_name: workbench.wellId
+						path: {
+							project_id: workbench.projectId,
+							well_name: workbench.wellId
+						}
 					},
 					body: {
 						min_depth: workbench.depthFilter?.min,
@@ -237,8 +239,10 @@
 				'/quick_pp/workspace/projects/{project_id}/wells/{well_name}/source_rock' as any,
 				{
 					params: {
-						project_id: workbench.projectId,
-						well_name: workbench.wellId
+						path: {
+							project_id: workbench.projectId,
+							well_name: workbench.wellId
+						}
 					},
 					body: {
 						min_depth: workbench.depthFilter?.min,

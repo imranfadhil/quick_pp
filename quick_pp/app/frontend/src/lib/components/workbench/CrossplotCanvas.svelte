@@ -2732,18 +2732,62 @@
 				});
 			}
 
+			const isSampleInActiveFilter = (s: any, depth: number) => {
+				if (!Number.isFinite(depth)) return false;
+				if (!wellData.hasActiveFilter) return true;
+				const sampleZone = s?.zone ?? s?.formation ?? s?.name;
+				if (workbench.selectedZones.length > 0 && typeof sampleZone === 'string' && sampleZone.trim()) {
+					const allowed = new Set(workbench.selectedZones.map((z) => z.trim()));
+					if (!allowed.has(sampleZone.trim())) return false;
+				}
+				return wellData.isDepthInActiveFilter(depth);
+			};
+
 			// Discrete CPORE core samples
 			const cporeX: number[] = [];
 			const cporeY: number[] = [];
-			for (const s of (wellData.coreSamples || [])) {
-				const sd = Number(s.depth ?? s.DEPTH);
-				const pRaw = Number(s.porosity ?? s.CPORE ?? s.poro);
-				const pVal = Number.isFinite(pRaw) && pRaw > 0 ? (pRaw > 1.0 ? pRaw / 100.0 : pRaw) : null;
-				if (Number.isFinite(sd) && pVal !== null && pVal >= 0 && pVal <= 0.6) {
-					cporeX.push(pVal);
-					cporeY.push(sd);
+			const cporeLabels: string[] = [];
+			if (wellData.coreSamples && wellData.coreSamples.length > 0) {
+				const seenPoro = new Set<string>();
+				let sampleSeq = 1;
+				wellData.coreSamples.forEach((s, idx) => {
+					const origS = wellData.originalCoreSamples?.[idx];
+					const dCur = Number(s.depth ?? s.DEPTH ?? origS?.depth);
+					const dRaw = Number(s.raw_depth ?? origS?.raw_depth ?? dCur);
+					const sd = Number.isFinite(dCur) ? dCur : dRaw;
+					if (!isSampleInActiveFilter(s, sd)) return;
+					const pRaw = Number(s.porosity ?? s.CPORE ?? s.poro);
+					const pVal = Number.isFinite(pRaw) && pRaw > 0 ? (pRaw > 1.0 ? pRaw / 100.0 : pRaw) : null;
+					if (pVal !== null && pVal >= 0 && pVal <= 0.6) {
+						const key = `${sd.toFixed(3)}_${pVal.toFixed(5)}`;
+						if (!seenPoro.has(key)) {
+							seenPoro.add(key);
+							cporeX.push(pVal);
+							cporeY.push(sd);
+							const sName = String(s.sample_name ?? s.SAMPLE ?? `Plug #${sampleSeq++}`).trim();
+							cporeLabels.push(sName);
+						}
+					}
+				});
+			}
+
+			// Fallback to continuous CPORE curve if no discrete samples in this zone
+			if (cporeX.length === 0) {
+				const cporeRaw = wellData.curves['CPORE'] ?? wellData.curves['CORE_PORO'];
+				if (cporeRaw && cporeRaw.length === deptAll.length) {
+					for (const idx of indices) {
+						const d = deptAll[idx];
+						const pRaw = Number(cporeRaw[idx]);
+						const pVal = Number.isFinite(pRaw) && pRaw > 0 ? (pRaw > 1.0 ? pRaw / 100.0 : pRaw) : null;
+						if (Number.isFinite(d) && pVal !== null && pVal >= 0 && pVal <= 0.6) {
+							cporeX.push(pVal);
+							cporeY.push(d);
+							cporeLabels.push('');
+						}
+					}
 				}
 			}
+
 			if (cporeX.length > 0) {
 				traces.push({
 					type: 'scatter',
@@ -2752,8 +2796,9 @@
 					x: cporeX,
 					y: cporeY,
 					xaxis: 'x4',
+					text: cporeLabels.map((lbl) => (lbl ? `<br>${lbl}` : '')),
 					marker: { symbol: 'circle', color: '#0F172A', size: 6, line: { color: '#FFFFFF', width: 0.5 } },
-					hovertemplate: `Depth: %{y:.2f} m<br>CPORE: %{x:.3f} v/v<extra></extra>`
+					hovertemplate: `Depth: %{y:.2f} m<br>CPORE: %{x:.3f} v/v%{text}<extra></extra>`
 				});
 			}
 
@@ -2793,14 +2838,46 @@
 			// Discrete Qv Core samples
 			const qvCoreX: number[] = [];
 			const qvCoreY: number[] = [];
-			for (const s of (wellData.coreSamples || [])) {
-				const sd = Number(s.depth ?? s.DEPTH);
-				const qvRaw = Number(s.qv ?? s.QV ?? s.qv_core ?? s.QV_CORE);
-				if (Number.isFinite(sd) && Number.isFinite(qvRaw) && qvRaw >= 0) {
-					qvCoreX.push(qvRaw);
-					qvCoreY.push(sd);
+			const qvCoreLabels: string[] = [];
+			if (wellData.coreSamples && wellData.coreSamples.length > 0) {
+				const seenQv = new Set<string>();
+				let sampleSeq = 1;
+				wellData.coreSamples.forEach((s, idx) => {
+					const origS = wellData.originalCoreSamples?.[idx];
+					const dCur = Number(s.depth ?? s.DEPTH ?? origS?.depth);
+					const dRaw = Number(s.raw_depth ?? origS?.raw_depth ?? dCur);
+					const sd = Number.isFinite(dCur) ? dCur : dRaw;
+					if (!isSampleInActiveFilter(s, sd)) return;
+					const qvRaw = Number(s.qv ?? s.QV ?? s.qv_core ?? s.QV_CORE);
+					if (Number.isFinite(sd) && Number.isFinite(qvRaw) && qvRaw >= 0) {
+						const key = `${sd.toFixed(3)}_${qvRaw.toFixed(4)}`;
+						if (!seenQv.has(key)) {
+							seenQv.add(key);
+							qvCoreX.push(qvRaw);
+							qvCoreY.push(sd);
+							const sName = String(s.sample_name ?? s.SAMPLE ?? `Plug #${sampleSeq++}`).trim();
+							qvCoreLabels.push(sName);
+						}
+					}
+				});
+			}
+
+			// Fallback to continuous QV_CORE curve if no discrete samples in this zone
+			if (qvCoreX.length === 0) {
+				const qvCoreRaw = wellData.curves['QV_CORE'];
+				if (qvCoreRaw && qvCoreRaw.length === deptAll.length) {
+					for (const idx of indices) {
+						const d = deptAll[idx];
+						const qvRaw = Number(qvCoreRaw[idx]);
+						if (Number.isFinite(d) && Number.isFinite(qvRaw) && qvRaw >= 0) {
+							qvCoreX.push(qvRaw);
+							qvCoreY.push(d);
+							qvCoreLabels.push('');
+						}
+					}
 				}
 			}
+
 			if (qvCoreX.length > 0) {
 				traces.push({
 					type: 'scatter',
@@ -2809,8 +2886,9 @@
 					x: qvCoreX,
 					y: qvCoreY,
 					xaxis: 'x5',
+					text: qvCoreLabels.map((lbl) => (lbl ? `<br>${lbl}` : '')),
 					marker: { symbol: 'diamond', color: '#B45309', size: 6, line: { color: '#FFFFFF', width: 0.6 } },
-					hovertemplate: `Depth: %{y:.2f} m<br>Qv Core: %{x:.3f} meq/mL<extra></extra>`
+					hovertemplate: `Depth: %{y:.2f} m<br>Qv Core: %{x:.3f} meq/mL%{text}<extra></extra>`
 				});
 			}
 
@@ -2976,6 +3054,7 @@
 			baseLayout.yaxis.autorange = 'reversed';
 			baseLayout.yaxis.title = { text: 'Depth (m)' };
 			baseLayout.yaxis.fixedrange = false;
+			baseLayout.uirevision = `sw-comp-${workbench.projectId}-${workbench.wellId}-${workbench.selectedZones.join(',')}-${workbench.depthFilter?.min ?? ''}_${workbench.depthFilter?.max ?? ''}`;
 			return { traces, layout: baseLayout };
 		}
 
@@ -5707,6 +5786,10 @@
 			void workbench.saturationParams.rwPickett;
 			void workbench.saturationParams.measSystem;
 			void workbench.lithoParams.model;
+			void workbench.selectedZones;
+			void workbench.depthFilter;
+			void wellData.visibleIndices;
+			void wellData.tops;
 		} else if (mode === 'bqv') {
 			void wellData.curves['RT'];
 			void wellData.curves['PHIT'];
@@ -5845,7 +5928,7 @@
 				(mode === 'core-qc' && workbench.coreQcView !== 'dual') ||
 				(mode === 'vsh-qc' && workbench.vshQcView !== 'gr-fit');
 			if (depthPlot && !layout.uirevision) {
-				layout.uirevision = `${mode}-${workbench.projectId}-${workbench.wellId}-${workbench.coreQcView}-${workbench.vshQcView}`;
+				layout.uirevision = `${mode}-${workbench.projectId}-${workbench.wellId}-${workbench.selectedZones.join(',')}-${workbench.depthFilter?.min ?? ''}_${workbench.depthFilter?.max ?? ''}-${workbench.coreQcView}-${workbench.vshQcView}`;
 			}
 			const visibleLegendTraces = traces.filter(
 				(t: any) => t.showlegend !== false && t.name

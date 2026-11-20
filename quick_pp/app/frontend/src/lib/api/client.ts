@@ -192,6 +192,12 @@ export function describeApiEndpoint(method: string, rawUrl: string): EndpointSta
 					done: `Water saturation updated (${wellName})`,
 					detail: wellName
 				};
+			case 'source_rock':
+				return {
+					active: `Computing Source Rock TOC (${wellName})...`,
+					done: `Source Rock TOC updated (${wellName})`,
+					detail: wellName
+				};
 			case 'reservoir_summary':
 				return {
 					active: `Computing reservoir summary & pay flags (${wellName})...`,
