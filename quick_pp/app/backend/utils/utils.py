@@ -1,6 +1,7 @@
 import math
 import re
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import numpy as np
@@ -56,3 +57,12 @@ def sanitize_filename(name: str) -> str:
     if not name:
         name = uuid4().hex
     return name
+
+
+def natural_sort_key(s: Any) -> list:
+    """Return a key for natural alphanumeric sorting (e.g. 'Well 2' before 'Well 10')."""
+    return [
+        int(part) if part.isdigit() else part.lower()
+        for part in re.split(r"(\d+)", str(s or ""))
+    ]
+

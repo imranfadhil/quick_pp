@@ -18,7 +18,10 @@
       const res = await fetch(`${API_BASE}/quick_pp/database/projects/${projectId}/wells`);
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
-      wells = Array.isArray(data) ? data : (data.wells ?? []);
+      const raw = Array.isArray(data) ? data : (data.wells ?? []);
+      wells = [...raw].sort((a, b) =>
+        (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })
+      );
     } catch (err: any) {
       error = String(err?.message ?? err);
     } finally {

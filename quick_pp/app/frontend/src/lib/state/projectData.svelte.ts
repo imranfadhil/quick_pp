@@ -712,7 +712,11 @@ class ProjectDataState {
 		models_status?: any;
 	} | null>(null);
 
-	wells = $derived<WellSummaryItem[]>(this.summary?.wells ?? []);
+	wells = $derived<WellSummaryItem[]>(
+		[...(this.summary?.wells ?? [])].sort((a, b) =>
+			(a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })
+		)
+	);
 	allZones = $derived<string[]>(this.summary?.all_zones ?? []);
 	allCurves = $derived<string[]>(this.summary?.all_curves ?? []);
 
@@ -2783,7 +2787,10 @@ class ProjectDataState {
 	async loadProjects(): Promise<ProjectListItem[]> {
 		try {
 			const { data } = await api.GET('/quick_pp/database/projects');
-			this.projects = Array.isArray(data) ? data : [];
+			const list = Array.isArray(data) ? data : [];
+			this.projects = [...list].sort((a, b) =>
+				(a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })
+			);
 			return this.projects;
 		} catch (e: any) {
 			this.error = e?.message || 'Failed to load projects';
@@ -2823,7 +2830,10 @@ class ProjectDataState {
 				params: { path: { project_id: String(pid) } }
 			});
 			if (!error && data) {
-				this.summary = data;
+				const sortedWells = [...(data.wells || [])].sort((a, b) =>
+					(a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })
+				);
+				this.summary = { ...data, wells: sortedWells };
 			}
 		} catch {
 			// Ignore background summary refresh error
@@ -2858,10 +2868,13 @@ class ProjectDataState {
 			if (error || !data) {
 				throw new Error(String((error as any)?.detail ?? 'Failed to load project summary'));
 			}
-			this.summary = data;
-			this.selectedWellNames = (data.wells || []).map((w) => w.name);
+			const sortedAvailableWells = [...(data.wells || [])].sort((a, b) =>
+				(a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })
+			);
+			this.summary = { ...data, wells: sortedAvailableWells };
+			this.selectedWellNames = sortedAvailableWells.map((w) => w.name);
 
-			const availableWells = data.wells || [];
+			const availableWells = sortedAvailableWells;
 			const hasCore = availableWells.some((w) => this.wellHasCorePhiK(w));
 			const hasLog = availableWells.some((w) => this.wellHasLogPhiK(w));
 			const defaultSrc: PhiKDataSource = hasCore || !hasLog ? 'core' : 'log';

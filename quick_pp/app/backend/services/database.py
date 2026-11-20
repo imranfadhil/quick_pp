@@ -31,7 +31,7 @@ from quick_pp.app.backend.utils.auth import (
     is_demo_mode,
 )
 from quick_pp.app.backend.utils.db import get_db
-from quick_pp.app.backend.utils.utils import sanitize_filename
+from quick_pp.app.backend.utils.utils import natural_sort_key, sanitize_filename
 from quick_pp.database import models as db_models
 from quick_pp.database import objects as db_objects
 
@@ -253,7 +253,7 @@ async def list_projects(request: Request):
                     .scalars()
                     .all()
                 }
-                return [
+                project_list = [
                     {
                         "project_id": r.project_id,
                         "name": r.name,
@@ -265,7 +265,9 @@ async def list_projects(request: Request):
                     for r in rows
                     if r.created_by == uid or r.project_id in pms
                 ]
-            return [
+                project_list.sort(key=lambda p: natural_sort_key(p["name"]))
+                return project_list
+            project_list = [
                 {
                     "project_id": r.project_id,
                     "name": r.name,
@@ -274,6 +276,8 @@ async def list_projects(request: Request):
                 }
                 for r in rows
             ]
+            project_list.sort(key=lambda p: natural_sort_key(p["name"]))
+            return project_list
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to list projects: {e}"
@@ -640,6 +644,7 @@ async def list_wells(project_id: int):
                     wells.append(
                         {"id": f"eph_{eph_name}", "name": eph_name, "uwi": eph_name}
                     )
+            wells.sort(key=lambda w: natural_sort_key(w.get("name", "")))
             return {"project_id": proj.project_id, "wells": wells}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
@@ -1235,6 +1240,7 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                     }
                 )
 
+            wells_summary.sort(key=lambda w: natural_sort_key(w.get("name", "")))
             return _sanitize_for_json(
                 {
                     "project_id": int(proj.project_id),
