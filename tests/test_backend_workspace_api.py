@@ -2040,6 +2040,13 @@ def test_workspace_multi_mineral_phi_max_and_pef_linearization(client_and_projec
     assert len(phit_c) > 0
     assert all(v <= 0.35001 for v in phit_c)
 
+    # Verify Stage 2 fluid saturation and HC partitioning outputs
+    assert "VOIL" in data
+    assert "VGAS" in data
+    assert "VWATER" in data
+    assert "SWT" in data
+    assert "BVW" in data
+
     # Verify quality metrics & summary
     assert "multi_mineral_summary" in body
     mm_sum = body["multi_mineral_summary"]
@@ -2047,8 +2054,11 @@ def test_workspace_multi_mineral_phi_max_and_pef_linearization(client_and_projec
     assert "chi2_mean" in mm_sum
     assert "avg_error_mean" in mm_sum
     assert "success_rate" in mm_sum
+    assert mm_sum.get("rt_curve") == "RT"
+    assert mm_sum.get("sw_mean") is not None
     assert "CHI2_ERROR" in body["stats"]
     assert "AVG_ERROR" in body["stats"]
+    assert "SWT" in body["stats"]
 
 
 def test_workspace_source_rock_endpoint(client_and_project):

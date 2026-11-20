@@ -4355,6 +4355,28 @@
 								>
 							</div>
 						{/if}
+						{#if (readout.VOIL ?? 0) > 0.001 || (readout.VGAS ?? 0) > 0.001 || (readout.VWATER ?? 0) > 0.001}
+							<div class="mt-0.5 border-t border-slate-200 pt-0.5">
+								{#if (readout.VOIL ?? 0) > 0.001}
+									<div class="flex items-center justify-between">
+										<span class="font-bold text-emerald-700">VOIL</span>
+										<span class="mono-num font-semibold">{fmtNum(readout.VOIL, 3)}</span>
+									</div>
+								{/if}
+								{#if (readout.VGAS ?? 0) > 0.001}
+									<div class="flex items-center justify-between">
+										<span class="font-bold text-red-600">VGAS</span>
+										<span class="mono-num font-semibold">{fmtNum(readout.VGAS, 3)}</span>
+									</div>
+								{/if}
+								{#if (readout.VWATER ?? 0) > 0.001}
+									<div class="flex items-center justify-between">
+										<span class="font-bold text-blue-600">VWATER</span>
+										<span class="mono-num font-semibold">{fmtNum(readout.VWATER, 3)}</span>
+									</div>
+								{/if}
+							</div>
+						{/if}
 						<div
 							class="mt-0.5 flex items-center justify-between border-t border-slate-300 pt-0.5"
 						>

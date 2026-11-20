@@ -1395,6 +1395,10 @@ class WorkspaceLithologyRequest(WorkspaceFilterBase, GammaParameters):
         False,
         description="Linearize PEF via volumetric cross-section U = PEF * RHOB",
     )
+    rt_curve: Optional[str] = Field(
+        None,
+        description="Deep resistivity curve mnemonic override (e.g. 'RT', 'RD', 'RDEP', 'LLD')",
+    )
     porosity_method: str = Field("density")
     gr_clean: Optional[float] = Field(None, description="Clean sand GR endpoint (API)")
     gr_clay: Optional[float] = Field(None, description="Shale GR endpoint (API)")
@@ -4471,11 +4475,32 @@ def workspace_lithology(
             if req.gr_clay is not None and "SHALE" in mm_model.responses:
                 mm_model.responses["SHALE"]["GR"] = float(req.gr_clay)
 
+            # Resolve deep resistivity (RT) log for Stage 2 non-linear fluid saturation and HC partitioning
+            rt_candidates = ("RT", "RD", "RDEP", "RDEEP", "LLD", "RILD", "RESD", "ILD")
+            rt_col = None
+            if req.rt_curve and req.rt_curve.strip().upper() in df.columns:
+                rt_col = req.rt_curve.strip().upper()
+            else:
+                for cand in rt_candidates:
+                    if cand in df.columns and pd.to_numeric(df[cand], errors="coerce").notna().any():
+                        rt_col = cand
+                        break
+
+            user_req_logs = [str(x).strip().upper() for x in (req.input_logs or []) if x]
+            use_rt = rt_col is not None and (len(user_req_logs) == 0 or "RT" in user_req_logs or rt_col in user_req_logs)
+
+            rt_data = None
+            if use_rt and rt_col is not None:
+                rt_s = pd.to_numeric(df[rt_col], errors="coerce")
+                if rt_s.loc[valid_mask].notna().any():
+                    rt_data = rt_s.loc[valid_mask].to_numpy(dtype=float)
+
             res_df = mm_model.estimate_lithology(
                 logs={
                     name: series[valid_mask].to_numpy(dtype=float)
                     for name, series in input_logs.items()
                 },
+                rt=rt_data,
                 auto_scale=req.auto_scale,
                 phi_max=req.phi_max,
                 linearize_pef=req.linearize_pef,
@@ -4492,8 +4517,7 @@ def workspace_lithology(
                 out_df[col] = col_series
                 if (
                     col.startswith("V")
-                    or col == "PHIT_CONSTRUCTED"
-                    or col in ("AVG_ERROR", "CHI2_ERROR", "OPTIMIZER_SUCCESS")
+                    or col in ("PHIT_CONSTRUCTED", "SWT", "BVW", "AVG_ERROR", "CHI2_ERROR", "OPTIMIZER_SUCCESS")
                 ):
                     save_cols.append(col)
 
@@ -4843,6 +4867,14 @@ def workspace_lithology(
                 if not opt_valid.empty
                 else None,
             }
+            if "rt_col" in locals() and rt_col and "SWT" in out_df:
+                sw_s = pd.to_numeric(out_df["SWT"], errors="coerce").dropna()
+                voil_s = pd.to_numeric(out_df.get("VOIL"), errors="coerce").dropna()
+                vgas_s = pd.to_numeric(out_df.get("VGAS"), errors="coerce").dropna()
+                mm_summary["rt_curve"] = rt_col
+                mm_summary["sw_mean"] = round(float(sw_s.mean()), 3) if not sw_s.empty else None
+                mm_summary["voil_mean"] = round(float(voil_s.mean()), 4) if not voil_s.empty else None
+                mm_summary["vgas_mean"] = round(float(vgas_s.mean()), 4) if not vgas_s.empty else None
         return {
             "well_name": well_name,
             "model": model,

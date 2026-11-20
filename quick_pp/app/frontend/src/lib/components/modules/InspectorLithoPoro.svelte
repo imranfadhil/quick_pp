@@ -99,6 +99,7 @@
 		{ mnemonic: 'RHOB', label: 'Bulk Density' },
 		{ mnemonic: 'PEF', label: 'Photoelectric Factor' },
 		{ mnemonic: 'DTC', label: 'Sonic (DTC)' },
+		{ mnemonic: 'RT', label: 'Deep Resistivity (Rt)' },
 		{ mnemonic: 'POTA', label: 'Potassium' },
 		{ mnemonic: 'THOR', label: 'Thorium' },
 		{ mnemonic: 'URAN', label: 'Uranium' }
@@ -177,6 +178,10 @@
 		chi2_p50: number | null;
 		avg_error_mean: number | null;
 		success_rate: number | null;
+		rt_curve?: string | null;
+		sw_mean?: number | null;
+		voil_mean?: number | null;
+		vgas_mean?: number | null;
 	} | null>(null);
 
 	function setLogCorrectionMode(mode: 'none' | 'hc' | 'den') {
@@ -326,6 +331,11 @@
 	/** Mirrors the backend alias resolution: raw, hydrocarbon-corrected, or enhanced curve. */
 	function inputLogLoaded(mnemonic: string): boolean {
 		const keys = Object.keys(wellData.curves);
+		if (mnemonic === 'RT') {
+			return ['RT', 'RD', 'RDEP', 'RDEEP', 'LLD', 'RILD', 'RESD', 'ILD'].some((k) =>
+				keys.includes(k)
+			);
+		}
 		return [mnemonic, `${mnemonic}_HC`, `${mnemonic}_ENH`].some((k) => keys.includes(k));
 	}
 
@@ -1131,6 +1141,36 @@
 								</span>
 							</div>
 						</div>
+						{#if mmSummary.rt_curve}
+							<div class="mt-1.5 border-t border-[var(--border-hairline)] pt-1.5 grid grid-cols-3 gap-1 text-[10px]">
+								<div class="flex flex-col">
+									<span class="text-[var(--text-muted)]">Resistivity</span>
+									<span class="mono-num text-[11px] font-semibold text-[var(--text-primary)]">
+										{mmSummary.rt_curve}
+									</span>
+								</div>
+								<div class="flex flex-col">
+									<span class="text-[var(--text-muted)]">Water Sat (Sw)</span>
+									<span class="mono-num text-[11px] font-semibold text-blue-600">
+										{mmSummary.sw_mean != null ? `${fmtNum(mmSummary.sw_mean * 100, 1)}%` : '—'}
+									</span>
+								</div>
+								<div class="flex flex-col">
+									<span class="text-[var(--text-muted)]">Fluids (v/v)</span>
+									<span class="mono-num text-[10px] font-semibold {(mmSummary.voil_mean ?? 0) > 0.001 || (mmSummary.vgas_mean ?? 0) > 0.001 ? 'text-emerald-600' : 'text-[var(--text-muted)]'}">
+										{#if (mmSummary.vgas_mean ?? 0) > 0.005 && (mmSummary.voil_mean ?? 0) > 0.005}
+											Oil {fmtNum(mmSummary.voil_mean ?? 0, 2)} | Gas {fmtNum(mmSummary.vgas_mean ?? 0, 2)}
+										{:else if (mmSummary.vgas_mean ?? 0) > 0.005}
+											Gas {fmtNum(mmSummary.vgas_mean ?? 0, 3)}
+										{:else if (mmSummary.voil_mean ?? 0) > 0.005}
+											Oil {fmtNum(mmSummary.voil_mean ?? 0, 3)}
+										{:else}
+											Water-filled
+										{/if}
+									</span>
+								</div>
+							</div>
+						{/if}
 					</div>
 				{/if}
 
