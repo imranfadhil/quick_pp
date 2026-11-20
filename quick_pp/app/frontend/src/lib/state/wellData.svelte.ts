@@ -165,6 +165,8 @@ export const CALCULATED_CURVE_GROUPS: Record<
 			'TEMP_GRAD',
 			'RW',
 			'B',
+			'QV',
+			'QV_CORE',
 			'QVN',
 			'M_STAR',
 			'VCL_OVER_PHI',
@@ -1296,9 +1298,11 @@ class WellDataState {
 			if (rawCoreList.length > 0 && baseDeptGrid.length > 0) {
 				const cporeGrid = new Array(baseDeptGrid.length).fill(Number.NaN);
 				const cpermGrid = new Array(baseDeptGrid.length).fill(Number.NaN);
+				const qvGrid = new Array(baseDeptGrid.length).fill(Number.NaN);
 				const bestDistPlug = new Array(baseDeptGrid.length).fill(Number.POSITIVE_INFINITY);
 				let hasCpore = false;
 				let hasCperm = false;
+				let hasQv = false;
 
 				for (const s of rawCoreList) {
 					const sd = Number(s.depth ?? s.DEPTH ?? s.raw_depth);
@@ -1312,7 +1316,9 @@ class WellDataState {
 							: null;
 					const rawK = Number(s.permeability ?? s.CPERM ?? s.perm);
 					const kVal = Number.isFinite(rawK) && rawK > 0 ? rawK : null;
-					if (pVal === null && kVal === null) continue;
+					const rawQv = Number(s.qv ?? s.QV ?? s.qv_core ?? s.QV_CORE);
+					const qvVal = Number.isFinite(rawQv) && rawQv >= 0 ? rawQv : null;
+					if (pVal === null && kVal === null && qvVal === null) continue;
 
 					let lo = 0;
 					let hi = baseDeptGrid.length - 1;
@@ -1332,8 +1338,10 @@ class WellDataState {
 						bestDistPlug[lo] = dist;
 						cporeGrid[lo] = pVal !== null ? pVal : Number.NaN;
 						cpermGrid[lo] = kVal !== null ? kVal : Number.NaN;
+						qvGrid[lo] = qvVal !== null ? qvVal : Number.NaN;
 						if (pVal !== null) hasCpore = true;
 						if (kVal !== null) hasCperm = true;
+						if (qvVal !== null) hasQv = true;
 					}
 				}
 				if (hasCpore) {
@@ -1345,6 +1353,11 @@ class WellDataState {
 					numericCurves['CPERM'] = cpermGrid;
 					origCopy['CPERM'] = [...cpermGrid];
 					committedCopy['CPERM'] = [...cpermGrid];
+				}
+				if (hasQv) {
+					numericCurves['QV_CORE'] = qvGrid;
+					origCopy['QV_CORE'] = [...qvGrid];
+					committedCopy['QV_CORE'] = [...qvGrid];
 				}
 			} else if (baseDeptGrid.length > 1) {
 				// Clean up any legacy merge_asof duplicate core values across consecutive log rows
@@ -3854,21 +3867,25 @@ class WellDataState {
 
 		const newCpore = new Array(dept.length).fill(Number.NaN);
 		const newCperm = new Array(dept.length).fill(Number.NaN);
+		const newQvCore = new Array(dept.length).fill(Number.NaN);
 		const newCporeAmb = new Array(dept.length).fill(Number.NaN);
 		const newCpermAir = new Array(dept.length).fill(Number.NaN);
 		let hasAmb = false;
 		let hasAir = false;
+		let hasQv = false;
 
 		for (const s of this.coreSamples) {
 			const sd = Number(s.depth ?? s.DEPTH);
 			if (!Number.isFinite(sd)) continue;
 			const pRaw = Number(s.porosity ?? s.CPORE ?? s.poro);
 			const kRaw = Number(s.permeability ?? s.CPERM ?? s.perm);
+			const qvRaw = Number(s.qv ?? s.QV ?? s.qv_core ?? s.QV_CORE);
 			const pAmbRaw = Number(s.porosity_amb ?? s.CPORE_AMB ?? s.CPORE_ORI);
 			const kAirRaw = Number(s.perm_air ?? s.CPERM_AIR ?? s.CPERM_ORI);
 			const pVal =
 				Number.isFinite(pRaw) && pRaw > 0 ? (pRaw > 1.0 ? pRaw / 100.0 : pRaw) : null;
 			const kVal = Number.isFinite(kRaw) && kRaw > 0 ? kRaw : null;
+			const qvVal = Number.isFinite(qvRaw) && qvRaw >= 0 ? qvRaw : null;
 			const pAmbVal =
 				Number.isFinite(pAmbRaw) && pAmbRaw > 0
 					? pAmbRaw > 1.0
@@ -3890,6 +3907,10 @@ class WellDataState {
 			if (Math.abs(dept[lo] - sd) <= 0.5) {
 				if (pVal !== null) newCpore[lo] = pVal;
 				if (kVal !== null) newCperm[lo] = kVal;
+				if (qvVal !== null) {
+					newQvCore[lo] = qvVal;
+					hasQv = true;
+				}
 				if (pAmbVal !== null) {
 					newCporeAmb[lo] = pAmbVal;
 					hasAmb = true;
@@ -3945,6 +3966,10 @@ class WellDataState {
 		if (hasAir) {
 			nextCurves['CPERM_AIR'] = newCpermAir;
 			nextCurves['CPERM_ORI'] = [...newCpermAir];
+		}
+		if (hasQv) {
+			nextCurves['QV_CORE'] = newQvCore;
+			nextCurves['QV_CORE_ORI'] = [...newQvCore];
 		}
 		if (this.curves['CORE_PORO']) {
 			nextCurves['CORE_PORO'] = [...newCpore];

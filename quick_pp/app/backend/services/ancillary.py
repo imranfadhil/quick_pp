@@ -332,6 +332,16 @@ ANCILLARY_TARGET_SCHEMAS: Dict[str, Dict[str, List[str]]] = {
             "rhoma",
             "density_grain",
         ],
+        "QV": [
+            "qv",
+            "qv_core",
+            "cec_qv",
+            "qv_meq_ml",
+            "qv_meq_cm3",
+            "cec_pv",
+            "core_qv",
+            "q_v",
+        ],
         "CSAT_WATER": [
             "sw",
             "water_saturation",
@@ -2741,6 +2751,7 @@ def commit_ancillary_data(
                     perm_col, perm_unit = col_map.get("CPERM", (None, None))
                     permv_col, permv_unit = col_map.get("CPERMV", (None, None))
                     gd_col, gd_unit = col_map.get("CGRAIN_DENSITY", (None, None))
+                    qv_col, qv_unit = col_map.get("QV", (None, None))
                     sw_col, sw_unit = col_map.get("CSAT_WATER", (None, None))
                     so_col, so_unit = col_map.get("CSAT_OIL", (None, None))
                     desc_col, _ = col_map.get("DESCRIPTION", (None, None))
@@ -2777,6 +2788,11 @@ def commit_ancillary_data(
                                     r.get(gd_col), gd_unit, "CGRAIN_DENSITY"
                                 )
                                 if gd_col
+                                else None,
+                                "qv": _convert_ancillary_numeric(
+                                    r.get(qv_col), qv_unit, "QV"
+                                )
+                                if qv_col
                                 else None,
                                 "sw": _convert_ancillary_numeric(
                                     r.get(sw_col), sw_unit, "CSAT_WATER"
@@ -2849,6 +2865,14 @@ def commit_ancillary_data(
                                         "property_name": "CGRAIN_DENSITY",
                                         "value": float(s_row["grain_density"]),
                                         "unit": "g/cc",
+                                    }
+                                )
+                            if pd.notna(s_row.get("qv")):
+                                meas.append(
+                                    {
+                                        "property_name": "QV",
+                                        "value": float(s_row["qv"]),
+                                        "unit": "meq/mL",
                                     }
                                 )
                             if pd.notna(s_row.get("sw")):

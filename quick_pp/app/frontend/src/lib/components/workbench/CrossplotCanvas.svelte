@@ -2570,6 +2570,281 @@
 				}
 				return savedVshale[index];
 			};
+
+			const sp = workbench.saturationParams;
+			const getRwAtDepth = (depthM: number) => {
+				if (sp.rwMode === 'pickett' && Number.isFinite(sp.rwPickett) && sp.rwPickett > 0) {
+					return sp.rwPickett;
+				}
+				let tempC: number;
+				if (sp.measSystem === 'imperial') {
+					const tvdKft = (depthM * 3.28084) / 1000.0;
+					const tempF = sp.surfaceTemp + sp.tempGradient * tvdKft;
+					tempC = Math.max(5, Math.min(250, ((tempF - 32.0) * 5.0) / 9.0));
+				} else {
+					tempC = Math.max(5, Math.min(250, sp.surfaceTemp + sp.tempGradient * (depthM / 1000.0)));
+				}
+				const tempF = (tempC * 9.0) / 5.0 + 32.0;
+				const sal = Math.max(100, sp.waterSalinity);
+				return Math.pow(400000.0 / (sal * tempF), 0.88);
+			};
+
+			// --- TRACK 1: Rw & Rt (log) ---
+			// X-Axis: 'x' (xaxis)
+			const rtRaw = wellData.curves['RT'] ?? wellData.curves['RD'] ?? wellData.curves['RDEP'] ?? wellData.curves['LLD'] ?? [];
+			const rwCurve = wellData.curves['RW'] ?? [];
+			const rtX: number[] = [];
+			const rtY: number[] = [];
+			const rwX: number[] = [];
+			const rwY: number[] = [];
+
+			for (const idx of indices) {
+				const d = deptAll[idx];
+				if (!Number.isFinite(d)) continue;
+				const rtVal = rtRaw[idx];
+				if (Number.isFinite(rtVal) && rtVal > 0) {
+					rtX.push(rtVal);
+					rtY.push(d);
+				}
+				const rwVal = Number.isFinite(rwCurve[idx]) && rwCurve[idx] > 0 ? rwCurve[idx] : getRwAtDepth(d);
+				if (Number.isFinite(rwVal) && rwVal > 0) {
+					rwX.push(rwVal);
+					rwY.push(d);
+				}
+			}
+
+			if (rtX.length > 0) {
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'Rt',
+					x: rtX,
+					y: rtY,
+					xaxis: 'x',
+					line: { color: '#DC2626', width: 1.5 },
+					hovertemplate: `Depth: %{y:.2f} m<br>Rt: %{x:.2f} ohm·m<extra></extra>`
+				});
+			}
+			if (rwX.length > 0) {
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'Rw',
+					x: rwX,
+					y: rwY,
+					xaxis: 'x',
+					line: { color: '#2563EB', width: 1.5, dash: 'dash' },
+					hovertemplate: `Depth: %{y:.2f} m<br>Rw: %{x:.4f} ohm·m<extra></extra>`
+				});
+			}
+
+			// --- TRACK 2: m & m* (linear) ---
+			// X-Axis: 'x3' (xaxis3)
+			const mStarCurve = wellData.curves['M_STAR'] ?? [];
+			const phitRaw = wellData.curves['PHIT'] ?? [];
+			const qvCurve = wellData.curves['QV'] ?? wellData.curves['QVN'] ?? [];
+			const mArchie = Number.isFinite(sp.m) && sp.m > 0 ? sp.m : 2.0;
+
+			const mX: number[] = [];
+			const mY: number[] = [];
+			const mStarX: number[] = [];
+			const mStarY: number[] = [];
+
+			for (const idx of indices) {
+				const d = deptAll[idx];
+				if (!Number.isFinite(d)) continue;
+				mX.push(mArchie);
+				mY.push(d);
+
+				let mStarVal: number | null = null;
+				if (Number.isFinite(mStarCurve[idx]) && mStarCurve[idx] > 0) {
+					mStarVal = mStarCurve[idx];
+				} else {
+					const phi = phitRaw[idx];
+					if (Number.isFinite(phi) && phi > 0.02 && phi < 0.5) {
+						const rwVal = Number.isFinite(rwCurve[idx]) && rwCurve[idx] > 0 ? rwCurve[idx] : getRwAtDepth(d);
+						let tempC = sp.surfaceTemp + (sp.measSystem === 'imperial' ? sp.tempGradient * ((d * 3.28084) / 1000) * 5 / 9 : sp.tempGradient * (d / 1000));
+						tempC = Math.max(5, Math.min(250, tempC));
+						const bVal = Math.max(0, (-1.28 + 0.225 * tempC - 0.0004059 * tempC ** 2) / (1 + Math.pow(rwVal, 1.23) * (0.045 * tempC - 0.27)));
+						const vsh = getVshale(idx);
+						const qvVal = Number.isFinite(qvCurve[idx]) && qvCurve[idx] >= 0
+							? qvCurve[idx]
+							: (Number.isFinite(vsh) && vsh >= 0 ? (0.16 * vsh) / phi : 0);
+						const factor = 1 + bVal * qvVal * rwVal;
+						if (factor >= 1) {
+							mStarVal = mArchie - Math.log(factor) / Math.log(phi);
+						}
+					}
+				}
+				if (mStarVal !== null && Number.isFinite(mStarVal) && mStarVal >= 1.0 && mStarVal <= 4.0) {
+					mStarX.push(mStarVal);
+					mStarY.push(d);
+				}
+			}
+
+			if (mX.length > 0) {
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'm (Archie)',
+					x: mX,
+					y: mY,
+					xaxis: 'x3',
+					line: { color: '#64748B', width: 1.2, dash: 'dot' },
+					hovertemplate: `Depth: %{y:.2f} m<br>m: %{x:.2f}<extra></extra>`
+				});
+			}
+			if (mStarX.length > 0) {
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'm* (WS)',
+					x: mStarX,
+					y: mStarY,
+					xaxis: 'x3',
+					line: { color: '#7C3AED', width: 1.6 },
+					hovertemplate: `Depth: %{y:.2f} m<br>m*: %{x:.2f}<extra></extra>`
+				});
+			}
+
+			// --- TRACK 3: PHIT & CPORE (linear reversed) ---
+			// X-Axis: 'x4' (xaxis4)
+			const phitX: number[] = [];
+			const phitY: number[] = [];
+			for (const idx of indices) {
+				const d = deptAll[idx];
+				const phi = phitRaw[idx];
+				if (Number.isFinite(d) && Number.isFinite(phi) && phi >= 0 && phi <= 0.6) {
+					phitX.push(phi);
+					phitY.push(d);
+				}
+			}
+			if (phitX.length > 0) {
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'PHIT',
+					x: phitX,
+					y: phitY,
+					xaxis: 'x4',
+					line: { color: '#0284C7', width: 1.5 },
+					hovertemplate: `Depth: %{y:.2f} m<br>PHIT: %{x:.3f} v/v<extra></extra>`
+				});
+			}
+
+			// Discrete CPORE core samples
+			const cporeX: number[] = [];
+			const cporeY: number[] = [];
+			for (const s of (wellData.coreSamples || [])) {
+				const sd = Number(s.depth ?? s.DEPTH);
+				const pRaw = Number(s.porosity ?? s.CPORE ?? s.poro);
+				const pVal = Number.isFinite(pRaw) && pRaw > 0 ? (pRaw > 1.0 ? pRaw / 100.0 : pRaw) : null;
+				if (Number.isFinite(sd) && pVal !== null && pVal >= 0 && pVal <= 0.6) {
+					cporeX.push(pVal);
+					cporeY.push(sd);
+				}
+			}
+			if (cporeX.length > 0) {
+				traces.push({
+					type: 'scatter',
+					mode: 'markers',
+					name: 'CPORE',
+					x: cporeX,
+					y: cporeY,
+					xaxis: 'x4',
+					marker: { symbol: 'circle', color: '#0F172A', size: 6, line: { color: '#FFFFFF', width: 0.5 } },
+					hovertemplate: `Depth: %{y:.2f} m<br>CPORE: %{x:.3f} v/v<extra></extra>`
+				});
+			}
+
+			// --- TRACK 4: Qv & Qv core (linear) ---
+			// X-Axis: 'x5' (xaxis5)
+			const qvLogX: number[] = [];
+			const qvLogY: number[] = [];
+			for (const idx of indices) {
+				const d = deptAll[idx];
+				if (!Number.isFinite(d)) continue;
+				let qVal = qvCurve[idx];
+				if (!Number.isFinite(qVal)) {
+					const phi = phitRaw[idx];
+					const vsh = getVshale(idx);
+					if (Number.isFinite(phi) && phi > 0.02 && Number.isFinite(vsh) && vsh >= 0) {
+						qVal = (0.16 * vsh) / phi;
+					}
+				}
+				if (Number.isFinite(qVal) && qVal >= 0 && qVal <= 3.0) {
+					qvLogX.push(qVal);
+					qvLogY.push(d);
+				}
+			}
+			if (qvLogX.length > 0) {
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'Qv',
+					x: qvLogX,
+					y: qvLogY,
+					xaxis: 'x5',
+					line: { color: '#D97706', width: 1.5 },
+					hovertemplate: `Depth: %{y:.2f} m<br>Qv: %{x:.3f} meq/mL<extra></extra>`
+				});
+			}
+
+			// Discrete Qv Core samples
+			const qvCoreX: number[] = [];
+			const qvCoreY: number[] = [];
+			for (const s of (wellData.coreSamples || [])) {
+				const sd = Number(s.depth ?? s.DEPTH);
+				const qvRaw = Number(s.qv ?? s.QV ?? s.qv_core ?? s.QV_CORE);
+				if (Number.isFinite(sd) && Number.isFinite(qvRaw) && qvRaw >= 0) {
+					qvCoreX.push(qvRaw);
+					qvCoreY.push(sd);
+				}
+			}
+			if (qvCoreX.length > 0) {
+				traces.push({
+					type: 'scatter',
+					mode: 'markers',
+					name: 'Qv Core',
+					x: qvCoreX,
+					y: qvCoreY,
+					xaxis: 'x5',
+					marker: { symbol: 'diamond', color: '#B45309', size: 6, line: { color: '#FFFFFF', width: 0.6 } },
+					hovertemplate: `Depth: %{y:.2f} m<br>Qv Core: %{x:.3f} meq/mL<extra></extra>`
+				});
+			}
+
+			// --- TRACK 5: VSHALE ---
+			// X-Axis: 'x6' (xaxis6)
+			const vshX: number[] = [];
+			const vshY: number[] = [];
+			const vshIndices: number[] = [];
+			for (const idx of indices) {
+				const vsh = getVshale(idx);
+				const depth = deptAll[idx];
+				if (Number.isFinite(vsh) && vsh >= 0 && vsh <= 1 && Number.isFinite(depth)) {
+					vshX.push(vsh);
+					vshY.push(depth);
+					vshIndices.push(idx);
+				}
+			}
+
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: vshKey,
+				x: vshX,
+				y: vshY,
+				xaxis: 'x6',
+				customdata: vshIndices,
+				line: { color: '#16A34A', width: 1.5 },
+				fill: 'tozerox',
+				fillcolor: 'rgba(22, 163, 74, 0.16)',
+				hovertemplate: `${vshKey}: %{x:.3f} v/v<br>Depth: %{y:.2f} m<extra></extra>`
+			});
+
+			// --- TRACK 6: Sw Comparison ---
+			// X-Axis: 'x2' (xaxis2)
 			const models = [
 				{ key: 'SWT_ARCHIE', label: 'Archie', color: '#64748B', method: 'archie' },
 				{
@@ -2592,33 +2867,6 @@
 					method: 'dual_water'
 				}
 			] as const;
-
-			const vshX: number[] = [];
-			const vshY: number[] = [];
-			const vshIndices: number[] = [];
-			for (const idx of indices) {
-				const vsh = getVshale(idx);
-				const depth = deptAll[idx];
-				if (Number.isFinite(vsh) && vsh >= 0 && vsh <= 1 && Number.isFinite(depth)) {
-					vshX.push(vsh);
-					vshY.push(depth);
-					vshIndices.push(idx);
-				}
-			}
-
-			traces.push({
-				type: 'scatter',
-				mode: 'lines',
-				name: vshKey,
-				x: vshX,
-				y: vshY,
-				xaxis: 'x',
-				customdata: vshIndices,
-				line: { color: '#16A34A', width: 1.5 },
-				fill: 'tozerox',
-				fillcolor: 'rgba(22, 163, 74, 0.16)',
-				hovertemplate: `${vshKey}: %{x:.3f} v/v<br>Depth: %{y:.2f} m<extra></extra>`
-			});
 
 			for (const model of models) {
 				const modelSw = wellData.curves[model.key] ?? [];
@@ -2664,21 +2912,70 @@
 				});
 			}
 
-			baseLayout.dragmode = 'lasso';
-			baseLayout.xaxis.domain = [0, 0.24];
-			baseLayout.xaxis.title = { text: `${vshKey} (v/v)` };
-			baseLayout.xaxis.range = [0, 1];
-			baseLayout.xaxis.anchor = 'y';
-			baseLayout.xaxis.fixedrange = true;
+			baseLayout.dragmode = 'pan';
+			// Track 1: Rw & Rt (log)
+			baseLayout.xaxis = {
+				...baseLayout.xaxis,
+				domain: [0.0, 0.14],
+				title: { text: 'Rw & Rt (\u03a9\u00b7m)' },
+				type: 'log',
+				range: [Math.log10(0.2), Math.log10(2000)],
+				anchor: 'y',
+				fixedrange: true
+			};
+			// Track 2: m & m* (linear)
+			baseLayout.xaxis3 = {
+				...baseLayout.xaxis,
+				domain: [0.17, 0.29],
+				title: { text: 'm & m*' },
+				type: 'linear',
+				range: [1.0, 3.0],
+				anchor: 'y',
+				fixedrange: true
+			};
+			// Track 3: PHIT & CPORE (linear reversed)
+			baseLayout.xaxis4 = {
+				...baseLayout.xaxis,
+				domain: [0.32, 0.46],
+				title: { text: 'PHIT & CPORE' },
+				type: 'linear',
+				range: [0.45, 0],
+				anchor: 'y',
+				fixedrange: true
+			};
+			// Track 4: Qv & Qv Core (linear)
+			baseLayout.xaxis5 = {
+				...baseLayout.xaxis,
+				domain: [0.49, 0.63],
+				title: { text: 'Qv (meq/mL)' },
+				type: 'linear',
+				range: [0, 1.5],
+				anchor: 'y',
+				fixedrange: true
+			};
+			// Track 5: VSHALE (linear)
+			baseLayout.xaxis6 = {
+				...baseLayout.xaxis,
+				domain: [0.66, 0.78],
+				title: { text: `${vshKey} (v/v)` },
+				type: 'linear',
+				range: [0, 1],
+				anchor: 'y',
+				fixedrange: true
+			};
+			// Track 6: Sw comparison (linear reversed)
 			baseLayout.xaxis2 = {
 				...baseLayout.xaxis,
-				domain: [0.34, 1],
-				title: { text: 'Water Saturation Sw (v/v)' },
+				domain: [0.81, 1.0],
+				title: { text: 'Sw (v/v)' },
+				type: 'linear',
 				range: [1, 0],
-				anchor: 'y'
+				anchor: 'y',
+				fixedrange: true
 			};
 			baseLayout.yaxis.autorange = 'reversed';
 			baseLayout.yaxis.title = { text: 'Depth (m)' };
+			baseLayout.yaxis.fixedrange = false;
 			return { traces, layout: baseLayout };
 		}
 
@@ -5381,6 +5678,18 @@
 		} else if (mode === 'sw-comparison') {
 			void wellData.curves['DEPT'];
 			void wellData.curves['DEPTH'];
+			void wellData.curves['RT'];
+			void wellData.curves['RD'];
+			void wellData.curves['RDEP'];
+			void wellData.curves['LLD'];
+			void wellData.curves['RW'];
+			void wellData.curves['M_STAR'];
+			void wellData.curves['PHIT'];
+			void wellData.curves['CPORE'];
+			void wellData.curves['QV'];
+			void wellData.curves['QVN'];
+			void wellData.curves['QV_CORE'];
+			void wellData.coreSamples;
 			void wellData.curves['VSHALE'];
 			void wellData.curves['VCLAY'];
 			void wellData.curves['VSILT'];
@@ -5390,6 +5699,13 @@
 			void wellData.curves['SWT_INDONESIAN'];
 			void wellData.curves['SWT_DUAL_WATER'];
 			void workbench.saturationParams.method;
+			void workbench.saturationParams.m;
+			void workbench.saturationParams.waterSalinity;
+			void workbench.saturationParams.surfaceTemp;
+			void workbench.saturationParams.tempGradient;
+			void workbench.saturationParams.rwMode;
+			void workbench.saturationParams.rwPickett;
+			void workbench.saturationParams.measSystem;
 			void workbench.lithoParams.model;
 		} else if (mode === 'bqv') {
 			void wellData.curves['RT'];
@@ -5553,7 +5869,7 @@
 				})
 			).then(() => {
 				if (cancelled || !plotEl) return;
-				for (const axisName of ['xaxis', 'xaxis2', 'yaxis', 'yaxis2']) {
+				for (const axisName of ['xaxis', 'xaxis2', 'xaxis3', 'xaxis4', 'xaxis5', 'xaxis6', 'yaxis', 'yaxis2']) {
 					const axisLayout = layout[axisName];
 					const fullAxis = (plotEl as any)._fullLayout?.[axisName];
 					if (!axisLayout || !fullAxis) continue;

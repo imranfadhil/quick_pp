@@ -113,7 +113,7 @@ export const CROSSPLOTS: readonly CrossplotDefinition[] = [
 	},
 	{
 		id: 'sw-comparison',
-		label: 'Saturation vs Depth + VSHALE',
+		label: 'Saturation Composite vs Depth (+ Rw, m, Φ, Qv)',
 		single: { group: 'Step 5 · Saturation', steps: ['saturation'], autoFor: ['saturation'] }
 	},
 	{

@@ -62,6 +62,7 @@
 			decimals: 3,
 			editable: true
 		},
+		{ key: 'qv', label: 'QV', unit: 'meq/mL', numeric: true, decimals: 3, editable: true },
 		{ key: 'rock_type', label: 'Rock Type', editable: false }
 	];
 

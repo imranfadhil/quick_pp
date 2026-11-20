@@ -480,3 +480,59 @@ def test_ancillary_commit_import_modes():
     assert len(samples_replaced) == 1
     assert abs(samples_replaced[0]["depth"] - 2000.0) < 0.1
 
+
+def test_rca_import_with_qv_without_cperm():
+    res = client.post("/quick_pp/database/projects", json={"name": "QvProj"})
+    assert res.status_code == 200
+    pid = res.json()["project_id"]
+    well_name = "QvWell"
+    res_w = client.post(
+        f"/quick_pp/database/projects/{pid}/wells",
+        json={"name": well_name, "uwi": "QV-1"},
+    )
+    assert res_w.status_code == 200
+
+    # Import RCA sample with QV, CPORE, but NO CPERM
+    res_rca = client.post(
+        "/quick_pp/import/ancillary/commit",
+        json={
+            "project_id": pid,
+            "well_name": well_name,
+            "data_type": "rca",
+            "import_mode": "replace",
+            "column_mappings": [
+                {"source_column": "sample", "target_column": "SAMPLE_NAME"},
+                {"source_column": "depth", "target_column": "DEPTH"},
+                {"source_column": "poro", "target_column": "CPORE"},
+                {"source_column": "qv_core", "target_column": "QV"},
+            ],
+            "rows": [
+                {"sample": "Plug-Qv-1", "depth": 1550.0, "poro": 0.22, "qv_core": 0.35},
+            ],
+        },
+    )
+    assert res_rca.status_code == 200
+
+    # Verify detail endpoint
+    res_detail = client.get(
+        f"/quick_pp/database/projects/{pid}/wells/{well_name}/core_samples/Plug-Qv-1"
+    )
+    assert res_detail.status_code == 200
+    detail = res_detail.json().get("core_sample")
+    assert detail is not None
+    meas = detail.get("measurements", [])
+    qv_meas = next((m for m in meas if m.get("property") == "QV" or m.get("property_name") == "QV"), None)
+    assert qv_meas is not None
+    assert abs(qv_meas["value"] - 0.35) < 1e-4
+
+    # Verify core samples list endpoint
+    list_res = client.get(
+        f"/quick_pp/database/projects/{pid}/wells/{well_name}/core_samples"
+    )
+    assert list_res.status_code == 200
+    samples = list_res.json().get("core_samples", [])
+    assert len(samples) == 1
+    assert samples[0]["sample_name"] == "Plug-Qv-1"
+    assert abs(samples[0]["depth"] - 1550.0) < 1e-4
+
+

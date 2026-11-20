@@ -2488,6 +2488,7 @@ def workspace_well_bundle(
                 poro_amb_val = None
                 perm_air_val = None
                 grain_density_val = None
+                qv_val = None
                 sw_val = None
                 so_val = None
                 raw_depth_val = None
@@ -2519,6 +2520,11 @@ def workspace_well_bundle(
                             and mrow.get("value") is not None
                         ):
                             grain_density_val = float(mrow["value"])
+                        elif (
+                            prop in ("QV", "QV_CORE", "CEC_QV", "CORE_QV")
+                            and mrow.get("value") is not None
+                        ):
+                            qv_val = float(mrow["value"])
                         elif (
                             prop in ("CPERMV", "PERM_V", "KV", "PERMEABILITY_VERTICAL")
                             and mrow.get("value") is not None
@@ -2613,6 +2619,7 @@ def workspace_well_bundle(
                     poro_val is not None
                     or perm_val is not None
                     or grain_density_val is not None
+                    or qv_val is not None
                     or not has_pc
                 ):
                     eff_raw_d = raw_depth_val if raw_depth_val is not None else s_depth
@@ -2630,6 +2637,8 @@ def workspace_well_bundle(
                         "permeability": perm_val,
                         "grain_density": grain_density_val,
                     }
+                    if qv_val is not None:
+                        sample_entry["qv"] = qv_val
                     if perm_vert_val is not None:
                         sample_entry["permeability_vertical"] = perm_vert_val
                     if sw_val is not None:

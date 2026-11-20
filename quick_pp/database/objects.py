@@ -3032,6 +3032,9 @@ class Well(object):
             grain_density = s.get(
                 "grain_density", s.get("cgd", s.get("CGD", s.get("rhog")))
             )
+            qv_val = s.get(
+                "qv", s.get("QV", s.get("qv_core", s.get("QV_CORE", s.get("cec_qv"))))
+            )
             poro_amb = s.get("porosity_amb", s.get("cpore_amb", s.get("cpore_ori")))
             perm_air = s.get("perm_air", s.get("cperm_air", s.get("cperm_ori")))
             perm_vert = s.get(
@@ -3062,6 +3065,17 @@ class Well(object):
                             "property_name": "CGRAIN_DENSITY",
                             "value": float(grain_density),
                             "unit": "g/cc",
+                        }
+                    )
+                except (TypeError, ValueError):
+                    pass
+            if qv_val is not None and str(qv_val).strip() != "":
+                try:
+                    meas_list.append(
+                        {
+                            "property_name": "QV",
+                            "value": float(qv_val),
+                            "unit": "meq/mL",
                         }
                     )
                 except (TypeError, ValueError):

@@ -125,6 +125,7 @@
       { key: 'CPERM', label: 'CPERM — Horizontal Permeability (mD)' },
       { key: 'CPERMV', label: 'CPERMV — Vertical Permeability (mD)' },
       { key: 'CGRAIN_DENSITY', label: 'CGRAIN_DENSITY — Grain Density (g/cc)' },
+      { key: 'QV', label: 'QV — Cation Exchange Capacity per PV (meq/mL)' },
       { key: 'CSAT_WATER', label: 'CSAT_WATER — Core Water Saturation (Sw)' },
       { key: 'CSAT_OIL', label: 'CSAT_OIL — Core Oil Saturation (So)' },
       { key: 'DESCRIPTION', label: 'DESCRIPTION — Lithology / Facies Description' },
