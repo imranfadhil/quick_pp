@@ -1901,6 +1901,26 @@
 			});
 		}
 
+		// Track 4: Total Organic Carbon (TOC wt%, scaled 0 -> 10 wt% across [0, 1] for visual overlay)
+		const tocVals = pick('TOC');
+		if (tocVals.some((v) => v !== null)) {
+			const tocDec = decimateSvg(tocVals);
+			const scaleToc = (arr: (number | null)[]): (number | null)[] =>
+				arr.map((v) => (v !== null && Number.isFinite(v) ? Math.min(Math.max(v / 10.0, 0), 1.0) : null));
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'TOC',
+				x: scaleToc(tocDec),
+				customdata: tocDec,
+				y: svgDepth,
+				xaxis: 'x4',
+				yaxis: 'y',
+				line: { color: '#059669', width: 2.0 },
+				hovertemplate: 'TOC: %{customdata:.2f} wt%<extra></extra>'
+			});
+		}
+
 		// Core Porosity & Core Permeability discrete points (filtered to non-null finite plugs)
 		const { cporeX, cporeY, cporeCustom, cpermX, cpermY, cpermCustom } = buildCoreMarkerData(
 			indices,
@@ -3702,6 +3722,20 @@
 							style="background: {PETRO_COLORS.phit}"
 						></div>
 					</div>
+					{#if wellData.curves['TOC']?.some((v) => v !== null)}
+						<div class="flex flex-col">
+							<div
+								class="mono-num flex items-center justify-between text-[8px] leading-none font-semibold whitespace-nowrap text-emerald-700"
+							>
+								<span>0</span>
+								<span class="font-sans text-[8px] font-bold">TOC (wt%) ►</span>
+								<span>10.0</span>
+							</div>
+							<div
+								class="mt-0.5 h-[1.5px] w-full bg-emerald-600"
+							></div>
+						</div>
+					{/if}
 				{/if}
 			</div>
 
@@ -4357,6 +4391,21 @@
 									>{fmtNum(readout.CPORE ?? readout.CORE_PORO, 3)}
 									<span class="text-[7px]">v/v</span></span
 								>
+							</div>
+						{/if}
+						{#if readout.TOC !== null && readout.TOC !== undefined}
+							<div class="flex items-center justify-between border-t border-slate-200 pt-0.5 text-emerald-800">
+								<span class="font-bold">TOC</span>
+								<span class="mono-num font-semibold"
+									>{fmtNum(readout.TOC, 2)}
+									<span class="text-[7px]">wt%</span></span
+								>
+							</div>
+						{/if}
+						{#if readout.DELTA_LOG_R !== null && readout.DELTA_LOG_R !== undefined}
+							<div class="flex items-center justify-between text-slate-700">
+								<span class="font-bold">ΔlogR</span>
+								<span class="mono-num font-semibold">{fmtNum(readout.DELTA_LOG_R, 3)}</span>
 							</div>
 						{/if}
 					</div>

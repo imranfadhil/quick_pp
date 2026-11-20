@@ -51,7 +51,7 @@ export type CurveEditOperation =
 
 export type CurveSpliceOverlapMode = 'blend' | 'splice_depth' | 'keep_first' | 'keep_last' | 'mean';
 
-export type CalculatedCurveGroupKey = 'qaqc' | 'litho_poro' | 'perm' | 'saturation' | 'ressum';
+export type CalculatedCurveGroupKey = 'qaqc' | 'litho_poro' | 'perm' | 'saturation' | 'source_rock' | 'ressum';
 
 export const CALCULATED_CURVE_GROUPS: Record<
 	CalculatedCurveGroupKey,
@@ -178,6 +178,11 @@ export const CALCULATED_CURVE_GROUPS: Record<
 			'SW_P50',
 			'SW_P90'
 		]
+	},
+	source_rock: {
+		label: 'Source Rock & TOC',
+		shortLabel: 'TOC',
+		curves: ['TOC', 'DELTA_LOG_R', 'TOC_PASSEY']
 	},
 	ressum: {
 		label: 'Res. Summary & Blocking',
@@ -356,6 +361,12 @@ class WellDataState {
 	);
 	cpermCurve = $derived(
 		this.curves['CPERM'] ?? this.curves['CORE_PERM'] ?? WellDataState.EMPTY_ARR
+	);
+	tocCurve = $derived(
+		this.curves['TOC'] ?? this.curves['TOC_PASSEY'] ?? WellDataState.EMPTY_ARR
+	);
+	deltaLogRCurve = $derived(
+		this.curves['DELTA_LOG_R'] ?? WellDataState.EMPTY_ARR
 	);
 
 	// Derived filtered indices based on workbench.depthFilter and workbench.selectedZones
@@ -1970,6 +1981,7 @@ class WellDataState {
 		'qaqc-edit',
 		'qaqc-badhole',
 		'qaqc-env',
+		'source_rock',
 		'litho-poro',
 		'perm',
 		'saturation',
@@ -1981,6 +1993,7 @@ class WellDataState {
 		'qaqc-edit': 'QAQC Edits',
 		'qaqc-badhole': 'Badhole Flags',
 		'qaqc-env': 'Env Corrections',
+		source_rock: 'Source Rock & TOC',
 		'litho-poro': 'Litho & Poro',
 		perm: 'Permeability',
 		saturation: 'Saturation',

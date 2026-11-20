@@ -10,7 +10,7 @@
 	import { workbench, computeSiltIntersection } from '$lib/state/workbench.svelte';
 	import { fmtNum } from '$lib/utils/formatters';
 	import { calculateMethodComparison } from '$lib/utils/methodComparison';
-	import { gammaParameters, fluidDensityParameters } from '$lib/utils/lithology';
+	import { gammaParameters, fluidDensityParameters, gammaEndpoints, gammaLabel } from '$lib/utils/lithology';
 	import {
 		gorMetricToScfStb,
 		gorScfStbToMetric,
@@ -444,8 +444,9 @@
 						buffer: lp.hcBuffer,
 						flag_mode: lp.hcFlagMode ?? 'strict',
 						vsh_tol: lp.hcVshTol ?? 0.05,
-						gr_clean: lp.grClean,
-						gr_clay: lp.grClay,
+						gr_clean: lp.gammaSource === 'gr' ? lp.grClean : lp.gammaClean,
+						gr_clay: lp.gammaSource === 'gr' ? lp.grClay : lp.gammaShale,
+						...gammaArgs,
 						...coalArgs,
 						...filterArgs
 					}
@@ -472,8 +473,9 @@
 						phid_sh: lp.denCorrPhidSh,
 						scope: lp.denCorrScope,
 						vsh_mismatch_threshold: lp.denCorrMismatchThreshold,
-						gr_clean: lp.grClean,
-						gr_clay: lp.grClay,
+						gr_clean: lp.gammaSource === 'gr' ? lp.grClean : lp.gammaClean,
+						gr_clay: lp.gammaSource === 'gr' ? lp.grClay : lp.gammaShale,
+						...gammaArgs,
 						enable_coal_flagging: lp.enableCoalFlagging,
 						coal_rhob_max: lp.coalRhobMax,
 						coal_nphi_min: lp.coalNphiMin,
@@ -1255,13 +1257,13 @@
 			{/if}
 		</ParameterSection>
 
-		{#if workbench.lithoParams.model === 'vsh_gr' || (workbench.lithoParams.model !== 'vsh_bulk' && wellData.vshComparison.allGood.count > 0)}
+		{#if ['vsh_gr', 'ssc', 'sand_shale', 'vsh_nd'].includes(workbench.lithoParams.model) || (workbench.lithoParams.model !== 'vsh_bulk' && wellData.vshComparison.allGood.count > 0)}
 			{@const vStat = wellData.vshComparison.active}
 			<ParameterSection
 				title="Vshale Calibration (VSH_GR × VSH_DN)"
 				badge={vStat.rmse !== null ? `RMSE=${fmtNum(vStat.rmse, 3)} · n=${vStat.count}` : `n=${vStat.count}`}
 			>
-				{#if workbench.lithoParams.model === 'vsh_gr'}
+				{#if ['vsh_gr', 'ssc', 'sand_shale', 'vsh_nd'].includes(workbench.lithoParams.model)}
 					<GammaSource onchange={() => {
 						wellData.applyLiveVshGr();
 						executeLithoPoro(false);
@@ -1317,11 +1319,11 @@
 			badge={workbench.lithoParams.logCorrectionMode === 'hc'
 				? hcSummary
 					? `HC · ${hcSummary.hc_flagged_count} pts`
-					: `HC · VSH_GR (${fmtNum(workbench.lithoParams.grClean, 0)}–${fmtNum(workbench.lithoParams.grClay, 0)})`
+					: `HC · ${gammaLabel(workbench.lithoParams)} (${fmtNum(gammaEndpoints(workbench.lithoParams).clean, 0)}–${fmtNum(gammaEndpoints(workbench.lithoParams).shale, 0)})`
 				: workbench.lithoParams.logCorrectionMode === 'den'
 					? denSummary
 						? `Den · ${denSummary.corrected_count} pts`
-						: `Den · VSH_GR (${fmtNum(workbench.lithoParams.grClean, 0)}–${fmtNum(workbench.lithoParams.grClay, 0)})`
+						: `Den · ${gammaLabel(workbench.lithoParams)} (${fmtNum(gammaEndpoints(workbench.lithoParams).clean, 0)}–${fmtNum(gammaEndpoints(workbench.lithoParams).shale, 0)})`
 					: 'Off'}
 		>
 			<div class="mb-1.5 grid grid-cols-3 gap-1">
@@ -1351,11 +1353,11 @@
 			{#if workbench.lithoParams.logCorrectionMode === 'hc'}
 				<div class="my-1.5 rounded-xs border border-emerald-200 bg-emerald-50/70 px-2 py-1 text-[10px] leading-snug text-emerald-950">
 					{#if workbench.lithoParams.hcCorrectionMethod === 'invaded_zone_standard'}
-						Applies the invaded-zone correction equations and selects S<sub>hi</sub> (0–1) in 0.01 increments to match the solid-relative clay fraction to VSH<sub>GR</sub>.
+						Applies the invaded-zone correction equations and selects S<sub>hi</sub> (0–1) in 0.01 increments to match the solid-relative clay fraction to {gammaLabel(workbench.lithoParams)}.
 					{:else if workbench.lithoParams.model === 'ssc'}
-						Shifts HC-flagged <span class="mono-num font-semibold">(NPHI, RHOB)</span> points along the fluid correction angle toward SSC non-sand fraction matching calibrated <span class="mono-num font-semibold">VSH_GR</span> (<span class="mono-num font-semibold">{fmtNum(workbench.lithoParams.grClean, 1)}–{fmtNum(workbench.lithoParams.grClay, 1)} gAPI</span>) spanning Sand to Silt line.
+						Shifts HC-flagged <span class="mono-num font-semibold">(NPHI, RHOB)</span> points along the fluid correction angle toward SSC non-sand fraction matching calibrated <span class="mono-num font-semibold">{gammaLabel(workbench.lithoParams)}</span> (<span class="mono-num font-semibold">{fmtNum(gammaEndpoints(workbench.lithoParams).clean, 1)}–{fmtNum(gammaEndpoints(workbench.lithoParams).shale, 1)} gAPI</span>) spanning Sand to Silt line.
 					{:else}
-						Shifts HC-flagged <span class="mono-num font-semibold">(NPHI, RHOB)</span> points along the fluid correction angle toward a binary solid-relative clay fraction matching calibrated <span class="mono-num font-semibold">VSH_GR</span> (<span class="mono-num font-semibold">{fmtNum(workbench.lithoParams.grClean, 1)}–{fmtNum(workbench.lithoParams.grClay, 1)} gAPI</span>).
+						Shifts HC-flagged <span class="mono-num font-semibold">(NPHI, RHOB)</span> points along the fluid correction angle toward a binary solid-relative clay fraction matching calibrated <span class="mono-num font-semibold">{gammaLabel(workbench.lithoParams)}</span> (<span class="mono-num font-semibold">{fmtNum(gammaEndpoints(workbench.lithoParams).clean, 1)}–{fmtNum(gammaEndpoints(workbench.lithoParams).shale, 1)} gAPI</span>).
 					{/if}
 				</div>
 				<div class="grid grid-cols-2 gap-1">

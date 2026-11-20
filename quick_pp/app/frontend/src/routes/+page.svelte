@@ -20,6 +20,7 @@
 	import InspectorPerm from '$lib/components/modules/InspectorPerm.svelte';
 	import InspectorSaturation from '$lib/components/modules/InspectorSaturation.svelte';
 	import InspectorScal from '$lib/components/modules/InspectorScal.svelte';
+	import InspectorToc from '$lib/components/modules/InspectorToc.svelte';
 	import InspectorResSum from '$lib/components/modules/InspectorResSum.svelte';
 	import InspectorReport from '$lib/components/modules/InspectorReport.svelte';
 
@@ -932,6 +933,8 @@
 							<InspectorSaturation />
 						{:else if workbench.singleWellStep === 'scal'}
 							<InspectorScal />
+						{:else if workbench.singleWellStep === 'toc'}
+							<InspectorToc />
 						{:else if workbench.singleWellStep === 'report'}
 							<InspectorReport />
 						{:else}

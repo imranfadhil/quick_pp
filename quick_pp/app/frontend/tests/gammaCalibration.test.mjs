@@ -37,7 +37,18 @@ test('selected and derived gamma use their inputs rather than GR', () => {
 	assert.deepEqual(selectedGamma(lp, curves), [12, 40, NaN]);
 	lp.cgrThCoefficient = 0;
 	assert.deepEqual(selectedGamma(lp, curves), []);
+	lp.cgrThCoefficient = 4;
 	lp.model = 'ssc';
+	selectGamma(lp, { gammaSource: 'cgr' });
+	assert.deepEqual(selectedGamma(lp, curves), [10, 40, 70]);
+	selectGamma(lp, { gammaSource: 'derived_cgr' });
+	assert.deepEqual(selectedGamma(lp, curves), [12, 40, NaN]);
+	selectGamma(lp, { gammaSource: 'gr' });
+	assert.deepEqual(selectedGamma(lp, curves), curves.GR);
+	lp.model = 'sand_shale';
+	selectGamma(lp, { gammaSource: 'cgr' });
+	assert.deepEqual(selectedGamma(lp, curves), [10, 40, 70]);
+	lp.model = 'multi_mineral';
 	assert.deepEqual(selectedGamma(lp, curves), curves.GR);
 });
 

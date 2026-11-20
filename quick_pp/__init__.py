@@ -61,6 +61,7 @@ from quick_pp import (  # noqa: E402
     rock_type,
     saturation,
     scal,
+    source_rock,
     uncertainty,
     upscaling,
 )
@@ -149,6 +150,14 @@ from quick_pp.scal import (  # noqa: E402
     overburden_poroperm_correction,
     overburden_porosity_correction,
     pc_lab_to_reservoir,
+)
+from quick_pp.source_rock import (  # noqa: E402
+    auto_detect_shale_baseline,
+    calibrate_toc_to_core,
+    estimate_toc_passey,
+    hood_lom_to_ro,
+    hood_ro_to_lom,
+    passey_delta_log_r,
 )
 from quick_pp.uncertainty import (  # noqa: E402
     calc_stochastic_reservoir_summary,
@@ -286,6 +295,13 @@ __all__ = [
     "solve_continuous_rho_fluid_and_phid",
     "sonic_porosity_hunt_raymer",
     "sonic_porosity_wyllie",
+    "source_rock",
+    "auto_detect_shale_baseline",
+    "calibrate_toc_to_core",
+    "estimate_toc_passey",
+    "hood_lom_to_ro",
+    "hood_ro_to_lom",
+    "passey_delta_log_r",
     "stratigraphic_normalization",
     "swirr_rqi",
     "swirr_semilog_k",

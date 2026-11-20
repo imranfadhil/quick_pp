@@ -2050,3 +2050,30 @@ def test_workspace_multi_mineral_phi_max_and_pef_linearization(client_and_projec
     assert "CHI2_ERROR" in body["stats"]
     assert "AVG_ERROR" in body["stats"]
 
+
+def test_workspace_source_rock_endpoint(client_and_project):
+    client, proj_id = client_and_project
+    well_name = "Well-A"
+    base = f"/quick_pp/workspace/projects/{proj_id}/wells/{well_name}"
+
+    payload = {
+        "porosity_type": "sonic",
+        "r_baseline": 2.0,
+        "poro_baseline": 80.0,
+        "maturity_mode": "lom",
+        "lom": 10.5,
+        "toc_baseline": 0.8,
+        "clamp_negative": True,
+        "save": False,
+    }
+    r = client.post(f"{base}/source_rock", json=payload)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["well_name"] == well_name
+    assert body["porosity_type"] == "sonic"
+    assert "DELTA_LOG_R" in body["data"]
+    assert "TOC" in body["data"]
+    assert "stats" in body
+    assert "TOC" in body["stats"]
+
+

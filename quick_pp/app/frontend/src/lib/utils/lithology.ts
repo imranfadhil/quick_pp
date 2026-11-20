@@ -5,8 +5,10 @@ type GammaParams = Pick<LithoEndpointParams,
 	'cgrThCoefficient' | 'cgrKCoefficient' | 'grClean' | 'grClay' |
 	'gammaClean' | 'gammaShale' | 'gammaEndpoints'>;
 
+const GAMMA_CALIB_MODELS = new Set(['vsh_gr', 'ssc', 'sand_shale', 'vsh_nd']);
+
 export function gammaKey(lp: GammaParams): string {
-	if (lp.model !== 'vsh_gr' || lp.gammaSource === 'gr') return 'gr';
+	if (!GAMMA_CALIB_MODELS.has(lp.model) || lp.gammaSource === 'gr') return 'gr';
 	return lp.gammaSource === 'cgr' ? `curve:${lp.gammaCurve.toUpperCase()}` : 'derived_cgr';
 }
 

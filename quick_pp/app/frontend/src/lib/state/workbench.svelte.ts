@@ -8,6 +8,7 @@ export type SingleWellStep =
 	| 'saturation'
 	| 'ressum'
 	| 'scal'
+	| 'toc'
 	| 'report';
 export type MultiWellStep =
 	| 'inventory'
@@ -336,6 +337,20 @@ export interface PermModelParams {
 	C: number;
 	s: number;
 	swirr: number;
+}
+
+export interface TocModelParams {
+	resCurve: string;
+	poroCurve: string;
+	porosityType: 'sonic' | 'density' | 'neutron';
+	rBaseline: number;
+	poroBaseline: number;
+	scalingCoeff: number | null;
+	maturityMode: 'lom' | 'ro';
+	lom: number;
+	ro: number;
+	tocBaseline: number;
+	clampNegative: boolean;
 }
 
 export interface ResSumParams {
@@ -1011,6 +1026,20 @@ class WorkbenchState {
 		C: 2.0,
 		s: 0.01,
 		swirr: 0.2
+	});
+
+	tocParams = $state<TocModelParams>({
+		resCurve: 'RD',
+		poroCurve: 'DT',
+		porosityType: 'sonic',
+		rBaseline: 2.0,
+		poroBaseline: 80.0,
+		scalingCoeff: null,
+		maturityMode: 'lom',
+		lom: 10.5,
+		ro: 0.8,
+		tocBaseline: 0.8,
+		clampNegative: true
 	});
 
 	resSumParams = $state<ResSumParams>({

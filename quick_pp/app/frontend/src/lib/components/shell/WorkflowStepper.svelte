@@ -196,7 +196,8 @@
 				'saturation': 'sw-step-5-saturation',
 				'ressum': 'sw-step-6-ressum',
 				'report': 'sw-step-7-report',
-				'scal': 'sw-standalone-core-pc'
+				'scal': 'sw-standalone-core-pc',
+				'toc': 'sw-standalone-source-rock'
 			};
 			return map[workbench.singleWellStep] ?? 'sw-step-1-qaqc';
 		}
@@ -298,6 +299,27 @@
 					{isScalDone && !isScalActive ? '✓' : 'LAB'}
 				</span>
 				<span>Core & Pc Prep</span>
+			</button>
+			{@const isTocActive = workbench.singleWellStep === 'toc'}
+			{@const isTocDone = Boolean(wellData.curves['TOC']?.some((v) => v !== null && !isNaN(v)))}
+			<button
+				type="button"
+				onclick={() => (workbench.singleWellStep = 'toc')}
+				title="Standalone Source Rock Identification & Total Organic Carbon (TOC) via Passey ΔlogR"
+				class="flex h-7 items-center gap-1.5 rounded-sm border px-2.5 text-xs font-medium whitespace-nowrap transition-colors {isTocActive
+					? 'border-[var(--accent-primary)] bg-blue-50/90 font-semibold text-[var(--accent-primary)]'
+					: 'border-[var(--border-hairline)] bg-[var(--bg-subtle)]/60 text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] hover:text-[var(--text-primary)]'}"
+			>
+				<span
+					class="mono-num flex h-4 items-center justify-center rounded-xs px-1 text-[9px] font-bold {isTocActive
+						? 'bg-[var(--accent-primary)] text-white'
+						: isTocDone
+							? 'bg-emerald-100 text-emerald-700'
+							: 'bg-slate-200 text-slate-600'}"
+				>
+					{isTocDone && !isTocActive ? '✓' : 'TOC'}
+				</span>
+				<span>Source Rock (TOC)</span>
 			</button>
 		{:else}
 			{#each MULTI_WELL_STEPS as step (step.id)}

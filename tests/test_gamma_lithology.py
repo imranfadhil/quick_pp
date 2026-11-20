@@ -141,6 +141,83 @@ def test_ssc_lithology_survives_porosity_calculation(client_and_state):
     pd.testing.assert_frame_equal(state["df"][cols], original)
 
 
+def test_ssc_and_ss_support_cgr_gamma_source_for_vsh_gr(client_and_state):
+    client, state = client_and_state
+    root = "/quick_pp/workspace/projects/1/wells/W"
+
+    # SSC with CGR
+    payload_ssc_cgr = {
+        "model": "ssc",
+        "gamma_source": "cgr",
+        "gamma_curve": "CGR",
+        "gamma_clean": 10.0,
+        "gamma_shale": 70.0,
+    }
+    res_ssc = client.post(root + "/lithology", json=payload_ssc_cgr)
+    assert res_ssc.status_code == 200, res_ssc.text
+    data_ssc = res_ssc.json()["data"]
+    assert "VSH_GR" in data_ssc
+    assert "VSH_DN" in data_ssc
+    np.testing.assert_allclose(data_ssc["VSH_GR"], [0.0, 0.5, 1.0])
+
+    # SSC with Derived CGR
+    payload_ssc_derived = {
+        "model": "ssc",
+        "gamma_source": "derived_cgr",
+        "gamma_clean": 12.0,
+        "gamma_shale": 60.0,
+    }
+    res_derived = client.post(root + "/lithology", json=payload_ssc_derived)
+    assert res_derived.status_code == 200, res_derived.text
+    data_derived = res_derived.json()["data"]
+    assert "CGR_SYN" in data_derived
+    np.testing.assert_allclose(data_derived["CGR_SYN"], [12.0, 40.0, 60.0])
+    np.testing.assert_allclose(data_derived["VSH_GR"], [0.0, 28.0 / 48.0, 1.0])
+
+    # Sand-Shale with CGR
+    payload_ss_cgr = {
+        "model": "sand_shale",
+        "gamma_source": "cgr",
+        "gamma_curve": "CGR",
+        "gamma_clean": 10.0,
+        "gamma_shale": 70.0,
+    }
+    res_ss = client.post(root + "/lithology", json=payload_ss_cgr)
+    assert res_ss.status_code == 200, res_ss.text
+    data_ss = res_ss.json()["data"]
+    assert "VSH_GR" in data_ss
+    assert "VSH_DN" in data_ss
+    np.testing.assert_allclose(data_ss["VSH_GR"], [0.0, 0.5, 1.0])
+
+
+def test_hc_and_den_correction_support_cgr_gamma_source(client_and_state):
+    client, state = client_and_state
+    root = "/quick_pp/workspace/projects/1/wells/W"
+
+    # HC correction with CGR
+    hc_payload = {
+        "model": "ssc",
+        "flag_mode": "vsh_gr",
+        "gamma_source": "cgr",
+        "gamma_curve": "CGR",
+        "gamma_clean": 10.0,
+        "gamma_shale": 70.0,
+    }
+    res_hc = client.post(root + "/hc_correction", json=hc_payload)
+    assert res_hc.status_code == 200, res_hc.text
+
+    # Den correction with CGR
+    den_payload = {
+        "scope": "vsh_mismatch",
+        "gamma_source": "cgr",
+        "gamma_curve": "CGR",
+        "gamma_clean": 10.0,
+        "gamma_shale": 70.0,
+    }
+    res_den = client.post(root + "/den_correction", json=den_payload)
+    assert res_den.status_code == 200, res_den.text
+
+
 def test_multi_mineral_reports_matrix_relative_volumes(client_and_state, monkeypatch):
     client, state = client_and_state
     monkeypatch.setattr(

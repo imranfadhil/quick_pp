@@ -113,6 +113,19 @@ export const SINGLE_WELL_REGIONAL_DEFAULTS: Record<ParamModuleKey, Record<string
 		e_o: 1.0,
 		t_o: 1.0
 	},
+	source_rock: {
+		resCurve: 'RD',
+		poroCurve: 'DT',
+		porosityType: 'sonic',
+		rBaseline: 2.0,
+		poroBaseline: 80.0,
+		scalingCoeff: null,
+		maturityMode: 'lom',
+		lom: 10.5,
+		ro: 0.8,
+		tocBaseline: 0.8,
+		clampNegative: true
+	},
 	ressum: {
 		vclCutoff: 0.4,
 		phieCutoff: 0.08,
@@ -124,6 +137,7 @@ export type ParamModuleKey =
 	| 'qaqc-badhole'
 	| 'qaqc-env'
 	| 'qaqc-enhance'
+	| 'source_rock'
 	| 'litho-poro'
 	| 'perm'
 	| 'saturation'
@@ -134,6 +148,7 @@ export const PARAM_MODULE_KEYS: ParamModuleKey[] = [
 	'qaqc-badhole',
 	'qaqc-env',
 	'qaqc-enhance',
+	'source_rock',
 	'litho-poro',
 	'perm',
 	'saturation',
@@ -145,6 +160,7 @@ export const PARAM_MODULE_LABELS: Record<ParamModuleKey, string> = {
 	'qaqc-badhole': 'Badhole',
 	'qaqc-env': 'Env. Corrections',
 	'qaqc-enhance': 'Resolution Enhancement',
+	source_rock: 'Source Rock (TOC)',
 	'litho-poro': 'Litho & Poro',
 	perm: 'Permeability',
 	saturation: 'Saturation',
@@ -321,6 +337,10 @@ const REGISTRY: Record<ParamModuleKey, ParamAccessor> = {
 	scal: {
 		get: () => clone(workbench.scalParams),
 		set: (p) => assignKnown(workbench.scalParams, p)
+	},
+	source_rock: {
+		get: () => clone(workbench.tocParams),
+		set: (p) => assignKnown(workbench.tocParams, p)
 	},
 	ressum: {
 		get: () => clone(workbench.resSumParams),

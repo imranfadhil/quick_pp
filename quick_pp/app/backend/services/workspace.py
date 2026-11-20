@@ -134,6 +134,13 @@ from quick_pp.scal import (
     grain_density_from_correlation,
     grain_density_from_correlation_multivariate,
 )
+from quick_pp.source_rock import (
+    auto_detect_shale_baseline,
+    calibrate_toc_to_core,
+    estimate_toc_passey,
+    hood_ro_to_lom,
+    passey_delta_log_r,
+)
 from quick_pp.uncertainty import (
     calc_stochastic_reservoir_summary,
     sample_lhs_parameters,
@@ -1016,28 +1023,93 @@ def _compute_vsh_gr_series(
     gr_clean: Optional[float] = None,
     gr_clay: Optional[float] = None,
     use_enhanced: bool = False,
+    gamma_source: str = "gr",
+    gamma_curve: str = "CGR",
+    thorium_curve: str = "THOR",
+    potassium_curve: str = "POTA",
+    gamma_clean: Optional[float] = None,
+    gamma_shale: Optional[float] = None,
+    cgr_th_coefficient: float = 4.0,
+    cgr_k_coefficient: float = 16.0,
 ) -> pd.Series:
-    """Compute calibrated VSH_GR series in [0, 1] from GR endpoints, existing VSH_GR curve, or auto-normalized gr_index.
+    """Compute calibrated VSH_GR series in [0, 1] from GR/CGR endpoints, existing VSH_GR curve, or auto-normalized gr_index.
 
     When ``use_enhanced`` is set and ``GR_ENH`` is populated, the resolution-enhanced
     gamma ray is used in place of the raw ``GR``.
     """
     out = pd.Series(np.nan, index=df.index, dtype=float)
+    source = (gamma_source or "gr").strip().lower()
+
+    if source == "derived_cgr":
+        th_name = (thorium_curve or "THOR").strip().upper()
+        k_name = (potassium_curve or "POTA").strip().upper()
+        if th_name in df.columns and k_name in df.columns:
+            gr_s = pd.Series(
+                spectral_cgr(
+                    pd.to_numeric(df[th_name], errors="coerce"),
+                    pd.to_numeric(df[k_name], errors="coerce"),
+                    float(cgr_th_coefficient),
+                    float(cgr_k_coefficient),
+                ),
+                index=df.index,
+            )
+            clean = gamma_clean if gamma_clean is not None else gr_clean
+            shale = gamma_shale if gamma_shale is not None else gr_clay
+            if clean is not None and shale is not None and abs(float(shale) - float(clean)) > 1e-6:
+                valid_gr = gr_s.notna()
+                if valid_gr.any():
+                    out.loc[valid_gr] = (
+                        (gr_s.loc[valid_gr] - float(clean))
+                        / (float(shale) - float(clean))
+                    ).clip(0.0, 1.0)
+                    return out
+            valid_gr = gr_s.notna()
+            if valid_gr.any():
+                vsh_arr = np.asarray(
+                    gr_index(gr_s.loc[valid_gr].reset_index(drop=True)), dtype=float
+                ).ravel()
+                out.loc[valid_gr] = np.clip(vsh_arr, 0.0, 1.0)
+                return out
+
+    elif source == "cgr":
+        curve_name = (gamma_curve or "CGR").strip().upper()
+        if curve_name in df.columns:
+            gr_s = pd.to_numeric(df[curve_name], errors="coerce")
+            clean = gamma_clean if gamma_clean is not None else gr_clean
+            shale = gamma_shale if gamma_shale is not None else gr_clay
+            if clean is not None and shale is not None and abs(float(shale) - float(clean)) > 1e-6:
+                valid_gr = gr_s.notna()
+                if valid_gr.any():
+                    out.loc[valid_gr] = (
+                        (gr_s.loc[valid_gr] - float(clean))
+                        / (float(shale) - float(clean))
+                    ).clip(0.0, 1.0)
+                    return out
+            valid_gr = gr_s.notna()
+            if valid_gr.any():
+                vsh_arr = np.asarray(
+                    gr_index(gr_s.loc[valid_gr].reset_index(drop=True)), dtype=float
+                ).ravel()
+                out.loc[valid_gr] = np.clip(vsh_arr, 0.0, 1.0)
+                return out
+
     gr_col = "GR"
     if use_enhanced and "GR_ENH" in df.columns and df["GR_ENH"].notna().any():
         gr_col = "GR_ENH"
+    clean = gr_clean if gr_clean is not None else gamma_clean
+    shale = gr_clay if gr_clay is not None else gamma_shale
     if (
         gr_col in df.columns
-        and gr_clean is not None
-        and gr_clay is not None
-        and abs(float(gr_clay) - float(gr_clean)) > 1e-6
+        and clean is not None
+        and shale is not None
+        and abs(float(shale) - float(clean)) > 1e-6
     ):
         gr_s = pd.to_numeric(df[gr_col], errors="coerce")
         valid_gr = gr_s.notna()
         if valid_gr.any():
             out.loc[valid_gr] = (
-                (gr_s.loc[valid_gr] - float(gr_clean))
-                / (float(gr_clay) - float(gr_clean))
+                (gr_s.loc[valid_gr] - float(clean))
+                / (float(shale) - float(clean))
             ).clip(0.0, 1.0)
             return out
     if "VSH_GR" in df.columns:
@@ -1055,6 +1127,27 @@ def _compute_vsh_gr_series(
     ).ravel()
     out.loc[valid_gr] = np.clip(vsh_arr, 0.0, 1.0)
     return out
+
+
+def _compute_vsh_from_request(
+    df: pd.DataFrame,
+    req: Any,
+    use_enhanced: bool = False,
+) -> pd.Series:
+    return _compute_vsh_gr_series(
+        df,
+        gr_clean=getattr(req, "gr_clean", None),
+        gr_clay=getattr(req, "gr_clay", None),
+        use_enhanced=use_enhanced,
+        gamma_source=getattr(req, "gamma_source", "gr"),
+        gamma_curve=getattr(req, "gamma_curve", "CGR"),
+        thorium_curve=getattr(req, "thorium_curve", "THOR"),
+        potassium_curve=getattr(req, "potassium_curve", "POTA"),
+        gamma_clean=getattr(req, "gamma_clean", None),
+        gamma_shale=getattr(req, "gamma_shale", None),
+        cgr_th_coefficient=getattr(req, "cgr_th_coefficient", 4.0),
+        cgr_k_coefficient=getattr(req, "cgr_k_coefficient", 16.0),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1116,7 +1209,22 @@ class WorkspaceBadholeRequest(WorkspaceFilterBase):
     )
 
 
-class WorkspaceHCCorrectionRequest(WorkspaceFilterBase):
+class GammaParameters(BaseModel):
+    gamma_source: str = Field("GR", description="GR, CGR curve, or derived_cgr")
+    gamma_curve: str = Field("CGR", description="Explicit CGR curve mnemonic")
+    thorium_curve: str = Field("THOR", description="Thorium curve in ppm")
+    potassium_curve: str = Field("POTA", description="Potassium curve in percent")
+    gamma_clean: float = Field(20.0)
+    gamma_shale: float = Field(120.0)
+    cgr_th_coefficient: float = Field(
+        4.0, description="gAPI per ppm Th; verify calibration"
+    )
+    cgr_k_coefficient: float = Field(
+        16.0, description="gAPI per percent K; verify calibration"
+    )
+
+
+class WorkspaceHCCorrectionRequest(WorkspaceFilterBase, GammaParameters):
     dry_sand_point: Tuple[float, float] = Field((-0.02, 2.65))
     dry_silt_point: Optional[Tuple[float, float]] = Field(None)
     dry_clay_point: Tuple[float, float] = Field((0.33, 2.7))
@@ -1207,7 +1315,7 @@ class WorkspaceHCCorrectionRequest(WorkspaceFilterBase):
     )
 
 
-class WorkspaceDenCorrectionRequest(WorkspaceFilterBase):
+class WorkspaceDenCorrectionRequest(WorkspaceFilterBase, GammaParameters):
     dry_sand_point: Tuple[float, float] = Field((-0.02, 2.65))
     dry_clay_point: Tuple[float, float] = Field((0.33, 2.7))
     rho_water: float = Field(1.0, description="Water density (g/cc)")
@@ -1245,21 +1353,6 @@ class WorkspaceDenCorrectionRequest(WorkspaceFilterBase):
             "Skip samples already flagged by hydrocarbon correction (HC_FLAG == 1) and "
             "preserve their NPHI_HC/RHOB_HC/HC_FLAG values"
         ),
-    )
-
-
-class GammaParameters(BaseModel):
-    gamma_source: str = Field("GR", description="GR, CGR curve, or derived_cgr")
-    gamma_curve: str = Field("CGR", description="Explicit CGR curve mnemonic")
-    thorium_curve: str = Field("THOR", description="Thorium curve in ppm")
-    potassium_curve: str = Field("POTA", description="Potassium curve in percent")
-    gamma_clean: float = Field(20.0)
-    gamma_shale: float = Field(120.0)
-    cgr_th_coefficient: float = Field(
-        4.0, description="gAPI per ppm Th; verify calibration"
-    )
-    cgr_k_coefficient: float = Field(
-        16.0, description="gAPI per percent K; verify calibration"
     )
 
 
@@ -1573,6 +1666,22 @@ class WorkspaceResolutionEnhancementRequest(WorkspaceFilterBase):
         True,
         description="Run the inter-log micro-depth alignment diagnostic on the outputs",
     )
+
+
+class WorkspaceSourceRockRequest(WorkspaceFilterBase):
+    res_curve: Optional[str] = Field(None, description="Resistivity curve mnemonic (default 'RD')")
+    poro_curve: Optional[str] = Field(None, description="Porosity curve mnemonic (default 'DT', 'RHOB', or 'NPHI')")
+    porosity_type: str = Field("sonic", description="Porosity log type: 'sonic', 'density', or 'neutron'")
+    r_baseline: float = Field(2.0, description="Baseline resistivity in lean shale (ohm.m)")
+    poro_baseline: float = Field(80.0, description="Baseline porosity log value in lean shale (us/ft, g/cc, or v/v)")
+    scaling_coeff: Optional[float] = Field(None, description="Custom scaling coefficient")
+    maturity_mode: str = Field("lom", description="Maturity input mode: 'lom' or 'ro'")
+    lom: Optional[float] = Field(10.5, description="Level of Organic Metamorphism (typically 6 - 14)")
+    ro: Optional[float] = Field(None, description="Vitrinite reflectance (Ro %)")
+    toc_baseline: float = Field(0.8, description="Background non-source TOC in lean shale (wt%)")
+    clamp_negative: bool = Field(True, description="Clamp TOC to toc_baseline when Delta Log R is negative")
+    use_enhanced_logs: bool = Field(False, description="Use resolution-enhanced logs if present")
+    auto_detect_baseline: bool = Field(False, description="Whether to auto-detect shale baseline values")
 
 
 class WorkspacePermeabilityRequest(WorkspaceFilterBase):
@@ -2882,7 +2991,7 @@ def workspace_hc_correction(
         hc_flag_full = pd.Series(np.nan, index=df.index, dtype=float)
         invaded_saturation_full = pd.Series(np.nan, index=df.index, dtype=float)
 
-        vsh_gr_s = _compute_vsh_gr_series(df, req.gr_clean, req.gr_clay)
+        vsh_gr_s = _compute_vsh_from_request(df, req)
         # Keep NaN where GR is missing so those samples are skipped rather than
         # being corrected all the way to the clean-sand line.
         vsh_gr_arr: Optional[np.ndarray] = (
@@ -2984,8 +3093,8 @@ def workspace_hc_correction(
                 rhob_hc_full.loc[badhole_mask] = rhob.loc[badhole_mask]
                 hc_flag_full.loc[badhole_mask] = 0.0
                 invaded_saturation_full.loc[badhole_mask] = np.nan
-                if bh_mode in ("vsh_gr", "gr") and "GR" in df.columns:
-                    vsh_bh_s = _compute_vsh_gr_series(df, req.gr_clean, req.gr_clay)
+                if bh_mode in ("vsh_gr", "gr"):
+                    vsh_bh_s = _compute_vsh_from_request(df, req)
                     bh_gr = badhole_mask & vsh_bh_s.notna()
                     if bh_gr.any():
                         vsh_v = vsh_bh_s.loc[bh_gr].to_numpy(dtype=float)
@@ -3190,10 +3299,10 @@ def workspace_den_correction(
                 "No valid NPHI and RHOB pairs found in the selected interval"
             )
 
-        vsh_gr_s = _compute_vsh_gr_series(df, req.gr_clean, req.gr_clay)
+        vsh_gr_s = _compute_vsh_from_request(df, req)
         if not vsh_gr_s.notna().any():
             raise ValueError(
-                "GR or VSH_GR curve is required to run density correction (den_correction)"
+                "GR, CGR, or VSH_GR curve is required to run density correction (den_correction)"
             )
 
         rho_w = float(req.rho_water)
@@ -4133,6 +4242,7 @@ def workspace_lithology(
             project_id, well_name, req.min_depth, req.max_depth, req.zones
         )
         model = req.model.lower()
+        source = (req.gamma_source or "gr").lower()
         out_df = pd.DataFrame({"DEPTH": df["DEPTH"]})
         crossplot_meta: Dict[str, Any] = {}
         save_cols: List[str] = []
@@ -4185,11 +4295,26 @@ def workspace_lithology(
             out_df["VSH_DN"] = (vclay_s + vsilt_s).clip(0.0, 1.0)
             out_df["PROJ_NPHI"] = px_s
             out_df["PROJ_RHOB"] = py_s
-            vsh_gr_s = _compute_vsh_gr_series(
-                df, req.gr_clean, req.gr_clay, use_enhanced=req.use_enhanced_logs
+            vsh_gr_s = _compute_vsh_from_request(
+                df, req, use_enhanced=req.use_enhanced_logs
             )
             if vsh_gr_s.notna().any():
                 out_df["VSH_GR"] = vsh_gr_s
+            if source == "derived_cgr":
+                th_name = req.thorium_curve.strip().upper()
+                k_name = req.potassium_curve.strip().upper()
+                if th_name in df.columns and k_name in df.columns:
+                    out_df["CGR_SYN"] = pd.Series(
+                        spectral_cgr(
+                            pd.to_numeric(df[th_name], errors="coerce"),
+                            pd.to_numeric(df[k_name], errors="coerce"),
+                            req.cgr_th_coefficient,
+                            req.cgr_k_coefficient,
+                        ),
+                        index=df.index,
+                    )
+                    if "CGR_SYN" not in save_cols:
+                        save_cols.append("CGR_SYN")
 
             # Zero out any non-SSC mineral columns so stale carbonate/evaporite volumes do not persist
             for mcol in ALL_LITHOLOGY_VOL_COLS:
@@ -4248,11 +4373,26 @@ def workspace_lithology(
             out_df["VSH_DN"] = vclay_s
             out_df["PROJ_NPHI"] = px_s
             out_df["PROJ_RHOB"] = py_s
-            vsh_gr_s = _compute_vsh_gr_series(
-                df, req.gr_clean, req.gr_clay, use_enhanced=req.use_enhanced_logs
+            vsh_gr_s = _compute_vsh_from_request(
+                df, req, use_enhanced=req.use_enhanced_logs
             )
             if vsh_gr_s.notna().any():
                 out_df["VSH_GR"] = vsh_gr_s
+            if source == "derived_cgr":
+                th_name = req.thorium_curve.strip().upper()
+                k_name = req.potassium_curve.strip().upper()
+                if th_name in df.columns and k_name in df.columns:
+                    out_df["CGR_SYN"] = pd.Series(
+                        spectral_cgr(
+                            pd.to_numeric(df[th_name], errors="coerce"),
+                            pd.to_numeric(df[k_name], errors="coerce"),
+                            req.cgr_th_coefficient,
+                            req.cgr_k_coefficient,
+                        ),
+                        index=df.index,
+                    )
+                    if "CGR_SYN" not in save_cols:
+                        save_cols.append("CGR_SYN")
 
             # Zero out any non-SandShale mineral columns (including VSILT) so stale volumes do not persist
             for mcol in ALL_LITHOLOGY_VOL_COLS:
@@ -4492,8 +4632,8 @@ def workspace_lithology(
 
         if bh_mode != "none" and active_badhole.any():
             if bh_mode in ("vsh_gr", "gr"):
-                vsh_bh_s = _compute_vsh_gr_series(
-                    df, req.gr_clean, req.gr_clay, use_enhanced=req.use_enhanced_logs
+                vsh_bh_s = _compute_vsh_from_request(
+                    df, req, use_enhanced=req.use_enhanced_logs
                 )
                 bh_gr = active_badhole & vsh_bh_s.notna()
                 if bh_gr.any():
@@ -4668,7 +4808,7 @@ def workspace_lithology(
                     **req.model_dump(include=set(GammaParameters.model_fields)),
                     "gamma_source": source,
                 }
-                if model == "vsh_gr"
+                if model in ("vsh_gr", "ssc", "sand_shale", "vsh_nd")
                 else None,
                 "dry_sand_point": list(req.dry_sand_point)
                 if req.dry_sand_point
@@ -5426,8 +5566,8 @@ def workspace_porosity(
 
         if bh_mode != "none" and active_badhole.any():
             if bh_mode in ("vsh_gr", "gr"):
-                vsh_bh_s = _compute_vsh_gr_series(
-                    df, req.gr_clean, req.gr_clay, use_enhanced=req.use_enhanced_logs
+                vsh_bh_s = _compute_vsh_from_request(
+                    df, req, use_enhanced=req.use_enhanced_logs
                 )
                 if vsh_bh_s.isna().all() and "VCLAY" in df.columns:
                     vcl_f = pd.to_numeric(df["VCLAY"], errors="coerce").fillna(0.0)
@@ -6624,6 +6764,152 @@ def workspace_saturation(
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Saturation calculation failed: {e}"
+        ) from e
+
+
+@router.post(
+    "/wells/{well_name}/source_rock",
+    summary="Compute Delta Log R and estimate Total Organic Carbon (TOC) using Passey (1990)",
+)
+def workspace_source_rock(
+    project_id: int, well_name: str, req: WorkspaceSourceRockRequest
+) -> Dict[str, Any]:
+    """Compute Passey Delta Log R and estimate Total Organic Carbon (TOC wt%) aligned on DEPTH."""
+    try:
+        df = _get_filtered_well_df(
+            project_id, well_name, req.min_depth, req.max_depth, req.zones
+        )
+        cols_upper = {c.upper(): c for c in df.columns}
+
+        # Resolve resistivity curve
+        res_col = None
+        if req.res_curve and req.res_curve.upper() in cols_upper:
+            res_col = cols_upper[req.res_curve.upper()]
+        else:
+            for c in ["RD", "RT", "ILD", "LLD", "AHT90", "AT90", "RES_DEEP"]:
+                if c in cols_upper:
+                    res_col = cols_upper[c]
+                    break
+        if not res_col:
+            raise ValueError("No valid deep resistivity log found for Source Rock / TOC calculation")
+
+        # Resolve porosity curve
+        poro_col = None
+        if req.poro_curve and req.poro_curve.upper() in cols_upper:
+            poro_col = cols_upper[req.poro_curve.upper()]
+        else:
+            ptype = (req.porosity_type or "sonic").lower()
+            if "son" in ptype or "dt" in ptype:
+                candidates = ["DT", "DTC", "DT_CO"]
+            elif "den" in ptype or "rho" in ptype:
+                candidates = (
+                    ["RHOB_ENH", "RHOB_HC", "RHOB"]
+                    if req.use_enhanced_logs
+                    else ["RHOB_HC", "RHOB", "DEN"]
+                )
+            else:
+                candidates = (
+                    ["NPHI_ENH", "NPHI_HC", "NPHI"]
+                    if req.use_enhanced_logs
+                    else ["NPHI_HC", "NPHI", "NEU"]
+                )
+            for c in candidates:
+                if c in cols_upper:
+                    poro_col = cols_upper[c]
+                    break
+        if not poro_col:
+            raise ValueError(
+                f"No valid {req.porosity_type} porosity curve found for Source Rock / TOC calculation"
+            )
+
+        res_s = pd.to_numeric(df[res_col], errors="coerce")
+        poro_s = pd.to_numeric(df[poro_col], errors="coerce")
+
+        # Effective LOM
+        effective_lom = req.lom
+        if req.maturity_mode == "ro" and req.ro is not None:
+            effective_lom = hood_ro_to_lom(req.ro)
+        elif effective_lom is None:
+            effective_lom = 10.5
+
+        # Compute Delta Log R
+        dlogr_s = passey_delta_log_r(
+            res_s,
+            poro_s,
+            r_baseline=req.r_baseline,
+            poro_baseline=req.poro_baseline,
+            porosity_type=req.porosity_type,
+            scaling_coeff=req.scaling_coeff,
+        )
+
+        # Compute TOC
+        toc_s = estimate_toc_passey(
+            dlogr_s,
+            lom=effective_lom,
+            toc_baseline=req.toc_baseline,
+            clamp_negative=req.clamp_negative,
+        )
+
+        out_df = pd.DataFrame(
+            {
+                "DEPTH": df["DEPTH"],
+                "DELTA_LOG_R": dlogr_s,
+                "TOC": toc_s,
+                "TOC_PASSEY": toc_s,
+            }
+        )
+
+        # Check for core TOC calibration if core data exists
+        core_cal = None
+        for core_toc_col in ["TOC", "CORE_TOC", "TOC_CORE"]:
+            if core_toc_col in cols_upper:
+                core_vals = pd.to_numeric(
+                    df[cols_upper[core_toc_col]], errors="coerce"
+                )
+                if core_vals.notna().sum() >= 3:
+                    core_cal = calibrate_toc_to_core(dlogr_s, core_vals)
+                    break
+
+        baseline_info = None
+        if req.auto_detect_baseline:
+            baseline_info = auto_detect_shale_baseline(
+                df,
+                res_col=res_col,
+                poro_col=poro_col,
+            )
+
+        saved_rows = 0
+        if req.save:
+            save_cols = ["DELTA_LOG_R", "TOC", "TOC_PASSEY"]
+            saved_rows = _save_curves_to_well(
+                project_id, well_name, out_df[["DEPTH"] + save_cols]
+            )
+
+        stats = {
+            "DELTA_LOG_R": _curve_summary_stats(dlogr_s),
+            "TOC": _curve_summary_stats(toc_s),
+        }
+
+        return {
+            "well_name": well_name,
+            "res_curve": res_col,
+            "poro_curve": poro_col,
+            "porosity_type": req.porosity_type,
+            "r_baseline": req.r_baseline,
+            "poro_baseline": req.poro_baseline,
+            "effective_lom": round(float(effective_lom), 2),
+            "saved": req.save,
+            "saved_rows": saved_rows,
+            "stats": stats,
+            "baseline_detection": baseline_info,
+            "core_calibration": core_cal,
+            **dataframe_to_columnar(out_df),
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Source Rock / TOC calculation failed: {e}"
         ) from e
 
 
