@@ -420,7 +420,7 @@ def _get_filtered_well_df(
         raise ValueError(
             f"No data rows remain for well '{well_name}' after applying depth/zone filters"
         )
-    return filtered
+    return Config.canonicalize_dataframe(filtered)
 
 
 def _curve_summary_stats(
@@ -491,6 +491,12 @@ def _resolve_log_column(
         corrected = _HC_LOG_ALIASES.get(name)
         if corrected and corrected in df.columns and df[corrected].notna().any():
             return corrected
+    if name in df.columns and pd.to_numeric(df[name], errors="coerce").notna().any():
+        return name
+    aliases = Config.CANONICAL_CURVE_ALIASES.get(name, ())
+    for alias in aliases:
+        if alias in df.columns and pd.to_numeric(df[alias], errors="coerce").notna().any():
+            return alias
     return name if name in df.columns else None
 
 
@@ -1705,11 +1711,17 @@ class WorkspacePermeabilityRequest(WorkspaceFilterBase):
     depths: Optional[List[float]] = Field(
         None, description="Optional client-side depth array fallback"
     )
+    rt: Optional[List[Optional[float]]] = Field(
+        None, description="Optional client-side RT (resistivity) array fallback"
+    )
     phit: Optional[List[Optional[float]]] = Field(
         None, description="Optional client-side PHIT array fallback"
     )
     vclay: Optional[List[Optional[float]]] = Field(
         None, description="Optional client-side VCLAY array fallback"
+    )
+    vshale: Optional[List[Optional[float]]] = Field(
+        None, description="Optional client-side bulk VSHALE array fallback"
     )
     vsilt: Optional[List[Optional[float]]] = Field(
         None, description="Optional client-side VSILT array fallback"
@@ -1786,6 +1798,9 @@ class WorkspaceSaturationRequest(WorkspaceFilterBase):
     )
     depths: Optional[List[float]] = Field(
         None, description="Optional client-side depth array fallback"
+    )
+    rt: Optional[List[Optional[float]]] = Field(
+        None, description="Optional client-side RT (resistivity) array fallback"
     )
     phit: Optional[List[Optional[float]]] = Field(
         None, description="Optional client-side PHIT array fallback"
@@ -2318,24 +2333,8 @@ def workspace_well_bundle(
         if "DEPTH" in curves_map and "DEPT" not in curves_map:
             curves_map["DEPT"] = curves_map["DEPTH"]
 
-        # Map standard aliases onto canonical display mnemonics (RT, RM, RS, PEF, DRHO) if canonical key is absent
-        alias_groups = {
-            "RT": ("RD", "RDEP", "RDEEP", "LLD", "RILD"),
-            "RM": ("RMED", "RILM", "ILM", "LLM", "LL8", "M2R6"),
-            "RS": (
-                "RSHAL",
-                "RSHA",
-                "RXO",
-                "RXOZ",
-                "MSFL",
-                "RMLL",
-                "RFOC",
-                "SFL",
-                "LLS",
-            ),
-            "PEF": ("PE", "PEFZ", "PEFA"),
-            "DRHO": ("HDRA", "DCOR", "RHOC"),
-        }
+        # Map standard aliases onto canonical display mnemonics if canonical key is absent
+        alias_groups = Config.CANONICAL_CURVE_ALIASES
         for canonical, aliases in alias_groups.items():
             if canonical not in curves_map or not any(
                 v is not None for v in curves_map.get(canonical, [])
@@ -6090,6 +6089,7 @@ def workspace_permeability(
             curve_arrays={
                 "PHIT": req.phit,
                 "VCLAY": req.vclay,
+                "VSHALE": req.vshale,
                 "VSILT": req.vsilt,
                 "PHIT_SAND": req.phit_sand,
                 "VSH_LAM": req.vsh_lam,
@@ -6369,6 +6369,7 @@ def workspace_saturation(
             df,
             depths=req.depths,
             curve_arrays={
+                "RT": req.rt,
                 "PHIT": req.phit,
                 "VCLAY": req.vclay,
                 "VSHALE": req.vshale,
@@ -6381,15 +6382,23 @@ def workspace_saturation(
         )
 
         # Resolve RT and PHIT
+        rt_candidates = Config.CANONICAL_CURVE_ALIASES.get(
+            "RT", ("RT", "RD", "RDEP", "RDEEP", "LLD", "RILD", "RESD", "ILD")
+        )
         rt_col = next(
-            (c for c in ("RT", "ILD", "LLD", "RDEP", "RESD") if c in df.columns),
+            (
+                c
+                for c in rt_candidates
+                if c in df.columns
+                and pd.to_numeric(df[c], errors="coerce").notna().any()
+            ),
             None,
         )
         if not rt_col:
             raise ValueError(
                 f"Resistivity curve (RT) not found in well data. Available: {list(df.columns)}"
             )
-        if "PHIT" not in df.columns:
+        if "PHIT" not in df.columns or not pd.to_numeric(df["PHIT"], errors="coerce").notna().any():
             raise ValueError(
                 "PHIT curve not found in well data. Compute and save porosity first."
             )
@@ -11039,7 +11048,7 @@ def workspace_stick_plot(
                     rt_col = next(
                         (
                             c
-                            for c in ("RT", "ILD", "LLD", "RDEP")
+                            for c in Config.CANONICAL_CURVE_ALIASES.get("RT", ("RT", "RD", "RDEP", "RDEEP", "LLD", "RILD", "RESD", "ILD"))
                             if c in wdf_sorted.columns and wdf_sorted[c].notna().any()
                         ),
                         None,
@@ -12263,7 +12272,7 @@ def workspace_optimize_fwl(
                 rt_col = next(
                     (
                         c
-                        for c in ("RT", "ILD", "LLD", "RDEP")
+                        for c in Config.CANONICAL_CURVE_ALIASES.get("RT", ("RT", "RD", "RDEP", "RDEEP", "LLD", "RILD", "RESD", "ILD"))
                         if c in wdf.columns and wdf[c].notna().any()
                     ),
                     None,

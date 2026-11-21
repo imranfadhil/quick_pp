@@ -1586,6 +1586,40 @@ def test_saturation_model_comparison_curves_and_archie_default(client_and_projec
         assert len(body["data"]["SWT_ARCHIE"]) == 10
 
 
+def test_saturation_with_rdeep_alias_curve(client_and_project, monkeypatch):
+    client, pid = client_and_project
+    endpoint = f"/quick_pp/workspace/projects/{pid}/wells/Well-A/saturation"
+
+    import quick_pp.app.backend.services.workspace as ws
+    orig_get = ws._get_filtered_well_df
+
+    def mock_filtered(*args, **kwargs):
+        df = orig_get(*args, **kwargs)
+        # Simulate a well having RDEEP, RMED, and VSHALE, but NO RT or VCLAY
+        if "RT" in df.columns:
+            df["RDEEP"] = df["RT"]
+            df = df.drop(columns=["RT"])
+        if "VCLAY" in df.columns:
+            df["VSHALE"] = df["VCLAY"]
+            df = df.drop(columns=["VCLAY"])
+        return df
+
+    monkeypatch.setattr(ws, "_get_filtered_well_df", mock_filtered)
+
+    fallback = {
+        "depths": np.linspace(1000.0, 1009.0, 10).tolist(),
+        "phit": np.linspace(0.12, 0.25, 10).tolist(),
+        "save": False,
+    }
+
+    res = client.post(endpoint, json=fallback)
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert "SWT" in body["data"]
+    assert "RT" in body["data"]
+    assert any(v is not None for v in body["data"]["RT"])
+
+
 def test_petrophysical_mcp_server_and_agent_assistant(client_and_project):
     client, pid = client_and_project
 

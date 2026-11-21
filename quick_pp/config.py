@@ -880,7 +880,9 @@ class Config:
         "GR": ["GR", "GAMMA", "CGR", "SGR", "GR_EDTC", "GR_ARC", "HCGR", "GRC", "GRD"],
         "RT": [
             "RT",
+            "RD",
             "RDEP",
+            "RDEEP",
             "RILD",
             "LLD",
             "AT90",
@@ -888,8 +890,9 @@ class Config:
             "HRLT",
             "RESD",
             "ILD",
-            "RD",
             "RTRUE",
+            "AHT90",
+            "RES_DEEP",
         ],
         "RMED": ["RMED", "RILM", "LLM", "AT60", "AT30", "ILM", "RM"],
         "RSHA": [
@@ -947,6 +950,125 @@ class Config:
             if base_clean == target or base_clean in aliases:
                 return target
         return clean
+
+    # Canonical curve aliases dictionary for workflow-wide standardization
+    CANONICAL_CURVE_ALIASES = {
+        "DEPTH": ("DEPT", "DEPTH", "MD", "TDEP", "DEPT:1", "DEPT_M", "DEPT_FT"),
+        "TVD": ("TVD", "DEPT_TVD", "DEPTH_TVD", "TVD_SCS", "TVDSCS"),
+        "TVDSS": ("TVDSS", "DEPT_TVDSS", "DEPTH_TVDSS", "TVD_SS", "Z"),
+        "GR": ("GR", "GAMMA", "CGR", "SGR", "GR_EDTC", "GR_ARC", "HCGR", "GRC", "GRD"),
+        "RT": (
+            "RT",
+            "RD",
+            "RDEP",
+            "RDEEP",
+            "LLD",
+            "RILD",
+            "RESD",
+            "ILD",
+            "AT90",
+            "AF90",
+            "HRLT",
+            "RTRUE",
+            "AHT90",
+            "RES_DEEP",
+        ),
+        "RM": (
+            "RM",
+            "RMED",
+            "RILM",
+            "ILM",
+            "LLM",
+            "LL8",
+            "M2R6",
+            "AT60",
+            "AT30",
+            "AHT60",
+            "AHT30",
+        ),
+        "RS": (
+            "RS",
+            "RSHA",
+            "RSHAL",
+            "RXO",
+            "RXOZ",
+            "MSFL",
+            "RMLL",
+            "RFOC",
+            "SFL",
+            "LLS",
+            "RLL3",
+            "AT10",
+            "AHT10",
+            "AHT20",
+            "AT20",
+        ),
+        "NPHI": (
+            "NPHI",
+            "TNPH",
+            "NPOR",
+            "CNCF",
+            "CNL",
+            "PHIN",
+            "NPHI_LS",
+            "NPUC",
+        ),
+        "RHOB": ("RHOB", "RHOZ", "DEN", "ZDEN", "BDEL", "RHO"),
+        "DRHO": ("DRHO", "HDRA", "DCOR", "ZCOR", "RHOC"),
+        "DTC": ("DTC", "DT", "DTCO", "AC", "DT4P", "DTCOMP"),
+        "DTS": ("DTS", "DTSM", "DT4S", "DTSH"),
+        "PEF": ("PEF", "PEFZ", "PE", "PEDN", "PEFA"),
+        "CALI": ("CALI", "HCAL", "CAL", "C1", "CALX"),
+        "BS": ("BS", "BIT", "BITSIZE"),
+        "SP": ("SP", "SSP"),
+        "CPORE": ("CPORE", "CPOR", "CORE_POR", "CORE_POROSITY", "POR_CORE"),
+        "CPERM": (
+            "CPERM",
+            "CKHG",
+            "CORE_PERM",
+            "CORE_PERMEABILITY",
+            "KLOGH",
+            "PERM_CORE",
+        ),
+        "VCLAY": ("VCLAY", "VSH", "VSHALE", "VCL", "VSH_GR", "VSHA", "VWCL"),
+        "VSHALE": ("VSHALE", "VCLAY", "VSH", "VCL", "VSH_GR", "VSHA", "VWCL"),
+        "PHIT": ("PHIT", "PHIE", "POROSITY", "POR"),
+        "PHIE": ("PHIE", "PHIT", "POROSITY", "POR"),
+        "PERM": ("PERM", "PERM_TRANS", "KLOGH", "PERMEABILITY", "K", "K_LOG"),
+        "SWT": ("SWT", "SWE", "SW", "SW_ARCHIE", "SW_SIMANDOUX", "SW_WS", "SHF"),
+        "SWE": ("SWE", "SWT", "SW"),
+        "ROCK_FLAG": ("ROCK_FLAG", "ROCK_FLAG_ML", "ROCK_FLAG_CUTOFF"),
+        "PERM_TRANS": ("PERM_TRANS",),
+        "SHF": ("SHF", "SW_SHF"),
+    }
+
+    @staticmethod
+    def canonicalize_dataframe(df):
+        """Ensure canonical curve mnemonics exist on DataFrame by aliasing physical curves if absent."""
+        if df is None or not hasattr(df, "columns") or df.empty:
+            return df
+        import pandas as pd
+
+        col_map = {str(c).upper(): c for c in df.columns}
+        for canon, aliases in Config.CANONICAL_CURVE_ALIASES.items():
+            canon_upper = canon.upper()
+            if canon_upper in col_map:
+                existing_s = pd.to_numeric(df[col_map[canon_upper]], errors="coerce")
+                if existing_s.notna().any():
+                    if col_map[canon_upper] != canon:
+                        df[canon] = existing_s
+                        col_map[canon_upper] = canon
+                    continue
+
+            for alias in aliases:
+                alias_upper = alias.upper()
+                if alias_upper in col_map:
+                    candidate_s = pd.to_numeric(df[col_map[alias_upper]], errors="coerce")
+                    if candidate_s.notna().any():
+                        df[canon] = candidate_s
+                        col_map[canon_upper] = canon
+                        break
+        return df
 
     @staticmethod
     def vars_units(data):

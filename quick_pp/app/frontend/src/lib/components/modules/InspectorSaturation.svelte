@@ -170,6 +170,14 @@
 		wellData.lastError = null;
 		const sp = workbench.saturationParams;
 		const deptArr = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
+		const rtArr =
+			wellData.curves['RT'] ??
+			wellData.curves['RDEEP'] ??
+			wellData.curves['RD'] ??
+			wellData.curves['RDEP'] ??
+			wellData.curves['LLD'] ??
+			wellData.curves['ILD'] ??
+			[];
 		const phitArr = wellData.curves['PHIT'] ?? [];
 		const vclayArr = wellData.curves['VCLAY'] ?? wellData.curves['VSHALE'] ?? [];
 		const phitSandArr = wellData.curves['PHIT_SAND'] ?? [];
@@ -211,6 +219,7 @@
 						use_thomas_stieber: useTs,
 						use_enhanced_logs: workbench.enhanceParams.useEnhancedLogs,
 						depths: cleanArr(deptArr) as number[] | undefined,
+						rt: cleanArr(rtArr),
 						phit: cleanArr(phitArr),
 						vclay: cleanArr(vclayArr),
 						phit_sand: useTs ? cleanArr(phitSandArr) : undefined,
