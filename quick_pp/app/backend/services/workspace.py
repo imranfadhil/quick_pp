@@ -13779,6 +13779,46 @@ def workspace_curve_edit(
             if not dst:
                 raise ValueError("Target curve name is required for rename")
             _update_cached_well_column(project_id, well_name, "rename", src, dst)
+
+            # Persist rename lineage and mapping
+            eph_hdr = _ephemeral_well_headers.setdefault((project_id, well_name), {})
+            lineage = list(eph_hdr.get("curve_lineage") or [])
+            lineage = [e for e in lineage if str(e.get("stored_curve", "")).upper() != dst]
+            lineage.append({
+                "filename": "Curve Editor",
+                "source_mnemonic": src,
+                "stored_curve": dst,
+                "raw_curve": src,
+            })
+            eph_hdr["curve_lineage"] = lineage
+
+            eph_cfg = _ephemeral_well_configs.setdefault((project_id, well_name), {})
+            renames = dict(eph_cfg.get("renamed_curves") or {})
+            renames[dst] = src
+            eph_cfg["renamed_curves"] = renames
+
+            if not is_demo_mode():
+                with get_db() as session:
+                    well_orm = session.scalar(
+                        select(db_models.Well).filter_by(project_id=project_id, name=well_name)
+                    )
+                    if well_orm:
+                        hdr_data = dict(well_orm.header_data or {})
+                        db_lineage = list(hdr_data.get("curve_lineage") or [])
+                        db_lineage = [e for e in db_lineage if str(e.get("stored_curve", "")).upper() != dst]
+                        db_lineage.append({
+                            "filename": "Curve Editor",
+                            "source_mnemonic": src,
+                            "stored_curve": dst,
+                            "raw_curve": src,
+                        })
+                        hdr_data["curve_lineage"] = db_lineage
+                        db_renames = dict(hdr_data.get("renamed_curves") or {})
+                        db_renames[dst] = src
+                        hdr_data["renamed_curves"] = db_renames
+                        well_orm.header_data = hdr_data
+                        session.flush()
+
             full_df = _get_merged_dataframe_sync(project_id, well_name)
             stats = (
                 {
@@ -14246,14 +14286,33 @@ CALCULATED_CURVES_BY_GROUP: Dict[str, Tuple[str, ...]] = {
         "NPHI_ENV_CORR",
         "RHOB_ENV_CORR",
         "RT_ENV_CORR",
+        "CALI_ENV_CORR",
+        "DT_ENV_CORR",
         "INVASION_FLAG",
         "GR_NORM",
         "NPHI_NORM",
         "NPHI_HC",
         "RHOB_HC",
         "HC_FLAG",
+        "SHC_INV",
         "RHOB_DEN_CORR",
         "DEN_CORR_FLAG",
+        "CALI_FLAG",
+        "DRHO_FLAG",
+        "RUGOSITY_FLAG",
+        "GR_ENH",
+        "NPHI_ENH",
+        "RHOB_ENH",
+        "GR_RECON",
+        "NPHI_RECON",
+        "RHOB_RECON",
+        "DECONV_WEIGHT",
+        "GR_SYN",
+        "DT_SYN",
+        "RHOB_SYN",
+        "NPHI_SYN",
+        "RT_SYN",
+        "CGR_SYN",
     ),
     "litho_poro": (
         "VSAND",
@@ -14269,12 +14328,44 @@ CALCULATED_CURVES_BY_GROUP: Dict[str, Tuple[str, ...]] = {
         "VHALI",
         "VPYRI",
         "VCOAL",
+        "VILLI",
+        "VSMEC",
+        "VCHLO",
+        "VGLAUC",
+        "VMUSC",
+        "VBIOT",
+        "VKFELD",
+        "VALBI",
+        "VSIDE",
+        "VANKE",
+        "VKERO",
+        "VQUARTZ",
+        "VCALCITE",
+        "VDOLOMITE",
+        "VSIDERITE",
+        "VANHYDRITE",
+        "VPYRITE",
+        "VHALITE",
+        "VGYPSUM",
+        "VKFELDSPAR",
+        "VPLAGIOCLASE",
+        "VCHLORITE",
+        "VILLITE",
+        "VSMECTITE",
+        "VKAOLINITE",
+        "VGLAUCONITE",
         "COAL_FLAG",
         "VSH_GR",
         "VSH_DN",
+        "VSH_SP",
+        "VSH_RT",
+        "VCL_GR",
+        "VCL_DN",
         "PHIT",
         "PHIE",
         "PHID",
+        "PHIN",
+        "PHIS",
         "PHIT_SH",
         "VSH_LAM",
         "VSH_DIS",
@@ -14285,6 +14376,14 @@ CALCULATED_CURVES_BY_GROUP: Dict[str, Tuple[str, ...]] = {
         "PHIE_TS",
         "RSAND_TS",
         "RT_MOD",
+        "PHID_RAW_100",
+        "RHO_FL",
+        "RHO_FL_TIER",
+        "RHO_MF",
+        "SXO_EST",
+        "PROJ_NPHI",
+        "PROJ_RHOB",
+        "PHIT_CONSTRUCTED",
         "PHIT_P10",
         "PHIT_P50",
         "PHIT_P90",
@@ -14305,6 +14404,8 @@ CALCULATED_CURVES_BY_GROUP: Dict[str, Tuple[str, ...]] = {
         "ROCK_FLAG_ML",
         "VDL",
         "PHI_SEC",
+        "KTIM",
+        "KSDR",
         "PERM_P10",
         "PERM_P50",
         "PERM_P90",
@@ -14312,12 +14413,25 @@ CALCULATED_CURVES_BY_GROUP: Dict[str, Tuple[str, ...]] = {
     "saturation": (
         "SWT",
         "SWE",
+        "SWA",
         "SWT_ARCHIE",
         "SWT_WAXMAN",
+        "SWT_SIMANDOUX",
+        "SWT_INDONESIAN",
+        "SWT_DUAL_WATER",
+        "SW_ARCHIE",
+        "SW_WAXMAN",
+        "SW_SIMANDOUX",
+        "SW_INDONESIAN",
+        "SW_DUAL_WATER",
         "BVW",
+        "BVH",
+        "BVHC",
         "TEMP_GRAD",
         "RW",
         "B",
+        "QV",
+        "QV_CORE",
         "QVN",
         "M_STAR",
         "VCL_OVER_PHI",
@@ -14328,6 +14442,11 @@ CALCULATED_CURVES_BY_GROUP: Dict[str, Tuple[str, ...]] = {
         "SW_P10",
         "SW_P50",
         "SW_P90",
+    ),
+    "source_rock": (
+        "TOC",
+        "DELTA_LOG_R",
+        "TOC_PASSEY",
     ),
     "ressum": (
         "RES_FLAG",

@@ -15,6 +15,7 @@
 	import {
 		ALL_CALCULATED_CURVE_MNEMONICS,
 		CALCULATED_CURVE_GROUPS,
+		isCalculatedCurveMnemonic,
 		wellData,
 		type CalculatedCurveGroupKey,
 		type CurveEditOperation,
@@ -32,24 +33,43 @@
 
 	let curveList = $derived(wellData.availableCurves);
 
-	// Raw = as-loaded logs (incl. *_ORI backups); Edited = raw curves overwritten in place
-	// (have a *_ORI backup); Computed = derived petrophysical curves.
+	// Raw = as-loaded logs (incl. *_ORI backups); Edited = curves renamed or modified in place
+	// (e.g. RT renamed from RDEEP); Computed = derived petrophysical calculations & volumetrics.
 	let curveGroups = $derived.by(() => {
 		const calc = new Set(wellData.calculatedCurvesPresent);
 		const raw: string[] = [];
 		const edited: string[] = [];
 		const computed: string[] = [];
 		for (const c of curveList) {
-			if (calc.has(c)) computed.push(c);
-			else if (!c.endsWith('_ORI') && wellData.curves[`${c}_ORI`]) edited.push(c);
-			else raw.push(c);
+			if (calc.has(c) || isCalculatedCurveMnemonic(c)) {
+				computed.push(c);
+			} else if (wellData.isCurveEdited(c).edited) {
+				edited.push(c);
+			} else {
+				raw.push(c);
+			}
 		}
 		return { raw, edited, computed };
 	});
 	let statGroups = $derived([
-		{ key: 'raw', label: 'Raw', hint: 'Curves as loaded (including _ORI backups)', curves: curveGroups.raw },
-		{ key: 'edited', label: 'Edited', hint: 'Curves modified in place (original kept as _ORI)', curves: curveGroups.edited },
-		{ key: 'computed', label: 'Computed', hint: 'Derived petrophysical curves', curves: curveGroups.computed }
+		{
+			key: 'raw',
+			label: 'Raw',
+			hint: 'Original logs as loaded from file, survey, or core (including _ORI backups)',
+			curves: curveGroups.raw
+		},
+		{
+			key: 'edited',
+			label: 'Edited',
+			hint: 'Curves renamed or modified in place (e.g. RT renamed from RDEEP)',
+			curves: curveGroups.edited
+		},
+		{
+			key: 'computed',
+			label: 'Computed',
+			hint: 'Derived petrophysical calculations, volumetrics, and synthetic models',
+			curves: curveGroups.computed
+		}
 	]);
 
 	// Keep selectedQaqcCurve valid when well changes
@@ -2443,6 +2463,24 @@
 														<span class="text-[9px] font-normal text-[var(--text-muted)]">
 															({getCurveUnit(c)})
 														</span>
+													{/if}
+													{#if grp.key === 'edited'}
+														{@const editInfo = wellData.isCurveEdited(c)}
+														{#if editInfo.source}
+															<span
+																class="ml-1 rounded-xs border border-amber-300 bg-amber-50 px-1 py-0.2 text-[8.5px] font-medium text-amber-800"
+																title="Renamed from {editInfo.source}"
+															>
+																from {editInfo.source}
+															</span>
+														{:else if editInfo.reason}
+															<span
+																class="ml-1 rounded-xs border border-amber-300 bg-amber-50 px-1 py-0.2 text-[8.5px] font-medium text-amber-800"
+																title={editInfo.reason}
+															>
+																{editInfo.reason}
+															</span>
+														{/if}
 													{/if}
 												</span>
 												{#if editorMode === 'splice'}
