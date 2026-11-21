@@ -725,7 +725,13 @@
 		}
 
 		if (effectiveMode === 'histogram') {
-			const curveName = workbench.selectedQaqcCurve || 'GR';
+			const defaultCurve = workbench.singleWellStep === 'toc' ? 'TOC' : 'GR';
+			const curveName =
+				workbench.singleWellStep === 'toc'
+					? (workbench.selectedQaqcCurve && wellData.curves[workbench.selectedQaqcCurve]
+						? workbench.selectedQaqcCurve
+						: (wellData.curves[defaultCurve] ? defaultCurve : 'GR'))
+					: (workbench.selectedQaqcCurve || 'GR');
 			const raw = wellData.curves[curveName] ?? [];
 			const vals = indices.map((i) => raw[i]).filter((v) => Number.isFinite(v));
 			const st = wellData.stats[curveName];

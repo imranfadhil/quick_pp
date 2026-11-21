@@ -210,14 +210,16 @@
 				calibrationResult = payload.core_calibration;
 			}
 
-			// Merge computed curves
+			// Merge computed curves from columnar payload
+			const curvesData = payload.data || payload;
 			const computed: Record<string, number[]> = {};
-			if (payload.DELTA_LOG_R) computed['DELTA_LOG_R'] = payload.DELTA_LOG_R;
-			if (payload.TOC) computed['TOC'] = payload.TOC;
-			if (payload.TOC_PASSEY) computed['TOC_PASSEY'] = payload.TOC_PASSEY;
+			if (curvesData.DELTA_LOG_R) computed['DELTA_LOG_R'] = curvesData.DELTA_LOG_R;
+			if (curvesData.TOC) computed['TOC'] = curvesData.TOC;
+			if (curvesData.TOC_PASSEY) computed['TOC_PASSEY'] = curvesData.TOC_PASSEY;
 
 			wellData.mergeComputedCurves(computed, payload.stats, selectionIndices);
-			wellData.markModuleComputed('source_rock', Object.keys(computed));
+			wellData.markModuleComputed('source_rock', computed);
+			workbench.selectedQaqcCurve = 'TOC';
 
 			if (persist && !selectionMode) {
 				await wellData.saveModuleComputed('source_rock', 'Source Rock & TOC Saved ✓');

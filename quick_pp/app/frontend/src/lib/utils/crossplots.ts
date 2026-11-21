@@ -45,12 +45,12 @@ export const CROSSPLOTS: readonly CrossplotDefinition[] = [
 	{
 		id: 'histogram',
 		label: 'Single-Well Histogram',
-		single: { group: 'Step 1 · Data & QAQC', steps: ['qaqc'], autoFor: ['qaqc'] }
+		single: { group: 'Step 1 · Data & QAQC', steps: ['qaqc', 'toc'], autoFor: ['qaqc', 'toc'] }
 	},
 	{
 		id: 'curve-depth',
 		label: 'Curve Editor · Log vs Depth',
-		single: { group: 'Step 1 · Data & QAQC', steps: ['qaqc'] }
+		single: { group: 'Step 1 · Data & QAQC', steps: ['qaqc', 'toc'] }
 	},
 	{
 		id: 'enhanced-vs-raw',
@@ -124,7 +124,7 @@ export const CROSSPLOTS: readonly CrossplotDefinition[] = [
 	{
 		id: 'pickett',
 		label: 'Pickett Plot (Rt vs Φ)',
-		single: { group: 'Step 5 · Saturation', steps: ['saturation'] }
+		single: { group: 'Step 5 · Saturation', steps: ['saturation', 'toc'] }
 	},
 	{
 		id: 'bqv',

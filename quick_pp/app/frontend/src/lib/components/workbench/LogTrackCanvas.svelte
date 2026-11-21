@@ -1335,6 +1335,42 @@
 			}
 		}
 
+		// Passey Porosity-Equivalent Resistivity Overlay on Track 2 (when in TOC step or DELTA_LOG_R present)
+		const dlogr = pick('DELTA_LOG_R');
+		if (dlogr.some((v) => v !== null)) {
+			const rtVals = pick('RT').some((v) => v !== null && v > 0)
+				? pick('RT')
+				: pick('RD').some((v) => v !== null && v > 0)
+					? pick('RD')
+					: pick('AHT90').some((v) => v !== null && v > 0)
+						? pick('AHT90')
+						: pick('ILD');
+			if (rtVals.some((v) => v !== null && v > 0)) {
+				const rPoro = rtVals.map((r, i) => {
+					const dlr = dlogr[i];
+					if (r !== null && r > 0 && dlr !== null && Number.isFinite(dlr)) {
+						const val = r / Math.pow(10, dlr);
+						return Number.isFinite(val) && val > 0 ? val : null;
+					}
+					return null;
+				});
+				if (rPoro.some((v) => v !== null)) {
+					const rPoroDec = decimateSvg(rPoro);
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: 'R_poro (Passey)',
+						x: rPoroDec.map((v) => (v !== null && v > 0 ? v : null)),
+						y: svgDepth,
+						xaxis: 'x2',
+						yaxis: 'y',
+						line: { color: '#0284c7', width: 1.5, dash: 'dash' },
+						hovertemplate: 'R_poro (Passey): %{x:.2f} ohm.m<extra></extra>'
+					});
+				}
+			}
+		}
+
 		// Track 3 (xaxis3): NPHI (0.45 -> -0.15, right-to-left), RHOB (1.95 -> 2.95, left-to-right),
 		// DTC (140 -> 40 us/ft, right-to-left), PEF (0 -> 10 b/e, left-to-right), and DRHO (-0.25 -> 0.25 g/cc, left-to-right)
 		// Normalize onto NPHI scale [0.45 -> -0.15]: x_eq = 0.45 - ((val - min) / (max - min)) * 0.6
@@ -3531,6 +3567,21 @@
 							{/each}
 						</div>
 					</div>
+
+					{#if wellData.curves['DELTA_LOG_R']?.some((v) => v !== null)}
+						<div class="flex flex-col">
+							<div
+								class="mono-num flex items-center justify-between text-[8px] leading-none font-semibold whitespace-nowrap text-sky-700"
+							>
+								<span>0.2</span>
+								<span class="font-sans text-[8px] font-bold">R_poro (Passey) ►</span>
+								<span>2000</span>
+							</div>
+							<div
+								class="mt-[1px] h-0 w-full border-t-[1.5px] border-dashed border-sky-600"
+							></div>
+						</div>
+					{/if}
 				{/if}
 			</div>
 
