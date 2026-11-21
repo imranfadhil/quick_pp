@@ -85,7 +85,9 @@ from quick_pp.fluid_type import (  # noqa: E402
     FluidContactResult,
     FluidGradientResult,
     FormationPressureAnalyzer,
+    classify_fluid_types,
     density_to_gradient,
+    fix_fluid_segregation,
     gradient_to_density,
 )
 from quick_pp.handover import (  # noqa: E402
@@ -225,6 +227,7 @@ __all__ = [
     "calc_stochastic_reservoir_summary",
     "cardwell_parsons_bounds",
     "check_interlog_depth_alignment",
+    "classify_fluid_types",
     "collect_well_handover_dict",
     "compute_borehole_weights",
     "compute_rock_flag_comparison",
@@ -249,6 +252,7 @@ __all__ = [
     "fit_grain_density_correlation_multivariate",
     "fit_relperm",
     "fit_swirr_correlation",
+    "fix_fluid_segregation",
     "fluid_type",
     "generate_swof_table",
     "geom_upscale",

@@ -10,6 +10,7 @@ export type CrossplotId =
 	| 'porosity-comparison'
 	| 'permeability-comparison'
 	| 'bqv'
+	| 'fluid-typing'
 	| 'histogram'
 	| 'curve-depth'
 	| 'enhanced-vs-raw'
@@ -129,6 +130,11 @@ export const CROSSPLOTS: readonly CrossplotDefinition[] = [
 	{
 		id: 'bqv',
 		label: 'Waxman–Smits BQv',
+		single: { group: 'Step 5 · Saturation', steps: ['saturation'] }
+	},
+	{
+		id: 'fluid-typing',
+		label: 'Fluid Typing (NPHI vs RHOB / ρ_hc)',
 		single: { group: 'Step 5 · Saturation', steps: ['saturation'] }
 	},
 	{

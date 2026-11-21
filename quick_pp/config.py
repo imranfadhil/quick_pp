@@ -140,6 +140,13 @@ class Config:
             "max": 3.0,
         },
         "HC_FLAG": {"name": "Hydrocarbon Flag", "unit": "unitless", "min": 0, "max": 1},
+        "GAS_FLAG": {"name": "Gas Flag", "unit": "unitless", "min": 0, "max": 1},
+        "OIL_FLAG": {"name": "Oil Flag", "unit": "unitless", "min": 0, "max": 1},
+        "UNC_FLAG": {"name": "Unconfirmed Hydrocarbon Flag", "unit": "unitless", "min": 0, "max": 1},
+        "VOIL": {"name": "Bulk Volume Oil", "unit": "v/v", "min": 0, "max": 0.5},
+        "VGAS": {"name": "Bulk Volume Gas", "unit": "v/v", "min": 0, "max": 0.5},
+        "VUNC": {"name": "Bulk Volume Unconfirmed Hydrocarbon", "unit": "v/v", "min": 0, "max": 0.5},
+        "RHO_HC": {"name": "Apparent Hydrocarbon Density", "unit": "g/cc", "min": 0.0, "max": 1.5},
         "PEF": {"name": "Photoelectric Factor", "unit": "b/e", "min": 0, "max": 10},
         "DTC": {
             "name": "Compressional Slowness",
@@ -1040,6 +1047,13 @@ class Config:
         "ROCK_FLAG": ("ROCK_FLAG", "ROCK_FLAG_ML", "ROCK_FLAG_CUTOFF"),
         "PERM_TRANS": ("PERM_TRANS",),
         "SHF": ("SHF", "SW_SHF"),
+        "GAS_FLAG": ("GAS_FLAG", "IS_GAS", "VGAS_FLAG"),
+        "OIL_FLAG": ("OIL_FLAG", "IS_OIL", "VOIL_FLAG"),
+        "UNC_FLAG": ("UNC_FLAG", "IS_UNC", "UNCONFIRMED_FLAG"),
+        "VOIL": ("VOIL", "VOL_OIL", "BV_OIL"),
+        "VGAS": ("VGAS", "VOL_GAS", "BV_GAS"),
+        "VUNC": ("VUNC", "VOL_UNC", "BV_UNC"),
+        "RHO_HC": ("RHO_HC", "RHOHC", "RHO_HYD"),
     }
 
     @staticmethod

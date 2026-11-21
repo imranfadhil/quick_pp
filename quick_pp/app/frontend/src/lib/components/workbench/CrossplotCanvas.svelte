@@ -120,6 +120,10 @@
 				return hasTrace((name) => name === 'Pickett (Rt vs Φ)')
 					? null
 					: 'No valid RT and PHIT pairs in the current selection. Load or calculate the curves, or adjust the filters.';
+			case 'fluid-typing':
+				return hasTrace((name) => name?.includes('Pay') || name?.includes('Leg') || name?.includes('Non-Pay'))
+					? null
+					: 'No valid NPHI and RHOB samples in the current selection. Ensure porosity logs are loaded and saturation is run.';
 			case 'bqv':
 				return hasTrace((name) => name === 'Log samples')
 					? null
@@ -3365,6 +3369,118 @@
 			baseLayout.yaxis.title = { text: 'Porosity Φ (v/v)' };
 			baseLayout.yaxis.type = 'log';
 			baseLayout.yaxis.range = [-2, -0.3];
+			return { traces, layout: baseLayout };
+		}
+
+		if (effectiveMode === 'fluid-typing') {
+			const nphiArr = wellData.curves['NPHI'] ?? [];
+			const rhobArr = wellData.curves['RHOB'] ?? [];
+			const gasFlag = wellData.curves['GAS_FLAG'] ?? [];
+			const oilFlag = wellData.curves['OIL_FLAG'] ?? [];
+			const uncFlag = wellData.curves['UNC_FLAG'] ?? [];
+			const swtArr = wellData.curves['SWT'] ?? [];
+
+			const gasXs: number[] = [], gasYs: number[] = [], gasCustom: number[] = [];
+			const oilXs: number[] = [], oilYs: number[] = [], oilCustom: number[] = [];
+			const uncXs: number[] = [], uncYs: number[] = [], uncCustom: number[] = [];
+			const waterXs: number[] = [], waterYs: number[] = [], waterCustom: number[] = [];
+			const otherXs: number[] = [], otherYs: number[] = [], otherCustom: number[] = [];
+
+			for (const idx of indices) {
+				const x = nphiArr[idx];
+				const y = rhobArr[idx];
+				if (Number.isFinite(x) && Number.isFinite(y)) {
+					if (gasFlag[idx] === 1) {
+						gasXs.push(x); gasYs.push(y); gasCustom.push(idx);
+					} else if (oilFlag[idx] === 1) {
+						oilXs.push(x); oilYs.push(y); oilCustom.push(idx);
+					} else if (uncFlag[idx] === 1) {
+						uncXs.push(x); uncYs.push(y); uncCustom.push(idx);
+					} else if (typeof swtArr[idx] === 'number' && swtArr[idx] > workbench.saturationParams.swPayCutoff) {
+						waterXs.push(x); waterYs.push(y); waterCustom.push(idx);
+					} else {
+						otherXs.push(x); otherYs.push(y); otherCustom.push(idx);
+					}
+				}
+			}
+
+			if (gasXs.length > 0) {
+				traces.push({
+					type: 'scatter',
+					mode: 'markers',
+					name: `Gas Pay (${gasXs.length} pts)`,
+					x: gasXs,
+					y: gasYs,
+					customdata: gasCustom,
+					marker: { size: 6.5, color: '#ef4444', symbol: 'circle', opacity: 0.9 },
+					hovertemplate: 'Gas Pay<br>NPHI: %{x:.3f} v/v<br>RHOB: %{y:.3f} g/cc<extra></extra>'
+				});
+			}
+			if (oilXs.length > 0) {
+				traces.push({
+					type: 'scatter',
+					mode: 'markers',
+					name: `Oil Pay (${oilXs.length} pts)`,
+					x: oilXs,
+					y: oilYs,
+					customdata: oilCustom,
+					marker: { size: 6.0, color: '#16a34a', symbol: 'circle', opacity: 0.9 },
+					hovertemplate: 'Oil Pay<br>NPHI: %{x:.3f} v/v<br>RHOB: %{y:.3f} g/cc<extra></extra>'
+				});
+			}
+			if (uncXs.length > 0) {
+				traces.push({
+					type: 'scatter',
+					mode: 'markers',
+					name: `Unconfirmed HC (${uncXs.length} pts)`,
+					x: uncXs,
+					y: uncYs,
+					customdata: uncCustom,
+					marker: { size: 6.0, color: '#f59e0b', symbol: 'diamond', opacity: 0.9 },
+					hovertemplate: 'Unconfirmed HC<br>NPHI: %{x:.3f} v/v<br>RHOB: %{y:.3f} g/cc<extra></extra>'
+				});
+			}
+			if (waterXs.length > 0) {
+				traces.push({
+					type: 'scatter',
+					mode: 'markers',
+					name: `Water Leg (${waterXs.length} pts)`,
+					x: waterXs,
+					y: waterYs,
+					customdata: waterCustom,
+					marker: { size: 5.5, color: '#2563eb', symbol: 'circle', opacity: 0.8 },
+					hovertemplate: 'Water Leg<br>NPHI: %{x:.3f} v/v<br>RHOB: %{y:.3f} g/cc<extra></extra>'
+				});
+			}
+			if (otherXs.length > 0) {
+				traces.push({
+					type: 'scatter',
+					mode: 'markers',
+					name: `Non-Pay / Shale (${otherXs.length} pts)`,
+					x: otherXs,
+					y: otherYs,
+					customdata: otherCustom,
+					marker: { size: 4.5, color: '#94a3b8', opacity: 0.5, symbol: 'circle' },
+					hovertemplate: 'Non-Pay<br>NPHI: %{x:.3f} v/v<br>RHOB: %{y:.3f} g/cc<extra></extra>'
+				});
+			}
+
+			// Clean Sandstone Reference Matrix Line (rho_ma = 2.65, rho_fl = 1.0)
+			const refNphi = [-0.05, 0.40];
+			const refRhob = refNphi.map((p) => 2.65 - p * (2.65 - 1.0));
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'Sandstone Matrix Line',
+				x: refNphi,
+				y: refRhob,
+				line: { color: '#64748b', width: 1.5, dash: 'dash' }
+			});
+
+			baseLayout.xaxis.title = { text: 'Neutron Porosity NPHI (v/v)' };
+			baseLayout.xaxis.range = [-0.05, 0.50];
+			baseLayout.yaxis.title = { text: 'Bulk Density RHOB (g/cc)' };
+			baseLayout.yaxis.range = [3.0, 1.8]; // Inverted bulk density standard in petrophysics
 			return { traces, layout: baseLayout };
 		}
 

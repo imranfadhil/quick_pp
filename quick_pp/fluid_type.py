@@ -437,6 +437,29 @@ def fix_fluid_segregation(df: pd.DataFrame) -> pd.DataFrame:
         pd.DataFrame: The DataFrame with corrected fluid volume assignments.
     """
     logger.info("Generating fluid volume fractions from OIL_FLAG and GAS_FLAG")
+    df = df.copy()
+    if "WELL_NAME" not in df.columns:
+        df["WELL_NAME"] = "Well_1"
+    if "DEPTH" not in df.columns:
+        for c in ("DEPT", "TVDSS", "TVD"):
+            if c in df.columns:
+                df["DEPTH"] = df[c]
+                break
+    if "VHC" not in df.columns:
+        if "VOIL" in df.columns and "VGAS" in df.columns and (df["VOIL"].notna().any() or df["VGAS"].notna().any()):
+            df["VHC"] = df["VOIL"].fillna(0) + df["VGAS"].fillna(0)
+        elif "PHIT" in df.columns and "SWT" in df.columns:
+            df["VHC"] = pd.to_numeric(df["PHIT"], errors="coerce").fillna(0.2) * (1.0 - pd.to_numeric(df["SWT"], errors="coerce").fillna(1.0).clip(0.0, 1.0))
+        elif "BVHC" in df.columns:
+            df["VHC"] = df["BVHC"]
+        else:
+            df["VHC"] = np.where((df.get("OIL_FLAG", 0) == 1) | (df.get("GAS_FLAG", 0) == 1), 1.0, 0.0)
+
+    if "OIL_FLAG" not in df.columns:
+        df["OIL_FLAG"] = 0
+    if "GAS_FLAG" not in df.columns:
+        df["GAS_FLAG"] = 0
+
     df["VOIL"] = df["OIL_FLAG"] * df["VHC"]
     df["VGAS"] = df["GAS_FLAG"] * df["VHC"]
 
@@ -468,20 +491,264 @@ def fix_fluid_segregation(df: pd.DataFrame) -> pd.DataFrame:
                         oil_above_gas_indices, "VHC"
                     ]
                     df.loc[oil_above_gas_indices, "VOIL"] = 0
+                    df.loc[oil_above_gas_indices, "GAS_FLAG"] = 1
+                    df.loc[oil_above_gas_indices, "OIL_FLAG"] = 0
                 if (group_df["GAS_FLAG"] == 1).any() and (
                     group_df["OIL_FLAG"] == 0
                 ).all():
                     df.loc[group_df.index, "VGAS"] = df.loc[group_df.index, "VHC"]
-                    df.loc[group_df.index, "VHC"] = 0
+                    df.loc[group_df.index, "VOIL"] = 0
+                    df.loc[group_df.index, "GAS_FLAG"] = 1
+                    df.loc[group_df.index, "OIL_FLAG"] = 0
                 if (group_df["OIL_FLAG"] == 1).any() and (
                     group_df["GAS_FLAG"] == 0
                 ).all():
                     df.loc[group_df.index, "VOIL"] = df.loc[group_df.index, "VHC"]
-                    df.loc[group_df.index, "VHC"] = 0
+                    df.loc[group_df.index, "VGAS"] = 0
+                    df.loc[group_df.index, "OIL_FLAG"] = 1
+                    df.loc[group_df.index, "GAS_FLAG"] = 0
 
+    df["OIL_FLAG"] = (df["VOIL"] > 0).astype(int)
+    df["GAS_FLAG"] = (df["VGAS"] > 0).astype(int)
+    if "UNC_FLAG" in df.columns:
+        df["UNC_FLAG"] = np.where((df["GAS_FLAG"] == 1) | (df["OIL_FLAG"] == 1), 0, df["UNC_FLAG"])
+        if "VUNC" in df.columns:
+            df["VUNC"] = df["UNC_FLAG"] * df["VHC"]
     df["VHC"] = np.where((df["VOIL"] > 0) | (df["VGAS"] > 0), 0, df["VHC"])
+    df["GAS_FLAG"] = np.where(df["VGAS"] > 0, 1, 0)
+    df["OIL_FLAG"] = np.where(df["VOIL"] > 0, 1, 0)
 
     return df
+
+
+def classify_fluid_types(
+    df: pd.DataFrame,
+    method: Literal[
+        "neutron_density",
+        "rho_hc",
+        "sonic_vp_vs",
+        "mud_gas",
+        "oil_only",
+        "gas_only",
+        "none",
+    ] = "neutron_density",
+    sw_cutoff: float = 0.65,
+    phit_cutoff: float = 0.05,
+    vsh_cutoff: float = 0.50,
+    crossover_cutoff: float = 0.04,
+    crossover_oil_cutoff: float = 0.01,
+    rho_hc_cutoff: float = 0.40,
+    rho_hc_oil_cutoff: float = 0.55,
+    vp_vs_cutoff: float = 1.60,
+    vp_vs_oil_cutoff: float = 1.70,
+    rho_ma: float = 2.65,
+    rho_w: float = 1.05,
+    allow_unconfirmed: bool = True,
+    enforce_segregation: bool = True,
+    sw_col: str = "SWT",
+    phit_col: str = "PHIT",
+    vsh_col: Optional[str] = "VSHALE",
+    nphi_col: Optional[str] = "NPHI",
+    rhob_col: Optional[str] = "RHOB",
+    dtc_col: Optional[str] = "DTC",
+    dts_col: Optional[str] = "DTS",
+    c1_col: Optional[str] = "C1",
+    c2_col: Optional[str] = "C2",
+    c3_col: Optional[str] = "C3",
+    ic4_col: Optional[str] = "IC4",
+    nc4_col: Optional[str] = "NC4",
+    ic5_col: Optional[str] = "IC5",
+    nc5_col: Optional[str] = "NC5",
+) -> pd.DataFrame:
+    """Classify reservoir fluid types (GAS, OIL, UNCONFIRMED, WATER) from log curves.
+
+    Differentiates hydrocarbon phases using petrophysical crossplots and log indicators:
+    1. 'neutron_density': Neutron-density porosity crossover (Gas: Delta_Phi >= crossover_cutoff,
+       Oil: Delta_Phi <= crossover_oil_cutoff, Unconfirmed: between cutoffs)
+    2. 'rho_hc': Inverted apparent hydrocarbon density (Gas: rho_hc <= rho_hc_cutoff,
+       Oil: rho_hc >= rho_hc_oil_cutoff, Unconfirmed: between cutoffs)
+    3. 'sonic_vp_vs': Dipole sonic velocity ratio (Vp/Vs <= vp_vs_cutoff). Requires valid paired DTC & DTS logs.
+    4. 'mud_gas': Surface mud gas chromatography using Haworth (1985) ratios (C1-C5). Requires valid gas curves.
+    5. 'oil_only': Assign all hydrocarbon pay to oil
+    6. 'gas_only': Assign all hydrocarbon pay to gas
+    7. 'none': Clear all fluid flags
+
+    Optionally enforces physical gravity segregation (gas sitting above oil within
+    continuous reservoir compartments).
+
+    Args:
+        df (pd.DataFrame): Well log DataFrame containing depth, saturation, porosity, etc.
+        method (str): Identification method. Defaults to 'neutron_density'.
+        sw_cutoff (float): Maximum water saturation for hydrocarbon pay. Defaults to 0.65.
+        phit_cutoff (float): Minimum total porosity for reservoir. Defaults to 0.05.
+        vsh_cutoff (float): Maximum shale/clay volume for reservoir. Defaults to 0.50.
+        crossover_cutoff (float): Porosity crossover threshold (Phi_D - Phi_N) for gas. Defaults to 0.04.
+        crossover_oil_cutoff (float): Porosity crossover threshold for oil. Defaults to 0.01.
+        rho_hc_cutoff (float): Hydrocarbon density threshold in g/cc for gas. Defaults to 0.40.
+        rho_hc_oil_cutoff (float): Hydrocarbon density threshold in g/cc for oil. Defaults to 0.55.
+        vp_vs_cutoff (float): Vp/Vs ratio threshold for gas. Defaults to 1.60.
+        vp_vs_oil_cutoff (float): Vp/Vs ratio threshold for oil. Defaults to 1.70.
+        rho_ma (float): Matrix density in g/cc for rho_hc computation. Defaults to 2.65.
+        rho_w (float): Formation water density in g/cc. Defaults to 1.05.
+        allow_unconfirmed (bool): Cater for unconfirmed fluid types in ambiguous transition buffers. Defaults to True.
+        enforce_segregation (bool): Enforce gas above oil physically. Defaults to True.
+        sw_col (str): Column name for water saturation. Defaults to 'SWT'.
+        phit_col (str): Column name for total porosity. Defaults to 'PHIT'.
+        vsh_col (str, optional): Column name for shale volume. Defaults to 'VSHALE'.
+        nphi_col (str, optional): Column name for neutron porosity. Defaults to 'NPHI'.
+        rhob_col (str, optional): Column name for bulk density. Defaults to 'RHOB'.
+        dtc_col (str, optional): Column name for compressional sonic slowness. Defaults to 'DTC'.
+        dts_col (str, optional): Column name for shear sonic slowness. Defaults to 'DTS'.
+        c1_col..nc5_col (str, optional): Column names for mud gas chromatograph components.
+
+    Returns:
+        pd.DataFrame: Copy of DataFrame with added or updated columns:
+            ['HC_FLAG', 'GAS_FLAG', 'OIL_FLAG', 'UNC_FLAG', 'RHO_HC', 'VOIL', 'VGAS', 'VUNC', 'BVHC', 'FLUID_TYPE']
+    """
+    logger.info(f"Classifying fluid types using method='{method}' (Sw_cutoff={sw_cutoff}, Phit_cutoff={phit_cutoff}, allow_unc={allow_unconfirmed})")
+    out = df.copy()
+    n = len(out)
+    if n == 0:
+        for c in ["HC_FLAG", "GAS_FLAG", "OIL_FLAG", "UNC_FLAG", "RHO_HC", "VOIL", "VGAS", "VUNC", "BVHC", "FLUID_TYPE"]:
+            out[c] = pd.Series(dtype=float if c != "FLUID_TYPE" else object)
+        return out
+
+    def _resolve(target: Optional[str], fallbacks: Sequence[str]) -> pd.Series:
+        if target and target in out.columns and pd.to_numeric(out[target], errors="coerce").notna().any():
+            return pd.to_numeric(out[target], errors="coerce")
+        for fb in fallbacks:
+            if fb in out.columns and pd.to_numeric(out[fb], errors="coerce").notna().any():
+                return pd.to_numeric(out[fb], errors="coerce")
+        return pd.Series(np.nan, index=out.index, dtype=float)
+
+    sw = _resolve(sw_col, ["SWT", "SWE", "SW", "SW_ARCHIE", "SW_WS", "SW_SIMANDOUX", "SW_INDONESIAN", "SW_DUAL_WATER"]).clip(0.0, 1.0)
+    phit = _resolve(phit_col, ["PHIT", "PHIE", "POR", "POROSITY"]).clip(0.0, 0.5)
+    vsh = _resolve(vsh_col, ["VSHALE", "VCLAY", "VSH", "VCL", "VSH_GR"]).clip(0.0, 1.0).fillna(0.0)
+    rhob = _resolve(rhob_col, ["RHOB", "RHOB_ENH", "RHOZ", "DEN"])
+    nphi = _resolve(nphi_col, ["NPHI", "NPHI_ENH", "TNPH", "NPOR", "NEU"])
+    dtc = _resolve(dtc_col, ["DTC", "DT", "DTCO", "AC"])
+    dts = _resolve(dts_col, ["DTS", "DTSM", "DT4S", "DTSH"])
+
+    # 1. Identify Reservoir and Hydrocarbon Pay
+    is_res = (phit >= float(phit_cutoff)) & (vsh <= float(vsh_cutoff)) & phit.notna()
+    is_hc = is_res & (sw <= float(sw_cutoff)) & sw.notna()
+    is_water = is_res & (sw > float(sw_cutoff)) & sw.notna()
+
+    # 2. Compute Apparent Hydrocarbon Density RHO_HC
+    # rho_b = (1 - phi)*rho_ma + phi*[Sw*rho_w + (1 - Sw)*rho_hc]
+    # rho_hc = [rho_b - (1 - phi)*rho_ma - phi*Sw*rho_w] / [phi*(1 - Sw)]
+    hcpv = phit * (1.0 - sw)
+    hcpv_mask = (hcpv >= 0.01) & rhob.notna()
+    rho_hc = pd.Series(np.nan, index=out.index, dtype=float)
+    if hcpv_mask.any():
+        num = rhob[hcpv_mask] - (1.0 - phit[hcpv_mask]) * float(rho_ma) - phit[hcpv_mask] * sw[hcpv_mask] * float(rho_w)
+        den = hcpv[hcpv_mask]
+        calc_rho = (num / den).clip(-0.1, 1.5)
+        rho_hc.loc[hcpv_mask] = calc_rho
+
+    # 3. Gas vs Oil discrimination
+    norm_method = (method or "neutron_density").lower().strip()
+    is_gas = np.zeros(n, dtype=bool)
+    is_oil = np.zeros(n, dtype=bool)
+    is_unc = np.zeros(n, dtype=bool)
+
+    if norm_method == "neutron_density":
+        # Density porosity: Phi_D = (rho_ma - rhob) / (rho_ma - rho_fl)
+        rho_fl = 1.0
+        phid = (float(rho_ma) - rhob) / (float(rho_ma) - rho_fl)
+        delta_phi = phid - nphi
+        valid_nd = is_hc & delta_phi.notna()
+        is_gas = valid_nd & (delta_phi >= float(crossover_cutoff))
+        if allow_unconfirmed:
+            is_oil = valid_nd & (delta_phi <= float(crossover_oil_cutoff))
+            is_unc = is_hc & ~is_gas & ~is_oil
+        else:
+            is_oil = is_hc & ~is_gas
+    elif norm_method == "rho_hc":
+        valid_rho = is_hc & rho_hc.notna()
+        is_gas = valid_rho & (rho_hc <= float(rho_hc_cutoff))
+        if allow_unconfirmed:
+            is_oil = valid_rho & (rho_hc >= float(rho_hc_oil_cutoff))
+            is_unc = is_hc & ~is_gas & ~is_oil
+        else:
+            is_oil = is_hc & ~is_gas
+    elif norm_method == "sonic_vp_vs":
+        valid_sonic = dtc.notna() & (dtc > 0) & dts.notna() & (dts > 0)
+        if not valid_sonic.any():
+            raise ValueError(
+                "Dipole sonic fluid typing requires valid compressional (DTC) and shear (DTS) sonic logs, "
+                "but no valid paired sonic data was found in the well."
+            )
+        vp_vs = dts / dtc
+        valid_vp = is_hc & valid_sonic
+        is_gas = valid_vp & (vp_vs <= float(vp_vs_cutoff))
+        if allow_unconfirmed:
+            is_oil = valid_vp & (vp_vs >= float(vp_vs_oil_cutoff))
+            is_unc = is_hc & ~is_gas & ~is_oil
+        else:
+            is_oil = is_hc & ~is_gas
+    elif norm_method == "mud_gas":
+        gas_cols = [c1_col, c2_col, c3_col, ic4_col, nc4_col, ic5_col, nc5_col]
+        missing_cols = [
+            c for c in gas_cols
+            if c is None or c not in out.columns or not pd.to_numeric(out[c], errors="coerce").notna().any()
+        ]
+        if missing_cols:
+            raise ValueError(
+                f"Mud gas fluid typing requires valid gas chromatography logs (C1-C5), "
+                f"but required curves are missing or empty: {', '.join(str(c) for c in missing_cols)}."
+            )
+        try:
+            g_res = gas_composition_analysis(
+                out[c1_col], out[c2_col], out[c3_col],
+                out[ic4_col], out[nc4_col], out[ic5_col], out[nc5_col]
+            )
+            hc_flag_type = g_res["HC_TYPE_FLAG"]
+            is_gas = is_hc & (hc_flag_type.isin([1, 2]))
+            if allow_unconfirmed:
+                is_oil = is_hc & (hc_flag_type.isin([4, 5]))
+                is_unc = is_hc & (hc_flag_type.isin([0, 3]) | ~hc_flag_type.isin([1, 2, 4, 5]))
+            else:
+                is_oil = is_hc & ~is_gas
+        except Exception as e_mg:
+            raise ValueError(f"Mud gas analysis failed: {e_mg}") from e_mg
+    elif norm_method == "oil_only":
+        is_gas = np.zeros(n, dtype=bool)
+        is_oil = is_hc.to_numpy(dtype=bool)
+    elif norm_method == "gas_only":
+        is_gas = is_hc.to_numpy(dtype=bool)
+        is_oil = np.zeros(n, dtype=bool)
+    elif norm_method in ("none", "off"):
+        is_gas = np.zeros(n, dtype=bool)
+        is_oil = np.zeros(n, dtype=bool)
+    else:
+        raise ValueError(f"Unknown fluid typing method '{method}'")
+
+    out["GAS_FLAG"] = np.where(is_gas, 1, 0)
+    out["OIL_FLAG"] = np.where(is_oil, 1, 0)
+    out["UNC_FLAG"] = np.where(is_unc, 1, 0)
+    out["HC_FLAG"] = np.where(is_gas | is_oil | is_unc, 1, 0)
+    out["VHC"] = hcpv
+
+    # 4. Enforce physical gravity segregation (Gas above Oil)
+    if enforce_segregation and (out["GAS_FLAG"] == 1).any() and (out["OIL_FLAG"] == 1).any():
+        out = fix_fluid_segregation(out)
+
+    # 5. Populate volume fractions and categorical fluid type
+    out["VOIL"] = out["OIL_FLAG"] * hcpv
+    out["VGAS"] = out["GAS_FLAG"] * hcpv
+    out["VUNC"] = out["UNC_FLAG"] * hcpv
+    out["BVHC"] = out["VOIL"] + out["VGAS"] + out["VUNC"]
+    out["RHO_HC"] = rho_hc
+
+    fluid_type = np.full(n, "NON_RESERVOIR", dtype=object)
+    fluid_type[is_water] = "WATER"
+    fluid_type[out["UNC_FLAG"] == 1] = "UNCONFIRMED"
+    fluid_type[out["OIL_FLAG"] == 1] = "OIL"
+    fluid_type[out["GAS_FLAG"] == 1] = "GAS"
+    out["FLUID_TYPE"] = fluid_type
+
+    return out
 
 
 # =============================================================================

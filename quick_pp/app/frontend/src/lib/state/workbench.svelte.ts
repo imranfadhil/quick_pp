@@ -201,6 +201,15 @@ export interface ResolutionEnhancementParams {
 	noiseCapMult: number;
 }
 
+export type FluidTypingMethod =
+	| 'neutron_density'
+	| 'rho_hc'
+	| 'sonic_vp_vs'
+	| 'mud_gas'
+	| 'oil_only'
+	| 'gas_only'
+	| 'none';
+
 export interface SaturationModelParams {
 	fwl: number;
 	method: 'waxman_smits' | 'archie' | 'simandoux' | 'indonesian' | 'dual_water';
@@ -227,6 +236,15 @@ export interface SaturationModelParams {
 	rsh: number;
 	swb: number;
 	rwb: number;
+	fluidTypingMethod: FluidTypingMethod;
+	gasCrossoverCutoff: number;
+	rhoHcCutoff: number;
+	vpVsCutoff: number;
+	swPayCutoff: number;
+	phitCutoff: number;
+	vshCutoff: number;
+	enforceSegregation: boolean;
+	allowUnconfirmed: boolean;
 }
 
 export interface ScalModelParams {
@@ -930,7 +948,16 @@ class WorkbenchState {
 		rsh: 2.0,
 		swb: 0.2,
 		rwb: 0.1,
-		fwl: 0
+		fwl: 0,
+		fluidTypingMethod: 'neutron_density',
+		gasCrossoverCutoff: 0.04,
+		rhoHcCutoff: 0.40,
+		vpVsCutoff: 1.60,
+		swPayCutoff: 0.65,
+		phitCutoff: 0.05,
+		vshCutoff: 0.50,
+		enforceSegregation: true,
+		allowUnconfirmed: true
 	});
 
 	scalParams = $state<ScalModelParams>({

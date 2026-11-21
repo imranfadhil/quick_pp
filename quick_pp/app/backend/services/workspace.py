@@ -1830,6 +1830,35 @@ class WorkspaceSaturationRequest(WorkspaceFilterBase):
     rsand_ts: Optional[List[Optional[float]]] = Field(
         None, description="Optional client-side RSAND_TS array fallback"
     )
+    fluid_typing_method: Optional[str] = Field(
+        "neutron_density",
+        description="Log-based fluid typing method: 'neutron_density', 'rho_hc', 'sonic_vp_vs', 'mud_gas', 'oil_only', 'gas_only', or 'none'",
+    )
+    gas_crossover_cutoff: float = Field(
+        0.04, description="Neutron-density crossover cutoff (Delta_Phi = Phi_D - Phi_N) for gas identification"
+    )
+    rho_hc_cutoff: float = Field(
+        0.40, description="Apparent hydrocarbon density cutoff (g/cc) below which fluid is gas"
+    )
+    vp_vs_cutoff: float = Field(
+        1.60, description="Compressional to shear velocity ratio (Vp/Vs) cutoff below which fluid is gas"
+    )
+    sw_pay_cutoff: float = Field(
+        0.65, description="Maximum water saturation for hydrocarbon pay"
+    )
+    phit_cutoff: float = Field(
+        0.05, description="Minimum porosity for reservoir rock"
+    )
+    vsh_cutoff: float = Field(
+        0.50, description="Maximum shale volume for reservoir rock"
+    )
+    enforce_fluid_segregation: bool = Field(
+        True, description="Enforce physical gravity segregation (gas above oil)"
+    )
+    allow_unconfirmed: bool = Field(
+        True,
+        description="Cater for unconfirmed fluid types in ambiguous crossover/density/sonic intervals",
+    )
 
 
 class WorkspaceReservoirSummaryRequest(WorkspaceFilterBase):
@@ -6730,6 +6759,65 @@ def workspace_saturation(
                 ** m_star_s[ws_mask].to_numpy(dtype=float)
             )
 
+        # 5. Fluid Typing & Hydrocarbon Identification (without FPT)
+        fluid_in_df = pd.DataFrame(
+            {
+                "DEPTH": depth,
+                "SWT": primary_swt,
+                "PHIT": phit_bulk,
+                "VSHALE": shale_volume,
+                "NPHI": nphi,
+                "RHOB": rhob,
+            },
+            index=df.index,
+        )
+        if "WELL_NAME" in df.columns:
+            fluid_in_df["WELL_NAME"] = df["WELL_NAME"]
+        else:
+            fluid_in_df["WELL_NAME"] = well_name
+        if "TVDSS" in df.columns:
+            fluid_in_df["TVDSS"] = df["TVDSS"]
+
+        for col_name, cands in [
+            ("DTC", ["DTC", "DT", "DTCO", "AC"]),
+            ("DTS", ["DTS", "DTSM", "DT4S", "DTSH"]),
+        ]:
+            cand = next((c for c in cands if c in df.columns), None)
+            if cand:
+                fluid_in_df[col_name] = pd.to_numeric(df[cand], errors="coerce")
+
+        for c_gas in ["C1", "C2", "C3", "IC4", "NC4", "IC5", "NC5"]:
+            cand = next((c for c in (c_gas, c_gas.lower()) if c in df.columns), None)
+            if cand:
+                fluid_in_df[c_gas] = pd.to_numeric(df[cand], errors="coerce")
+
+        from quick_pp.fluid_type import classify_fluid_types
+        from quick_pp.saturation import extract_fluid_contacts_and_limits
+
+        classified = classify_fluid_types(
+            df=fluid_in_df,
+            method=req.fluid_typing_method or "neutron_density",
+            sw_cutoff=float(req.sw_pay_cutoff),
+            phit_cutoff=float(req.phit_cutoff),
+            vsh_cutoff=float(req.vsh_cutoff),
+            crossover_cutoff=float(req.gas_crossover_cutoff),
+            rho_hc_cutoff=float(req.rho_hc_cutoff),
+            vp_vs_cutoff=float(req.vp_vs_cutoff),
+            allow_unconfirmed=bool(req.allow_unconfirmed),
+            enforce_segregation=bool(req.enforce_fluid_segregation),
+        )
+
+        gas_flag_s = classified["GAS_FLAG"]
+        oil_flag_s = classified["OIL_FLAG"]
+        unc_flag_s = classified.get("UNC_FLAG", pd.Series(0, index=classified.index))
+        hc_flag_s = classified["HC_FLAG"]
+        voil_s = classified["VOIL"]
+        vgas_s = classified["VGAS"]
+        vunc_s = classified.get("VUNC", pd.Series(0.0, index=classified.index))
+        bvhc_s = classified["BVHC"]
+        rho_hc_s = classified["RHO_HC"]
+        fluid_type_s = classified["FLUID_TYPE"]
+
         out_df = pd.DataFrame(
             {
                 "DEPTH": df["DEPTH"],
@@ -6748,12 +6836,36 @@ def workspace_saturation(
                 "SWT_DUAL_WATER": swt_dual_water_s,
                 "SWT": primary_swt,
                 "BVW": bvw_s,
+                "BVHC": bvhc_s,
+                "HC_FLAG": hc_flag_s,
+                "GAS_FLAG": gas_flag_s,
+                "OIL_FLAG": oil_flag_s,
+                "UNC_FLAG": unc_flag_s,
+                "VOIL": voil_s,
+                "VGAS": vgas_s,
+                "VUNC": vunc_s,
+                "FLUID_TYPE": fluid_type_s,
+                "RHO_HC": rho_hc_s,
                 "VCL_OVER_PHI": vcl_phi_s,
                 "CWA": cwa_s,
             }
         )
 
-        save_sat_cols = ["DEPTH", "SWT", "BVW"]
+        save_sat_cols = [
+            "DEPTH",
+            "SWT",
+            "BVW",
+            "BVHC",
+            "HC_FLAG",
+            "GAS_FLAG",
+            "OIL_FLAG",
+            "UNC_FLAG",
+            "VOIL",
+            "VGAS",
+            "VUNC",
+        ]
+        if rho_hc_s.notna().any():
+            save_sat_cols.append("RHO_HC")
         if req.phit is not None:
             save_sat_cols.append("PHIT")
         if req.vclay is not None:
@@ -6768,6 +6880,33 @@ def workspace_saturation(
                 project_id, well_name, out_df.loc[primary_swt.notna(), save_sat_cols]
             )
 
+        detected_contacts = []
+        try:
+            cont_in = classified.copy()
+            cont_in["WELL_NAME"] = well_name
+            if "ZONES" in df.columns:
+                cont_in["ZONES"] = df["ZONES"]
+            tvdss_c = next(
+                (c for c in ("TVDSS", "TVD_SS", "TVD", "DEPTH") if c in df.columns),
+                "DEPTH",
+            )
+            cont_in["TVDSS"] = pd.to_numeric(df[tvdss_c], errors="coerce").fillna(depth)
+            c_df = extract_fluid_contacts_and_limits(
+                df=cont_in,
+                depth_col="TVDSS",
+                sw_col="SWT",
+                phit_col="PHIT",
+                vsh_col="VSHALE",
+                sw_pay_cutoff=float(req.sw_pay_cutoff),
+                phit_cutoff=float(req.phit_cutoff),
+                vsh_cutoff=float(req.vsh_cutoff),
+                require_pay=True,
+            )
+            if not c_df.empty:
+                detected_contacts = dataframe_to_records(c_df)
+        except Exception as exc_c:
+            logger.debug(f"Contact extraction in saturation skipped: {exc_c}")
+
         _record_well_model_config(
             project_id,
             well_name,
@@ -6781,6 +6920,13 @@ def workspace_saturation(
                 "sw_rsh": float(req.rsh),
                 "sw_swb": float(req.swb),
                 "sw_rwb": float(req.rwb),
+                "fluid_typing_method": req.fluid_typing_method or "neutron_density",
+                "gas_crossover_cutoff": float(req.gas_crossover_cutoff),
+                "rho_hc_cutoff": float(req.rho_hc_cutoff),
+                "vp_vs_cutoff": float(req.vp_vs_cutoff),
+                "sw_pay_cutoff": float(req.sw_pay_cutoff),
+                "enforce_fluid_segregation": bool(req.enforce_fluid_segregation),
+                "allow_unconfirmed": bool(req.allow_unconfirmed),
             },
             persist_db=bool(req.save),
         )
@@ -6789,6 +6935,7 @@ def workspace_saturation(
             "method": req.method.lower(),
             "saved": req.save,
             "saved_rows": saved_rows,
+            "contacts": detected_contacts,
             "stats": {
                 "SWT": _curve_summary_stats(primary_swt),
                 "SWT_ARCHIE": _curve_summary_stats(swt_archie_s),
@@ -6797,6 +6944,13 @@ def workspace_saturation(
                 "SWT_INDONESIAN": _curve_summary_stats(swt_indonesian_s),
                 "SWT_DUAL_WATER": _curve_summary_stats(swt_dual_water_s),
                 "RW": _curve_summary_stats(rw_s),
+                "GAS_FLAG": _curve_summary_stats(gas_flag_s),
+                "OIL_FLAG": _curve_summary_stats(oil_flag_s),
+                "UNC_FLAG": _curve_summary_stats(unc_flag_s),
+                "VOIL": _curve_summary_stats(voil_s),
+                "VGAS": _curve_summary_stats(vgas_s),
+                "VUNC": _curve_summary_stats(vunc_s),
+                "RHO_HC": _curve_summary_stats(rho_hc_s),
             },
             **dataframe_to_columnar(out_df),
         }

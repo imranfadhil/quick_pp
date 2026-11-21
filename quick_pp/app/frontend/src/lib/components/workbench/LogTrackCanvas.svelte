@@ -2248,6 +2248,108 @@
 			const swtClamped = swtDec.map((v) =>
 				v !== null && Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : null
 			);
+
+			// Fluid Phase Shading (Gas: Red, Oil: Green, Unconfirmed: Amber) from Sw to 1.0
+			const gasFlagDec = decimateSvg(pick('GAS_FLAG'));
+			const oilFlagDec = decimateSvg(pick('OIL_FLAG'));
+			const uncFlagDec = decimateSvg(pick('UNC_FLAG'));
+
+			if (gasFlagDec.some((v) => v === 1)) {
+				const gasBase = swtClamped.map((_, i) => (gasFlagDec[i] === 1 ? 1.0 : null));
+				const gasTop = swtClamped.map((sw, i) => (gasFlagDec[i] === 1 && sw !== null ? sw : null));
+				const gasPinched = buildPairPinchedFill(gasBase, gasTop, svgDepth, 1.0);
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'GAS_BASE',
+					x: gasPinched.baseX,
+					y: gasPinched.y,
+					xaxis: 'x7',
+					yaxis: 'y',
+					line: { width: 0, color: 'rgba(0,0,0,0)' },
+					hoverinfo: 'skip',
+					showlegend: false
+				});
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'GAS_PAY_SHADE',
+					x: gasPinched.topX,
+					y: gasPinched.y,
+					xaxis: 'x7',
+					yaxis: 'y',
+					fill: 'tonextx',
+					fillcolor: 'rgba(239, 68, 68, 0.65)',
+					line: { width: 0, color: 'rgba(0,0,0,0)' },
+					hoverinfo: 'skip',
+					showlegend: false
+				});
+			}
+
+			if (oilFlagDec.some((v) => v === 1)) {
+				const oilBase = swtClamped.map((_, i) => (oilFlagDec[i] === 1 ? 1.0 : null));
+				const oilTop = swtClamped.map((sw, i) => (oilFlagDec[i] === 1 && sw !== null ? sw : null));
+				const oilPinched = buildPairPinchedFill(oilBase, oilTop, svgDepth, 1.0);
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'OIL_BASE',
+					x: oilPinched.baseX,
+					y: oilPinched.y,
+					xaxis: 'x7',
+					yaxis: 'y',
+					line: { width: 0, color: 'rgba(0,0,0,0)' },
+					hoverinfo: 'skip',
+					showlegend: false
+				});
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'OIL_PAY_SHADE',
+					x: oilPinched.topX,
+					y: oilPinched.y,
+					xaxis: 'x7',
+					yaxis: 'y',
+					fill: 'tonextx',
+					fillcolor: 'rgba(34, 197, 94, 0.65)',
+					line: { width: 0, color: 'rgba(0,0,0,0)' },
+					hoverinfo: 'skip',
+					showlegend: false
+				});
+			}
+
+			if (uncFlagDec.some((v) => v === 1)) {
+				const uncBase = swtClamped.map((_, i) => (uncFlagDec[i] === 1 ? 1.0 : null));
+				const uncTop = swtClamped.map((sw, i) => (uncFlagDec[i] === 1 && sw !== null ? sw : null));
+				const uncPinched = buildPairPinchedFill(uncBase, uncTop, svgDepth, 1.0);
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'UNC_BASE',
+					x: uncPinched.baseX,
+					y: uncPinched.y,
+					xaxis: 'x7',
+					yaxis: 'y',
+					line: { width: 0, color: 'rgba(0,0,0,0)' },
+					hoverinfo: 'skip',
+					showlegend: false
+				});
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'UNC_PAY_SHADE',
+					x: uncPinched.topX,
+					y: uncPinched.y,
+					xaxis: 'x7',
+					yaxis: 'y',
+					fill: 'tonextx',
+					fillcolor: 'rgba(245, 158, 11, 0.55)',
+					line: { width: 0, color: 'rgba(0,0,0,0)' },
+					hoverinfo: 'skip',
+					showlegend: false
+				});
+			}
+
 			const swtPinched = buildZeroPinchedFill(swtClamped, svgDepth, 0);
 			traces.push({
 				type: 'scatter',
@@ -3940,7 +4042,14 @@
 						style="color: {PETRO_COLORS.water}"
 					>
 						<span>1.0</span>
-						<span class="font-sans text-[9.5px] font-bold">◄ SW / PAY</span>
+						<span class="font-sans text-[9px] font-bold inline-flex items-center gap-1">
+							<span>◄ SW / PAY</span>
+							<span class="inline-flex items-center gap-0.5" title="Fluid Pay Shades: Gas (Red), Oil (Green), Unconfirmed (Amber)">
+								<span class="inline-block h-1.5 w-1.5 rounded-full bg-red-500"></span>
+								<span class="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+								<span class="inline-block h-1.5 w-1.5 rounded-full bg-amber-500"></span>
+							</span>
+						</span>
 						<span>0.0</span>
 					</div>
 					<div

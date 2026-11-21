@@ -146,6 +146,62 @@
 		dual_water: 'DUAL WATER'
 	};
 
+	const fluidTypingLabels: Record<string, string> = {
+		neutron_density: 'NEU-DEN CROSSOVER',
+		rho_hc: 'APPARENT RHO_HC',
+		sonic_vp_vs: 'DIPOLE Vp/Vs',
+		mud_gas: 'MUD GAS (HAWORTH)',
+		oil_only: 'ALL OIL',
+		gas_only: 'ALL GAS',
+		none: 'OFF'
+	};
+
+	let detectedContacts = $state<Array<{ contact_type: string; depth: number; remarks?: string }>>([]);
+
+	let hasDipoleSonic = $derived.by(() => {
+		const curves = wellData.curves;
+		const hasDtc = ['DTC', 'DT', 'DTCO', 'AC'].some((c) =>
+			curves[c]?.some((v: any) => typeof v === 'number' && Number.isFinite(v) && v > 0)
+		);
+		const hasDts = ['DTS', 'DTSM', 'DT4S', 'DTSH'].some((c) =>
+			curves[c]?.some((v: any) => typeof v === 'number' && Number.isFinite(v) && v > 0)
+		);
+		return Boolean(hasDtc && hasDts);
+	});
+
+	let hasMudGas = $derived.by(() => {
+		const curves = wellData.curves;
+		const c1 = ['C1', 'c1'].some((c) => curves[c]?.some((v: any) => typeof v === 'number' && Number.isFinite(v) && v > 0));
+		const c2 = ['C2', 'c2'].some((c) => curves[c]?.some((v: any) => typeof v === 'number' && Number.isFinite(v) && v > 0));
+		const c3 = ['C3', 'c3'].some((c) => curves[c]?.some((v: any) => typeof v === 'number' && Number.isFinite(v) && v > 0));
+		return Boolean(c1 && c2 && c3);
+	});
+
+	let fluidSummary = $derived.by(() => {
+		const gasFlag = wellData.curves['GAS_FLAG'] ?? [];
+		const oilFlag = wellData.curves['OIL_FLAG'] ?? [];
+		const uncFlag = wellData.curves['UNC_FLAG'] ?? [];
+		const swt = wellData.curves['SWT'] ?? [];
+		const indices = wellData.visibleIndices;
+		if (indices.length === 0) return null;
+		let gasCount = 0;
+		let oilCount = 0;
+		let uncCount = 0;
+		let waterCount = 0;
+		for (const i of indices) {
+			if (gasFlag[i] === 1) gasCount++;
+			else if (oilFlag[i] === 1) oilCount++;
+			else if (uncFlag[i] === 1) uncCount++;
+			else if (typeof swt[i] === 'number' && swt[i] > workbench.saturationParams.swPayCutoff) waterCount++;
+		}
+		return {
+			gasCount,
+			oilCount,
+			uncCount,
+			waterCount
+		};
+	});
+
 	let hasTsAvailable = $derived.by(() => {
 		const ps = wellData.curves['PHIT_SAND'];
 		return thomasStieberAvailable(workbench.lithoParams.model, Boolean(
@@ -230,6 +286,15 @@
 						min_depth: workbench.depthFilter?.min ?? null,
 						max_depth: workbench.depthFilter?.max ?? null,
 						zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
+						fluid_typing_method: sp.fluidTypingMethod,
+						gas_crossover_cutoff: sp.gasCrossoverCutoff,
+						rho_hc_cutoff: sp.rhoHcCutoff,
+						vp_vs_cutoff: sp.vpVsCutoff,
+						sw_pay_cutoff: sp.swPayCutoff,
+						phit_cutoff: sp.phitCutoff,
+						vsh_cutoff: sp.vshCutoff,
+						enforce_fluid_segregation: sp.enforceSegregation,
+						allow_unconfirmed: sp.allowUnconfirmed,
 						save: persist && !selectionMode
 					} as any
 				}
@@ -237,6 +302,7 @@
 			if (error || !data) {
 				throw new Error(String((error as any)?.detail ?? 'Saturation calculation failed'));
 			}
+			detectedContacts = (data as any)?.contacts ?? [];
 			wellData.mergeComputedCurves(data.data, data.stats, selectionIndices);
 			wellData.markModuleComputed('saturation', data.data);
 			// If using Salinity & Temp Gradient mode, sync the median computed Rw to rwPickett for the Pickett Plot line
@@ -391,6 +457,167 @@
 						{/if}
 					</div>
 				</div>
+			{/if}
+		</ParameterSection>
+
+		<ParameterSection
+			title="Fluid Typing (Log & Crossplot)"
+			badge={fluidTypingLabels[workbench.saturationParams.fluidTypingMethod] || 'NEU-DEN'}
+		>
+			<div class="grid grid-cols-[1fr_130px] items-center gap-x-2 py-0.5">
+				<span class="text-xs font-medium text-[var(--text-primary)]">Method</span>
+				<select
+					bind:value={workbench.saturationParams.fluidTypingMethod}
+					onchange={() => executeSaturation(false)}
+					class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
+				>
+					<option value="neutron_density">Neutron-Density (ΔΦ)</option>
+					<option value="rho_hc">Apparent HC Density (ρ_hc)</option>
+					<option value="sonic_vp_vs" disabled={!hasDipoleSonic}>
+						Dipole Sonic (Vp / Vs) {hasDipoleSonic ? '' : '[No DTC/DTS]'}
+					</option>
+					<option value="mud_gas" disabled={!hasMudGas}>
+						Mud Gas Ratios (Haworth) {hasMudGas ? '' : '[No C1-C5]'}
+					</option>
+					<option value="oil_only">All Oil (No Gas)</option>
+					<option value="gas_only">All Gas (No Oil)</option>
+					<option value="none">Off (No Flags)</option>
+				</select>
+			</div>
+
+			{#if workbench.saturationParams.fluidTypingMethod === 'neutron_density'}
+				<NumericScrubber
+					label="Gas Crossover (ΔΦ_ND)"
+					bind:value={workbench.saturationParams.gasCrossoverCutoff}
+					unit="v/v"
+					min={-0.1}
+					max={0.25}
+					step={0.01}
+					decimals={2}
+				/>
+				<div class="text-[10px] text-[var(--text-muted)]">
+					Flags Gas when porosity crossover (Φ_D - Φ_N) ≥ cutoff in pay.
+				</div>
+			{:else if workbench.saturationParams.fluidTypingMethod === 'rho_hc'}
+				<NumericScrubber
+					label="Gas ρ_hc Cutoff"
+					bind:value={workbench.saturationParams.rhoHcCutoff}
+					unit="g/cc"
+					min={0.1}
+					max={0.8}
+					step={0.02}
+					decimals={2}
+				/>
+				<div class="text-[10px] text-[var(--text-muted)]">
+					Inverted hydrocarbon density: Gas when ρ_hc ≤ cutoff (&lt; 0.40 g/cc), Oil when &gt; cutoff.
+				</div>
+			{:else if workbench.saturationParams.fluidTypingMethod === 'sonic_vp_vs'}
+				<NumericScrubber
+					label="Gas Vp/Vs Cutoff"
+					bind:value={workbench.saturationParams.vpVsCutoff}
+					unit="ratio"
+					min={1.3}
+					max={2.0}
+					step={0.02}
+					decimals={2}
+				/>
+				<div class="text-[10px] text-[var(--text-muted)]">
+					Compressional to shear ratio: Gas when Vp/Vs ≤ cutoff (&lt; 1.60 in clastics).
+				</div>
+			{:else if workbench.saturationParams.fluidTypingMethod === 'mud_gas'}
+				<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10px] text-[var(--text-secondary)]">
+					Uses Haworth (1985) mud gas chromatography ratios (C1–C5) from mud logs.
+				</div>
+			{/if}
+
+			{#if workbench.saturationParams.fluidTypingMethod !== 'none'}
+				<NumericScrubber
+					label="Pay Sw Cutoff"
+					bind:value={workbench.saturationParams.swPayCutoff}
+					unit="v/v"
+					min={0.1}
+					max={0.95}
+					step={0.05}
+					decimals={2}
+				/>
+				<NumericScrubber
+					label="Reservoir Min Φt"
+					bind:value={workbench.saturationParams.phitCutoff}
+					unit="v/v"
+					min={0.01}
+					max={0.2}
+					step={0.01}
+					decimals={2}
+				/>
+				<NumericScrubber
+					label="Reservoir Max Vsh"
+					bind:value={workbench.saturationParams.vshCutoff}
+					unit="v/v"
+					min={0.1}
+					max={0.8}
+					step={0.05}
+					decimals={2}
+				/>
+
+				<div class="my-1 rounded-xs border border-blue-200 bg-blue-50/70 px-2 py-1 text-[10.5px]">
+					<label class="flex items-center justify-between gap-2 font-medium text-blue-950 cursor-pointer">
+						<span class="flex items-center gap-1.5">
+							<input
+								type="checkbox"
+								bind:checked={workbench.saturationParams.enforceSegregation}
+								onchange={() => executeSaturation(false)}
+								class="h-3.5 w-3.5 rounded-xs border-blue-400 text-blue-700"
+							/>
+							<span>Enforce Gravity Segregation</span>
+						</span>
+						<span class="rounded-2xs bg-blue-100 px-1 py-0.5 font-mono text-[9px] font-bold text-blue-800">
+							Gas above Oil
+						</span>
+					</label>
+				</div>
+
+				<div class="my-1 rounded-xs border border-amber-200 bg-amber-50/70 px-2 py-1 text-[10.5px]">
+					<label class="flex items-center justify-between gap-2 font-medium text-amber-950 cursor-pointer">
+						<span class="flex items-center gap-1.5">
+							<input
+								type="checkbox"
+								bind:checked={workbench.saturationParams.allowUnconfirmed}
+								onchange={() => executeSaturation(false)}
+								class="h-3.5 w-3.5 rounded-xs border-amber-400 text-amber-700"
+							/>
+							<span>Cater for Unconfirmed HC</span>
+						</span>
+						<span class="rounded-2xs bg-amber-100 px-1 py-0.5 font-mono text-[9px] font-bold text-amber-800">
+							Buffer Zone
+						</span>
+					</label>
+				</div>
+
+				{#if fluidSummary}
+					<div class="mt-1 space-y-1 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10px]">
+						<div class="flex items-center justify-between">
+							<span class="font-semibold text-[var(--text-primary)]">Fluid Pay Samples:</span>
+							<span class="font-mono text-[9.5px]">
+								<span class="font-bold text-red-600">Gas: {fluidSummary.gasCount}</span> |
+								<span class="font-bold text-emerald-600">Oil: {fluidSummary.oilCount}</span>
+								{#if fluidSummary.uncCount > 0}
+									 | <span class="font-bold text-amber-600">Unc: {fluidSummary.uncCount}</span>
+								{/if}
+								 | <span class="font-bold text-blue-600">Water: {fluidSummary.waterCount}</span>
+							</span>
+						</div>
+						{#if detectedContacts.length > 0}
+							<div class="border-t border-[var(--border-hairline)] pt-1 text-[9.5px]">
+								<span class="font-medium text-[var(--text-secondary)]">Contacts: </span>
+								{#each detectedContacts as c}
+									<span class="mr-1 inline-block rounded-2xs bg-slate-200/80 px-1 py-0.5 font-mono font-bold text-slate-800">
+										{c.contact_type}: {c.depth.toFixed(1)}m
+									</span>
+								{/each}
+							</div>
+						{/if}
+					</div>
+				{/if}
 			{/if}
 		</ParameterSection>
 
