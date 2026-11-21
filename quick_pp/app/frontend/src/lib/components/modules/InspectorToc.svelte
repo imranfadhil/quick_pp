@@ -25,10 +25,23 @@
 	// Find available curve candidates
 	let availableResCurves = $derived.by(() => {
 		const cols = Object.keys(wellData.curves);
-		const candidates = ['RD', 'RT', 'ILD', 'LLD', 'AHT90', 'AT90', 'RES_DEEP', 'RD_NORM', 'RT_ENV_CORR'];
+		const candidates = [
+			'RD',
+			'RT',
+			'ILD',
+			'LLD',
+			'AHT90',
+			'AT90',
+			'RES_DEEP',
+			'RD_NORM',
+			'RT_ENV_CORR'
+		];
 		const matched = candidates.filter((c) => cols.includes(c));
 		const others = cols.filter(
-			(c) => (c.startsWith('R') || c.includes('RES')) && !matched.includes(c) && !c.includes('RW')
+			(c) =>
+				(c.startsWith('R') || c.includes('RES')) &&
+				!matched.includes(c) &&
+				!c.includes('RW')
 		);
 		const all = [...matched, ...others];
 		return all.length > 0 ? all : ['RD', 'RT'];
@@ -46,12 +59,16 @@
 			const candidates = ['RHOB_HC', 'RHOB', 'RHOB_NORM', 'RHOB_ENV_CORR', 'RHOB_ENH', 'DEN'];
 			const matched = candidates.filter((c) => cols.includes(c));
 			const others = cols.filter((c) => c.includes('RHOB') && !matched.includes(c));
-			return [...matched, ...others].length > 0 ? [...matched, ...others] : ['RHOB', 'RHOB_HC'];
+			return [...matched, ...others].length > 0
+				? [...matched, ...others]
+				: ['RHOB', 'RHOB_HC'];
 		} else {
 			const candidates = ['NPHI_HC', 'NPHI', 'NPHI_NORM', 'NPHI_ENV_CORR', 'NPHI_ENH', 'NEU'];
 			const matched = candidates.filter((c) => cols.includes(c));
 			const others = cols.filter((c) => c.includes('NPHI') && !matched.includes(c));
-			return [...matched, ...others].length > 0 ? [...matched, ...others] : ['NPHI', 'NPHI_HC'];
+			return [...matched, ...others].length > 0
+				? [...matched, ...others]
+				: ['NPHI', 'NPHI_HC'];
 		}
 	});
 
@@ -64,7 +81,13 @@
 
 	$effect(() => {
 		if (!availablePoroCurves.includes(tp.poroCurve)) {
-			tp.poroCurve = availablePoroCurves[0] ?? (tp.porosityType === 'sonic' ? 'DT' : tp.porosityType === 'density' ? 'RHOB' : 'NPHI');
+			tp.poroCurve =
+				availablePoroCurves[0] ??
+				(tp.porosityType === 'sonic'
+					? 'DT'
+					: tp.porosityType === 'density'
+						? 'RHOB'
+						: 'NPHI');
 		}
 	});
 
@@ -91,7 +114,7 @@
 			tp.scalingCoeff = null;
 		} else if (newType === 'density') {
 			tp.poroCurve = 'RHOB';
-			tp.poroBaseline = 2.50;
+			tp.poroBaseline = 2.5;
 			tp.scalingCoeff = null;
 		} else {
 			tp.poroCurve = 'NPHI';
@@ -109,17 +132,36 @@
 			return tp.scalingCoeff;
 		}
 		if (tp.porosityType === 'sonic') return 0.02;
-		if (tp.porosityType === 'density') return -2.50;
+		if (tp.porosityType === 'density') return -2.5;
 		return 4.0;
 	});
 
 	let maturityStage = $derived.by(() => {
 		const lom = tp.lom;
-		if (lom < 7.5) return { label: 'Immature', color: 'bg-emerald-100 text-emerald-800 border-emerald-300' };
-		if (lom < 9.5) return { label: 'Early Oil Window', color: 'bg-amber-100 text-amber-800 border-amber-300' };
-		if (lom < 11.0) return { label: 'Peak Oil Window', color: 'bg-orange-100 text-orange-800 border-orange-300' };
-		if (lom < 12.5) return { label: 'Condensate / Wet Gas', color: 'bg-sky-100 text-sky-800 border-sky-300' };
-		return { label: 'Dry Gas / Post-Mature', color: 'bg-purple-100 text-purple-800 border-purple-300' };
+		if (lom < 7.5)
+			return {
+				label: 'Immature',
+				color: 'bg-emerald-100 text-emerald-800 border-emerald-300'
+			};
+		if (lom < 9.5)
+			return {
+				label: 'Early Oil Window',
+				color: 'bg-amber-100 text-amber-800 border-amber-300'
+			};
+		if (lom < 11.0)
+			return {
+				label: 'Peak Oil Window',
+				color: 'bg-orange-100 text-orange-800 border-orange-300'
+			};
+		if (lom < 12.5)
+			return {
+				label: 'Condensate / Wet Gas',
+				color: 'bg-sky-100 text-sky-800 border-sky-300'
+			};
+		return {
+			label: 'Dry Gas / Post-Mature',
+			color: 'bg-purple-100 text-purple-800 border-purple-300'
+		};
 	});
 
 	// Evaluate TOC statistics from currently loaded curve
@@ -182,7 +224,10 @@
 					body: {
 						min_depth: workbench.depthFilter?.min,
 						max_depth: workbench.depthFilter?.max,
-						zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : undefined,
+						zones:
+							workbench.selectedZones.length > 0
+								? workbench.selectedZones
+								: undefined,
 						res_curve: tp.resCurve,
 						poro_curve: tp.poroCurve,
 						porosity_type: tp.porosityType,
@@ -210,21 +255,19 @@
 				calibrationResult = payload.core_calibration;
 			}
 
-			// Merge computed curves from columnar payload
+			// Merge computed curves from columnar payload (passing curvesData directly preserves DEPTH for depth-indexed merging)
 			const curvesData = payload.data || payload;
-			const computed: Record<string, number[]> = {};
-			if (curvesData.DELTA_LOG_R) computed['DELTA_LOG_R'] = curvesData.DELTA_LOG_R;
-			if (curvesData.TOC) computed['TOC'] = curvesData.TOC;
-			if (curvesData.TOC_PASSEY) computed['TOC_PASSEY'] = curvesData.TOC_PASSEY;
-
-			wellData.mergeComputedCurves(computed, payload.stats, selectionIndices);
-			wellData.markModuleComputed('source_rock', computed);
+			wellData.mergeComputedCurves(curvesData, payload.stats, selectionIndices);
+			wellData.markModuleComputed('source_rock', curvesData);
 			workbench.selectedQaqcCurve = 'TOC';
 
 			if (persist && !selectionMode) {
 				await wellData.saveModuleComputed('source_rock', 'Source Rock & TOC Saved ✓');
 			} else {
-				appStatus.success(`TOC computed via Passey ${tp.porosityType.toUpperCase()} (LOM: ${tp.lom})`, workbench.wellId);
+				appStatus.success(
+					`TOC computed via Passey ${tp.porosityType.toUpperCase()} (LOM: ${tp.lom})`,
+					workbench.wellId
+				);
 			}
 		} catch (err: any) {
 			appStatus.error(err.message || 'Error running TOC calculation', workbench.wellId);
@@ -249,7 +292,10 @@
 					body: {
 						min_depth: workbench.depthFilter?.min,
 						max_depth: workbench.depthFilter?.max,
-						zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : undefined,
+						zones:
+							workbench.selectedZones.length > 0
+								? workbench.selectedZones
+								: undefined,
 						res_curve: tp.resCurve,
 						poro_curve: tp.poroCurve,
 						porosity_type: tp.porosityType,
@@ -290,15 +336,18 @@
 	<!-- Overview Header -->
 	<div class="border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)]/50 p-2.5">
 		<div class="flex items-center justify-between">
-			<span class="text-[11px] font-bold text-[var(--text-primary)] uppercase tracking-wide">
+			<span class="text-[11px] font-bold tracking-wide text-[var(--text-primary)] uppercase">
 				Source Rock · Passey ΔlogR
 			</span>
-			<span class="rounded-xs border px-1.5 py-0.5 text-[9px] font-semibold {maturityStage.color}">
+			<span
+				class="rounded-xs border px-1.5 py-0.5 text-[9px] font-semibold {maturityStage.color}"
+			>
 				{maturityStage.label}
 			</span>
 		</div>
 		<p class="mt-1 text-[10px] leading-tight text-[var(--text-muted)]">
-			Estimates Total Organic Carbon (TOC wt%) by overlaying deep resistivity and porosity logs (sonic, density, or neutron) in lean shale.
+			Estimates Total Organic Carbon (TOC wt%) by overlaying deep resistivity and porosity
+			logs (sonic, density, or neutron) in lean shale.
 		</p>
 	</div>
 
@@ -307,7 +356,9 @@
 		<div class="flex flex-col gap-2 p-2">
 			<!-- Porosity Log Type -->
 			<div class="grid grid-cols-[1fr_130px] items-center gap-x-2">
-				<label for="toc-poro-type" class="text-xs font-medium text-[var(--text-secondary)]">Porosity Log Type</label>
+				<label for="toc-poro-type" class="text-xs font-medium text-[var(--text-secondary)]"
+					>Porosity Log Type</label
+				>
 				<select
 					id="toc-poro-type"
 					value={tp.porosityType}
@@ -322,7 +373,9 @@
 
 			<!-- Resistivity Curve -->
 			<div class="grid grid-cols-[1fr_130px] items-center gap-x-2">
-				<label for="toc-res-curve" class="text-xs font-medium text-[var(--text-secondary)]">Resistivity Curve</label>
+				<label for="toc-res-curve" class="text-xs font-medium text-[var(--text-secondary)]"
+					>Resistivity Curve</label
+				>
 				<select
 					id="toc-res-curve"
 					bind:value={tp.resCurve}
@@ -336,7 +389,9 @@
 
 			<!-- Porosity Curve -->
 			<div class="grid grid-cols-[1fr_130px] items-center gap-x-2">
-				<label for="toc-poro-curve" class="text-xs font-medium text-[var(--text-secondary)]">Porosity Curve</label>
+				<label for="toc-poro-curve" class="text-xs font-medium text-[var(--text-secondary)]"
+					>Porosity Curve</label
+				>
 				<select
 					id="toc-poro-curve"
 					bind:value={tp.poroCurve}
@@ -354,7 +409,9 @@
 	<ParameterSection title="2. Lean Shale Baseline Picking" defaultOpen={true}>
 		<div class="flex flex-col gap-1 p-2">
 			<div class="flex items-center justify-between pb-1">
-				<span class="text-[10px] text-[var(--text-muted)]">Non-source lean shale overlay values</span>
+				<span class="text-[10px] text-[var(--text-muted)]"
+					>Non-source lean shale overlay values</span
+				>
 				<button
 					type="button"
 					onclick={autoDetectBaseline}
@@ -437,7 +494,10 @@
 		<div class="flex flex-col gap-1.5 p-2">
 			<!-- Maturity Mode Toggle -->
 			<div class="grid grid-cols-[1fr_130px] items-center gap-x-2">
-				<label for="toc-maturity-mode" class="text-xs font-medium text-[var(--text-secondary)]">Maturity Scale</label>
+				<label
+					for="toc-maturity-mode"
+					class="text-xs font-medium text-[var(--text-secondary)]">Maturity Scale</label
+				>
 				<select
 					id="toc-maturity-mode"
 					bind:value={tp.maturityMode}
@@ -494,7 +554,9 @@
 				onrun={() => executeToc(false)}
 			/>
 
-			<label class="mt-1 flex items-center gap-2 text-xs text-[var(--text-secondary)] cursor-pointer">
+			<label
+				class="mt-1 flex cursor-pointer items-center gap-2 text-xs text-[var(--text-secondary)]"
+			>
 				<input
 					type="checkbox"
 					bind:checked={tp.clampNegative}
@@ -509,7 +571,9 @@
 	<ParameterSection title="4. Source Rock Statistics & Calibration" defaultOpen={true}>
 		<div class="flex flex-col gap-2 p-2">
 			{#if tocSummary}
-				<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-2 text-xs">
+				<div
+					class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-2 text-xs"
+				>
 					<div class="grid grid-cols-2 gap-y-1 text-[11px]">
 						<div>Mean TOC: <strong>{tocSummary.mean} wt%</strong></div>
 						<div>Peak TOC: <strong>{tocSummary.max} wt%</strong></div>
@@ -517,21 +581,34 @@
 						<div>Samples: <strong>{tocSummary.count}</strong></div>
 					</div>
 					<div class="mt-2 border-t border-[var(--border-hairline)] pt-1.5 text-[10.5px]">
-						<div>Rich Source (&ge; 2.0 wt%): <strong>{tocSummary.netRichPct}%</strong> of interval</div>
-						<div>Potential Source (&ge; 1.0 wt%): <strong>{tocSummary.netGoodPct}%</strong> of interval</div>
+						<div>
+							Rich Source (&ge; 2.0 wt%): <strong>{tocSummary.netRichPct}%</strong> of interval
+						</div>
+						<div>
+							Potential Source (&ge; 1.0 wt%): <strong
+								>{tocSummary.netGoodPct}%</strong
+							> of interval
+						</div>
 					</div>
 				</div>
 			{:else}
-				<div class="text-center py-2 text-[10.5px] text-[var(--text-muted)] italic">
+				<div class="py-2 text-center text-[10.5px] text-[var(--text-muted)] italic">
 					Run calculation to view organic richness and interval statistics
 				</div>
 			{/if}
 
 			{#if calibrationResult}
-				<div class="rounded-xs border border-blue-200 bg-blue-50/70 p-2 text-[10.5px] text-blue-900">
+				<div
+					class="rounded-xs border border-blue-200 bg-blue-50/70 p-2 text-[10.5px] text-blue-900"
+				>
 					<div class="font-bold">Core TOC Calibration Fit</div>
-					<div>R²: <strong>{calibrationResult.r2}</strong> (RMSE: {calibrationResult.rmse} wt%)</div>
-					<div>Implied LOM: <strong>{calibrationResult.implied_lom ?? '—'}</strong> ({calibrationResult.sample_count} core plugs)</div>
+					<div>
+						R²: <strong>{calibrationResult.r2}</strong> (RMSE: {calibrationResult.rmse} wt%)
+					</div>
+					<div>
+						Implied LOM: <strong>{calibrationResult.implied_lom ?? '—'}</strong>
+						({calibrationResult.sample_count} core plugs)
+					</div>
 					{#if calibrationResult.implied_lom}
 						<button
 							type="button"
