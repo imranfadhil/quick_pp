@@ -66,7 +66,10 @@ from quick_pp.lithology.multi_mineral import MultiMineral
 from quick_pp.lithology.sand_shale import SandShale
 from quick_pp.lithology.sand_silt_clay import SandSiltClay
 from quick_pp.lithology.thin_beds import ThinBeds
-from quick_pp.machine_learning.feature_engineering import coal_flagging
+from quick_pp.machine_learning.feature_engineering import (
+    coal_flagging,
+    refine_coal_mask,
+)
 from quick_pp.permeability import (
     choo_permeability,
     coates_permeability,
@@ -495,7 +498,10 @@ def _resolve_log_column(
         return name
     aliases = Config.CANONICAL_CURVE_ALIASES.get(name, ())
     for alias in aliases:
-        if alias in df.columns and pd.to_numeric(df[alias], errors="coerce").notna().any():
+        if (
+            alias in df.columns
+            and pd.to_numeric(df[alias], errors="coerce").notna().any()
+        ):
             return alias
     return name if name in df.columns else None
 
@@ -568,8 +574,14 @@ def _compute_coal_mask(
     coal_nphi_min: float = 0.30,
     coal_window_size: int = 41,
     coal_trend_factor: float = 0.05,
+    coal_buffer_pts: int = 1,
+    coal_bridge_gap: int = 2,
+    coal_adaptive_shoulder: bool = True,
+    coal_max_adaptive_pts: int = 2,
 ) -> pd.Series:
-    """Compute boolean mask for coal intervals using raw NPHI and RHOB logs."""
+    """Compute boolean mask for coal intervals using raw NPHI and RHOB logs, with
+    boundary buffering, gap bridging, and adaptive shoulder recovery.
+    """
     if not enable_coal_flagging:
         return pd.Series(False, index=df.index, dtype=bool)
     if "NPHI" not in df.columns or "RHOB" not in df.columns:
@@ -582,6 +594,11 @@ def _compute_coal_mask(
 
     tf = max(float(coal_trend_factor), 0.0)
     win = max(int(coal_window_size), 3)
+    buf = max(int(coal_buffer_pts), 0)
+    gap = max(int(coal_bridge_gap), 0)
+    adaptive = bool(coal_adaptive_shoulder)
+    max_adapt = max(int(coal_max_adaptive_pts), 0)
+
     if tf > 1e-6:
         flagged = coal_flagging(
             nphi_raw,
@@ -595,11 +612,28 @@ def _compute_coal_mask(
         extreme_coal = (rhob_raw < min(float(coal_rhob_max) - 0.12, 1.85)) & (
             nphi_raw > max(float(coal_nphi_min) + 0.05, 0.38)
         )
-        return ((flagged >= 0.5) | extreme_coal).fillna(False)
+        base_mask = ((flagged >= 0.5) | extreme_coal).fillna(False).to_numpy(dtype=bool)
     else:
-        return (
-            (rhob_raw < float(coal_rhob_max)) & (nphi_raw > float(coal_nphi_min))
-        ).fillna(False)
+        base_mask = (
+            ((rhob_raw < float(coal_rhob_max)) & (nphi_raw > float(coal_nphi_min)))
+            .fillna(False)
+            .to_numpy(dtype=bool)
+        )
+
+    if buf > 0 or gap > 0 or adaptive:
+        refined = refine_coal_mask(
+            base_mask,
+            rhob=rhob_raw.to_numpy(dtype=float),
+            nphi=nphi_raw.to_numpy(dtype=float),
+            buffer_pts=buf,
+            bridge_gap=gap,
+            adaptive_shoulder=adaptive,
+            max_adaptive_pts=max_adapt,
+            rhob_shoulder_max=min(float(coal_rhob_max) + 0.35, 2.40),
+        )
+        return pd.Series(refined, index=df.index, dtype=bool)
+
+    return pd.Series(base_mask, index=df.index, dtype=bool)
 
 
 def _resolve_fluid_zone_array(
@@ -1061,7 +1095,11 @@ def _compute_vsh_gr_series(
             )
             clean = gamma_clean if gamma_clean is not None else gr_clean
             shale = gamma_shale if gamma_shale is not None else gr_clay
-            if clean is not None and shale is not None and abs(float(shale) - float(clean)) > 1e-6:
+            if (
+                clean is not None
+                and shale is not None
+                and abs(float(shale) - float(clean)) > 1e-6
+            ):
                 valid_gr = gr_s.notna()
                 if valid_gr.any():
                     out.loc[valid_gr] = (
@@ -1083,7 +1121,11 @@ def _compute_vsh_gr_series(
             gr_s = pd.to_numeric(df[curve_name], errors="coerce")
             clean = gamma_clean if gamma_clean is not None else gr_clean
             shale = gamma_shale if gamma_shale is not None else gr_clay
-            if clean is not None and shale is not None and abs(float(shale) - float(clean)) > 1e-6:
+            if (
+                clean is not None
+                and shale is not None
+                and abs(float(shale) - float(clean)) > 1e-6
+            ):
                 valid_gr = gr_s.notna()
                 if valid_gr.any():
                     out.loc[valid_gr] = (
@@ -1114,8 +1156,7 @@ def _compute_vsh_gr_series(
         valid_gr = gr_s.notna()
         if valid_gr.any():
             out.loc[valid_gr] = (
-                (gr_s.loc[valid_gr] - float(clean))
-                / (float(shale) - float(clean))
+                (gr_s.loc[valid_gr] - float(clean)) / (float(shale) - float(clean))
             ).clip(0.0, 1.0)
             return out
     if "VSH_GR" in df.columns:
@@ -1315,6 +1356,19 @@ class WorkspaceHCCorrectionRequest(WorkspaceFilterBase, GammaParameters):
     coal_trend_factor: float = Field(
         0.05, description="Rolling trend deviation factor for coal (0 = threshold only)"
     )
+    coal_buffer_pts: int = Field(
+        1, ge=0, le=10, description="Buffer samples at top and bottom of coal seam"
+    )
+    coal_bridge_gap: int = Field(
+        2,
+        ge=0,
+        le=10,
+        description="Maximum sample gap to bridge between adjacent coal seams",
+    )
+    coal_adaptive_shoulder: bool = Field(
+        True,
+        description="Enable adaptive gradient shoulder recovery for coal boundaries",
+    )
     badhole_treatment: str = Field(
         "none",
         description="How to treat BADHOLE intervals: 'none', 'vsh_gr', 'interpolate', or 'ignore'",
@@ -1352,6 +1406,19 @@ class WorkspaceDenCorrectionRequest(WorkspaceFilterBase, GammaParameters):
     coal_window_size: int = Field(41, description="Rolling window size for coal trend")
     coal_trend_factor: float = Field(
         0.05, description="Rolling trend deviation factor for coal (0 = threshold only)"
+    )
+    coal_buffer_pts: int = Field(
+        1, ge=0, le=10, description="Buffer samples at top and bottom of coal seam"
+    )
+    coal_bridge_gap: int = Field(
+        2,
+        ge=0,
+        le=10,
+        description="Maximum sample gap to bridge between adjacent coal seams",
+    )
+    coal_adaptive_shoulder: bool = Field(
+        True,
+        description="Enable adaptive gradient shoulder recovery for coal boundaries",
     )
     protect_hc_rows: bool = Field(
         True,
@@ -1419,6 +1486,19 @@ class WorkspaceLithologyRequest(WorkspaceFilterBase, GammaParameters):
     coal_window_size: int = Field(41, description="Rolling window size for coal trend")
     coal_trend_factor: float = Field(
         0.05, description="Rolling trend deviation factor for coal (0 = threshold only)"
+    )
+    coal_buffer_pts: int = Field(
+        1, ge=0, le=10, description="Buffer samples at top and bottom of coal seam"
+    )
+    coal_bridge_gap: int = Field(
+        2,
+        ge=0,
+        le=10,
+        description="Maximum sample gap to bridge between adjacent coal seams",
+    )
+    coal_adaptive_shoulder: bool = Field(
+        True,
+        description="Enable adaptive gradient shoulder recovery for coal boundaries",
     )
     badhole_treatment: str = Field(
         "none",
@@ -1558,6 +1638,19 @@ class WorkspacePorosityRequest(WorkspaceFilterBase, GammaParameters):
     coal_trend_factor: float = Field(
         0.05, description="Rolling trend deviation factor for coal (0 = threshold only)"
     )
+    coal_buffer_pts: int = Field(
+        1, ge=0, le=10, description="Buffer samples at top and bottom of coal seam"
+    )
+    coal_bridge_gap: int = Field(
+        2,
+        ge=0,
+        le=10,
+        description="Maximum sample gap to bridge between adjacent coal seams",
+    )
+    coal_adaptive_shoulder: bool = Field(
+        True,
+        description="Enable adaptive gradient shoulder recovery for coal boundaries",
+    )
     badhole_treatment: str = Field(
         "none",
         description="How to treat BADHOLE intervals: 'none', 'vsh_gr', 'interpolate', or 'ignore'",
@@ -1679,19 +1772,42 @@ class WorkspaceResolutionEnhancementRequest(WorkspaceFilterBase):
 
 
 class WorkspaceSourceRockRequest(WorkspaceFilterBase):
-    res_curve: Optional[str] = Field(None, description="Resistivity curve mnemonic (default 'RD')")
-    poro_curve: Optional[str] = Field(None, description="Porosity curve mnemonic (default 'DT', 'RHOB', or 'NPHI')")
-    porosity_type: str = Field("sonic", description="Porosity log type: 'sonic', 'density', or 'neutron'")
-    r_baseline: float = Field(2.0, description="Baseline resistivity in lean shale (ohm.m)")
-    poro_baseline: float = Field(80.0, description="Baseline porosity log value in lean shale (us/ft, g/cc, or v/v)")
-    scaling_coeff: Optional[float] = Field(None, description="Custom scaling coefficient")
+    res_curve: Optional[str] = Field(
+        None, description="Resistivity curve mnemonic (default 'RD')"
+    )
+    poro_curve: Optional[str] = Field(
+        None, description="Porosity curve mnemonic (default 'DT', 'RHOB', or 'NPHI')"
+    )
+    porosity_type: str = Field(
+        "sonic", description="Porosity log type: 'sonic', 'density', or 'neutron'"
+    )
+    r_baseline: float = Field(
+        2.0, description="Baseline resistivity in lean shale (ohm.m)"
+    )
+    poro_baseline: float = Field(
+        80.0,
+        description="Baseline porosity log value in lean shale (us/ft, g/cc, or v/v)",
+    )
+    scaling_coeff: Optional[float] = Field(
+        None, description="Custom scaling coefficient"
+    )
     maturity_mode: str = Field("lom", description="Maturity input mode: 'lom' or 'ro'")
-    lom: Optional[float] = Field(10.5, description="Level of Organic Metamorphism (typically 6 - 14)")
+    lom: Optional[float] = Field(
+        10.5, description="Level of Organic Metamorphism (typically 6 - 14)"
+    )
     ro: Optional[float] = Field(None, description="Vitrinite reflectance (Ro %)")
-    toc_baseline: float = Field(0.8, description="Background non-source TOC in lean shale (wt%)")
-    clamp_negative: bool = Field(True, description="Clamp TOC to toc_baseline when Delta Log R is negative")
-    use_enhanced_logs: bool = Field(False, description="Use resolution-enhanced logs if present")
-    auto_detect_baseline: bool = Field(False, description="Whether to auto-detect shale baseline values")
+    toc_baseline: float = Field(
+        0.8, description="Background non-source TOC in lean shale (wt%)"
+    )
+    clamp_negative: bool = Field(
+        True, description="Clamp TOC to toc_baseline when Delta Log R is negative"
+    )
+    use_enhanced_logs: bool = Field(
+        False, description="Use resolution-enhanced logs if present"
+    )
+    auto_detect_baseline: bool = Field(
+        False, description="Whether to auto-detect shale baseline values"
+    )
 
 
 class WorkspacePermeabilityRequest(WorkspaceFilterBase):
@@ -1835,20 +1951,21 @@ class WorkspaceSaturationRequest(WorkspaceFilterBase):
         description="Log-based fluid typing method: 'neutron_density', 'rho_hc', 'sonic_vp_vs', 'mud_gas', 'oil_only', 'gas_only', or 'none'",
     )
     gas_crossover_cutoff: float = Field(
-        0.04, description="Neutron-density crossover cutoff (Delta_Phi = Phi_D - Phi_N) for gas identification"
+        0.04,
+        description="Neutron-density crossover cutoff (Delta_Phi = Phi_D - Phi_N) for gas identification",
     )
     rho_hc_cutoff: float = Field(
-        0.40, description="Apparent hydrocarbon density cutoff (g/cc) below which fluid is gas"
+        0.40,
+        description="Apparent hydrocarbon density cutoff (g/cc) below which fluid is gas",
     )
     vp_vs_cutoff: float = Field(
-        1.60, description="Compressional to shear velocity ratio (Vp/Vs) cutoff below which fluid is gas"
+        1.60,
+        description="Compressional to shear velocity ratio (Vp/Vs) cutoff below which fluid is gas",
     )
     sw_pay_cutoff: float = Field(
         0.65, description="Maximum water saturation for hydrocarbon pay"
     )
-    phit_cutoff: float = Field(
-        0.05, description="Minimum porosity for reservoir rock"
-    )
+    phit_cutoff: float = Field(0.05, description="Minimum porosity for reservoir rock")
     vsh_cutoff: float = Field(
         0.50, description="Maximum shale volume for reservoir rock"
     )
@@ -3106,6 +3223,9 @@ def workspace_hc_correction(
                 coal_nphi_min=req.coal_nphi_min,
                 coal_window_size=req.coal_window_size,
                 coal_trend_factor=req.coal_trend_factor,
+                coal_buffer_pts=req.coal_buffer_pts,
+                coal_bridge_gap=req.coal_bridge_gap,
+                coal_adaptive_shoulder=req.coal_adaptive_shoulder,
             )
             if coal_mask.any():
                 nphi_hc_full.loc[coal_mask] = nphi.loc[coal_mask]
@@ -3364,6 +3484,9 @@ def workspace_den_correction(
                 coal_nphi_min=req.coal_nphi_min,
                 coal_window_size=req.coal_window_size,
                 coal_trend_factor=req.coal_trend_factor,
+                coal_buffer_pts=req.coal_buffer_pts,
+                coal_bridge_gap=req.coal_bridge_gap,
+                coal_adaptive_shoulder=req.coal_adaptive_shoulder,
             )
         else:
             coal_mask = pd.Series(False, index=df.index, dtype=bool)
@@ -4510,12 +4633,21 @@ def workspace_lithology(
                 rt_col = req.rt_curve.strip().upper()
             else:
                 for cand in rt_candidates:
-                    if cand in df.columns and pd.to_numeric(df[cand], errors="coerce").notna().any():
+                    if (
+                        cand in df.columns
+                        and pd.to_numeric(df[cand], errors="coerce").notna().any()
+                    ):
                         rt_col = cand
                         break
 
-            user_req_logs = [str(x).strip().upper() for x in (req.input_logs or []) if x]
-            use_rt = rt_col is not None and (len(user_req_logs) == 0 or "RT" in user_req_logs or rt_col in user_req_logs)
+            user_req_logs = [
+                str(x).strip().upper() for x in (req.input_logs or []) if x
+            ]
+            use_rt = rt_col is not None and (
+                len(user_req_logs) == 0
+                or "RT" in user_req_logs
+                or rt_col in user_req_logs
+            )
 
             rt_data = None
             if use_rt and rt_col is not None:
@@ -4543,9 +4675,13 @@ def workspace_lithology(
                     col_vals, errors="coerce"
                 ).to_numpy(dtype=float)
                 out_df[col] = col_series
-                if (
-                    col.startswith("V")
-                    or col in ("PHIT_CONSTRUCTED", "SWT", "BVW", "AVG_ERROR", "CHI2_ERROR", "OPTIMIZER_SUCCESS")
+                if col.startswith("V") or col in (
+                    "PHIT_CONSTRUCTED",
+                    "SWT",
+                    "BVW",
+                    "AVG_ERROR",
+                    "CHI2_ERROR",
+                    "OPTIMIZER_SUCCESS",
                 ):
                     save_cols.append(col)
 
@@ -4644,6 +4780,9 @@ def workspace_lithology(
                 coal_nphi_min=req.coal_nphi_min,
                 coal_window_size=req.coal_window_size,
                 coal_trend_factor=req.coal_trend_factor,
+                coal_buffer_pts=req.coal_buffer_pts,
+                coal_bridge_gap=req.coal_bridge_gap,
+                coal_adaptive_shoulder=req.coal_adaptive_shoulder,
             )
             coal_flag_s = pd.Series(np.nan, index=df.index, dtype=float)
             coal_flag_s.loc[valid_mask] = np.where(coal_mask.loc[valid_mask], 1.0, 0.0)
@@ -4900,9 +5039,15 @@ def workspace_lithology(
                 voil_s = pd.to_numeric(out_df.get("VOIL"), errors="coerce").dropna()
                 vgas_s = pd.to_numeric(out_df.get("VGAS"), errors="coerce").dropna()
                 mm_summary["rt_curve"] = rt_col
-                mm_summary["sw_mean"] = round(float(sw_s.mean()), 3) if not sw_s.empty else None
-                mm_summary["voil_mean"] = round(float(voil_s.mean()), 4) if not voil_s.empty else None
-                mm_summary["vgas_mean"] = round(float(vgas_s.mean()), 4) if not vgas_s.empty else None
+                mm_summary["sw_mean"] = (
+                    round(float(sw_s.mean()), 3) if not sw_s.empty else None
+                )
+                mm_summary["voil_mean"] = (
+                    round(float(voil_s.mean()), 4) if not voil_s.empty else None
+                )
+                mm_summary["vgas_mean"] = (
+                    round(float(vgas_s.mean()), 4) if not vgas_s.empty else None
+                )
         return {
             "well_name": well_name,
             "model": model,
@@ -5604,6 +5749,9 @@ def workspace_porosity(
                 coal_nphi_min=req.coal_nphi_min,
                 coal_window_size=req.coal_window_size,
                 coal_trend_factor=req.coal_trend_factor,
+                coal_buffer_pts=req.coal_buffer_pts,
+                coal_bridge_gap=req.coal_bridge_gap,
+                coal_adaptive_shoulder=req.coal_adaptive_shoulder,
             )
         elif "COAL_FLAG" in df.columns:
             coal_mask = (
@@ -6427,7 +6575,10 @@ def workspace_saturation(
             raise ValueError(
                 f"Resistivity curve (RT) not found in well data. Available: {list(df.columns)}"
             )
-        if "PHIT" not in df.columns or not pd.to_numeric(df["PHIT"], errors="coerce").notna().any():
+        if (
+            "PHIT" not in df.columns
+            or not pd.to_numeric(df["PHIT"], errors="coerce").notna().any()
+        ):
             raise ValueError(
                 "PHIT curve not found in well data. Compute and save porosity first."
             )
@@ -6986,7 +7137,9 @@ def workspace_source_rock(
                     res_col = cols_upper[c]
                     break
         if not res_col:
-            raise ValueError("No valid deep resistivity log found for Source Rock / TOC calculation")
+            raise ValueError(
+                "No valid deep resistivity log found for Source Rock / TOC calculation"
+            )
 
         # Resolve porosity curve
         poro_col = None
@@ -7058,9 +7211,7 @@ def workspace_source_rock(
         core_cal = None
         for core_toc_col in ["TOC", "CORE_TOC", "TOC_CORE"]:
             if core_toc_col in cols_upper:
-                core_vals = pd.to_numeric(
-                    df[cols_upper[core_toc_col]], errors="coerce"
-                )
+                core_vals = pd.to_numeric(df[cols_upper[core_toc_col]], errors="coerce")
                 if core_vals.notna().sum() >= 3:
                     core_cal = calibrate_toc_to_core(dlogr_s, core_vals)
                     break
@@ -11202,7 +11353,19 @@ def workspace_stick_plot(
                     rt_col = next(
                         (
                             c
-                            for c in Config.CANONICAL_CURVE_ALIASES.get("RT", ("RT", "RD", "RDEP", "RDEEP", "LLD", "RILD", "RESD", "ILD"))
+                            for c in Config.CANONICAL_CURVE_ALIASES.get(
+                                "RT",
+                                (
+                                    "RT",
+                                    "RD",
+                                    "RDEP",
+                                    "RDEEP",
+                                    "LLD",
+                                    "RILD",
+                                    "RESD",
+                                    "ILD",
+                                ),
+                            )
                             if c in wdf_sorted.columns and wdf_sorted[c].notna().any()
                         ),
                         None,
@@ -12426,7 +12589,10 @@ def workspace_optimize_fwl(
                 rt_col = next(
                     (
                         c
-                        for c in Config.CANONICAL_CURVE_ALIASES.get("RT", ("RT", "RD", "RDEP", "RDEEP", "LLD", "RILD", "RESD", "ILD"))
+                        for c in Config.CANONICAL_CURVE_ALIASES.get(
+                            "RT",
+                            ("RT", "RD", "RDEP", "RDEEP", "LLD", "RILD", "RESD", "ILD"),
+                        )
                         if c in wdf.columns and wdf[c].notna().any()
                     ),
                     None,
@@ -13783,13 +13949,17 @@ def workspace_curve_edit(
             # Persist rename lineage and mapping
             eph_hdr = _ephemeral_well_headers.setdefault((project_id, well_name), {})
             lineage = list(eph_hdr.get("curve_lineage") or [])
-            lineage = [e for e in lineage if str(e.get("stored_curve", "")).upper() != dst]
-            lineage.append({
-                "filename": "Curve Editor",
-                "source_mnemonic": src,
-                "stored_curve": dst,
-                "raw_curve": src,
-            })
+            lineage = [
+                e for e in lineage if str(e.get("stored_curve", "")).upper() != dst
+            ]
+            lineage.append(
+                {
+                    "filename": "Curve Editor",
+                    "source_mnemonic": src,
+                    "stored_curve": dst,
+                    "raw_curve": src,
+                }
+            )
             eph_hdr["curve_lineage"] = lineage
 
             eph_cfg = _ephemeral_well_configs.setdefault((project_id, well_name), {})
@@ -13800,18 +13970,26 @@ def workspace_curve_edit(
             if not is_demo_mode():
                 with get_db() as session:
                     well_orm = session.scalar(
-                        select(db_models.Well).filter_by(project_id=project_id, name=well_name)
+                        select(db_models.Well).filter_by(
+                            project_id=project_id, name=well_name
+                        )
                     )
                     if well_orm:
                         hdr_data = dict(well_orm.header_data or {})
                         db_lineage = list(hdr_data.get("curve_lineage") or [])
-                        db_lineage = [e for e in db_lineage if str(e.get("stored_curve", "")).upper() != dst]
-                        db_lineage.append({
-                            "filename": "Curve Editor",
-                            "source_mnemonic": src,
-                            "stored_curve": dst,
-                            "raw_curve": src,
-                        })
+                        db_lineage = [
+                            e
+                            for e in db_lineage
+                            if str(e.get("stored_curve", "")).upper() != dst
+                        ]
+                        db_lineage.append(
+                            {
+                                "filename": "Curve Editor",
+                                "source_mnemonic": src,
+                                "stored_curve": dst,
+                                "raw_curve": src,
+                            }
+                        )
                         hdr_data["curve_lineage"] = db_lineage
                         db_renames = dict(hdr_data.get("renamed_curves") or {})
                         db_renames[dst] = src

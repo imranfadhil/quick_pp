@@ -160,6 +160,9 @@ export interface LithoEndpointParams {
 	coalNphiMin: number;
 	coalWindowSize: number;
 	coalTrendFactor: number;
+	coalBufferPts: number;
+	coalBridgeGap: number;
+	coalAdaptiveShoulder: boolean;
 	badholeTreatment: BadholeTreatmentMode;
 	/** Continuous apparent fluid density (RHO_FL) engine mode. */
 	fluidDensityMode: 'static' | 'zonal_coupled' | 'iterative_sxo';
@@ -866,6 +869,9 @@ class WorkbenchState {
 		coalNphiMin: 0.3,
 		coalWindowSize: 41,
 		coalTrendFactor: 0.05,
+		coalBufferPts: 1,
+		coalBridgeGap: 2,
+		coalAdaptiveShoulder: true,
 		badholeTreatment: 'vsh_gr',
 		fluidDensityMode: 'static',
 		fluidDensityMudType: 'WBM',

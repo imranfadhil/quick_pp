@@ -418,6 +418,9 @@
 			coal_nphi_min: lp.coalNphiMin,
 			coal_window_size: Math.round(lp.coalWindowSize),
 			coal_trend_factor: lp.coalTrendFactor,
+			coal_buffer_pts: Math.round(lp.coalBufferPts ?? 1),
+			coal_bridge_gap: Math.round(lp.coalBridgeGap ?? 2),
+			coal_adaptive_shoulder: lp.coalAdaptiveShoulder ?? true,
 			badhole_treatment: lp.badholeTreatment
 		};
 		const gammaArgs = gammaParameters(lp);
@@ -491,6 +494,9 @@
 						coal_nphi_min: lp.coalNphiMin,
 						coal_window_size: Math.round(lp.coalWindowSize),
 						coal_trend_factor: lp.coalTrendFactor,
+						coal_buffer_pts: Math.round(lp.coalBufferPts ?? 1),
+						coal_bridge_gap: Math.round(lp.coalBridgeGap ?? 2),
+						coal_adaptive_shoulder: lp.coalAdaptiveShoulder ?? true,
 						...filterArgs
 					}
 				);
@@ -1853,6 +1859,35 @@
 					decimals={0}
 					onrun={() => executeLithoPoro(false)}
 				/>
+				<NumericScrubber
+					label="Boundary Buffer"
+					bind:value={workbench.lithoParams.coalBufferPts}
+					unit="pts"
+					min={0}
+					max={5}
+					step={1}
+					decimals={0}
+					onrun={() => executeLithoPoro(false)}
+				/>
+				<NumericScrubber
+					label="Gap Bridging"
+					bind:value={workbench.lithoParams.coalBridgeGap}
+					unit="pts"
+					min={0}
+					max={6}
+					step={1}
+					decimals={0}
+					onrun={() => executeLithoPoro(false)}
+				/>
+				<label class="flex items-center gap-2 py-0.5 text-xs font-medium cursor-pointer">
+					<input
+						type="checkbox"
+						bind:checked={workbench.lithoParams.coalAdaptiveShoulder}
+						class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+						onchange={() => executeLithoPoro(false)}
+					/>
+					<span>Adaptive Shoulder Recovery</span>
+				</label>
 			{/if}
 		</ParameterSection>
 

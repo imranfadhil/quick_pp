@@ -41,6 +41,9 @@ export function comparisonRequest(kind: 'porosity' | 'permeability') {
 			coal_nphi_min: lp.coalNphiMin,
 			coal_window_size: Math.round(lp.coalWindowSize),
 			coal_trend_factor: lp.coalTrendFactor,
+			coal_buffer_pts: Math.round(lp.coalBufferPts ?? 1),
+			coal_bridge_gap: Math.round(lp.coalBridgeGap ?? 2),
+			coal_adaptive_shoulder: lp.coalAdaptiveShoulder ?? true,
 			badhole_treatment: lp.badholeTreatment,
 			...filter
 		};
