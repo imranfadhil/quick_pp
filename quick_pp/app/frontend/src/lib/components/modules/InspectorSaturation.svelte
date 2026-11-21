@@ -35,9 +35,7 @@
 		return Number(wellData.depthRange.max.toFixed(1));
 	});
 
-	let refDepth = $derived(
-		workbench.saturationParams.bqvReferenceDepth ?? defaultRefDepth
-	);
+	let refDepth = $derived(workbench.saturationParams.bqvReferenceDepth ?? defaultRefDepth);
 
 	function estimateTempAndRwAtDepth(depthM: number) {
 		const sp = workbench.saturationParams;
@@ -96,9 +94,7 @@
 		);
 		const sp = workbench.saturationParams;
 		const intercept =
-			bqvReferenceRw.rw > 0 && sp.a > 0
-				? 1 / (sp.a * bqvReferenceRw.rw)
-				: Number.NaN;
+			bqvReferenceRw.rw > 0 && sp.a > 0 ? 1 / (sp.a * bqvReferenceRw.rw) : Number.NaN;
 		return fitBqvCrossplotWithFixedIntercept(fit.points, intercept);
 	});
 	let bqvFit = $derived.by(() =>
@@ -156,7 +152,9 @@
 		none: 'OFF'
 	};
 
-	let detectedContacts = $state<Array<{ contact_type: string; depth: number; remarks?: string }>>([]);
+	let detectedContacts = $state<Array<{ contact_type: string; depth: number; remarks?: string }>>(
+		[]
+	);
 
 	let hasDipoleSonic = $derived.by(() => {
 		const curves = wellData.curves;
@@ -171,9 +169,15 @@
 
 	let hasMudGas = $derived.by(() => {
 		const curves = wellData.curves;
-		const c1 = ['C1', 'c1'].some((c) => curves[c]?.some((v: any) => typeof v === 'number' && Number.isFinite(v) && v > 0));
-		const c2 = ['C2', 'c2'].some((c) => curves[c]?.some((v: any) => typeof v === 'number' && Number.isFinite(v) && v > 0));
-		const c3 = ['C3', 'c3'].some((c) => curves[c]?.some((v: any) => typeof v === 'number' && Number.isFinite(v) && v > 0));
+		const c1 = ['C1', 'c1'].some((c) =>
+			curves[c]?.some((v: any) => typeof v === 'number' && Number.isFinite(v) && v > 0)
+		);
+		const c2 = ['C2', 'c2'].some((c) =>
+			curves[c]?.some((v: any) => typeof v === 'number' && Number.isFinite(v) && v > 0)
+		);
+		const c3 = ['C3', 'c3'].some((c) =>
+			curves[c]?.some((v: any) => typeof v === 'number' && Number.isFinite(v) && v > 0)
+		);
 		return Boolean(c1 && c2 && c3);
 	});
 
@@ -181,32 +185,56 @@
 		const gasFlag = wellData.curves['GAS_FLAG'] ?? [];
 		const oilFlag = wellData.curves['OIL_FLAG'] ?? [];
 		const uncFlag = wellData.curves['UNC_FLAG'] ?? [];
+		const fluidType = wellData.curves['FLUID_TYPE'] ?? [];
 		const swt = wellData.curves['SWT'] ?? [];
+		const phit = wellData.curves['PHIT'] ?? wellData.curves['PHIE'] ?? [];
+		const vsh = wellData.curves['VSHALE'] ?? wellData.curves['VCLAY'] ?? [];
 		const indices = wellData.visibleIndices;
 		if (indices.length === 0) return null;
 		let gasCount = 0;
 		let oilCount = 0;
 		let uncCount = 0;
 		let waterCount = 0;
+		let nonPayCount = 0;
+		const phitCutoff = workbench.saturationParams.phitCutoff ?? 0.05;
+		const vshCutoff = workbench.saturationParams.vshCutoff ?? 0.5;
+		const swCutoff = workbench.saturationParams.swPayCutoff ?? 0.65;
+
 		for (const i of indices) {
-			if (gasFlag[i] === 1) gasCount++;
-			else if (oilFlag[i] === 1) oilCount++;
-			else if (uncFlag[i] === 1) uncCount++;
-			else if (typeof swt[i] === 'number' && swt[i] > workbench.saturationParams.swPayCutoff) waterCount++;
+			const ftStr = String(fluidType[i] ?? '');
+			if (gasFlag[i] === 1 || ftStr === 'GAS') gasCount++;
+			else if (oilFlag[i] === 1 || ftStr === 'OIL') oilCount++;
+			else if (uncFlag[i] === 1 || ftStr === 'UNCONFIRMED') uncCount++;
+			else {
+				const isRes =
+					typeof phit[i] === 'number' &&
+					phit[i] >= phitCutoff &&
+					(typeof vsh[i] !== 'number' || vsh[i] <= vshCutoff);
+				if (
+					ftStr === 'WATER' ||
+					(isRes && typeof swt[i] === 'number' && swt[i] > swCutoff)
+				) {
+					waterCount++;
+				} else {
+					nonPayCount++;
+				}
+			}
 		}
 		return {
 			gasCount,
 			oilCount,
 			uncCount,
-			waterCount
+			waterCount,
+			nonPayCount
 		};
 	});
 
 	let hasTsAvailable = $derived.by(() => {
 		const ps = wellData.curves['PHIT_SAND'];
-		return thomasStieberAvailable(workbench.lithoParams.model, Boolean(
-			workbench.tsParams.enabled || (ps && ps.some((v) => Number.isFinite(v)))
-		));
+		return thomasStieberAvailable(
+			workbench.lithoParams.model,
+			Boolean(workbench.tsParams.enabled || (ps && ps.some((v) => Number.isFinite(v))))
+		);
 	});
 
 	async function executeSaturation(persist: boolean = false) {
@@ -373,8 +401,7 @@
 					<option value="dual_water">Dual Water</option>
 				</select>
 			</div>
-			{#if workbench.saturationParams.method === 'simandoux' ||
-				workbench.saturationParams.method === 'indonesian'}
+			{#if workbench.saturationParams.method === 'simandoux' || workbench.saturationParams.method === 'indonesian'}
 				<NumericScrubber
 					label="Shale Resistivity (Rsh)"
 					bind:value={workbench.saturationParams.rsh}
@@ -434,8 +461,12 @@
 			</div>
 
 			{#if hasTsAvailable}
-				<div class="my-1.5 rounded-xs border border-teal-200 bg-teal-50/70 px-2 py-1.5 text-[10.5px]">
-					<label class="flex items-center justify-between gap-2 font-medium text-teal-950 cursor-pointer">
+				<div
+					class="my-1.5 rounded-xs border border-teal-200 bg-teal-50/70 px-2 py-1.5 text-[10.5px]"
+				>
+					<label
+						class="flex cursor-pointer items-center justify-between gap-2 font-medium text-teal-950"
+					>
 						<span class="flex items-center gap-1.5">
 							<input
 								type="checkbox"
@@ -445,15 +476,23 @@
 							/>
 							<span>Use Thomas-Stieber Thin-Bed Inputs</span>
 						</span>
-						<span class="rounded-2xs bg-teal-100 px-1 py-0.5 font-mono text-[9px] font-bold text-teal-800">
+						<span
+							class="rounded-2xs bg-teal-100 px-1 py-0.5 font-mono text-[9px] font-bold text-teal-800"
+						>
 							{workbench.tsParams.useInSaturation ? 'TS Active' : 'Bulk'}
 						</span>
 					</label>
 					<div class="mt-0.5 text-[9.5px] leading-snug text-teal-800">
 						{#if workbench.tsParams.useInSaturation}
-							Solves sand-lamina <span class="mono-num">Sw</span> from <span class="mono-num">PHIT_SAND</span>, dispersed <span class="mono-num">VSH_DIS</span>, and de-shaled <span class="mono-num">RSAND_TS</span>, then maps back to bulk <span class="mono-num">SWT</span> conserving HCPV.
+							Solves sand-lamina <span class="mono-num">Sw</span> from
+							<span class="mono-num">PHIT_SAND</span>, dispersed
+							<span class="mono-num">VSH_DIS</span>, and de-shaled
+							<span class="mono-num">RSAND_TS</span>, then maps back to bulk
+							<span class="mono-num">SWT</span> conserving HCPV.
 						{:else}
-							Using standard bulk <span class="mono-num">RT</span>, <span class="mono-num">PHIT</span>, and total <span class="mono-num">VCLAY</span>.
+							Using standard bulk <span class="mono-num">RT</span>,
+							<span class="mono-num">PHIT</span>, and total
+							<span class="mono-num">VCLAY</span>.
 						{/if}
 					</div>
 				</div>
@@ -509,7 +548,8 @@
 					decimals={2}
 				/>
 				<div class="text-[10px] text-[var(--text-muted)]">
-					Inverted hydrocarbon density: Gas when ρ_hc ≤ cutoff (&lt; 0.40 g/cc), Oil when &gt; cutoff.
+					Inverted hydrocarbon density: Gas when ρ_hc ≤ cutoff (&lt; 0.40 g/cc), Oil when
+					&gt; cutoff.
 				</div>
 			{:else if workbench.saturationParams.fluidTypingMethod === 'sonic_vp_vs'}
 				<NumericScrubber
@@ -525,7 +565,9 @@
 					Compressional to shear ratio: Gas when Vp/Vs ≤ cutoff (&lt; 1.60 in clastics).
 				</div>
 			{:else if workbench.saturationParams.fluidTypingMethod === 'mud_gas'}
-				<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10px] text-[var(--text-secondary)]">
+				<div
+					class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10px] text-[var(--text-secondary)]"
+				>
 					Uses Haworth (1985) mud gas chromatography ratios (C1–C5) from mud logs.
 				</div>
 			{/if}
@@ -559,8 +601,12 @@
 					decimals={2}
 				/>
 
-				<div class="my-1 rounded-xs border border-blue-200 bg-blue-50/70 px-2 py-1 text-[10.5px]">
-					<label class="flex items-center justify-between gap-2 font-medium text-blue-950 cursor-pointer">
+				<div
+					class="my-1 rounded-xs border border-blue-200 bg-blue-50/70 px-2 py-1 text-[10.5px]"
+				>
+					<label
+						class="flex cursor-pointer items-center justify-between gap-2 font-medium text-blue-950"
+					>
 						<span class="flex items-center gap-1.5">
 							<input
 								type="checkbox"
@@ -570,14 +616,20 @@
 							/>
 							<span>Enforce Gravity Segregation</span>
 						</span>
-						<span class="rounded-2xs bg-blue-100 px-1 py-0.5 font-mono text-[9px] font-bold text-blue-800">
+						<span
+							class="rounded-2xs bg-blue-100 px-1 py-0.5 font-mono text-[9px] font-bold text-blue-800"
+						>
 							Gas above Oil
 						</span>
 					</label>
 				</div>
 
-				<div class="my-1 rounded-xs border border-amber-200 bg-amber-50/70 px-2 py-1 text-[10.5px]">
-					<label class="flex items-center justify-between gap-2 font-medium text-amber-950 cursor-pointer">
+				<div
+					class="my-1 rounded-xs border border-amber-200 bg-amber-50/70 px-2 py-1 text-[10.5px]"
+				>
+					<label
+						class="flex cursor-pointer items-center justify-between gap-2 font-medium text-amber-950"
+					>
 						<span class="flex items-center gap-1.5">
 							<input
 								type="checkbox"
@@ -587,30 +639,54 @@
 							/>
 							<span>Cater for Unconfirmed HC</span>
 						</span>
-						<span class="rounded-2xs bg-amber-100 px-1 py-0.5 font-mono text-[9px] font-bold text-amber-800">
+						<span
+							class="rounded-2xs bg-amber-100 px-1 py-0.5 font-mono text-[9px] font-bold text-amber-800"
+						>
 							Buffer Zone
 						</span>
 					</label>
 				</div>
 
 				{#if fluidSummary}
-					<div class="mt-1 space-y-1 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10px]">
+					<div
+						class="mt-1 space-y-1 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10px]"
+					>
 						<div class="flex items-center justify-between">
-							<span class="font-semibold text-[var(--text-primary)]">Fluid Pay Samples:</span>
+							<span class="font-semibold text-[var(--text-primary)]"
+								>Fluid Pay Samples:</span
+							>
 							<span class="font-mono text-[9.5px]">
-								<span class="font-bold text-red-600">Gas: {fluidSummary.gasCount}</span> |
-								<span class="font-bold text-emerald-600">Oil: {fluidSummary.oilCount}</span>
+								<span class="font-bold text-red-600"
+									>Gas: {fluidSummary.gasCount}</span
+								>
+								|
+								<span class="font-bold text-emerald-600"
+									>Oil: {fluidSummary.oilCount}</span
+								>
 								{#if fluidSummary.uncCount > 0}
-									 | <span class="font-bold text-amber-600">Unc: {fluidSummary.uncCount}</span>
+									| <span class="font-bold text-amber-600"
+										>Unc: {fluidSummary.uncCount}</span
+									>
 								{/if}
-								 | <span class="font-bold text-blue-600">Water: {fluidSummary.waterCount}</span>
+								|
+								<span class="font-bold text-blue-600"
+									>Water: {fluidSummary.waterCount}</span
+								>
+								|
+								<span class="text-[var(--text-muted)]"
+									>Non-Pay: {fluidSummary.nonPayCount}</span
+								>
 							</span>
 						</div>
 						{#if detectedContacts.length > 0}
 							<div class="border-t border-[var(--border-hairline)] pt-1 text-[9.5px]">
-								<span class="font-medium text-[var(--text-secondary)]">Contacts: </span>
+								<span class="font-medium text-[var(--text-secondary)]"
+									>Contacts:
+								</span>
 								{#each detectedContacts as c}
-									<span class="mr-1 inline-block rounded-2xs bg-slate-200/80 px-1 py-0.5 font-mono font-bold text-slate-800">
+									<span
+										class="rounded-2xs mr-1 inline-block bg-slate-200/80 px-1 py-0.5 font-mono font-bold text-slate-800"
+									>
 										{c.contact_type}: {c.depth.toFixed(1)}m
 									</span>
 								{/each}
@@ -687,11 +763,16 @@
 				max={120}
 				step={1.0}
 			/>
-			<div class="mt-1 space-y-1 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1.5 text-[10px] text-[var(--text-secondary)]">
+			<div
+				class="mt-1 space-y-1 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1.5 text-[10px] text-[var(--text-secondary)]"
+			>
 				<div class="flex items-center justify-between gap-1.5">
 					<span>
-						At Surface: <strong class="mono-num">{estimatedRwAtSurface.tempC}°C</strong> →
-						<strong class="mono-num text-[var(--accent-primary)]">Rw = {estimatedRwAtSurface.rw} ohm.m</strong>
+						At Surface: <strong class="mono-num">{estimatedRwAtSurface.tempC}°C</strong>
+						→
+						<strong class="mono-num text-[var(--accent-primary)]"
+							>Rw = {estimatedRwAtSurface.rw} ohm.m</strong
+						>
 					</span>
 					{#if workbench.saturationParams.rwMode === 'pickett'}
 						<button
@@ -705,7 +786,9 @@
 						</button>
 					{/if}
 				</div>
-				<div class="flex items-center justify-between gap-1.5 border-t border-[var(--border-hairline)] pt-1">
+				<div
+					class="flex items-center justify-between gap-1.5 border-t border-[var(--border-hairline)] pt-1"
+				>
 					<span class="flex flex-wrap items-center gap-1">
 						<span>At</span>
 						<input
@@ -715,17 +798,21 @@
 							value={refDepth}
 							oninput={(event) => {
 								const value = Number(event.currentTarget.value);
-								workbench.saturationParams.bqvReferenceDepth = Number.isFinite(value)
+								workbench.saturationParams.bqvReferenceDepth = Number.isFinite(
+									value
+								)
 									? value
 									: null;
 							}}
 							title="Reference depth for Rw calculation (defaults to bottom of filtered interval)"
-							class="mono-num h-5 w-16 rounded-2xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 py-0 text-right text-[10px] font-semibold text-[var(--text-primary)] focus:border-[var(--border-focus)] focus:ring-1 focus:ring-[var(--border-focus)] focus:outline-none"
+							class="mono-num rounded-2xs h-5 w-16 border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 py-0 text-right text-[10px] font-semibold text-[var(--text-primary)] focus:border-[var(--border-focus)] focus:ring-1 focus:ring-[var(--border-focus)] focus:outline-none"
 						/>
 						<span>m:</span>
 						<strong class="mono-num">{estimatedRwAtRefDepth.tempC}°C</strong>
 						<span>→</span>
-						<strong class="mono-num text-[var(--accent-primary)]">Rw = {estimatedRwAtRefDepth.rw} ohm.m</strong>
+						<strong class="mono-num text-[var(--accent-primary)]"
+							>Rw = {estimatedRwAtRefDepth.rw} ohm.m</strong
+						>
 						{#if Math.abs((refDepth ?? 0) - defaultRefDepth) > 0.1}
 							<button
 								type="button"
@@ -823,13 +910,15 @@
 					class="mt-1 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10px] text-[var(--text-secondary)]"
 				>
 					<div class="mb-1 flex items-center justify-between gap-2">
-						<span class="font-semibold text-[var(--text-primary)]">Fit interval and line</span>
+						<span class="font-semibold text-[var(--text-primary)]"
+							>Fit interval and line</span
+						>
 						<div class="flex items-center gap-1">
 							<button
 								type="button"
 								onclick={() => (workbench.saturationParams.bqvFitMode = 'auto')}
-								class="rounded-xs border px-1.5 py-0.5 font-semibold {workbench.saturationParams.bqvFitMode ===
-								'auto'
+								class="rounded-xs border px-1.5 py-0.5 font-semibold {workbench
+									.saturationParams.bqvFitMode === 'auto'
 									? 'border-blue-600 bg-blue-600 text-white'
 									: 'border-[var(--border-hairline)] bg-white text-[var(--text-secondary)]'}"
 							>
@@ -839,8 +928,8 @@
 								type="button"
 								disabled={bqvAutoFit.points.length < 2}
 								onclick={useManualBqvFit}
-								class="rounded-xs border px-1.5 py-0.5 font-semibold {workbench.saturationParams.bqvFitMode ===
-								'manual'
+								class="rounded-xs border px-1.5 py-0.5 font-semibold {workbench
+									.saturationParams.bqvFitMode === 'manual'
 									? 'border-blue-600 bg-blue-600 text-white'
 									: 'border-[var(--border-hairline)] bg-white text-[var(--text-secondary)]'} disabled:cursor-not-allowed disabled:opacity-45"
 							>
@@ -868,11 +957,9 @@
 							{workbench.saturationParams.bqvFitMode === 'manual'
 								? 'Manual fit'
 								: 'Autofit'}:
-							<strong class="mono-num"
-								>{bqvFit.slope.toFixed(4)}</strong
-							>
-							(<span class="mono-num">BQv/a</span>),
-							intercept <strong class="mono-num">{bqvFit.intercept?.toFixed(4)}</strong>,
+							<strong class="mono-num">{bqvFit.slope.toFixed(4)}</strong>
+							(<span class="mono-num">BQv/a</span>), intercept
+							<strong class="mono-num">{bqvFit.intercept?.toFixed(4)}</strong>,
 							<strong class="mono-num"
 								>a × slope = {(bqvFit.slope * workbench.saturationParams.a).toFixed(
 									4
@@ -886,7 +973,8 @@
 								At {refDepth.toFixed(1)} m, B = {crossplotCalibration.b.toFixed(3)} and
 								implied CEC = {crossplotCalibration.cec.toFixed(4)} meq/g.
 							{:else}
-								A positive slope and valid reference-depth inputs are required for CEC.
+								A positive slope and valid reference-depth inputs are required for
+								CEC.
 							{/if}
 						{:else}
 							Select an interval with at least two valid crossplot samples and a
@@ -895,10 +983,10 @@
 					</div>
 					<div class="mt-1 flex items-start justify-between gap-2">
 						<span class="text-[9.5px]">
-							Lasso water-bearing and clean-shale samples on the BQv plot; depth/zone filters
-							also constrain the interval. Autofit fixes the intercept at 1/(a·Rw) from the
-							active Rw source and optimizes slope only. Manual mode lets you edit both;
-							neither mode changes the configured Rw.
+							Lasso water-bearing and clean-shale samples on the BQv plot; depth/zone
+							filters also constrain the interval. Autofit fixes the intercept at
+							1/(a·Rw) from the active Rw source and optimizes slope only. Manual mode
+							lets you edit both; neither mode changes the configured Rw.
 						</span>
 						<button
 							type="button"
@@ -924,7 +1012,9 @@
 		{/if}
 
 		{#if wellData.lastError}
-			<div class="m-2 rounded-sm border border-red-200 bg-red-50 p-2 text-xs text-[var(--status-error)]">
+			<div
+				class="m-2 rounded-sm border border-red-200 bg-red-50 p-2 text-xs text-[var(--status-error)]"
+			>
 				{wellData.lastError}
 			</div>
 		{/if}
@@ -937,13 +1027,15 @@
 			type="button"
 			disabled={wellData.isCalculating || wellData.isSaving}
 			onclick={() => executeSaturation(false)}
-			class="h-7 flex-1 mr-1.5 rounded-sm bg-[var(--accent-primary)] px-3 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+			class="mr-1.5 h-7 flex-1 rounded-sm bg-[var(--accent-primary)] px-3 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
 		>
 			{wellData.isCalculating ? 'Running...' : 'Run (⌘+Enter)'}
 		</button>
 		<button
 			type="button"
-			disabled={wellData.isCalculating || wellData.isSaving || !wellData.hasPendingComputed('saturation')}
+			disabled={wellData.isCalculating ||
+				wellData.isSaving ||
+				!wellData.hasPendingComputed('saturation')}
 			onclick={saveSaturation}
 			title={wellData.hasPendingComputed('saturation')
 				? wellData.getPendingSaveTooltip(

@@ -195,7 +195,9 @@
 
 	let tsOverlayActive = $derived(workbench.tsParams.enabled && showTsOverlay && hasTsComputed);
 	let mobilityData = $derived.by(() =>
-		buildMobilityPoints(wellData.pressureTests, (depth) => wellData.isDepthInActiveFilter(depth))
+		buildMobilityPoints(wellData.pressureTests, (depth) =>
+			wellData.isDepthInActiveFilter(depth)
+		)
 	);
 
 	// Interactive dragging state for Formation Tops & Fluid Contacts
@@ -396,7 +398,10 @@
 				continue;
 			}
 			if (
-				(activeModel === 'sand_shale' || activeModel === 'vsh_nd' || activeModel === 'vsh_gr' || activeModel === 'vsh_bulk') &&
+				(activeModel === 'sand_shale' ||
+					activeModel === 'vsh_nd' ||
+					activeModel === 'vsh_gr' ||
+					activeModel === 'vsh_bulk') &&
 				!hasCarbonateCols &&
 				!hasComplexCols &&
 				!['VCLAY', 'VSAND', ...(coalEnabled ? ['VCOAL'] : [])].includes(spec.mnemonic)
@@ -1942,7 +1947,9 @@
 		if (tocVals.some((v) => v !== null)) {
 			const tocDec = decimateSvg(tocVals);
 			const scaleToc = (arr: (number | null)[]): (number | null)[] =>
-				arr.map((v) => (v !== null && Number.isFinite(v) ? Math.min(Math.max(v / 10.0, 0), 1.0) : null));
+				arr.map((v) =>
+					v !== null && Number.isFinite(v) ? Math.min(Math.max(v / 10.0, 0), 1.0) : null
+				);
 			traces.push({
 				type: 'scatter',
 				mode: 'lines',
@@ -2102,7 +2109,9 @@
 			});
 		}
 		if (showMobility && mobilityData.points.length > 0) {
-			traces.push(buildMobilityTrace(mobilityData.points, (depth) => formatLogDepth(depth, 2)));
+			traces.push(
+				buildMobilityTrace(mobilityData.points, (depth) => formatLogDepth(depth, 2))
+			);
 		}
 
 		// Track 6 (xaxis6): Discrete Rock Type (ROCK_FLAG) small track between PERM and SW
@@ -2250,13 +2259,28 @@
 			);
 
 			// Fluid Phase Shading (Gas: Red, Oil: Green, Unconfirmed: Amber) from Sw to 1.0
-			const gasFlagDec = decimateSvg(pick('GAS_FLAG'));
-			const oilFlagDec = decimateSvg(pick('OIL_FLAG'));
-			const uncFlagDec = decimateSvg(pick('UNC_FLAG'));
+			// Bridge single-sample dropout holes in flags where Sw <= 0.65 to maintain smooth visual fills
+			const bridgeFlagDropouts = (flags: (number | null)[]) => {
+				const res = [...flags];
+				for (let i = 1; i < res.length - 1; i++) {
+					if (res[i] !== 1 && res[i - 1] === 1 && res[i + 1] === 1) {
+						const sw = swtClamped[i];
+						if (sw !== null && sw <= 0.65) {
+							res[i] = 1;
+						}
+					}
+				}
+				return res;
+			};
+			const gasFlagDec = bridgeFlagDropouts(decimateSvg(pick('GAS_FLAG')));
+			const oilFlagDec = bridgeFlagDropouts(decimateSvg(pick('OIL_FLAG')));
+			const uncFlagDec = bridgeFlagDropouts(decimateSvg(pick('UNC_FLAG')));
 
 			if (gasFlagDec.some((v) => v === 1)) {
 				const gasBase = swtClamped.map((_, i) => (gasFlagDec[i] === 1 ? 1.0 : null));
-				const gasTop = swtClamped.map((sw, i) => (gasFlagDec[i] === 1 && sw !== null ? sw : null));
+				const gasTop = swtClamped.map((sw, i) =>
+					gasFlagDec[i] === 1 && sw !== null ? sw : null
+				);
 				const gasPinched = buildPairPinchedFill(gasBase, gasTop, svgDepth, 1.0);
 				traces.push({
 					type: 'scatter',
@@ -2288,7 +2312,9 @@
 
 			if (oilFlagDec.some((v) => v === 1)) {
 				const oilBase = swtClamped.map((_, i) => (oilFlagDec[i] === 1 ? 1.0 : null));
-				const oilTop = swtClamped.map((sw, i) => (oilFlagDec[i] === 1 && sw !== null ? sw : null));
+				const oilTop = swtClamped.map((sw, i) =>
+					oilFlagDec[i] === 1 && sw !== null ? sw : null
+				);
 				const oilPinched = buildPairPinchedFill(oilBase, oilTop, svgDepth, 1.0);
 				traces.push({
 					type: 'scatter',
@@ -2320,7 +2346,9 @@
 
 			if (uncFlagDec.some((v) => v === 1)) {
 				const uncBase = swtClamped.map((_, i) => (uncFlagDec[i] === 1 ? 1.0 : null));
-				const uncTop = swtClamped.map((sw, i) => (uncFlagDec[i] === 1 && sw !== null ? sw : null));
+				const uncTop = swtClamped.map((sw, i) =>
+					uncFlagDec[i] === 1 && sw !== null ? sw : null
+				);
 				const uncPinched = buildPairPinchedFill(uncBase, uncTop, svgDepth, 1.0);
 				traces.push({
 					type: 'scatter',
@@ -2638,7 +2666,10 @@
 				gridcolor: gridColor,
 				automargin: false,
 				tickfont: { family: 'JetBrains Mono', size: 10, color: '#0F172A' },
-				title: { text: `DEPTH (${depthDisplay.unit})`, font: { family: 'Inter', size: 10, color: '#64748B' } }
+				title: {
+					text: `DEPTH (${depthDisplay.unit})`,
+					font: { family: 'Inter', size: 10, color: '#64748B' }
+				}
 			},
 			xaxis: {
 				...axisCommon,
@@ -3335,9 +3366,17 @@
 		</div>
 
 		<div class="flex shrink-0 items-center gap-2">
-			<label class="flex items-center gap-1 text-[10px] text-[var(--text-secondary)]" title="Changes the single-well log, working interval, filter, and meter-valued tables; other plots and exports retain their own units">
+			<label
+				class="flex items-center gap-1 text-[10px] text-[var(--text-secondary)]"
+				title="Changes the single-well log, working interval, filter, and meter-valued tables; other plots and exports retain their own units"
+			>
 				Log / interval
-				<select value={depthDisplay.unit} onchange={(e) => depthDisplay.setUnit(e.currentTarget.value === 'ft' ? 'ft' : 'm')} class="h-5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-[10px]">
+				<select
+					value={depthDisplay.unit}
+					onchange={(e) =>
+						depthDisplay.setUnit(e.currentTarget.value === 'ft' ? 'ft' : 'm')}
+					class="h-5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-[10px]"
+				>
 					<option value="m">m</option>
 					<option value="ft">ft</option>
 				</select>
@@ -3358,7 +3397,8 @@
 					<span
 						class="text-[10px] font-medium text-pink-700"
 						title="Positive mobility values outside 0.01–10,000 mD/cP in the active depth filter are not shown."
-					>{mobilityData.outsideRange} mobility off-scale</span>
+						>{mobilityData.outsideRange} mobility off-scale</span
+					>
 				{/if}
 			{/if}
 			{#if workbench.tsParams.enabled && hasTsComputed}
@@ -3676,7 +3716,8 @@
 								class="mono-num flex items-center justify-between text-[8px] leading-none font-semibold whitespace-nowrap text-sky-700"
 							>
 								<span>0.2</span>
-								<span class="font-sans text-[8px] font-bold">R_poro (Passey) ►</span>
+								<span class="font-sans text-[8px] font-bold">R_poro (Passey) ►</span
+								>
 								<span>2000</span>
 							</div>
 							<div
@@ -3884,9 +3925,7 @@
 								<span class="font-sans text-[8px] font-bold">TOC (wt%) ►</span>
 								<span>10.0</span>
 							</div>
-							<div
-								class="mt-0.5 h-[1.5px] w-full bg-emerald-600"
-							></div>
+							<div class="mt-0.5 h-[1.5px] w-full bg-emerald-600"></div>
 						</div>
 					{/if}
 				{/if}
@@ -4042,12 +4081,18 @@
 						style="color: {PETRO_COLORS.water}"
 					>
 						<span>1.0</span>
-						<span class="font-sans text-[9px] font-bold inline-flex items-center gap-1">
+						<span class="inline-flex items-center gap-1 font-sans text-[9px] font-bold">
 							<span>◄ SW / PAY</span>
-							<span class="inline-flex items-center gap-0.5" title="Fluid Pay Shades: Gas (Red), Oil (Green), Unconfirmed (Amber)">
-								<span class="inline-block h-1.5 w-1.5 rounded-full bg-red-500"></span>
-								<span class="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
-								<span class="inline-block h-1.5 w-1.5 rounded-full bg-amber-500"></span>
+							<span
+								class="inline-flex items-center gap-0.5"
+								title="Fluid Pay Shades: Gas (Red), Oil (Green), Unconfirmed (Amber)"
+							>
+								<span class="inline-block h-1.5 w-1.5 rounded-full bg-red-500"
+								></span>
+								<span class="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500"
+								></span>
+								<span class="inline-block h-1.5 w-1.5 rounded-full bg-amber-500"
+								></span>
 							</span>
 						</span>
 						<span>0.0</span>
@@ -4160,7 +4205,9 @@
 									activeDepth
 								)}
 							style="top: {pct}%;"
-							title="Drag vertically to adjust Fluid Contact ({contact.type}) — TVDSS: {formatLogDepth(activeDepth)}{Math.abs(activePlotDepth - activeDepth) > 0.5
+							title="Drag vertically to adjust Fluid Contact ({contact.type}) — TVDSS: {formatLogDepth(
+								activeDepth
+							)}{Math.abs(activePlotDepth - activeDepth) > 0.5
 								? ` (MD: ${formatLogDepth(activePlotDepth)})`
 								: ''}"
 							class="group pointer-events-auto absolute right-0 left-0 -translate-y-1/2 cursor-ns-resize py-1"
@@ -4520,19 +4567,25 @@
 								{#if (readout.VOIL ?? 0) > 0.001}
 									<div class="flex items-center justify-between">
 										<span class="font-bold text-emerald-700">VOIL</span>
-										<span class="mono-num font-semibold">{fmtNum(readout.VOIL, 3)}</span>
+										<span class="mono-num font-semibold"
+											>{fmtNum(readout.VOIL, 3)}</span
+										>
 									</div>
 								{/if}
 								{#if (readout.VGAS ?? 0) > 0.001}
 									<div class="flex items-center justify-between">
 										<span class="font-bold text-red-600">VGAS</span>
-										<span class="mono-num font-semibold">{fmtNum(readout.VGAS, 3)}</span>
+										<span class="mono-num font-semibold"
+											>{fmtNum(readout.VGAS, 3)}</span
+										>
 									</div>
 								{/if}
 								{#if (readout.VWATER ?? 0) > 0.001}
 									<div class="flex items-center justify-between">
 										<span class="font-bold text-blue-600">VWATER</span>
-										<span class="mono-num font-semibold">{fmtNum(readout.VWATER, 3)}</span>
+										<span class="mono-num font-semibold"
+											>{fmtNum(readout.VWATER, 3)}</span
+										>
 									</div>
 								{/if}
 							</div>
@@ -4576,7 +4629,9 @@
 							</div>
 						{/if}
 						{#if readout.TOC !== null && readout.TOC !== undefined}
-							<div class="flex items-center justify-between border-t border-slate-200 pt-0.5 text-emerald-800">
+							<div
+								class="flex items-center justify-between border-t border-slate-200 pt-0.5 text-emerald-800"
+							>
 								<span class="font-bold">TOC</span>
 								<span class="mono-num font-semibold"
 									>{fmtNum(readout.TOC, 2)}
@@ -4587,7 +4642,9 @@
 						{#if readout.DELTA_LOG_R !== null && readout.DELTA_LOG_R !== undefined}
 							<div class="flex items-center justify-between text-slate-700">
 								<span class="font-bold">ΔlogR</span>
-								<span class="mono-num font-semibold">{fmtNum(readout.DELTA_LOG_R, 3)}</span>
+								<span class="mono-num font-semibold"
+									>{fmtNum(readout.DELTA_LOG_R, 3)}</span
+								>
 							</div>
 						{/if}
 					</div>
