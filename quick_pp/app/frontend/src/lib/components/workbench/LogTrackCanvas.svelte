@@ -41,9 +41,156 @@
 			'yaxis.ticktext': ticktext
 		});
 	}
+	// Depth index mode ('MD' vs 'TVDSS') and dual-depth track display
+	let depthIndex = $state<'MD' | 'TVDSS'>('MD');
+	let showTvdssTrack = $state(true);
+
+	function getWellTvdssArray(): (number | null)[] | undefined {
+		return (
+			wellData.curves['TVDSS'] ??
+			wellData.curves['TVD'] ??
+			wellData.curves['DEPT_TVD'] ??
+			wellData.curves['DEPTH_TVD']
+		);
+	}
+
+	// Precomputed monotonic (MD, TVDSS) mapping pairs for robust interpolation & linear extrapolation
+	let depthMappingPairs = $derived.by(() => {
+		const deptArr = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'];
+		const tvdssArr = getWellTvdssArray();
+		if (!deptArr || !tvdssArr || deptArr.length === 0 || tvdssArr.length === 0) {
+			return {
+				byMd: [] as { md: number; tvdss: number }[],
+				byTvdss: [] as { md: number; tvdss: number }[]
+			};
+		}
+		const pairs: Array<{ md: number; tvdss: number }> = [];
+		const limit = Math.min(deptArr.length, tvdssArr.length);
+		for (let i = 0; i < limit; i++) {
+			const m = deptArr[i];
+			const z = tvdssArr[i];
+			if (
+				typeof m === 'number' &&
+				Number.isFinite(m) &&
+				typeof z === 'number' &&
+				Number.isFinite(z)
+			) {
+				pairs.push({ md: m, tvdss: z });
+			}
+		}
+		if (pairs.length === 0) {
+			return { byMd: [], byTvdss: [] };
+		}
+		const byMd = [...pairs].sort((a, b) => a.md - b.md);
+		const byTvdss = [...pairs].sort((a, b) => a.tvdss - b.tvdss);
+		return { byMd, byTvdss };
+	});
+
+	// Convert TVDSS depth to MD depth with monotonic interpolation & linear extrapolation
+	function tvdssToMd(tvdss: number): number {
+		if (!Number.isFinite(tvdss)) return tvdss;
+		const { byTvdss } = depthMappingPairs;
+		if (byTvdss.length === 0) return tvdss;
+		if (byTvdss.length === 1) {
+			return tvdss + (byTvdss[0].md - byTvdss[0].tvdss);
+		}
+		// Extrapolate shallow
+		if (tvdss <= byTvdss[0].tvdss) {
+			const p0 = byTvdss[0];
+			const p1 = byTvdss[1];
+			const dZ = p1.tvdss - p0.tvdss;
+			const slope = Math.abs(dZ) > 1e-4 ? (p1.md - p0.md) / dZ : 1.0;
+			return p0.md + (tvdss - p0.tvdss) * slope;
+		}
+		// Extrapolate deep
+		const lastIdx = byTvdss.length - 1;
+		if (tvdss >= byTvdss[lastIdx].tvdss) {
+			const p0 = byTvdss[lastIdx - 1];
+			const p1 = byTvdss[lastIdx];
+			const dZ = p1.tvdss - p0.tvdss;
+			const slope = Math.abs(dZ) > 1e-4 ? (p1.md - p0.md) / dZ : 1.0;
+			return p1.md + (tvdss - p1.tvdss) * slope;
+		}
+		// Binary search in between
+		let lo = 0;
+		let hi = byTvdss.length - 1;
+		while (lo <= hi) {
+			const mid = (lo + hi) >> 1;
+			if (byTvdss[mid].tvdss < tvdss) lo = mid + 1;
+			else hi = mid - 1;
+		}
+		const i0 = Math.max(0, lo - 1);
+		const i1 = Math.min(byTvdss.length - 1, i0 + 1);
+		const p0 = byTvdss[i0];
+		const p1 = byTvdss[i1];
+		const dZ = p1.tvdss - p0.tvdss;
+		const frac = Math.abs(dZ) > 1e-4 ? (tvdss - p0.tvdss) / dZ : 0.0;
+		return p0.md + frac * (p1.md - p0.md);
+	}
+
+	function mdToTvdss(md: number): number {
+		if (!Number.isFinite(md)) return md;
+		const { byMd } = depthMappingPairs;
+		if (byMd.length === 0) return md;
+		if (byMd.length === 1) {
+			return md - (byMd[0].md - byMd[0].tvdss);
+		}
+		// Extrapolate shallow
+		if (md <= byMd[0].md) {
+			const p0 = byMd[0];
+			const p1 = byMd[1];
+			const dMd = p1.md - p0.md;
+			const slope = Math.abs(dMd) > 1e-4 ? (p1.tvdss - p0.tvdss) / dMd : 1.0;
+			return p0.tvdss + (md - p0.md) * slope;
+		}
+		// Extrapolate deep
+		const lastIdx = byMd.length - 1;
+		if (md >= byMd[lastIdx].md) {
+			const p0 = byMd[lastIdx - 1];
+			const p1 = byMd[lastIdx];
+			const dMd = p1.md - p0.md;
+			const slope = Math.abs(dMd) > 1e-4 ? (p1.tvdss - p0.tvdss) / dMd : 1.0;
+			return p1.tvdss + (md - p1.md) * slope;
+		}
+		// Binary search in between
+		let lo = 0;
+		let hi = byMd.length - 1;
+		while (lo <= hi) {
+			const mid = (lo + hi) >> 1;
+			if (byMd[mid].md < md) lo = mid + 1;
+			else hi = mid - 1;
+		}
+		const i0 = Math.max(0, lo - 1);
+		const i1 = Math.min(byMd.length - 1, i0 + 1);
+		const p0 = byMd[i0];
+		const p1 = byMd[i1];
+		const dMd = p1.md - p0.md;
+		const frac = Math.abs(dMd) > 1e-4 ? (md - p0.md) / dMd : 0.0;
+		return p0.tvdss + frac * (p1.tvdss - p0.tvdss);
+	}
+
+	let hasTvdss = $derived.by(() => {
+		const tvdss = getWellTvdssArray();
+		return Boolean(
+			tvdss &&
+			tvdss.some((v) => typeof v === 'number' && Number.isFinite(v) && (v > 0 || v < 0))
+		);
+	});
+
+	let effectiveDepthIndex = $derived<'MD' | 'TVDSS'>(
+		depthIndex === 'TVDSS' && hasTvdss ? 'TVDSS' : 'MD'
+	);
+
+	let showDualDepth = $derived(hasTvdss && showTvdssTrack);
+	let depthGutterWidth = $derived(showDualDepth ? 116 : 56);
+
 	// Track actual Plotly plot area left/right insets for pixel-accurate header & overlay alignment
-	let plotAreaLeft = $state(54);
+	let plotAreaLeft = $state(56);
 	let plotAreaRight = $state(8);
+
+	$effect(() => {
+		plotAreaLeft = depthGutterWidth;
+	});
 
 	function syncPlotBounds() {
 		if (!plotContainer) return;
@@ -52,6 +199,8 @@
 		if (size && typeof size.l === 'number' && typeof size.w === 'number') {
 			plotAreaLeft = size.l;
 			plotAreaRight = Math.max(0, plotContainer.clientWidth - (size.l + size.w));
+		} else {
+			plotAreaLeft = depthGutterWidth;
 		}
 	}
 
@@ -230,13 +379,23 @@
 		const indices = wellData.visibleIndices;
 		const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
 		if (indices.length > 0 && dept.length > 0) {
-			const minD = dept[indices[0]];
-			const maxD = dept[indices[indices.length - 1]];
-			if (Number.isFinite(minD) && Number.isFinite(maxD) && maxD >= minD) {
-				return [maxD, minD]; // Reversed depth axis (top = shallow, bottom = deep)
+			const rawMinD = dept[indices[0]];
+			const rawMaxD = dept[indices[indices.length - 1]];
+			if (Number.isFinite(rawMinD) && Number.isFinite(rawMaxD) && rawMaxD >= rawMinD) {
+				if (effectiveDepthIndex === 'TVDSS') {
+					const t0 = mdToTvdss(rawMinD);
+					const t1 = mdToTvdss(rawMaxD);
+					return [Math.max(t0, t1), Math.min(t0, t1)];
+				}
+				return [rawMaxD, rawMinD]; // Reversed depth axis (top = shallow, bottom = deep)
 			}
 		}
 		const dr = wellData.depthRange;
+		if (effectiveDepthIndex === 'TVDSS') {
+			const topT = mdToTvdss(dr.min);
+			const botT = mdToTvdss(dr.max);
+			return [Math.max(topT, botT), Math.min(topT, botT)];
+		}
 		return [dr.max, dr.min];
 	}
 
@@ -249,7 +408,7 @@
 			indices.length > 0 && dept.length > 0
 				? dept[indices[indices.length - 1]]
 				: wellData.depthRange.max;
-		const key = `${workbench.wellId ?? ''}:${indices.length}:${minD}:${maxD}`;
+		const key = `${workbench.wellId ?? ''}:${effectiveDepthIndex}:${indices.length}:${minD}:${maxD}`;
 		const defaultRange = getDefaultDepthRange();
 		if (key !== lastFilterKey) {
 			lastFilterKey = key;
@@ -279,10 +438,13 @@
 	$effect(() => {
 		const target = workbench.targetScrollDepth;
 		if (target !== null && Number.isFinite(target) && PlotlyLib && plotContainer && plotReady) {
+			const targetPlotD = effectiveDepthIndex === 'TVDSS' ? mdToTvdss(target) : target;
 			const span = Math.max(20, Math.abs(yRange[0] - yRange[1]) * 0.4);
-			const dr = wellData.depthRange;
-			const newMin = Math.max(dr.min, target - span / 2);
-			const newMax = Math.min(dr.max, target + span / 2);
+			const dr = getDefaultDepthRange();
+			const fullMin = Math.min(dr[0], dr[1]);
+			const fullMax = Math.max(dr[0], dr[1]);
+			const newMin = Math.max(fullMin, targetPlotD - span / 2);
+			const newMax = Math.min(fullMax, targetPlotD + span / 2);
 			yRange = [newMax, newMin];
 			PlotlyLib.relayout(plotContainer, { 'yaxis.range': [newMax, newMin] });
 			workbench.targetScrollDepth = null;
@@ -292,36 +454,48 @@
 	// Compute brushed depth intervals for translucent cobalt highlight bands
 	let brushedIntervals = $derived.by(() => {
 		const brushed = workbench.brushedDepthIndices;
-		const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
-		if (brushed.size === 0 || dept.length === 0) return [];
+		const deptAll = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
+		const tvdssAll = getWellTvdssArray();
+		const plotDepths: number[] =
+			effectiveDepthIndex === 'TVDSS' && hasTvdss
+				? deptAll.map((d, i) => {
+						const tv = tvdssAll && i < tvdssAll.length ? tvdssAll[i] : null;
+						if (typeof tv === 'number' && Number.isFinite(tv)) return tv;
+						return mdToTvdss(d);
+					})
+				: deptAll;
+		if (brushed.size === 0 || plotDepths.length === 0) return [];
 		const sorted = Array.from(brushed)
-			.filter((i) => i >= 0 && i < dept.length && Number.isFinite(dept[i]))
+			.filter((i) => i >= 0 && i < plotDepths.length && Number.isFinite(plotDepths[i]))
 			.sort((a, b) => a - b);
 		if (sorted.length === 0) return [];
 
 		let step = 0.5;
-		for (let i = 1; i < dept.length; i++) {
-			const diff = Math.abs(dept[i] - dept[i - 1]);
+		for (let i = 1; i < plotDepths.length; i++) {
+			const diff = Math.abs(plotDepths[i] - plotDepths[i - 1]);
 			if (Number.isFinite(diff) && diff > 1e-4 && diff < 10) {
 				step = diff;
 				break;
 			}
 		}
 		const intervals: Array<{ top: number; bottom: number; count: number }> = [];
-		let curTop = dept[sorted[0]] - step * 0.5;
-		let curBot = dept[sorted[0]] + step * 0.5;
+		let curTop = plotDepths[sorted[0]] - step * 0.5;
+		let curBot = plotDepths[sorted[0]] + step * 0.5;
 		let curCount = 1;
 
 		for (let k = 1; k < sorted.length; k++) {
 			const idx = sorted[k];
 			const prevIdx = sorted[k - 1];
-			if (idx <= prevIdx + 2 && Math.abs(dept[idx] - dept[prevIdx]) <= step * 3.5) {
-				curBot = dept[idx] + step * 0.5;
+			if (
+				idx <= prevIdx + 2 &&
+				Math.abs(plotDepths[idx] - plotDepths[prevIdx]) <= step * 3.5
+			) {
+				curBot = plotDepths[idx] + step * 0.5;
 				curCount++;
 			} else {
 				intervals.push({ top: curTop, bottom: curBot, count: curCount });
-				curTop = dept[idx] - step * 0.5;
-				curBot = dept[idx] + step * 0.5;
+				curTop = plotDepths[idx] - step * 0.5;
+				curBot = plotDepths[idx] + step * 0.5;
 				curCount = 1;
 			}
 		}
@@ -738,7 +912,7 @@
 	let cporeTraceIdx = -1;
 	let cpermTraceIdx = -1;
 
-	function buildCoreMarkerData(indices: number[], deptAll: number[]) {
+	function buildCoreMarkerData(indices: number[], plotDepthsAll: number[]) {
 		const cporeX: number[] = [];
 		const cporeY: number[] = [];
 		const cporeCustom: Array<[number, string]> = [];
@@ -752,8 +926,9 @@
 			const seenPerm = new Set<string>();
 			let sampleSeq = 1;
 			for (const s of wellData.coreSamples) {
-				const d = Number(s.depth ?? s.DEPTH);
-				if (!Number.isFinite(d) || !wellData.isDepthInActiveFilter(d)) continue;
+				const rawD = Number(s.depth ?? s.DEPTH);
+				if (!Number.isFinite(rawD) || !wellData.isDepthInActiveFilter(rawD)) continue;
+				const d = effectiveDepthIndex === 'TVDSS' ? mdToTvdss(rawD) : rawD;
 				const sName = String(s.sample_name ?? s.SAMPLE ?? `Plug #${sampleSeq++}`).trim();
 				const label = `${formatLogDepth(d, 2)}${sName ? ` • ${sName}` : ''}`;
 
@@ -787,7 +962,7 @@
 			const cpermRaw = wellData.curves['CPERM'] ?? wellData.curves['CORE_PERM'];
 			const rawPairs: Array<{ d: number; p: number | null; k: number | null }> = [];
 			for (const i of indices) {
-				const d = deptAll[i];
+				const d = plotDepthsAll[i];
 				if (!Number.isFinite(d)) continue;
 				const pVal = cporeRaw ? cporeRaw[i] : Number.NaN;
 				const kVal = cpermRaw ? cpermRaw[i] : Number.NaN;
@@ -842,7 +1017,16 @@
 		const currentYRange: [number, number] = untrack(() => [yRange[0], yRange[1]]);
 		const indices = wellData.visibleIndices;
 		const deptAll = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
-		const depth = indices.map((i) => deptAll[i]);
+		const tvdssAll = getWellTvdssArray();
+		const plotDepthsAll: number[] =
+			effectiveDepthIndex === 'TVDSS' && hasTvdss
+				? deptAll.map((d, i) => {
+						const tv = tvdssAll && i < tvdssAll.length ? tvdssAll[i] : null;
+						if (typeof tv === 'number' && Number.isFinite(tv)) return tv;
+						return mdToTvdss(d);
+					})
+				: deptAll;
+		const depth = indices.map((i) => plotDepthsAll[i]);
 		cporeTraceIdx = -1;
 		cpermTraceIdx = -1;
 		if (depth.length === 0) return { traces: [], layout: {} };
@@ -859,7 +1043,7 @@
 		let stepCount = 0;
 		for (let k = 1; k < indices.length && stepCount < 200; k++) {
 			if (indices[k] === indices[k - 1] + 1) {
-				const dd = Math.abs(deptAll[indices[k]] - deptAll[indices[k - 1]]);
+				const dd = Math.abs(plotDepthsAll[indices[k]] - plotDepthsAll[indices[k - 1]]);
 				if (Number.isFinite(dd) && dd > 1e-4 && dd < 5) {
 					stepSum += dd;
 					stepCount++;
@@ -874,8 +1058,8 @@
 		for (let k = 1; k < indices.length; k++) {
 			const prevRaw = indices[k - 1];
 			const curRaw = indices[k];
-			const dPrev = deptAll[prevRaw];
-			const dCur = deptAll[curRaw];
+			const dPrev = plotDepthsAll[prevRaw];
+			const dCur = plotDepthsAll[curRaw];
 			const isIndexJump = curRaw !== prevRaw + 1;
 			const isDepthJump =
 				!Number.isFinite(dPrev) ||
@@ -926,9 +1110,14 @@
 			const fy: number[] = [];
 			const n = depths.length;
 			const isValid = (idx: number) =>
-				idx >= 0 && idx < n && vals[idx] !== null && Number.isFinite(vals[idx]!);
+				idx >= 0 &&
+				idx < n &&
+				vals[idx] !== null &&
+				Number.isFinite(vals[idx]!) &&
+				Number.isFinite(depths[idx]);
 			for (let i = 0; i < n; i++) {
 				const d = depths[i];
+				if (!Number.isFinite(d)) continue;
 				if (isValid(i)) {
 					const v = vals[i]!;
 					if (!isValid(i - 1)) {
@@ -967,7 +1156,8 @@
 				baseVals[idx] !== null &&
 				Number.isFinite(baseVals[idx]!) &&
 				topVals[idx] !== null &&
-				Number.isFinite(topVals[idx]!);
+				Number.isFinite(topVals[idx]!) &&
+				Number.isFinite(depths[idx]);
 			let lastPinch = fallbackVal;
 			for (let i = 0; i < n; i++) {
 				if (baseVals[i] !== null && Number.isFinite(baseVals[i]!)) {
@@ -977,6 +1167,7 @@
 			}
 			for (let i = 0; i < n; i++) {
 				const d = depths[i];
+				if (!Number.isFinite(d)) continue;
 				if (isValid(i)) {
 					const b = baseVals[i]!;
 					const t = topVals[i]!;
@@ -1988,7 +2179,7 @@
 		// Core Porosity & Core Permeability discrete points (filtered to non-null finite plugs)
 		const { cporeX, cporeY, cporeCustom, cpermX, cpermY, cpermCustom } = buildCoreMarkerData(
 			indices,
-			deptAll
+			plotDepthsAll
 		);
 		if (cporeX.length > 0) {
 			cporeTraceIdx = traces.length;
@@ -2130,8 +2321,12 @@
 			});
 		}
 		if (showMobility && mobilityData.points.length > 0) {
+			const plotMobilityPoints =
+				effectiveDepthIndex === 'TVDSS'
+					? mobilityData.points.map((p) => ({ ...p, depth: mdToTvdss(p.depth) }))
+					: mobilityData.points;
 			traces.push(
-				buildMobilityTrace(mobilityData.points, (depth) => formatLogDepth(depth, 2))
+				buildMobilityTrace(plotMobilityPoints, (depth) => formatLogDepth(depth, 2))
 			);
 		}
 
@@ -2538,10 +2733,16 @@
 				seenTopKeys.add(key);
 				return true;
 			});
-		const wellMaxDepth = wellData.depthRange.max;
+		const wellMaxDepth =
+			effectiveDepthIndex === 'TVDSS'
+				? mdToTvdss(wellData.depthRange.max)
+				: wellData.depthRange.max;
 		for (let i = 0; i < sortedTops.length; i++) {
-			const topD = sortedTops[i].depth;
-			const botD = i + 1 < sortedTops.length ? sortedTops[i + 1].depth : wellMaxDepth;
+			const rawTopD = sortedTops[i].depth;
+			const rawBotD =
+				i + 1 < sortedTops.length ? sortedTops[i + 1].depth : wellData.depthRange.max;
+			const topD = effectiveDepthIndex === 'TVDSS' ? mdToTvdss(rawTopD) : rawTopD;
+			const botD = effectiveDepthIndex === 'TVDSS' ? mdToTvdss(rawBotD) : rawBotD;
 			shapes.push({
 				type: 'rect',
 				xref: 'paper',
@@ -2590,8 +2791,10 @@
 			.filter((p) => Number.isFinite(p.top) && Number.isFinite(p.bottom))
 			.sort((a, b) => a.top - b.top);
 		for (const perf of perfList) {
-			const pTop = Math.min(perf.top, perf.bottom);
-			const pBot = Math.max(perf.top, perf.bottom);
+			const rawPTop = Math.min(perf.top, perf.bottom);
+			const rawPBot = Math.max(perf.top, perf.bottom);
+			const pTop = effectiveDepthIndex === 'TVDSS' ? mdToTvdss(rawPTop) : rawPTop;
+			const pBot = effectiveDepthIndex === 'TVDSS' ? mdToTvdss(rawPBot) : rawPBot;
 			const thick = pBot - pTop;
 			const descTxt = perf.description ? `<br>${perf.description}` : '';
 			const hoverTxt =
@@ -2670,7 +2873,7 @@
 
 		const layout: any = {
 			autosize: true,
-			margin: { l: 54, r: 8, t: 6, b: 8, autoexpand: false },
+			margin: { l: depthGutterWidth, r: 8, t: 6, b: 8, autoexpand: false },
 			paper_bgcolor: '#FFFFFF',
 			plot_bgcolor: '#FFFFFF',
 			showlegend: false,
@@ -2680,16 +2883,15 @@
 			annotations,
 			yaxis: {
 				range: currentYRange,
-				...(depthDisplay.unit === 'ft'
-					? { tickmode: 'array', ...depthAxisTicks(currentYRange, depthDisplay.unit) }
-					: { tickmode: 'auto' }),
+				tickmode: 'array',
+				...depthAxisTicks(currentYRange, depthDisplay.unit),
 				showgrid: true,
 				gridcolor: gridColor,
 				automargin: false,
-				tickfont: { family: 'JetBrains Mono', size: 10, color: '#0F172A' },
+				showticklabels: false,
+				ticks: '',
 				title: {
-					text: `DEPTH (${depthDisplay.unit})`,
-					font: { family: 'Inter', size: 10, color: '#64748B' }
+					text: ''
 				}
 			},
 			xaxis: {
@@ -2900,6 +3102,8 @@
 			mobilityData,
 			showTopLabels,
 			depthDisplay.unit,
+			effectiveDepthIndex,
+			showDualDepth,
 			tsOverlayActive,
 			enhancedOverlayActive,
 			workbench.lithoParams.enableHcCorrection,
@@ -2952,8 +3156,17 @@
 			preRenderRaf = requestAnimationFrame(() => {
 				if (cancelled || !PlotlyLib || !plotContainer) return;
 				const deptAll = curves['DEPT'] ?? curves['DEPTH'] ?? [];
+				const tvdssAll = getWellTvdssArray();
+				const plotDepthsAll: number[] =
+					effectiveDepthIndex === 'TVDSS' && hasTvdss
+						? deptAll.map((d, i) => {
+								const tv = tvdssAll && i < tvdssAll.length ? tvdssAll[i] : null;
+								if (typeof tv === 'number' && Number.isFinite(tv)) return tv;
+								return mdToTvdss(d);
+							})
+						: deptAll;
 				const { cporeX, cporeY, cporeCustom, cpermX, cpermY, cpermCustom } = untrack(() =>
-					buildCoreMarkerData(visIndices, deptAll)
+					buildCoreMarkerData(visIndices, plotDepthsAll)
 				);
 				if (cporeTraceIdx >= 0) {
 					PlotlyLib.restyle(
@@ -3001,8 +3214,9 @@
 						let hoverRaf = 0;
 						(plotContainer as any).on('plotly_hover', (ev: any) => {
 							const pt = ev?.points?.[0];
-							if (pt && typeof pt.y === 'number') {
-								const nextY = pt.y;
+							if (pt && typeof pt.y === 'number' && Number.isFinite(pt.y)) {
+								const nextY =
+									effectiveDepthIndex === 'TVDSS' ? tvdssToMd(pt.y) : pt.y;
 								cancelAnimationFrame(hoverRaf);
 								hoverRaf = requestAnimationFrame(() => {
 									workbench.cursorDepth = nextY;
@@ -3091,12 +3305,122 @@
 
 	// Convert a depth value to CSS top percentage inside the plot area (margin top=6px, bottom=8px)
 	function depthToPercent(depth: number): number | null {
-		const [maxD, minD] = yRange;
-		if (!Number.isFinite(maxD) || !Number.isFinite(minD) || maxD === minD) return null;
-		const ratio = (depth - minD) / (maxD - minD);
+		const [d0, d1] = yRange;
+		if (!Number.isFinite(d0) || !Number.isFinite(d1) || d0 === d1) return null;
+		const topD = Math.min(d0, d1);
+		const botD = Math.max(d0, d1);
+		const span = botD - topD;
+		if (span <= 0) return null;
+		const ratio = (depth - topD) / span;
 		if (ratio < 0 || ratio > 1) return null;
 		return ratio * 100;
 	}
+
+	interface GutterTick {
+		key: string;
+		text: string;
+		pct: number;
+	}
+
+	let depthGutterTicks = $derived.by(() => {
+		const [d0, d1] = yRange;
+		if (!Number.isFinite(d0) || !Number.isFinite(d1) || d0 === d1) {
+			return {
+				primary: [] as GutterTick[],
+				primaryMinor: [] as number[],
+				secondary: [] as GutterTick[]
+			};
+		}
+
+		const unit = depthDisplay.unit;
+		const viewMin = Math.min(d0, d1);
+		const viewMax = Math.max(d0, d1);
+		const span = viewMax - viewMin;
+		if (span <= 0) {
+			return {
+				primary: [] as GutterTick[],
+				primaryMinor: [] as number[],
+				secondary: [] as GutterTick[]
+			};
+		}
+
+		// 1. Primary Ticks
+		const primaryAxis = depthAxisTicks([viewMin, viewMax], unit);
+		const primaryTicks: GutterTick[] = [];
+		const primaryMinor: number[] = [];
+
+		for (let i = 0; i < primaryAxis.tickvals.length; i++) {
+			const valM = primaryAxis.tickvals[i];
+			const ratio = (valM - viewMin) / span;
+			if (ratio >= -0.01 && ratio <= 1.01) {
+				const pct = Math.max(0, Math.min(100, ratio * 100));
+				primaryTicks.push({
+					key: `prim_${i}_${valM}`,
+					text: primaryAxis.ticktext[i],
+					pct
+				});
+			}
+		}
+
+		// Minor ticks between primary major ticks
+		if (primaryAxis.tickvals.length >= 2) {
+			const stepM = Math.abs(primaryAxis.tickvals[1] - primaryAxis.tickvals[0]);
+			const subStepM = stepM / 5;
+			const startVal = primaryAxis.tickvals[0] - stepM;
+			const endVal = primaryAxis.tickvals[primaryAxis.tickvals.length - 1] + stepM;
+			for (let v = startVal; v <= endVal; v += subStepM) {
+				const isMajor = primaryAxis.tickvals.some(
+					(mv) => Math.abs(mv - v) < subStepM * 0.1
+				);
+				if (!isMajor) {
+					const ratio = (v - viewMin) / span;
+					if (ratio >= 0 && ratio <= 1) {
+						primaryMinor.push(ratio * 100);
+					}
+				}
+			}
+		}
+
+		// 2. Secondary Ticks (only when showDualDepth is true)
+		const secondaryTicks: GutterTick[] = [];
+		if (showDualDepth) {
+			let secMinM: number;
+			let secMaxM: number;
+			if (effectiveDepthIndex === 'TVDSS') {
+				// Primary is TVDSS, secondary is MD
+				const mdTop = tvdssToMd(viewMin);
+				const mdBot = tvdssToMd(viewMax);
+				secMinM = Math.min(mdTop, mdBot);
+				secMaxM = Math.max(mdTop, mdBot);
+			} else {
+				// Primary is MD, secondary is TVDSS
+				const tvTop = mdToTvdss(viewMin);
+				const tvBot = mdToTvdss(viewMax);
+				secMinM = Math.min(tvTop, tvBot);
+				secMaxM = Math.max(tvTop, tvBot);
+			}
+
+			if (Number.isFinite(secMinM) && Number.isFinite(secMaxM) && secMaxM > secMinM) {
+				const secAxis = depthAxisTicks([secMinM, secMaxM], unit);
+				for (let j = 0; j < secAxis.tickvals.length; j++) {
+					const secValM = secAxis.tickvals[j];
+					const primEquivM =
+						effectiveDepthIndex === 'TVDSS' ? mdToTvdss(secValM) : tvdssToMd(secValM);
+					const ratio = (primEquivM - viewMin) / span;
+					if (ratio >= -0.01 && ratio <= 1.01) {
+						const pct = Math.max(0, Math.min(100, ratio * 100));
+						secondaryTicks.push({
+							key: `sec_${j}_${secValM}`,
+							text: secAxis.ticktext[j],
+							pct
+						});
+					}
+				}
+			}
+		}
+
+		return { primary: primaryTicks, primaryMinor, secondary: secondaryTicks };
+	});
 
 	// Convert a depth interval [top, bottom] to clipped CSS { topPct, heightPct } inside [0, 100]%
 	function intervalToOverlayBox(
@@ -3124,10 +3448,13 @@
 		const minD = Math.min(d0, d1);
 		const maxD = Math.max(d0, d1);
 		const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
+		const tvdss = getWellTvdssArray();
+		const plotDepths =
+			effectiveDepthIndex === 'TVDSS' && tvdss && tvdss.length === dept.length ? tvdss : dept;
 		const next: number[] = append ? Array.from(workbench.brushedDepthIndices) : [];
 		for (const idx of wellData.visibleIndices) {
-			const d = dept[idx];
-			if (Number.isFinite(d) && d >= minD && d <= maxD) {
+			const d = plotDepths[idx];
+			if (typeof d === 'number' && Number.isFinite(d) && d >= minD && d <= maxD) {
 				next.push(idx);
 			}
 		}
@@ -3156,13 +3483,13 @@
 		const startD = clientYToDepth(e.clientY);
 		const appendSelection = e.ctrlKey || e.metaKey;
 		selectingInterval = { startDepth: startD, currentDepth: startD };
-		workbench.cursorDepth = startD;
+		workbench.cursorDepth = effectiveDepthIndex === 'TVDSS' ? tvdssToMd(startD) : startD;
 
 		const onMove = (moveEvent: PointerEvent) => {
 			if (!selectingInterval) return;
 			const curD = clientYToDepth(moveEvent.clientY);
 			selectingInterval = { ...selectingInterval, currentDepth: curD };
-			workbench.cursorDepth = curD;
+			workbench.cursorDepth = effectiveDepthIndex === 'TVDSS' ? tvdssToMd(curD) : curD;
 		};
 
 		const onUp = (upEvent: PointerEvent) => {
@@ -3183,55 +3510,6 @@
 		window.addEventListener('pointerup', onUp);
 	}
 
-	// Convert TVDSS depth to MD depth using well log depth arrays (if TVDSS curve present)
-	function tvdssToMd(tvdss: number): number {
-		const deptArr = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'];
-		const tvdssArr = wellData.curves['TVDSS'] ?? wellData.curves['TVD'];
-		if (!deptArr || !tvdssArr || deptArr.length === 0 || tvdssArr.length === 0) {
-			return tvdss;
-		}
-		for (let i = 0; i < tvdssArr.length - 1; i++) {
-			const z0 = tvdssArr[i];
-			const z1 = tvdssArr[i + 1];
-			if (z0 === null || z1 === null || !Number.isFinite(z0) || !Number.isFinite(z1))
-				continue;
-			if ((z0 <= tvdss && tvdss <= z1) || (z1 <= tvdss && tvdss <= z0)) {
-				const dz = z1 - z0;
-				const md0 = deptArr[i];
-				const md1 = deptArr[i + 1];
-				if (md0 !== null && md1 !== null && Number.isFinite(md0) && Number.isFinite(md1)) {
-					const frac = Math.abs(dz) > 1e-4 ? (tvdss - z0) / dz : 0.0;
-					return md0 + frac * (md1 - md0);
-				}
-			}
-		}
-		return tvdss;
-	}
-
-	function mdToTvdss(md: number): number {
-		const deptArr = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'];
-		const tvdssArr = wellData.curves['TVDSS'] ?? wellData.curves['TVD'];
-		if (!deptArr || !tvdssArr || deptArr.length === 0 || tvdssArr.length === 0) {
-			return md;
-		}
-		for (let i = 0; i < deptArr.length - 1; i++) {
-			const m0 = deptArr[i];
-			const m1 = deptArr[i + 1];
-			if (m0 === null || m1 === null || !Number.isFinite(m0) || !Number.isFinite(m1))
-				continue;
-			if ((m0 <= md && md <= m1) || (m1 <= md && md <= m0)) {
-				const dm = m1 - m0;
-				const z0 = tvdssArr[i];
-				const z1 = tvdssArr[i + 1];
-				if (z0 !== null && z1 !== null && Number.isFinite(z0) && Number.isFinite(z1)) {
-					const frac = Math.abs(dm) > 1e-4 ? (md - m0) / dm : 0.0;
-					return z0 + frac * (z1 - z0);
-				}
-			}
-		}
-		return md;
-	}
-
 	function startMarkerDrag(
 		e: PointerEvent,
 		kind: 'top' | 'contact',
@@ -3243,7 +3521,14 @@
 		e.stopPropagation();
 		if (!plotContainer) return;
 
-		const initialPlotD = kind === 'contact' ? tvdssToMd(initialDepth) : initialDepth;
+		const initialPlotD =
+			kind === 'contact'
+				? effectiveDepthIndex === 'TVDSS'
+					? initialDepth
+					: tvdssToMd(initialDepth)
+				: effectiveDepthIndex === 'TVDSS'
+					? mdToTvdss(initialDepth)
+					: initialDepth;
 		draggingMarker = { kind, id, name, depth: initialDepth, plotDepth: initialPlotD };
 		const rect = plotContainer.getBoundingClientRect();
 		const plotTop = rect.top + 6;
@@ -3253,11 +3538,22 @@
 		const onMove = (moveEvent: PointerEvent) => {
 			if (!draggingMarker) return;
 			const relY = Math.min(1, Math.max(0, (moveEvent.clientY - plotTop) / plotHeight));
-			const newMd = Number((minD + relY * (maxD - minD)).toFixed(1));
-			const newTvdss =
-				draggingMarker.kind === 'contact' ? Number(mdToTvdss(newMd).toFixed(1)) : newMd;
-			draggingMarker = { ...draggingMarker, depth: newTvdss, plotDepth: newMd };
-			workbench.cursorDepth = newMd;
+			const newPlotD = Number((minD + relY * (maxD - minD)).toFixed(1));
+			let markerStoredDepth: number;
+			if (draggingMarker.kind === 'top') {
+				markerStoredDepth =
+					effectiveDepthIndex === 'TVDSS'
+						? Number(tvdssToMd(newPlotD).toFixed(1))
+						: newPlotD;
+			} else {
+				markerStoredDepth =
+					effectiveDepthIndex === 'TVDSS'
+						? newPlotD
+						: Number(mdToTvdss(newPlotD).toFixed(1));
+			}
+			draggingMarker = { ...draggingMarker, depth: markerStoredDepth, plotDepth: newPlotD };
+			workbench.cursorDepth =
+				effectiveDepthIndex === 'TVDSS' ? tvdssToMd(newPlotD) : newPlotD;
 		};
 
 		const onUp = () => {
@@ -3289,7 +3585,11 @@
 
 	let inspectionPct = $derived(
 		showInspectionLine && workbench.cursorDepth !== null
-			? depthToPercent(workbench.cursorDepth)
+			? depthToPercent(
+					effectiveDepthIndex === 'TVDSS'
+						? mdToTvdss(workbench.cursorDepth)
+						: workbench.cursorDepth
+				)
 			: null
 	);
 
@@ -3307,7 +3607,8 @@
 
 		cancelAnimationFrame(pointerMoveRaf);
 		pointerMoveRaf = requestAnimationFrame(() => {
-			workbench.cursorDepth = nextDepth;
+			workbench.cursorDepth =
+				effectiveDepthIndex === 'TVDSS' ? tvdssToMd(nextDepth) : nextDepth;
 		});
 	}
 
@@ -3388,7 +3689,8 @@
 			<span class="mono-num text-[var(--text-muted)]">
 				[{formatLogDepth(Math.min(yRange[0], yRange[1]))} – {formatLogDepth(
 					Math.max(yRange[0], yRange[1])
-				)}]
+				)}
+				{effectiveDepthIndex}]
 			</span>
 		</div>
 
@@ -3408,6 +3710,34 @@
 					<option value="ft">ft</option>
 				</select>
 			</label>
+			<label
+				class="flex items-center gap-1 text-[10px] text-[var(--text-secondary)]"
+				title="Select primary vertical depth index: MD (Measured Depth) or TVDSS (True Vertical Depth Sub-Sea)"
+			>
+				Index
+				<select
+					bind:value={depthIndex}
+					class="h-5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-[10px] font-medium"
+				>
+					<option value="MD">MD</option>
+					<option value="TVDSS" disabled={!hasTvdss}
+						>TVDSS{!hasTvdss ? ' (no curve)' : ''}</option
+					>
+				</select>
+			</label>
+			{#if hasTvdss}
+				<label
+					class="flex cursor-pointer items-center gap-1 rounded-xs border border-sky-200 bg-sky-50/70 px-1.5 py-0.5 text-[10.5px] font-medium text-sky-900"
+					title="Show dual depth tracks (MD and TVDSS side-by-side)"
+				>
+					<input
+						type="checkbox"
+						bind:checked={showTvdssTrack}
+						class="h-3 w-3 rounded-xs border-sky-300 text-sky-700 focus:ring-0"
+					/>
+					<span>Dual Depth</span>
+				</label>
+			{/if}
 			{#if mobilityData.points.length > 0 || mobilityData.outsideRange > 0}
 				<label
 					class="flex cursor-pointer items-center gap-1 text-[11px] text-[var(--text-secondary)]"
@@ -3573,8 +3903,48 @@
 	<!-- Vertically Stacked Petrophysical Track Scale Headers (aligned with Plotly track domains) -->
 	<div
 		style="padding-left: {plotAreaLeft}px; padding-right: {plotAreaRight}px;"
-		class="flex shrink-0 items-stretch border-b border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[9px] leading-tight"
+		class="relative flex shrink-0 items-stretch border-b border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[9px] leading-tight"
 	>
+		<!-- Depth Track Scale Header (placed in the left gutter area: 0 to plotAreaLeft) -->
+		<div
+			style="width: {plotAreaLeft}px;"
+			class="absolute top-0 bottom-0 left-0 flex border-r border-slate-300 bg-slate-50 font-sans select-none"
+		>
+			{#if showDualDepth}
+				<!-- Column 1: Primary Depth Header -->
+				<div
+					class="flex w-1/2 flex-col items-center justify-center border-r border-slate-200 px-0.5 py-1 text-center"
+				>
+					<span class="text-[8.5px] leading-tight font-bold text-slate-800">
+						{effectiveDepthIndex === 'TVDSS' ? 'TVDSS' : 'Reference'}
+					</span>
+					<span class="text-[7.5px] font-medium text-slate-500">
+						({depthDisplay.unit.toUpperCase()})
+					</span>
+				</div>
+				<!-- Column 2: Secondary Depth Header -->
+				<div
+					class="flex w-1/2 flex-col items-center justify-center bg-sky-50/50 px-0.5 py-1 text-center"
+				>
+					<span class="text-[8.5px] leading-tight font-bold text-sky-900">
+						{effectiveDepthIndex === 'TVDSS' ? 'Reference' : 'TVDSS'}
+					</span>
+					<span class="text-[7.5px] font-medium text-sky-600">
+						({depthDisplay.unit.toUpperCase()})
+					</span>
+				</div>
+			{:else}
+				<div class="flex w-full flex-col items-center justify-center px-1 py-1 text-center">
+					<span class="text-[8.5px] leading-tight font-bold text-slate-800">
+						{effectiveDepthIndex === 'TVDSS' ? 'TVDSS' : 'DEPTH'}
+					</span>
+					<span class="text-[7.5px] font-medium text-slate-500">
+						({depthDisplay.unit.toUpperCase()})
+					</span>
+				</div>
+			{/if}
+		</div>
+
 		<div class="relative flex h-[62px] w-full">
 			<!-- Track 1: GR (0 - 200 gAPI) & CALI / BS (6 - 16 in) -->
 			<div
@@ -4178,6 +4548,65 @@
 			</div>
 		{/if}
 
+		<!-- Interactive Depth Gutter Overlay (MD & TVDSS tracks) -->
+		<div
+			style="width: {plotAreaLeft}px;"
+			class="pointer-events-none absolute top-[6px] bottom-[8px] left-0 overflow-hidden border-r border-slate-300 bg-white select-none"
+		>
+			{#if showDualDepth}
+				<!-- Primary Depth Column (Left) -->
+				<div class="absolute top-0 bottom-0 left-0 w-1/2 border-r border-slate-200">
+					{#each depthGutterTicks.primary as tick (tick.key)}
+						<div
+							style="top: {tick.pct}%;"
+							class="absolute right-0 left-0 flex -translate-y-1/2 items-center justify-between pr-0.5 pl-1 font-mono text-[8.5px] font-medium text-slate-800"
+						>
+							<span class="truncate leading-none">{tick.text}</span>
+							<div class="h-[1px] w-2 shrink-0 bg-slate-400"></div>
+						</div>
+					{/each}
+					{#each depthGutterTicks.primaryMinor as minPct, idx (`pmin_${idx}`)}
+						<div
+							style="top: {minPct}%;"
+							class="absolute right-0 h-[1px] w-1 -translate-y-1/2 bg-slate-300"
+						></div>
+					{/each}
+				</div>
+
+				<!-- Secondary Depth Column (Right: TVDSS or MD) -->
+				<div class="absolute top-0 right-0 bottom-0 w-1/2 bg-sky-50/20">
+					{#each depthGutterTicks.secondary as tick (tick.key)}
+						<div
+							style="top: {tick.pct}%;"
+							class="absolute right-0 left-0 flex -translate-y-1/2 items-center justify-between pr-1 pl-0.5 font-mono text-[8.5px] font-medium text-sky-900"
+						>
+							<div class="h-[1px] w-2 shrink-0 bg-sky-400"></div>
+							<span class="ml-auto truncate leading-none">{tick.text}</span>
+						</div>
+					{/each}
+				</div>
+			{:else}
+				<!-- Single Column Depth Track -->
+				<div class="absolute inset-0">
+					{#each depthGutterTicks.primary as tick (tick.key)}
+						<div
+							style="top: {tick.pct}%;"
+							class="absolute right-0 left-0 flex -translate-y-1/2 items-center justify-between pr-1 pl-1.5 font-mono text-[8.5px] font-medium text-slate-800"
+						>
+							<span class="truncate leading-none">{tick.text}</span>
+							<div class="h-[1px] w-2.5 shrink-0 bg-slate-400"></div>
+						</div>
+					{/each}
+					{#each depthGutterTicks.primaryMinor as minPct, idx (`smin_${idx}`)}
+						<div
+							style="top: {minPct}%;"
+							class="absolute right-0 h-[1px] w-1.5 -translate-y-1/2 bg-slate-300"
+						></div>
+					{/each}
+				</div>
+			{/if}
+		</div>
+
 		<!-- Overlay container aligned with Plotly's plot area (Brushed Intervals & Fluid Contacts) -->
 		<div
 			style="left: {plotAreaLeft}px; right: {plotAreaRight}px;"
@@ -4231,7 +4660,9 @@
 					{@const activePlotDepth =
 						isDragging && draggingMarker?.plotDepth !== undefined
 							? draggingMarker.plotDepth
-							: tvdssToMd(contact.depth)}
+							: effectiveDepthIndex === 'TVDSS'
+								? contact.depth
+								: tvdssToMd(contact.depth)}
 					{@const pct = depthToPercent(activePlotDepth)}
 					{#if pct !== null}
 						<!-- svelte-ignore a11y_no_static_element_interactions -->

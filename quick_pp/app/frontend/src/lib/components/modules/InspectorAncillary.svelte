@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { saveAncillaryItems } from '$lib/api/client';
+	import { postJson, saveAncillaryItems } from '$lib/api/client';
 	import CompactDataGrid, {
 		type GridColumn
 	} from '$lib/components/workbench/CompactDataGrid.svelte';
@@ -9,9 +9,12 @@
 	import { workbench } from '$lib/state/workbench.svelte';
 	import { depthDisplay } from '$lib/state/depthDisplay.svelte';
 	import { depthFromMeters, depthToMeters } from '$lib/utils/depthUnits';
+	import { computeMinimumCurvature, interpolateTrajectoryOnGrid } from '$lib/utils/trajectory';
 
 	type AncillaryTab = 'tops' | 'contacts' | 'perfs' | 'core' | 'scal' | 'pressure' | 'survey';
-	let activeTab = $state<AncillaryTab>('tops');
+	let { initialTab = 'tops' }: { initialTab?: AncillaryTab } = $props();
+	// svelte-ignore state_referenced_locally
+	let activeTab = $state<AncillaryTab>(initialTab);
 	let isSaving = $state(false);
 	let statusMsg = $state<string | null>(null);
 
@@ -52,8 +55,22 @@
 	const CORE_COLS: GridColumn[] = [
 		{ key: 'sample_name', label: 'Sample', editable: true },
 		{ key: 'depth', label: 'Depth', unit: 'm', numeric: true, decimals: 2, editable: true },
-		{ key: 'porosity', label: 'CPORE', unit: 'v/v', numeric: true, decimals: 3, editable: true },
-		{ key: 'permeability', label: 'CPERM', unit: 'mD', numeric: true, decimals: 2, editable: true },
+		{
+			key: 'porosity',
+			label: 'CPORE',
+			unit: 'v/v',
+			numeric: true,
+			decimals: 3,
+			editable: true
+		},
+		{
+			key: 'permeability',
+			label: 'CPERM',
+			unit: 'mD',
+			numeric: true,
+			decimals: 2,
+			editable: true
+		},
 		{
 			key: 'grain_density',
 			label: 'CGD',
@@ -69,8 +86,22 @@
 	const SCAL_PC_COLS: GridColumn[] = [
 		{ key: 'sample_name', label: 'Sample', editable: true },
 		{ key: 'depth', label: 'Depth', unit: 'm', numeric: true, decimals: 2, editable: true },
-		{ key: 'porosity', label: 'CPORE', unit: 'v/v', numeric: true, decimals: 3, editable: true },
-		{ key: 'permeability', label: 'CPERM', unit: 'mD', numeric: true, decimals: 2, editable: true },
+		{
+			key: 'porosity',
+			label: 'CPORE',
+			unit: 'v/v',
+			numeric: true,
+			decimals: 3,
+			editable: true
+		},
+		{
+			key: 'permeability',
+			label: 'CPERM',
+			unit: 'mD',
+			numeric: true,
+			decimals: 2,
+			editable: true
+		},
 		{ key: 'rock_type', label: 'Rock Type', editable: false },
 		{ key: 'pc', label: 'Pc', unit: 'psi', numeric: true, decimals: 2, editable: true },
 		{ key: 'sw', label: 'Sw', unit: 'v/v', numeric: true, decimals: 3, editable: true }
@@ -96,10 +127,38 @@
 
 	const PRESSURE_COLS: GridColumn[] = [
 		{ key: 'depth', label: 'Depth', unit: 'm', numeric: true, decimals: 1, editable: true },
-		{ key: 'pressure', label: 'Form. Press.', unit: 'psi', numeric: true, decimals: 1, editable: true },
-		{ key: 'mobility', label: 'Mobility', unit: 'mD/cP', numeric: true, decimals: 2, editable: true },
-		{ key: 'permeability', label: 'Perm', unit: 'mD', numeric: true, decimals: 2, editable: true },
-		{ key: 'temperature', label: 'Temp', unit: 'degC', numeric: true, decimals: 1, editable: true },
+		{
+			key: 'pressure',
+			label: 'Form. Press.',
+			unit: 'psi',
+			numeric: true,
+			decimals: 1,
+			editable: true
+		},
+		{
+			key: 'mobility',
+			label: 'Mobility',
+			unit: 'mD/cP',
+			numeric: true,
+			decimals: 2,
+			editable: true
+		},
+		{
+			key: 'permeability',
+			label: 'Perm',
+			unit: 'mD',
+			numeric: true,
+			decimals: 2,
+			editable: true
+		},
+		{
+			key: 'temperature',
+			label: 'Temp',
+			unit: 'degC',
+			numeric: true,
+			decimals: 1,
+			editable: true
+		},
 		{ key: 'remarks', label: 'Remarks', editable: true },
 		{ key: 'fluid_type', label: 'Fluid', editable: true },
 		{ key: 'test_quality', label: 'QC', editable: true }
@@ -107,7 +166,8 @@
 
 	/** Parse an optional numeric input (blank / invalid -> null). */
 	function optNum(v: unknown): number | null {
-		if (v === null || v === undefined || (typeof v === 'string' && v.trim() === '')) return null;
+		if (v === null || v === undefined || (typeof v === 'string' && v.trim() === ''))
+			return null;
 		const n = Number(v);
 		return Number.isFinite(n) ? n : null;
 	}
@@ -125,21 +185,116 @@
 			remarks: String(r.remarks ?? r.remark ?? '').trim(),
 			// Preserve FPT interpretation (set in the multi-well Pressure & Contacts module)
 			tvdss: optNum(r.tvdss),
-			fluid_type: String(r.fluid_type || 'UNASSIGNED').trim().toUpperCase(),
-			test_quality: String(r.test_quality || 'VALID').trim().toUpperCase().replace(/[\s-]+/g, '_'),
+			fluid_type: String(r.fluid_type || 'UNASSIGNED')
+				.trim()
+				.toUpperCase(),
+			test_quality: String(r.test_quality || 'VALID')
+				.trim()
+				.toUpperCase()
+				.replace(/[\s-]+/g, '_'),
 			zone: r.zone ?? ''
 		};
 	}
 
-	const SURVEY_COLS: GridColumn[] = [
+	let surveyColumns = $derived<GridColumn[]>([
 		{ key: 'md', label: 'MD', unit: 'm', numeric: true, decimals: 1, editable: true },
 		{ key: 'inc', label: 'Inc', unit: 'deg', numeric: true, decimals: 2, editable: true },
-		{ key: 'azim', label: 'Azim', unit: 'deg', numeric: true, decimals: 2, editable: true }
-	];
+		{ key: 'azim', label: 'Azim', unit: 'deg', numeric: true, decimals: 2, editable: true },
+		{
+			key: 'tvdss',
+			label: wellData.datumElevationInfo.hasElevation ? 'TVDSS' : 'TVDDF',
+			unit: 'm',
+			numeric: true,
+			decimals: 1,
+			editable: false
+		}
+	]);
+
+	let isRecalculating = $state(false);
+
+	function recomputeSurveyTrajectoryLocally() {
+		if (!wellData.survey || wellData.survey.length === 0) return;
+		const elevMeters = wellData.datumElevationInfo.hasElevation
+			? wellData.datumElevationInfo.elevationMeters
+			: 0;
+		wellData.survey = computeMinimumCurvature(wellData.survey, elevMeters);
+	}
+
+	async function recalculateSurvey() {
+		if (!workbench.projectId || !workbench.wellId) return;
+		isRecalculating = true;
+		statusMsg = null;
+		try {
+			recomputeSurveyTrajectoryLocally();
+
+			// Interpolate continuous TVD / TVDSS curves if depth grid is present
+			const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'];
+			const elevMeters = wellData.datumElevationInfo.hasElevation
+				? wellData.datumElevationInfo.elevationMeters
+				: 0;
+			if (dept && dept.length > 0) {
+				const trajCurves = interpolateTrajectoryOnGrid(dept, wellData.survey, elevMeters);
+				if (trajCurves) {
+					wellData.curves = {
+						...wellData.curves,
+						TVD: trajCurves.tvd,
+						TVDSS: trajCurves.tvdss
+					};
+				}
+			}
+
+			// Persist surveys to backend
+			await saveAncillaryItems(
+				workbench.projectId,
+				workbench.wellId,
+				'well_surveys',
+				'surveys',
+				wellData.survey
+			);
+
+			// Call backend calculate_tvd endpoint if available
+			try {
+				await postJson(
+					`/quick_pp/well_surveys/calculate_tvd?project_id=${encodeURIComponent(workbench.projectId)}&well_name=${encodeURIComponent(workbench.wellId)}`,
+					{}
+				);
+			} catch (err) {
+				console.warn('Backend calculate_tvd notice:', err);
+			}
+
+			statusMsg = wellData.datumElevationInfo.hasElevation
+				? `Survey & TVDSS recalculated (${wellData.datumElevationInfo.label}) ✓`
+				: 'Survey & TVDDF recalculated (No DF/KB Datum) ✓';
+		} catch (e: any) {
+			statusMsg = `Recalculation error: ${e?.message || 'Failed'}`;
+		} finally {
+			isRecalculating = false;
+		}
+	}
+
+	// Auto-compute TVDSS/TVDDF locally if rows are loaded or missing computed values
+	$effect(() => {
+		const s = wellData.survey;
+		const _hasElev = wellData.datumElevationInfo.hasElevation;
+		if (s && s.length > 0) {
+			const needsCalc = s.some((r) => r.tvdss === undefined || r.tvdss === null);
+			if (needsCalc) {
+				recomputeSurveyTrajectoryLocally();
+			}
+		}
+	});
+
+	async function handleSurveyCellChange(_rowIndex: number, _key: string, _newValue: any) {
+		recomputeSurveyTrajectoryLocally();
+		await saveCurrentTab();
+	}
 
 	async function addQuickRow() {
 		if (!workbench.projectId || !workbench.wellId) return;
-		if (!Number.isFinite(newDepth) || (activeTab === 'perfs' && !Number.isFinite(newPerfBottom))) {
+		if (
+			!Number.isFinite(newDepth) ||
+			(activeTab === 'perfs' && !Number.isFinite(newPerfBottom))
+		) {
 			statusMsg = 'Enter a valid depth before adding a row.';
 			return;
 		}
@@ -189,10 +344,9 @@
 			newName = '';
 		} else if (activeTab === 'scal') {
 			// Keep sample_name, depth, cpore, cperm sticky so user can enter multiple (Pc, Sw) pairs for the same plug
-			const lastScal = wellData.scalPc.length > 0 ? wellData.scalPc[wellData.scalPc.length - 1] : null;
-			const sampleName =
-				newName.trim() ||
-				(lastScal ? String(lastScal.sample_name) : 'S-1');
+			const lastScal =
+				wellData.scalPc.length > 0 ? wellData.scalPc[wellData.scalPc.length - 1] : null;
+			const sampleName = newName.trim() || (lastScal ? String(lastScal.sample_name) : 'S-1');
 			newName = sampleName;
 			let effPor: number | null = null;
 			if (newScalCpore !== null && Number.isFinite(Number(newScalCpore))) {
@@ -241,7 +395,8 @@
 			wellData.survey = [
 				...wellData.survey,
 				{ md: Number(newDepth), inc: Number(newVal1), azim: Number(newVal2) }
-			];
+			].sort((a, b) => a.md - b.md);
+			recomputeSurveyTrajectoryLocally();
 		}
 		await saveCurrentTab();
 	}
@@ -255,7 +410,9 @@
 				wellData.tops = wellData.tops.filter((_, i) => !removeSet.has(i));
 				if (workbench.selectedZones.length > 0) {
 					const remainingNames = new Set(wellData.tops.map((t) => t.name));
-					workbench.selectedZones = workbench.selectedZones.filter((z) => remainingNames.has(z));
+					workbench.selectedZones = workbench.selectedZones.filter((z) =>
+						remainingNames.has(z)
+					);
 				}
 			} else if (activeTab === 'contacts') {
 				wellData.contacts = wellData.contacts.filter((_, i) => !removeSet.has(i));
@@ -298,7 +455,9 @@
 		} else if (activeTab === 'contacts') {
 			const mapped = pastedRows
 				.map((r, i) => {
-					const t = String(r.type || r.name || 'OWC').trim().toUpperCase();
+					const t = String(r.type || r.name || 'OWC')
+						.trim()
+						.toUpperCase();
 					return {
 						id: `contact-${now}-${i}`,
 						type: t,
@@ -315,18 +474,23 @@
 					const b = Number(r.bottom ?? r.top ?? r.depth);
 					return {
 						id: `perf-${now}-${i}`,
-						name: String(r.name || `PERF-${wellData.perforations.length + i + 1}`).trim(),
+						name: String(
+							r.name || `PERF-${wellData.perforations.length + i + 1}`
+						).trim(),
 						top: Math.min(t, b),
 						bottom: Math.max(t, b),
 						description: String(r.description ?? '').trim()
 					};
 				})
 				.filter((p) => Number.isFinite(p.top) && Number.isFinite(p.bottom));
-			wellData.perforations = [...wellData.perforations, ...mapped].sort((a, b) => a.top - b.top);
+			wellData.perforations = [...wellData.perforations, ...mapped].sort(
+				(a, b) => a.top - b.top
+			);
 		} else if (activeTab === 'core') {
 			const mapped = pastedRows
 				.map((r, i) => {
-					let por = r.porosity !== null && r.porosity !== undefined ? Number(r.porosity) : null;
+					let por =
+						r.porosity !== null && r.porosity !== undefined ? Number(r.porosity) : null;
 					if (por !== null && Number.isFinite(por) && por > 1.0) por /= 100.0;
 					const perm =
 						r.permeability !== null && r.permeability !== undefined
@@ -339,7 +503,9 @@
 							? Number(gdRaw)
 							: null;
 					return {
-						sample_name: String(r.sample_name || `S-${wellData.coreSamples.length + i + 1}`).trim(),
+						sample_name: String(
+							r.sample_name || `S-${wellData.coreSamples.length + i + 1}`
+						).trim(),
 						depth: Number(r.depth ?? 0),
 						porosity: por,
 						permeability: perm,
@@ -366,7 +532,9 @@
 						perm = null;
 					}
 					return {
-						sample_name: String(r.sample_name || `S-${wellData.scalPc.length + i + 1}`).trim(),
+						sample_name: String(
+							r.sample_name || `S-${wellData.scalPc.length + i + 1}`
+						).trim(),
 						depth: Number(r.depth ?? 0),
 						pc: Number(r.pc ?? 0),
 						sw: Number(r.sw ?? 0),
@@ -389,12 +557,13 @@
 		} else if (activeTab === 'survey') {
 			const mapped = pastedRows
 				.map((r) => ({
-					md: Number(r.md ?? 0),
+					md: Number(r.md ?? r.depth ?? 0),
 					inc: Number(r.inc ?? 0),
 					azim: Number(r.azim ?? 0)
 				}))
 				.filter((s) => Number.isFinite(s.md));
-			wellData.survey = [...wellData.survey, ...mapped];
+			wellData.survey = [...wellData.survey, ...mapped].sort((a, b) => a.md - b.md);
+			recomputeSurveyTrajectoryLocally();
 		}
 		await saveCurrentTab();
 	}
@@ -418,12 +587,17 @@
 					workbench.wellId,
 					'fluid_contacts',
 					'contacts',
-					wellData.contacts.map((c) => ({ name: c.type || c.name, depth: Number(c.depth) }))
+					wellData.contacts.map((c) => ({
+						name: c.type || c.name,
+						depth: Number(c.depth)
+					}))
 				);
 			} else if (activeTab === 'perfs') {
 				// Re-assign a normalized copy so plots (reference-tracked deps) refresh after inline cell edits
 				wellData.perforations = wellData.perforations
-					.filter((p) => Number.isFinite(Number(p.top)) && Number.isFinite(Number(p.bottom)))
+					.filter(
+						(p) => Number.isFinite(Number(p.top)) && Number.isFinite(Number(p.bottom))
+					)
 					.map((p) => ({
 						id: p.id,
 						name: String(p.name || '').trim() || 'PERF',
@@ -449,7 +623,11 @@
 				}
 			} else if (activeTab === 'core') {
 				for (const r of wellData.coreSamples) {
-					if (r.porosity !== null && r.porosity !== undefined && Number(r.porosity) > 1.0) {
+					if (
+						r.porosity !== null &&
+						r.porosity !== undefined &&
+						Number(r.porosity) > 1.0
+					) {
 						r.porosity = Number(r.porosity) / 100.0;
 					}
 					r.rock_type = projectData.classifyRockType(r.porosity, r.permeability);
@@ -470,13 +648,22 @@
 				for (const r of wellData.scalPc) {
 					const sname = String(r.sample_name || '').trim();
 					if (sname) {
-						if (Number.isFinite(Number(r.depth))) depthBySample.set(sname, Number(r.depth));
-						if (r.porosity !== null && r.porosity !== undefined && Number.isFinite(Number(r.porosity))) {
+						if (Number.isFinite(Number(r.depth)))
+							depthBySample.set(sname, Number(r.depth));
+						if (
+							r.porosity !== null &&
+							r.porosity !== undefined &&
+							Number.isFinite(Number(r.porosity))
+						) {
 							let p = Number(r.porosity);
 							if (p > 1.0) p /= 100.0;
 							cporeBySample.set(sname, p);
 						}
-						if (r.permeability !== null && r.permeability !== undefined && Number.isFinite(Number(r.permeability))) {
+						if (
+							r.permeability !== null &&
+							r.permeability !== undefined &&
+							Number.isFinite(Number(r.permeability))
+						) {
 							cpermBySample.set(sname, Number(r.permeability));
 						}
 					}
@@ -484,12 +671,16 @@
 				const normalizedScal = wellData.scalPc.map((r, i) => {
 					const sname = String(r.sample_name || `S-${i + 1}`).trim();
 					let por =
-						r.porosity !== null && r.porosity !== undefined && Number.isFinite(Number(r.porosity))
+						r.porosity !== null &&
+						r.porosity !== undefined &&
+						Number.isFinite(Number(r.porosity))
 							? Number(r.porosity)
 							: (cporeBySample.get(sname) ?? null);
 					if (por !== null && por > 1.0) por /= 100.0;
 					const perm =
-						r.permeability !== null && r.permeability !== undefined && Number.isFinite(Number(r.permeability))
+						r.permeability !== null &&
+						r.permeability !== undefined &&
+						Number.isFinite(Number(r.permeability))
 							? Number(r.permeability)
 							: (cpermBySample.get(sname) ?? null);
 					return {
@@ -527,6 +718,25 @@
 					wellData.pressureTests
 				);
 			} else if (activeTab === 'survey') {
+				recomputeSurveyTrajectoryLocally();
+				const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'];
+				const elevMeters = wellData.datumElevationInfo.hasElevation
+					? wellData.datumElevationInfo.elevationMeters
+					: 0;
+				if (dept && dept.length > 0) {
+					const trajCurves = interpolateTrajectoryOnGrid(
+						dept,
+						wellData.survey,
+						elevMeters
+					);
+					if (trajCurves) {
+						wellData.curves = {
+							...wellData.curves,
+							TVD: trajCurves.tvd,
+							TVDSS: trajCurves.tvdss
+						};
+					}
+				}
 				await saveAncillaryItems(
 					workbench.projectId,
 					workbench.wellId,
@@ -557,7 +767,9 @@
 			const sname = String(row.sample_name || '').trim();
 			if (sname) {
 				const por =
-					row.porosity !== null && row.porosity !== undefined && Number.isFinite(Number(row.porosity))
+					row.porosity !== null &&
+					row.porosity !== undefined &&
+					Number.isFinite(Number(row.porosity))
 						? Number(row.porosity)
 						: null;
 				const normPor = por !== null ? (por > 1.0 ? por / 100.0 : por) : null;
@@ -599,21 +811,13 @@
 	<div
 		class="grid grid-cols-7 border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)] text-[10px] font-semibold"
 	>
-		{#each [
-			['tops', `Tops (${wellData.tops.length})`],
-			['contacts', `Contacts (${wellData.contacts.length})`],
-			['perfs', `Perfs (${wellData.perforations.length})`],
-			['core', `RCA (${wellData.coreSamples.length})`],
-			['scal', `SCAL (${wellData.scalPc.length})`],
-			['pressure', `Press (${wellData.pressureTests.length})`],
-			['survey', `Survey (${wellData.survey.length})`]
-		] as [key, lbl]}
+		{#each [['tops', `Tops (${wellData.tops.length})`], ['contacts', `Contacts (${wellData.contacts.length})`], ['perfs', `Perfs (${wellData.perforations.length})`], ['core', `RCA (${wellData.coreSamples.length})`], ['scal', `SCAL (${wellData.scalPc.length})`], ['pressure', `Press (${wellData.pressureTests.length})`], ['survey', `Survey (${wellData.survey.length})`]] as [key, lbl]}
 			<button
 				type="button"
 				onclick={() => (activeTab = key as AncillaryTab)}
-				class="h-7 truncate border-r border-[var(--border-hairline)] px-1 last:border-r-0 transition-colors {activeTab ===
+				class="h-7 truncate border-r border-[var(--border-hairline)] px-1 transition-colors last:border-r-0 {activeTab ===
 				key
-					? 'bg-[var(--bg-surface)] text-[var(--accent-primary)] border-b-2 border-b-[var(--accent-primary)]'
+					? 'border-b-2 border-b-[var(--accent-primary)] bg-[var(--bg-surface)] text-[var(--accent-primary)]'
 					: 'text-[var(--text-secondary)] hover:bg-slate-200/60'}"
 				title={key === 'core'
 					? 'Routine Core Analysis (CPORE, CPERM, CGD)'
@@ -647,7 +851,10 @@
 				placeholder="Depth"
 				aria-label="Depth ({depthDisplay.unit})"
 				title="Depth ({depthDisplay.unit})"
-				bind:value={() => depthFromMeters(newDepth, depthDisplay.unit), (v) => (newDepth = depthToMeters(v, depthDisplay.unit))}
+				bind:value={
+					() => depthFromMeters(newDepth, depthDisplay.unit),
+					(v) => (newDepth = depthToMeters(v, depthDisplay.unit))
+				}
 				class="mono-num h-6 w-20 rounded-sm border border-[var(--border-hairline)] bg-white px-1.5 text-right text-xs"
 			/>
 		{:else if activeTab === 'perfs'}
@@ -662,7 +869,10 @@
 				step="0.5"
 				placeholder="Top"
 				title="Perforation Top MD ({depthDisplay.unit})"
-				bind:value={() => depthFromMeters(newDepth, depthDisplay.unit), (v) => (newDepth = depthToMeters(v, depthDisplay.unit))}
+				bind:value={
+					() => depthFromMeters(newDepth, depthDisplay.unit),
+					(v) => (newDepth = depthToMeters(v, depthDisplay.unit))
+				}
 				class="mono-num h-6 w-16 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
 			/>
 			<input
@@ -670,7 +880,10 @@
 				step="0.5"
 				placeholder="Bottom"
 				title="Perforation Bottom MD ({depthDisplay.unit})"
-				bind:value={() => depthFromMeters(newPerfBottom, depthDisplay.unit), (v) => (newPerfBottom = depthToMeters(v, depthDisplay.unit))}
+				bind:value={
+					() => depthFromMeters(newPerfBottom, depthDisplay.unit),
+					(v) => (newPerfBottom = depthToMeters(v, depthDisplay.unit))
+				}
 				class="mono-num h-6 w-16 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
 			/>
 			<input
@@ -691,7 +904,10 @@
 				step="0.5"
 				placeholder="Depth"
 				title="Sample Depth ({depthDisplay.unit})"
-				bind:value={() => depthFromMeters(newDepth, depthDisplay.unit), (v) => (newDepth = depthToMeters(v, depthDisplay.unit))}
+				bind:value={
+					() => depthFromMeters(newDepth, depthDisplay.unit),
+					(v) => (newDepth = depthToMeters(v, depthDisplay.unit))
+				}
 				class="mono-num h-6 w-16 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
 			/>
 			<input
@@ -720,7 +936,10 @@
 				type="number"
 				step="0.5"
 				placeholder="Depth"
-				bind:value={() => depthFromMeters(newDepth, depthDisplay.unit), (v) => (newDepth = depthToMeters(v, depthDisplay.unit))}
+				bind:value={
+					() => depthFromMeters(newDepth, depthDisplay.unit),
+					(v) => (newDepth = depthToMeters(v, depthDisplay.unit))
+				}
 				title="Sample Depth ({depthDisplay.unit})"
 				class="mono-num h-6 w-16 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
 			/>
@@ -767,7 +986,10 @@
 				step="0.5"
 				placeholder="Depth"
 				title="Test Depth MD ({depthDisplay.unit})"
-				bind:value={() => depthFromMeters(newDepth, depthDisplay.unit), (v) => (newDepth = depthToMeters(v, depthDisplay.unit))}
+				bind:value={
+					() => depthFromMeters(newDepth, depthDisplay.unit),
+					(v) => (newDepth = depthToMeters(v, depthDisplay.unit))
+				}
 				class="mono-num h-6 w-14 min-w-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
 			/>
 			<input
@@ -809,13 +1031,44 @@
 				bind:value={newPressRemarks}
 				class="h-6 min-w-0 flex-1 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-xs"
 			/>
+		{:else if activeTab === 'survey'}
+			<input
+				type="number"
+				step="1"
+				placeholder="Depth / MD"
+				title="Depth / MD ({depthDisplay.unit})"
+				bind:value={
+					() => depthFromMeters(newDepth, depthDisplay.unit),
+					(v) => (newDepth = depthToMeters(v, depthDisplay.unit))
+				}
+				class="mono-num h-6 w-20 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+			/>
+			<input
+				type="number"
+				step="0.1"
+				placeholder="Inc"
+				title="Inclination (deg)"
+				bind:value={newVal1}
+				class="mono-num h-6 w-16 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+			/>
+			<input
+				type="number"
+				step="0.1"
+				placeholder="Azim"
+				title="Azimuth (deg)"
+				bind:value={newVal2}
+				class="mono-num h-6 flex-1 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+			/>
 		{:else}
 			<input
 				type="number"
 				step="1"
 				placeholder="Depth / MD"
 				title="Depth / MD ({depthDisplay.unit})"
-				bind:value={() => depthFromMeters(newDepth, depthDisplay.unit), (v) => (newDepth = depthToMeters(v, depthDisplay.unit))}
+				bind:value={
+					() => depthFromMeters(newDepth, depthDisplay.unit),
+					(v) => (newDepth = depthToMeters(v, depthDisplay.unit))
+				}
 				class="mono-num h-6 w-20 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
 			/>
 			<input
@@ -839,6 +1092,56 @@
 	{#if activeTab === 'core'}
 		<div class="shrink-0 border-b border-[var(--border-hairline)] p-1.5">
 			<CoreDepthShiftPanel defaultTarget="combined" />
+		</div>
+	{:else if activeTab === 'survey'}
+		<div
+			class="flex shrink-0 items-center justify-between gap-2 border-b border-[var(--border-hairline)] bg-[var(--bg-app,#f8fafc)] px-2.5 py-1.5 text-xs"
+		>
+			<div class="flex items-center gap-2">
+				{#if wellData.datumElevationInfo.hasElevation}
+					<span
+						class="inline-flex items-center gap-1 rounded bg-emerald-50 px-1.5 py-0.5 text-[11px] font-medium text-emerald-700 ring-1 ring-emerald-600/20 ring-inset"
+						data-testid="survey-tvdss-status"
+					>
+						<span class="inline-block h-1.5 w-1.5 rounded-full bg-emerald-600"></span>
+						TVDSS Active &bull; Datum: {wellData.datumElevationInfo.label}
+					</span>
+				{:else}
+					<span
+						class="inline-flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-800 ring-1 ring-amber-600/20 ring-inset"
+						data-testid="survey-tvdss-status"
+						title="No Derrick Floor (DF) or Kelly Bushing (KB) elevation found in well header. TVD is referenced to drill floor (TVDDF)."
+					>
+						<span class="inline-block h-1.5 w-1.5 rounded-full bg-amber-500"></span>
+						TVDDF Mode (No DF/KB Datum)
+					</span>
+				{/if}
+				<span class="text-[11px] text-[var(--text-muted)]">Min. Curvature</span>
+			</div>
+			<button
+				type="button"
+				disabled={isRecalculating || wellData.survey.length === 0}
+				onclick={recalculateSurvey}
+				class="flex items-center gap-1.5 rounded bg-[var(--accent-primary)] px-2.5 py-1 text-[11px] font-semibold text-white shadow-xs hover:bg-blue-700 disabled:opacity-40"
+				title="Recalculate True Vertical Depth from surveys using Minimum Curvature and update TVD/TVDSS curves"
+			>
+				{#if isRecalculating}
+					<span
+						class="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent"
+					></span>
+					Recalculating...
+				{:else}
+					<svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+						<path
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							stroke-width="2"
+							d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+						/>
+					</svg>
+					Recalculate TVD
+				{/if}
+			</button>
 		</div>
 	{/if}
 
@@ -912,11 +1215,11 @@
 			/>
 		{:else}
 			<CompactDataGrid
-				columns={SURVEY_COLS}
+				columns={surveyColumns}
 				bind:rows={wellData.survey}
 				editable={true}
 				emptyMessage="No directional survey rows."
-				oncellchange={() => saveCurrentTab()}
+				oncellchange={handleSurveyCellChange}
 				onpasteRows={handlePasteRows}
 				ondeleteRow={handleDeleteRow}
 				ondeleteRows={handleDeleteRows}

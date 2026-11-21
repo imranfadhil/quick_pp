@@ -413,6 +413,52 @@ class WellDataState {
 	config = $state<Record<string, any>>({});
 	renamedCurves = $state<Record<string, string>>({});
 
+	get datumElevationInfo() {
+		const h = (this.header || {}) as Record<string, any>;
+		const cfg = (this.config || {}) as Record<string, any>;
+		const raw =
+			h.df_elev ??
+			h.kb_elev ??
+			cfg.df_elev ??
+			cfg.kb_elev ??
+			h.dfe_elevation ??
+			h.kb_elevation ??
+			h.raw_well_header?.EDF ??
+			h.raw_well_header?.DF ??
+			h.raw_well_header?.DFE ??
+			h.raw_well_header?.EKB ??
+			h.raw_well_header?.KB ??
+			h.raw_well_header?.RKB ??
+			h.raw_well_header?.APD;
+		const num = raw !== null && raw !== undefined && raw !== '' ? Number(raw) : null;
+		const datumUnit = (h.datum_unit || cfg.datum_unit || 'm') as 'm' | 'ft';
+		if (num !== null && Number.isFinite(num) && num > 0) {
+			const isDf =
+				h.df_elev != null ||
+				cfg.df_elev != null ||
+				h.raw_well_header?.DF != null ||
+				h.raw_well_header?.EDF != null;
+			const type = isDf ? 'DF' : 'KB';
+			const elevMeters = datumUnit === 'ft' ? num * 0.3048 : num;
+			return {
+				hasElevation: true,
+				elevation: num,
+				elevationMeters: elevMeters,
+				unit: datumUnit,
+				type,
+				label: `${num} ${datumUnit} (${type})`
+			};
+		}
+		return {
+			hasElevation: false,
+			elevation: 0,
+			elevationMeters: 0,
+			unit: datumUnit,
+			type: 'DF' as const,
+			label: 'No DF/KB Datum'
+		};
+	}
+
 	// Reservoir summary table & metrics from latest run
 	zonalSummary = $state.raw<Record<string, any>[]>([]);
 	zonalSummarySource = $state<{ projectId: string; wellId: string } | null>(null);
