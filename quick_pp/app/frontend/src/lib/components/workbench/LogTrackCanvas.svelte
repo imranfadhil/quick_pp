@@ -82,6 +82,7 @@
 	let showTsOverlay = $state(true);
 	let showDtc = $state(true);
 	let showSpectralGr = $state(true);
+	let showToc = $state(true);
 	let showEnvCorrections = $state(true);
 	let showMobility = $state(true);
 	let showTopLabels = $state(true);
@@ -161,6 +162,14 @@
 	});
 
 	let hasSpectralGr = $derived(hasPota || hasThor || hasUran || hasCgr);
+	let hasTocCurves = $derived.by(() => {
+		const toc = wellData.curves['TOC'];
+		const dlr = wellData.curves['DELTA_LOG_R'];
+		return Boolean(
+			(toc && toc.some((v) => typeof v === 'number' && Number.isFinite(v))) ||
+			(dlr && dlr.some((v) => typeof v === 'number' && Number.isFinite(v)))
+		);
+	});
 	const ENV_CORRECTION_CURVES = [
 		'GR_ENV_CORR',
 		'RT_ENV_CORR',
@@ -1342,14 +1351,26 @@
 
 		// Passey Porosity-Equivalent Resistivity Overlay on Track 2 (when in TOC step or DELTA_LOG_R present)
 		const dlogr = pick('DELTA_LOG_R');
-		if (dlogr.some((v) => v !== null)) {
-			const rtVals = pick('RT').some((v) => v !== null && v > 0)
-				? pick('RT')
-				: pick('RD').some((v) => v !== null && v > 0)
-					? pick('RD')
-					: pick('AHT90').some((v) => v !== null && v > 0)
-						? pick('AHT90')
-						: pick('ILD');
+		if (showToc && dlogr.some((v) => v !== null)) {
+			let rtVals = pick('RT');
+			if (!rtVals.some((v) => v !== null && v > 0)) {
+				for (const mnem of [
+					'RD',
+					'RDEP',
+					'RDEEP',
+					'LLD',
+					'AHT90',
+					'AT90',
+					'ILD',
+					'RES_DEEP'
+				]) {
+					const alt = pick(mnem);
+					if (alt.some((v) => v !== null && v > 0)) {
+						rtVals = alt;
+						break;
+					}
+				}
+			}
 			if (rtVals.some((v) => v !== null && v > 0)) {
 				const rPoro = rtVals.map((r, i) => {
 					const dlr = dlogr[i];
@@ -1369,8 +1390,8 @@
 						y: svgDepth,
 						xaxis: 'x2',
 						yaxis: 'y',
-						line: { color: '#0284c7', width: 1.5, dash: 'dash' },
-						hovertemplate: 'R_poro (Passey): %{x:.2f} ohm.m<extra></extra>'
+						line: { color: '#0284c7', width: 1.6, dash: '4px,2px' },
+						hovertemplate: 'R_poro (Passey Overlay): %{x:.2f} ohm.m<extra></extra>'
 					});
 				}
 			}
@@ -1944,7 +1965,7 @@
 
 		// Track 4: Total Organic Carbon (TOC wt%, scaled 0 -> 10 wt% across [0, 1] for visual overlay)
 		const tocVals = pick('TOC');
-		if (tocVals.some((v) => v !== null)) {
+		if (showToc && tocVals.some((v) => v !== null)) {
 			const tocDec = decimateSvg(tocVals);
 			const scaleToc = (arr: (number | null)[]): (number | null)[] =>
 				arr.map((v) =>
@@ -2845,7 +2866,11 @@
 		// enhancement (e.g. on a new selection) forces a Plotly re-render.
 		'GR_ENH',
 		'NPHI_ENH',
-		'RHOB_ENH'
+		'RHOB_ENH',
+		// Source Rock / TOC curves: track them so running Passey TOC triggers Plotly re-render.
+		'TOC',
+		'TOC_PASSEY',
+		'DELTA_LOG_R'
 	] as const;
 
 	let lastBaseTrackDeps: unknown[] | null = null;
@@ -2863,11 +2888,13 @@
 		const renderGen = wellData.wellLoadGeneration;
 
 		const currentBaseDeps: unknown[] = [
+			workbench.singleWellStep,
 			visIndices,
 			tops,
 			perforations,
 			showDtc,
 			showSpectralGr,
+			showToc,
 			showEnvCorrections,
 			showMobility,
 			mobilityData,
@@ -3464,6 +3491,19 @@
 					<span style="color: {PETRO_COLORS.pota}" class="font-medium">SGR</span>
 				</label>
 			{/if}
+			{#if hasTocCurves}
+				<label
+					class="flex cursor-pointer items-center gap-1 text-[11px] text-[var(--text-secondary)]"
+					title="Toggle Total Organic Carbon (TOC) and Passey R_poro overlays on Track 4 and Track 2"
+				>
+					<input
+						type="checkbox"
+						bind:checked={showToc}
+						class="h-3 w-3 rounded-xs border-[var(--border-hairline)] text-emerald-600 focus:ring-0"
+					/>
+					<span class="font-medium text-emerald-700 dark:text-emerald-400">TOC</span>
+				</label>
+			{/if}
 			{#if wellData.tops.length > 0}
 				<label
 					class="flex cursor-pointer items-center gap-1 text-[11px] text-[var(--text-secondary)]"
@@ -3710,7 +3750,7 @@
 						</div>
 					</div>
 
-					{#if wellData.curves['DELTA_LOG_R']?.some((v) => v !== null)}
+					{#if showToc && wellData.curves['DELTA_LOG_R']?.some((v) => v !== null)}
 						<div class="flex flex-col">
 							<div
 								class="mono-num flex items-center justify-between text-[8px] leading-none font-semibold whitespace-nowrap text-sky-700"
@@ -3916,7 +3956,7 @@
 							style="background: {PETRO_COLORS.phit}"
 						></div>
 					</div>
-					{#if wellData.curves['TOC']?.some((v) => v !== null)}
+					{#if showToc && wellData.curves['TOC']?.some((v) => v !== null)}
 						<div class="flex flex-col">
 							<div
 								class="mono-num flex items-center justify-between text-[8px] leading-none font-semibold whitespace-nowrap text-emerald-700"
@@ -4948,6 +4988,18 @@
 				<strong style="color: {PETRO_COLORS.water}">SW:</strong>
 				{fmtNum(readout.SWT ?? readout.SWE, 3)}
 			</span>
+			{#if readout.TOC !== null && readout.TOC !== undefined}
+				<span>
+					<strong class="text-emerald-700 dark:text-emerald-400">TOC:</strong>
+					{fmtNum(readout.TOC, 2)} <span class="text-[9px]">wt%</span>
+				</span>
+			{/if}
+			{#if readout.DELTA_LOG_R !== null && readout.DELTA_LOG_R !== undefined}
+				<span>
+					<strong class="text-sky-700 dark:text-sky-400">ΔlogR:</strong>
+					{fmtNum(readout.DELTA_LOG_R, 3)}
+				</span>
+			{/if}
 			{#if readout.BADHOLE !== null && readout.BADHOLE !== undefined && readout.BADHOLE >= 0.5}
 				<span
 					class="py-0.2 rounded-xs bg-red-100 px-1.5 text-[10px] font-bold text-red-800"

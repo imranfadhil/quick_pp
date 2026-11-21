@@ -23,7 +23,8 @@ export type CrossplotId =
 	| 'th-k'
 	| 'pef-k'
 	| 'pef-th-k'
-	| 'grain-density';
+	| 'grain-density'
+	| 'toc-tracks';
 
 export type CrossplotContext =
 	| { scope: 'single-well'; step: SingleWellStep }
@@ -44,9 +45,18 @@ type CrossplotDefinition = {
 
 export const CROSSPLOTS: readonly CrossplotDefinition[] = [
 	{
+		id: 'toc-tracks',
+		label: 'Source Rock 4-Track Strip (Vsh · Rt · Poro · TOC)',
+		single: {
+			group: 'Standalone · Source Rock (TOC)',
+			steps: ['toc'],
+			autoFor: ['toc']
+		}
+	},
+	{
 		id: 'histogram',
 		label: 'Single-Well Histogram',
-		single: { group: 'Step 1 · Data & QAQC', steps: ['qaqc', 'toc'], autoFor: ['qaqc', 'toc'] }
+		single: { group: 'Step 1 · Data & QAQC', steps: ['qaqc', 'toc'], autoFor: ['qaqc'] }
 	},
 	{
 		id: 'curve-depth',

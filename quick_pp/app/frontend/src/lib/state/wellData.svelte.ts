@@ -4544,7 +4544,10 @@ class WellDataState {
 			'SHF',
 			'SW_SHF',
 			'PAY',
-			'BADHOLE'
+			'BADHOLE',
+			'TOC',
+			'TOC_PASSEY',
+			'DELTA_LOG_R'
 		]) {
 			const arr = this.curves[k] ?? this.curves[k + '.'];
 			if (arr) {
