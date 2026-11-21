@@ -728,6 +728,228 @@ def estimate_m_star(m_apparent, b_parameter, qv, rw, phi):
     return m_star
 
 
+def estimate_m_borai(phi):
+    """Estimate cementation exponent m using Borai (1987) correlation.
+
+    Borai, A.M. (1987), 'A New Correlation for Cementation Factor in Low-Porosity Reservoirs',
+    SPE Formation Evaluation, 2(4), pp. 495–499.
+
+    m = 2.2 - 0.035 / (phi + 0.042)
+
+    Args:
+        phi (np.ndarray or float): Total or effective porosity [fraction].
+
+    Returns:
+        np.ndarray or float: Cementation exponent m.
+    """
+    phi_arr = np.asarray(phi, dtype=float)
+    m = 2.2 - 0.035 / (np.maximum(phi_arr, 1e-4) + 0.042)
+    return np.clip(m, 1.0, 3.5)
+
+
+def estimate_m_shell_lucia(phi, min_m=1.0, max_m=3.5):
+    """Estimate cementation exponent m using the Shell / Lucia (1983) empirical correlation.
+
+    Lucia, F.J. (1983), 'Petrophysical parameters estimated from visual descriptions of carbonate rocks:
+    A field classification of carbonate pore space', JPT, 35(3), pp. 629–637.
+    Widely referenced Shell empirical correlation for tight/carbonate reservoirs:
+    m = 1.87 + 0.019 / phi
+
+    Args:
+        phi (np.ndarray or float): Total or effective porosity [fraction].
+        min_m (float): Lower clip bound. Default 1.0.
+        max_m (float): Upper clip bound. Default 3.5.
+
+    Returns:
+        np.ndarray or float: Cementation exponent m.
+    """
+    phi_arr = np.asarray(phi, dtype=float)
+    safe_phi = np.maximum(phi_arr, 0.005)
+    m = 1.87 + (0.019 / safe_phi)
+    return np.clip(m, min_m, max_m)
+
+
+def compute_continuous_m(
+    phi,
+    method="calibrated",
+    slope=None,
+    intercept=None,
+    default_m=2.0,
+    min_m=1.0,
+    max_m=3.5,
+):
+    """Compute continuous depth-by-depth cementation exponent m(phi).
+
+    Supports:
+      - 'calibrated': Linear regression trend from water-leg calibration: m = slope * phi + intercept
+      - 'borai': Borai (1987) correlation: m = 2.2 - 0.035 / (phi + 0.042)
+      - 'shell_lucia': Shell / Lucia (1983) correlation: m = 1.87 + 0.019 / phi
+
+    Args:
+        phi (np.ndarray or float): Porosity [fraction].
+        method (str): 'calibrated', 'borai', or 'shell_lucia'.
+        slope (float, optional): Linear slope for 'calibrated'.
+        intercept (float, optional): Linear intercept for 'calibrated'.
+        default_m (float): Fallback scalar cementation exponent.
+        min_m (float): Lower clip bound.
+        max_m (float): Upper clip bound.
+
+    Returns:
+        np.ndarray: Continuous cementation exponent array.
+    """
+    phi_arr = np.asarray(phi, dtype=float)
+    meth = str(method or "calibrated").lower().strip()
+    if meth == "borai":
+        return estimate_m_borai(phi_arr)
+    elif meth in ("shell_lucia", "shell", "lucia"):
+        return estimate_m_shell_lucia(phi_arr, min_m=min_m, max_m=max_m)
+    else:
+        s = float(slope) if slope is not None else 0.0
+        ic = float(intercept) if intercept is not None else float(default_m)
+        calc_m = s * phi_arr + ic
+        return np.clip(calc_m, min_m, max_m)
+
+
+def calibrate_water_leg_m(
+    rt,
+    rw,
+    phit,
+    vsh=None,
+    rsh=2.0,
+    method="archie",
+    vsh_cutoff=0.30,
+    min_phit=0.03,
+    max_phit=0.45,
+):
+    """Calibrate cementation exponent (m) strictly from a 100% water-bearing zone.
+
+    Inverts either Archie (for clean water sand) or Indonesian (for shaly water sand)
+    assuming Sw = 1.0. Computes distribution metrics and linear regression m = a*phi + b.
+
+    Args:
+        rt (np.ndarray): True resistivity in the water leg [ohm.m].
+        rw (np.ndarray or float): Water resistivity [ohm.m].
+        phit (np.ndarray): Porosity in the water leg [fraction].
+        vsh (np.ndarray, optional): Shale volume [fraction]. Defaults to None.
+        rsh (float, optional): Shale resistivity [ohm.m]. Defaults to 2.0.
+        method (str, optional): 'archie' or 'indonesian'. Defaults to 'archie'.
+        vsh_cutoff (float, optional): Maximum Vsh for clean sand in Archie mode. Defaults to 0.30.
+        min_phit (float, optional): Minimum porosity cutoff. Defaults to 0.03.
+        max_phit (float, optional): Maximum porosity cutoff. Defaults to 0.45.
+
+    Returns:
+        dict: Calibrated results containing:
+            - 'm_points': np.ndarray of valid apparent m
+            - 'phi_points': np.ndarray of corresponding porosity
+            - 'vsh_points': np.ndarray of corresponding vsh
+            - 'mean_m': float (mean apparent m)
+            - 'median_m': float (median apparent m)
+            - 'p10_m': float
+            - 'p90_m': float
+            - 'count': int
+            - 'slope': float (a in m = a*phi + b)
+            - 'intercept': float (b in m = a*phi + b)
+            - 'r2': float
+    """
+    rt_arr = np.asarray(rt, dtype=float).ravel()
+    phit_arr = np.asarray(phit, dtype=float).ravel()
+    rw_arr = np.asarray(rw, dtype=float)
+    if rw_arr.ndim == 0:
+        rw_arr = np.full_like(rt_arr, float(rw_arr))
+    else:
+        rw_arr = rw_arr.ravel()
+
+    n = len(rt_arr)
+    vsh_arr = (
+        np.asarray(vsh, dtype=float).ravel()
+        if vsh is not None
+        else np.zeros(n, dtype=float)
+    )
+
+    valid_mask = (
+        np.isfinite(rt_arr)
+        & (rt_arr > 0)
+        & np.isfinite(phit_arr)
+        & (phit_arr >= min_phit)
+        & (phit_arr <= max_phit)
+        & np.isfinite(rw_arr)
+        & (rw_arr > 0)
+    )
+
+    if method == "archie":
+        if vsh is not None:
+            valid_mask &= np.isfinite(vsh_arr) & (vsh_arr <= vsh_cutoff)
+        calc_m = np.full(n, np.nan, dtype=float)
+        calc_m[valid_mask] = np.log(rw_arr[valid_mask] / rt_arr[valid_mask]) / np.log(
+            phit_arr[valid_mask]
+        )
+    elif method == "indonesian":
+        calc_m = np.full(n, np.nan, dtype=float)
+        sh_term = np.clip(vsh_arr, 0.0, 1.0) ** (
+            1 - 0.5 * np.clip(vsh_arr, 0.0, 1.0)
+        ) / np.sqrt(max(float(rsh), 1e-3))
+        diff = (1.0 / np.sqrt(np.maximum(rt_arr, 1e-4))) - sh_term
+        diff_mask = valid_mask & (diff > 0)
+        calc_m[diff_mask] = (2.0 / np.log(phit_arr[diff_mask])) * np.log(
+            np.sqrt(rw_arr[diff_mask]) * diff[diff_mask]
+        )
+        valid_mask = diff_mask
+    elif method in ("shell_lucia", "shell", "lucia"):
+        calc_m = estimate_m_shell_lucia(phit_arr)
+    else:
+        calc_m = estimate_m_borai(phit_arr)
+
+    # Filter physical range for m
+    phys_mask = valid_mask & np.isfinite(calc_m) & (calc_m >= 1.0) & (calc_m <= 3.5)
+    m_pts = calc_m[phys_mask]
+    phi_pts = phit_arr[phys_mask]
+    vsh_pts = vsh_arr[phys_mask]
+    count = int(len(m_pts))
+
+    if count < 3:
+        return {
+            "m_points": m_pts,
+            "phi_points": phi_pts,
+            "vsh_points": vsh_pts,
+            "mean_m": 2.0,
+            "median_m": 2.0,
+            "p10_m": 2.0,
+            "p90_m": 2.0,
+            "count": count,
+            "slope": 0.0,
+            "intercept": 2.0,
+            "r2": 0.0,
+        }
+
+    mean_m = float(np.mean(m_pts))
+    median_m = float(np.median(m_pts))
+    p10_m = float(np.percentile(m_pts, 10))
+    p90_m = float(np.percentile(m_pts, 90))
+
+    try:
+        slope, intercept = np.polyfit(phi_pts, m_pts, 1)
+        pred = slope * phi_pts + intercept
+        ss_res = np.sum((m_pts - pred) ** 2)
+        ss_tot = np.sum((m_pts - mean_m) ** 2)
+        r2 = float(1.0 - (ss_res / ss_tot)) if ss_tot > 0 else 0.0
+    except Exception:
+        slope, intercept, r2 = 0.0, mean_m, 0.0
+
+    return {
+        "m_points": m_pts,
+        "phi_points": phi_pts,
+        "vsh_points": vsh_pts,
+        "mean_m": round(mean_m, 3),
+        "median_m": round(median_m, 3),
+        "p10_m": round(p10_m, 3),
+        "p90_m": round(p90_m, 3),
+        "count": count,
+        "slope": round(float(slope), 3),
+        "intercept": round(float(intercept), 3),
+        "r2": round(max(0.0, float(r2)), 3),
+    }
+
+
 def qv_phit_xplot(phit, qv):
     """Generate a Qv vs 1/PHIT crossplot.
 
@@ -1183,7 +1405,11 @@ def _normalize_shm_params_map(shm_params, model: str = "leverett_j") -> dict:
         default_p = (
             {"a": 0.85, "b": 35.0, "c": 1.5, "d": 2.0, "swirr": 0.0}
             if is_skelt
-            else ({"a": 0.12, "b": 0.40, "swirr": 0.0} if is_cuddy else {"a": 0.15, "b": 1.5, "swirr": 0.0})
+            else (
+                {"a": 0.12, "b": 0.40, "swirr": 0.0}
+                if is_cuddy
+                else {"a": 0.15, "b": 1.5, "swirr": 0.0}
+            )
         )
         return {"default": default_p, "poor_rock": poor_p, "by_rock": {}}
 
@@ -1199,7 +1425,9 @@ def _normalize_shm_params_map(shm_params, model: str = "leverett_j") -> dict:
                     by_rock[float(rf_val)] = item
                 except Exception:
                     pass
-        default_item = shm_params[len(shm_params) // 2] if shm_params else {"a": 0.15, "b": 1.5}
+        default_item = (
+            shm_params[len(shm_params) // 2] if shm_params else {"a": 0.15, "b": 1.5}
+        )
         return {"default": default_item, "poor_rock": poor_p, "by_rock": by_rock}
 
     # Case 2: Dict
@@ -1460,7 +1688,9 @@ def predict_sw_shm(
         if isinstance(fwl, dict) and well_col in df.columns:
             default_fwl = float(next(iter(fwl.values())))
             fwl_arr = (
-                df[well_col].map(lambda w: float(fwl.get(w, default_fwl))).to_numpy(dtype=float)
+                df[well_col]
+                .map(lambda w: float(fwl.get(w, default_fwl)))
+                .to_numpy(dtype=float)
             )
         else:
             fwl_arr = np.full(
@@ -1470,7 +1700,9 @@ def predict_sw_shm(
             )
     else:
         if depth is None:
-            raise ValueError("Either `df` or `depth` must be provided to predict_sw_shm.")
+            raise ValueError(
+                "Either `df` or `depth` must be provided to predict_sw_shm."
+            )
         if isinstance(depth, pd.Series):
             return_series = True
             series_index = depth.index
@@ -1533,7 +1765,9 @@ def predict_sw_shm(
         sw_pred = swirr_use + (1.0 - swirr_use) * swn
     elif model_clean in ("skelt_harrison", "skelt"):
         with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-            sw_pred = 1.0 - a_arr * np.exp(-((b_arr / np.maximum(h + d_arr, 1e-6)) ** c_arr))
+            sw_pred = 1.0 - a_arr * np.exp(
+                -((b_arr / np.maximum(h + d_arr, 1e-6)) ** c_arr)
+            )
         if np.any(swirr_use > 0):
             sw_pred = np.maximum(sw_pred, swirr_use)
     elif model_clean == "cuddy":
@@ -1542,7 +1776,7 @@ def predict_sw_shm(
         with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
             sw_pred = np.where(
                 (h > 0) & (pc > 0) & (phit_arr > 0),
-                a_arr / ((pc ** b_abs) * np.maximum(phit_arr, 1e-6)),
+                a_arr / ((pc**b_abs) * np.maximum(phit_arr, 1e-6)),
                 1.0,
             )
         if np.any(swirr_use > 0):
@@ -1657,7 +1891,9 @@ def analyze_transition_zone(
 
         sw_irr_model = 1.0 - a
         sw_owc_eff = float(np.clip(sw_owc_threshold, sw_irr_model + 0.05, 0.99))
-        sw_top_eff = float(np.clip(sw_irr_model + sw_ttz_tol * a, sw_irr_model + 0.01, 0.90))
+        sw_top_eff = float(
+            np.clip(sw_irr_model + sw_ttz_tol * a, sw_irr_model + 0.01, 0.90)
+        )
         h_entry = _solve_h_skelt(sw_owc_eff)
         h_top = max(_solve_h_skelt(sw_top_eff), h_entry)
 
@@ -1829,7 +2065,9 @@ def optimize_fwl(
         if well_col not in work_df.columns:
             work_df[well_col] = "WELL_1"
     else:
-        raise ValueError("`df` must be a pandas DataFrame or a dict of {well_name: DataFrame}.")
+        raise ValueError(
+            "`df` must be a pandas DataFrame or a dict of {well_name: DataFrame}."
+        )
 
     # Resolve depth column
     d_col = depth_col
@@ -1870,8 +2108,16 @@ def optimize_fwl(
             m_arch = float(ap.get("m", 2.0))
             n_arch = float(ap.get("n", 2.0))
             if saturation_method.strip().lower() == "waxman_smits":
-                qv_val = work_df["QV"].to_numpy(dtype=float) if "QV" in work_df.columns else 0.3
-                b_val = work_df["B"].to_numpy(dtype=float) if "B" in work_df.columns else None
+                qv_val = (
+                    work_df["QV"].to_numpy(dtype=float)
+                    if "QV" in work_df.columns
+                    else 0.3
+                )
+                b_val = (
+                    work_df["B"].to_numpy(dtype=float)
+                    if "B" in work_df.columns
+                    else None
+                )
                 work_df[sw_col] = np.clip(
                     waxman_smits_saturation(
                         work_df["RT"].to_numpy(dtype=float),
@@ -1928,9 +2174,7 @@ def optimize_fwl(
         else None
     )
     rf_arr = (
-        work_df[rock_flag_col].to_numpy()
-        if rock_flag_col in work_df.columns
-        else None
+        work_df[rock_flag_col].to_numpy() if rock_flag_col in work_df.columns else None
     )
     wells_arr = work_df[well_col].astype(str).to_numpy()
 
@@ -1989,14 +2233,14 @@ def optimize_fwl(
 
     # Detect lowest confirmed hydrocarbon depth (Oil Down To / Gas Down To)
     hc_sample_mask = (
-        res_mask
-        & (sw_log_arr < 0.75)
-        & (phit_arr >= max(phit_cutoff, 0.05))
+        res_mask & (sw_log_arr < 0.75) & (phit_arr >= max(phit_cutoff, 0.05))
     )
     if is_leverett:
         hc_sample_mask = hc_sample_mask & (perm_arr >= max(perm_cutoff, 0.1))
 
-    odt = float(np.nanmax(depth_arr[hc_sample_mask])) if np.any(hc_sample_mask) else None
+    odt = (
+        float(np.nanmax(depth_arr[hc_sample_mask])) if np.any(hc_sample_mask) else None
+    )
 
     if fwl_bounds is not None:
         fwl_low, fwl_high = float(fwl_bounds[0]), float(fwl_bounds[1])
@@ -2106,18 +2350,27 @@ def optimize_fwl(
         norm_p = _normalize_shm_params_map(shm_params, model=model)["default"]
         if is_leverett:
             x0 = np.array(
-                [opt_fwl, float(norm_p.get("a", 0.15)), abs(float(norm_p.get("b", 1.5)))],
+                [
+                    opt_fwl,
+                    float(norm_p.get("a", 0.15)),
+                    abs(float(norm_p.get("b", 1.5))),
+                ],
                 dtype=float,
             )
             bounds_joint = [(fwl_low, fwl_high), (1e-4, 5.0), (0.1, 10.0)]
 
             def _joint_obj_j(x):
-                return _compute_loss(float(x[0]), cand_params={"a": float(x[1]), "b": float(x[2])})
+                return _compute_loss(
+                    float(x[0]), cand_params={"a": float(x[1]), "b": float(x[2])}
+                )
 
             res_j = minimize(_joint_obj_j, x0, method="L-BFGS-B", bounds=bounds_joint)
             if res_j.fun <= _compute_loss(opt_fwl, shm_params):
                 opt_fwl = float(res_j.x[0])
-                active_shm_params = {"a": round(float(res_j.x[1]), 4), "b": round(float(res_j.x[2]), 4)}
+                active_shm_params = {
+                    "a": round(float(res_j.x[1]), 4),
+                    "b": round(float(res_j.x[2]), 4),
+                }
         elif model_clean in ("skelt_harrison", "skelt"):
             x0 = np.array(
                 [
@@ -2240,7 +2493,9 @@ def optimize_fwl(
     for w_name in pd.unique(wells_arr):
         w_mask = res_mask & (wells_arr == w_name)
         if not np.any(w_mask):
-            w_mask = (wells_arr == w_name) & np.isfinite(depth_arr) & np.isfinite(sw_log_arr)
+            w_mask = (
+                (wells_arr == w_name) & np.isfinite(depth_arr) & np.isfinite(sw_log_arr)
+            )
         n_w = int(np.sum(w_mask))
         if n_w == 0:
             continue
@@ -2321,15 +2576,15 @@ def optimize_fwl(
         )
 
     well_metrics_df = pd.DataFrame(well_rows)
-    grid_profile_df = pd.DataFrame(
-        {"fwl": grid_fwls, "objective_loss": grid_losses}
-    )
+    grid_profile_df = pd.DataFrame({"fwl": grid_fwls, "objective_loss": grid_losses})
 
     # 9. Per-zone FWL optimization & transition zone contacts
     zone_rows = []
     fwl_by_zone: dict[str, float] = {}
-    resolved_zone_col = zone_col if zone_col in work_df.columns else (
-        "ZONE" if "ZONE" in work_df.columns else None
+    resolved_zone_col = (
+        zone_col
+        if zone_col in work_df.columns
+        else ("ZONE" if "ZONE" in work_df.columns else None)
     )
     if solve_per_zone and resolved_zone_col is not None:
         zones_raw = work_df[resolved_zone_col].fillna("Unknown").astype(str).to_numpy()
@@ -2375,9 +2630,7 @@ def optimize_fwl(
 
             # Physical constraint per zone: FWL >= ODT within this zone
             z_hc_mask = (
-                z_mask
-                & (sw_log_arr < 0.75)
-                & (phit_arr >= max(phit_cutoff, 0.05))
+                z_mask & (sw_log_arr < 0.75) & (phit_arr >= max(phit_cutoff, 0.05))
             )
             if is_leverett:
                 z_hc_mask = z_hc_mask & (perm_arr >= max(perm_cutoff, 0.1))
@@ -2449,9 +2702,7 @@ def optimize_fwl(
                     fwl=fwl_zone_opt,
                     model=model,
                     shm_params=active_shm_params,
-                    swirr=swirr[z_all_mask]
-                    if isinstance(swirr, np.ndarray)
-                    else swirr,
+                    swirr=swirr[z_all_mask] if isinstance(swirr, np.ndarray) else swirr,
                     ift=ift,
                     theta=theta,
                     gw=gw,
@@ -2481,7 +2732,9 @@ def optimize_fwl(
             z_bvw_rmse = float(np.sqrt(np.mean((z_phi * (z_obs - z_pred)) ** 2)))
             z_ss_res = float(np.sum((z_obs - z_pred) ** 2))
             z_ss_tot = float(np.sum((z_obs - np.mean(z_obs)) ** 2))
-            z_r2 = float(max(0.0, 1.0 - z_ss_res / z_ss_tot)) if z_ss_tot > 1e-12 else 0.0
+            z_r2 = (
+                float(max(0.0, 1.0 - z_ss_res / z_ss_tot)) if z_ss_tot > 1e-12 else 0.0
+            )
 
             fwl_by_zone[str(z_name)] = round(float(fwl_zone_opt), 2)
             zone_rows.append(
@@ -2520,7 +2773,9 @@ def optimize_fwl(
             )
             ss_res = float(np.sum((sw_obs_res - sw_pred_res) ** 2))
             ss_tot = float(np.sum((sw_obs_res - np.mean(sw_obs_res)) ** 2))
-            global_r2 = float(max(0.0, 1.0 - ss_res / ss_tot)) if ss_tot > 1e-12 else 0.0
+            global_r2 = (
+                float(max(0.0, 1.0 - ss_res / ss_tot)) if ss_tot > 1e-12 else 0.0
+            )
 
     zone_metrics_df = pd.DataFrame(zone_rows)
 
@@ -2629,8 +2884,19 @@ def extract_fluid_contacts_and_limits(
 
     # Depth column resolution (prefer TVDSS)
     z_col = None
-    for cand in ("TVDSS", "DEPT_TVDSS", "DEPTH_TVDSS", "TVD_SS", depth_col, "TVD", "DEPTH"):
-        if cand in work_df.columns and pd.to_numeric(work_df[cand], errors="coerce").notna().sum() >= 2:
+    for cand in (
+        "TVDSS",
+        "DEPT_TVDSS",
+        "DEPTH_TVDSS",
+        "TVD_SS",
+        depth_col,
+        "TVD",
+        "DEPTH",
+    ):
+        if (
+            cand in work_df.columns
+            and pd.to_numeric(work_df[cand], errors="coerce").notna().sum() >= 2
+        ):
             z_col = cand
             break
     if z_col is None:
@@ -2643,29 +2909,67 @@ def extract_fluid_contacts_and_limits(
     work_df["_DEPTH_CALC"] = z_vals
 
     # Resolve well, zone, fault block
-    w_col = next((c for c in (well_col, "WELL_NAME", "WELL", "UWI") if c in work_df.columns), None)
+    w_col = next(
+        (c for c in (well_col, "WELL_NAME", "WELL", "UWI") if c in work_df.columns),
+        None,
+    )
     if w_col is None:
         work_df["_WELL_NAME"] = "Field"
         w_col = "_WELL_NAME"
 
-    z_name_col = next((c for c in (zone_col, "ZONES", "ZONE", "FORMATION") if c in work_df.columns), None)
-    fb_col = next((c for c in (fault_block_col, "FAULT_BLOCK", "FAULTBLOCK", "BLOCK") if c in work_df.columns), None)
+    z_name_col = next(
+        (c for c in (zone_col, "ZONES", "ZONE", "FORMATION") if c in work_df.columns),
+        None,
+    )
+    fb_col = next(
+        (
+            c
+            for c in (fault_block_col, "FAULT_BLOCK", "FAULTBLOCK", "BLOCK")
+            if c in work_df.columns
+        ),
+        None,
+    )
 
     # Saturation, porosity, vsh
-    s_col = next((c for c in (sw_col, "SW", "SWT", "SWE", "SW_WS", "SW_ARCHIE") if c in work_df.columns), None)
+    s_col = next(
+        (
+            c
+            for c in (sw_col, "SW", "SWT", "SWE", "SW_WS", "SW_ARCHIE")
+            if c in work_df.columns
+        ),
+        None,
+    )
     if s_col is None:
         return pd.DataFrame(columns=contact_cols)
     work_df["_SW_CALC"] = pd.to_numeric(work_df[s_col], errors="coerce").clip(0.0, 1.0)
 
-    p_col = next((c for c in (phit_col, "PHIT", "POR", "PHIE", "POROSITY") if c in work_df.columns), None)
+    p_col = next(
+        (
+            c
+            for c in (phit_col, "PHIT", "POR", "PHIE", "POROSITY")
+            if c in work_df.columns
+        ),
+        None,
+    )
     if p_col is not None:
-        work_df["_PHIT_CALC"] = pd.to_numeric(work_df[p_col], errors="coerce").clip(0.0, 0.5)
+        work_df["_PHIT_CALC"] = pd.to_numeric(work_df[p_col], errors="coerce").clip(
+            0.0, 0.5
+        )
     else:
         work_df["_PHIT_CALC"] = 0.20
 
-    v_col = next((c for c in (vsh_col, "VSH", "VCL", "VSHALE", "GR_NORM") if c in work_df.columns), None)
+    v_col = next(
+        (
+            c
+            for c in (vsh_col, "VSH", "VCL", "VSHALE", "GR_NORM")
+            if c in work_df.columns
+        ),
+        None,
+    )
     if v_col is not None:
-        work_df["_VSH_CALC"] = pd.to_numeric(work_df[v_col], errors="coerce").clip(0.0, 1.0)
+        work_df["_VSH_CALC"] = pd.to_numeric(work_df[v_col], errors="coerce").clip(
+            0.0, 1.0
+        )
     else:
         work_df["_VSH_CALC"] = 0.0
 
@@ -2684,7 +2988,11 @@ def extract_fluid_contacts_and_limits(
             keys = (keys,)
         well_val = str(keys[0])
         zone_val = str(keys[1]) if len(keys) > 1 and pd.notna(keys[1]) else None
-        fb_val = str(grp[fb_col].dropna().iloc[0]) if fb_col and fb_col in grp.columns and grp[fb_col].notna().any() else None
+        fb_val = (
+            str(grp[fb_col].dropna().iloc[0])
+            if fb_col and fb_col in grp.columns and grp[fb_col].notna().any()
+            else None
+        )
 
         valid = grp[
             grp["_DEPTH_CALC"].notna()
@@ -2726,47 +3034,55 @@ def extract_fluid_contacts_and_limits(
         if np.any(is_gas):
             gut = float(np.min(depths[is_gas]))
             gdt = float(np.max(depths[is_gas]))
-            records.append({
-                "well_name": well_val,
-                "zone": zone_val,
-                "fault_block": fb_val,
-                "contact_type": "GUT",
-                "depth": gut,
-                "source": "Log Evaluation (Gas column top)",
-                "remarks": f"Proved Gas Up To at {gut:.1f} m TVDss in {zone_val or 'reservoir'}",
-            })
-            records.append({
-                "well_name": well_val,
-                "zone": zone_val,
-                "fault_block": fb_val,
-                "contact_type": "GDT",
-                "depth": gdt,
-                "source": "Log Evaluation (Lowest proved gas pay)",
-                "remarks": f"Proved Gas Down To at {gdt:.1f} m TVDss in {zone_val or 'reservoir'}",
-            })
+            records.append(
+                {
+                    "well_name": well_val,
+                    "zone": zone_val,
+                    "fault_block": fb_val,
+                    "contact_type": "GUT",
+                    "depth": gut,
+                    "source": "Log Evaluation (Gas column top)",
+                    "remarks": f"Proved Gas Up To at {gut:.1f} m TVDss in {zone_val or 'reservoir'}",
+                }
+            )
+            records.append(
+                {
+                    "well_name": well_val,
+                    "zone": zone_val,
+                    "fault_block": fb_val,
+                    "contact_type": "GDT",
+                    "depth": gdt,
+                    "source": "Log Evaluation (Lowest proved gas pay)",
+                    "remarks": f"Proved Gas Down To at {gdt:.1f} m TVDss in {zone_val or 'reservoir'}",
+                }
+            )
 
         # 2. Oil Up To (OUT) & Oil Down To (ODT)
         if np.any(is_oil):
             out = float(np.min(depths[is_oil]))
             odt = float(np.max(depths[is_oil]))
-            records.append({
-                "well_name": well_val,
-                "zone": zone_val,
-                "fault_block": fb_val,
-                "contact_type": "OUT",
-                "depth": out,
-                "source": "Log Evaluation (Oil column top)",
-                "remarks": f"Proved Oil Up To at {out:.1f} m TVDss in {zone_val or 'reservoir'}",
-            })
-            records.append({
-                "well_name": well_val,
-                "zone": zone_val,
-                "fault_block": fb_val,
-                "contact_type": "ODT",
-                "depth": odt,
-                "source": "Log Evaluation (Lowest proved oil pay, Sw < 0.65)",
-                "remarks": f"Proved Oil Down To at {odt:.1f} m TVDss in {zone_val or 'reservoir'} ({well_val})",
-            })
+            records.append(
+                {
+                    "well_name": well_val,
+                    "zone": zone_val,
+                    "fault_block": fb_val,
+                    "contact_type": "OUT",
+                    "depth": out,
+                    "source": "Log Evaluation (Oil column top)",
+                    "remarks": f"Proved Oil Up To at {out:.1f} m TVDss in {zone_val or 'reservoir'}",
+                }
+            )
+            records.append(
+                {
+                    "well_name": well_val,
+                    "zone": zone_val,
+                    "fault_block": fb_val,
+                    "contact_type": "ODT",
+                    "depth": odt,
+                    "source": "Log Evaluation (Lowest proved oil pay, Sw < 0.65)",
+                    "remarks": f"Proved Oil Down To at {odt:.1f} m TVDss in {zone_val or 'reservoir'} ({well_val})",
+                }
+            )
 
         # Lowest confirmed hydrocarbon base (ODT or GDT)
         hc_base = None
@@ -2782,28 +3098,32 @@ def extract_fluid_contacts_and_limits(
             basal_water_mask = is_water & (depths >= hc_base)
             if np.any(basal_water_mask):
                 wut = float(np.min(depths[basal_water_mask]))
-                records.append({
-                    "well_name": well_val,
-                    "zone": zone_val,
-                    "fault_block": fb_val,
-                    "contact_type": "WUT",
-                    "depth": wut,
-                    "source": "Log Evaluation (100% Sw water leg below HC)",
-                    "remarks": f"Proved Water Up To at {wut:.1f} m TVDss in {zone_val or 'reservoir'} (below ODT {hc_base:.1f}m)",
-                })
+                records.append(
+                    {
+                        "well_name": well_val,
+                        "zone": zone_val,
+                        "fault_block": fb_val,
+                        "contact_type": "WUT",
+                        "depth": wut,
+                        "source": "Log Evaluation (100% Sw water leg below HC)",
+                        "remarks": f"Proved Water Up To at {wut:.1f} m TVDss in {zone_val or 'reservoir'} (below ODT {hc_base:.1f}m)",
+                    }
+                )
         else:
             # 100% wet reservoir interval without confirmed hydrocarbon pay (only reached if require_pay=False)
             if np.any(is_water):
                 wut = float(np.min(depths[is_water]))
-                records.append({
-                    "well_name": well_val,
-                    "zone": zone_val,
-                    "fault_block": fb_val,
-                    "contact_type": "WUT",
-                    "depth": wut,
-                    "source": "Log Evaluation (100% Water-bearing Sand)",
-                    "remarks": f"Proved Water-bearing Sand top at {wut:.1f} m TVDss in {zone_val or 'reservoir'} (aquifer interval)",
-                })
+                records.append(
+                    {
+                        "well_name": well_val,
+                        "zone": zone_val,
+                        "fault_block": fb_val,
+                        "contact_type": "WUT",
+                        "depth": wut,
+                        "source": "Log Evaluation (100% Water-bearing Sand)",
+                        "remarks": f"Proved Water-bearing Sand top at {wut:.1f} m TVDss in {zone_val or 'reservoir'} (aquifer interval)",
+                    }
+                )
 
         # 4. Inferred Discrete Contacts (GOC, GWC, OWC)
         if np.any(is_gas) and np.any(is_oil):
@@ -2811,58 +3131,70 @@ def extract_fluid_contacts_and_limits(
             out_val = float(np.min(depths[is_oil]))
             if gdt_val <= out_val:
                 goc = round(float((gdt_val + out_val) / 2.0), 1)
-                records.append({
-                    "well_name": well_val,
-                    "zone": zone_val,
-                    "fault_block": fb_val,
-                    "contact_type": "GOC",
-                    "depth": goc,
-                    "source": "Calculated (GDT-OUT midpoint bracket)",
-                    "remarks": f"Gas-Oil Contact bracketed between GDT ({gdt_val:.1f}m) and OUT ({out_val:.1f}m)",
-                })
+                records.append(
+                    {
+                        "well_name": well_val,
+                        "zone": zone_val,
+                        "fault_block": fb_val,
+                        "contact_type": "GOC",
+                        "depth": goc,
+                        "source": "Calculated (GDT-OUT midpoint bracket)",
+                        "remarks": f"Gas-Oil Contact bracketed between GDT ({gdt_val:.1f}m) and OUT ({out_val:.1f}m)",
+                    }
+                )
         elif np.any(is_gas) and np.any(is_water):
             gdt_val = float(np.max(depths[is_gas]))
             wut_val = float(np.min(depths[is_water]))
             if gdt_val <= wut_val:
                 gwc = round(float((gdt_val + wut_val) / 2.0), 1)
-                records.append({
-                    "well_name": well_val,
-                    "zone": zone_val,
-                    "fault_block": fb_val,
-                    "contact_type": "GWC",
-                    "depth": gwc,
-                    "source": "Calculated (GDT-WUT midpoint bracket)",
-                    "remarks": f"Gas-Water Contact bracketed between GDT ({gdt_val:.1f}m) and WUT ({wut_val:.1f}m)",
-                })
+                records.append(
+                    {
+                        "well_name": well_val,
+                        "zone": zone_val,
+                        "fault_block": fb_val,
+                        "contact_type": "GWC",
+                        "depth": gwc,
+                        "source": "Calculated (GDT-WUT midpoint bracket)",
+                        "remarks": f"Gas-Water Contact bracketed between GDT ({gdt_val:.1f}m) and WUT ({wut_val:.1f}m)",
+                    }
+                )
 
         if np.any(is_oil) and np.any(is_water):
             odt_val = float(np.max(depths[is_oil]))
             wut_val = float(np.min(depths[is_water]))
             if odt_val <= wut_val:
                 owc = round(float((odt_val + wut_val) / 2.0), 1)
-                records.append({
-                    "well_name": well_val,
-                    "zone": zone_val,
-                    "fault_block": fb_val,
-                    "contact_type": "OWC",
-                    "depth": owc,
-                    "source": "Calculated (ODT-WUT midpoint bracket)",
-                    "remarks": f"Oil-Water Contact bracketed between ODT ({odt_val:.1f}m) and WUT ({wut_val:.1f}m)",
-                })
+                records.append(
+                    {
+                        "well_name": well_val,
+                        "zone": zone_val,
+                        "fault_block": fb_val,
+                        "contact_type": "OWC",
+                        "depth": owc,
+                        "source": "Calculated (ODT-WUT midpoint bracket)",
+                        "remarks": f"Oil-Water Contact bracketed between ODT ({odt_val:.1f}m) and WUT ({wut_val:.1f}m)",
+                    }
+                )
 
         # 5. Zonal or Well FWL if supplied
         if fwl_dict:
-            z_fwl = fwl_dict.get(zone_val) or fwl_dict.get(well_val) or fwl_dict.get("default")
+            z_fwl = (
+                fwl_dict.get(zone_val)
+                or fwl_dict.get(well_val)
+                or fwl_dict.get("default")
+            )
             if z_fwl is not None:
-                records.append({
-                    "well_name": well_val,
-                    "zone": zone_val,
-                    "fault_block": fb_val,
-                    "contact_type": "FWL",
-                    "depth": round(float(z_fwl), 1),
-                    "source": "FWL Optimizer (Capillary Pc = 0 datum)",
-                    "remarks": f"Optimized Free Water Level (Pc = 0 datum) for {zone_val or 'zone'}",
-                })
+                records.append(
+                    {
+                        "well_name": well_val,
+                        "zone": zone_val,
+                        "fault_block": fb_val,
+                        "contact_type": "FWL",
+                        "depth": round(float(z_fwl), 1),
+                        "source": "FWL Optimizer (Capillary Pc = 0 datum)",
+                        "remarks": f"Optimized Free Water Level (Pc = 0 datum) for {zone_val or 'zone'}",
+                    }
+                )
 
     # 6. Pressure Test Integration (if pressure_df provided)
     if pressure_df is not None and not pressure_df.empty:
@@ -2878,35 +3210,41 @@ def extract_fluid_contacts_and_limits(
                 if p_d is None:
                     continue
                 if "GAS" in p_fl:
-                    records.append({
-                        "well_name": p_wn,
-                        "zone": p_z,
-                        "fault_block": p_fb,
-                        "contact_type": "GDT",
-                        "depth": p_d,
-                        "source": "MDT Pre-test (Gas gradient point)",
-                        "remarks": f"Proved gas by pressure testing at {p_d} m TVDss",
-                    })
+                    records.append(
+                        {
+                            "well_name": p_wn,
+                            "zone": p_z,
+                            "fault_block": p_fb,
+                            "contact_type": "GDT",
+                            "depth": p_d,
+                            "source": "MDT Pre-test (Gas gradient point)",
+                            "remarks": f"Proved gas by pressure testing at {p_d} m TVDss",
+                        }
+                    )
                 elif "OIL" in p_fl:
-                    records.append({
-                        "well_name": p_wn,
-                        "zone": p_z,
-                        "fault_block": p_fb,
-                        "contact_type": "ODT",
-                        "depth": p_d,
-                        "source": "MDT Pre-test (Oil gradient point)",
-                        "remarks": f"Proved oil by pressure testing at {p_d} m TVDss",
-                    })
+                    records.append(
+                        {
+                            "well_name": p_wn,
+                            "zone": p_z,
+                            "fault_block": p_fb,
+                            "contact_type": "ODT",
+                            "depth": p_d,
+                            "source": "MDT Pre-test (Oil gradient point)",
+                            "remarks": f"Proved oil by pressure testing at {p_d} m TVDss",
+                        }
+                    )
                 elif "WATER" in p_fl:
-                    records.append({
-                        "well_name": p_wn,
-                        "zone": p_z,
-                        "fault_block": p_fb,
-                        "contact_type": "WUT",
-                        "depth": p_d,
-                        "source": "MDT Pre-test (Water gradient point)",
-                        "remarks": f"Proved formation water by pressure testing at {p_d} m TVDss",
-                    })
+                    records.append(
+                        {
+                            "well_name": p_wn,
+                            "zone": p_z,
+                            "fault_block": p_fb,
+                            "contact_type": "WUT",
+                            "depth": p_d,
+                            "source": "MDT Pre-test (Water gradient point)",
+                            "remarks": f"Proved formation water by pressure testing at {p_d} m TVDss",
+                        }
+                    )
 
     out_df = pd.DataFrame(records, columns=contact_cols)
     if not out_df.empty:
@@ -2945,22 +3283,34 @@ def plot_fwl_reconciliation(
     ttz = opt_result["ttz"]
     mdt_fwl = opt_result.get("mdt_fwl")
 
-    d_col = depth_col if depth_col in df.columns else (
-        "TVDSS" if "TVDSS" in df.columns else df.columns[0]
+    d_col = (
+        depth_col
+        if depth_col in df.columns
+        else ("TVDSS" if "TVDSS" in df.columns else df.columns[0])
     )
-    s_col = sw_col if sw_col in df.columns else ("SW" if "SW" in df.columns else "SW_SHM")
+    s_col = (
+        sw_col if sw_col in df.columns else ("SW" if "SW" in df.columns else "SW_SHM")
+    )
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 5.5))
     fig.suptitle(title, fontsize=11, fontweight="bold")
 
     # Panel 1: Objective Loss vs. Candidate FWL
     ax0 = axes[0]
-    ax0.plot(grid_df["objective_loss"], grid_df["fwl"], color="navy", lw=1.8, label="Objective Loss")
+    ax0.plot(
+        grid_df["objective_loss"],
+        grid_df["fwl"],
+        color="navy",
+        lw=1.8,
+        label="Objective Loss",
+    )
     ax0.axhline(fwl, color="dodgerblue", ls="-", lw=1.8, label=f"Opt FWL = {fwl:.1f}")
     ax0.axhline(owc, color="forestgreen", ls="--", lw=1.4, label=f"OWC = {owc:.1f}")
     ax0.axhline(ttz, color="darkorange", ls=":", lw=1.4, label=f"TTZ = {ttz:.1f}")
     if mdt_fwl is not None:
-        ax0.axhline(mdt_fwl, color="crimson", ls="-.", lw=1.5, label=f"MDT FWL = {mdt_fwl:.1f}")
+        ax0.axhline(
+            mdt_fwl, color="crimson", ls="-.", lw=1.5, label=f"MDT FWL = {mdt_fwl:.1f}"
+        )
     ax0.invert_yaxis()
     ax0.set_xlabel("Objective Error (Sw / BVW)")
     ax0.set_ylabel("Depth (TVD / TVDSS)")
@@ -2973,9 +3323,15 @@ def plot_fwl_reconciliation(
     wells = df[well_col].unique() if well_col in df.columns else ["WELL"]
     cmap = plt.get_cmap("tab10")
     for idx, w in enumerate(wells):
-        sub = df[df[well_col] == w].sort_values(d_col) if well_col in df.columns else df.sort_values(d_col)
+        sub = (
+            df[df[well_col] == w].sort_values(d_col)
+            if well_col in df.columns
+            else df.sort_values(d_col)
+        )
         color = cmap(idx % 10)
-        ax1.scatter(sub[s_col], sub[d_col], s=10, alpha=0.45, color=color, label=f"{w} Sw_log")
+        ax1.scatter(
+            sub[s_col], sub[d_col], s=10, alpha=0.45, color=color, label=f"{w} Sw_log"
+        )
         ax1.plot(sub["SW_SHM"], sub[d_col], lw=1.5, color=color, label=f"{w} Sw_SHM")
     ax1.axhline(fwl, color="dodgerblue", ls="-", lw=1.6, label="FWL")
     ax1.axhline(owc, color="forestgreen", ls="--", lw=1.3, label="OWC")
@@ -2992,7 +3348,14 @@ def plot_fwl_reconciliation(
     ax2 = axes[2]
     for idx, w in enumerate(wells):
         sub = df[df[well_col] == w] if well_col in df.columns else df
-        ax2.scatter(sub[s_col], sub["SW_SHM"], s=14, alpha=0.6, color=cmap(idx % 10), label=str(w))
+        ax2.scatter(
+            sub[s_col],
+            sub["SW_SHM"],
+            s=14,
+            alpha=0.6,
+            color=cmap(idx % 10),
+            label=str(w),
+        )
     ax2.plot([0, 1], [0, 1], "k--", lw=1.2, label="1:1 Line")
     ax2.set_xlim(0.0, 1.0)
     ax2.set_ylim(0.0, 1.0)
@@ -3137,7 +3500,9 @@ class ContactOptimizer:
     ) -> pd.Series:
         """Predict $S_{w,SHM}$ on a DataFrame using the fitted FWL and SHM parameters."""
         if self.fwl_ is None:
-            raise RuntimeError("ContactOptimizer must be fitted with .fit() before calling .predict().")
+            raise RuntimeError(
+                "ContactOptimizer must be fitted with .fit() before calling .predict()."
+            )
 
         fwl_arg = self.fwl_
         if (
@@ -3202,8 +3567,10 @@ class ContactOptimizer:
             rock_flag_col=rock_flag_col,
             well_col=well_col,
         )
-        d_col = depth_col if depth_col in out_df.columns else (
-            "TVDSS" if "TVDSS" in out_df.columns else out_df.columns[0]
+        d_col = (
+            depth_col
+            if depth_col in out_df.columns
+            else ("TVDSS" if "TVDSS" in out_df.columns else out_df.columns[0])
         )
         z = np.asarray(out_df[d_col], dtype=float)
         conv = _gravity_conversion_factor(self.unit)
@@ -3225,7 +3592,9 @@ class ContactOptimizer:
         """Return a dictionary of fitted contacts, transition zone thickness, and error metrics."""
         if self.result_ is None:
             raise RuntimeError("ContactOptimizer has not been fitted yet.")
-        return {k: v for k, v in self.result_.items() if k not in ("df", "grid_profile")}
+        return {
+            k: v for k, v in self.result_.items() if k not in ("df", "grid_profile")
+        }
 
     def plot(self, **kwargs):
         """Plot the 3-panel Multi-Well FWL & SHM Reconciliation diagnostic figure."""
@@ -3234,9 +3603,13 @@ class ContactOptimizer:
         return plot_fwl_reconciliation(self.result_, **kwargs)
 
 
-
 def swirr_rqi(
-    poro, perm, a: float = 0.25, b: float = 0.50, swirr_min: float = 0.02, swirr_max: float = 0.90
+    poro,
+    perm,
+    a: float = 0.25,
+    b: float = 0.50,
+    swirr_min: float = 0.02,
+    swirr_max: float = 0.90,
 ):
     """Estimate irreducible water saturation ($S_{wirr}$) from Reservoir Quality Index (RQI) ratio.
 
@@ -3266,7 +3639,11 @@ def swirr_rqi(
 
 
 def swirr_semilog_k(
-    perm, a: float = 0.35, b: float = 0.10, swirr_min: float = 0.02, swirr_max: float = 0.90
+    perm,
+    a: float = 0.35,
+    b: float = 0.10,
+    swirr_min: float = 0.02,
+    swirr_max: float = 0.90,
 ):
     """Estimate irreducible water saturation ($S_{wirr}$) using a semi-log permeability correlation.
 
@@ -3444,7 +3821,13 @@ def fit_swirr_correlation(
         sw_pred = swirr_semilog_k(k_v, a_val, b_val, swirr_min, swirr_max)
     elif eq == "timur":
         sw_pred = swirr_timur(
-            phi_v, k_v, a_val, b_val, c_val if c_val is not None else 0.5, swirr_min, swirr_max
+            phi_v,
+            k_v,
+            a_val,
+            b_val,
+            c_val if c_val is not None else 0.5,
+            swirr_min,
+            swirr_max,
         )
     else:
         sw_pred = swirr_rqi(phi_v, k_v, a_val, b_val, swirr_min, swirr_max)

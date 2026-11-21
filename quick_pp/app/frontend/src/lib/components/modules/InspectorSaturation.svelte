@@ -1,11 +1,14 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { api } from '$lib/api/client';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
 	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
+	import { depthDisplay } from '$lib/state/depthDisplay.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
 	import { thomasStieberAvailable } from '$lib/utils/lithology';
+	import { calculateWaterLegCalibration } from '$lib/utils/waterLegCalibration';
 	import {
 		fillMissingCurve,
 		estimateBqvReferenceRw,
@@ -36,6 +39,9 @@
 	});
 
 	let refDepth = $derived(workbench.saturationParams.bqvReferenceDepth ?? defaultRefDepth);
+	let availableZoneNames = $derived([
+		...new Set(wellData.tops.map((t) => t.name).filter(Boolean))
+	]);
 
 	function estimateTempAndRwAtDepth(depthM: number) {
 		const sp = workbench.saturationParams;
@@ -229,6 +235,81 @@
 		};
 	});
 
+	let averageBoraiM = $derived.by(() => {
+		const phit = wellData.curves['PHIT'] ?? wellData.curves['PHIE'] ?? [];
+		const indices =
+			wellData.visibleIndices.length > 0 ? wellData.visibleIndices : phit.map((_, i) => i);
+		let sum = 0;
+		let count = 0;
+		for (const i of indices) {
+			const p = phit[i];
+			if (Number.isFinite(p) && p > 0.01 && p < 0.6) {
+				const m = Math.max(1.0, Math.min(3.5, 2.2 - 0.035 / (p + 0.042)));
+				sum += m;
+				count++;
+			}
+		}
+		return count > 0 ? Number((sum / count).toFixed(3)) : 2.0;
+	});
+
+	let averageShellLuciaM = $derived.by(() => {
+		const phit = wellData.curves['PHIT'] ?? wellData.curves['PHIE'] ?? [];
+		const indices =
+			wellData.visibleIndices.length > 0 ? wellData.visibleIndices : phit.map((_, i) => i);
+		let sum = 0;
+		let count = 0;
+		for (const i of indices) {
+			const p = phit[i];
+			if (Number.isFinite(p) && p > 0.01 && p < 0.6) {
+				const m = Math.max(1.0, Math.min(3.5, 1.87 + 0.019 / Math.max(p, 0.005)));
+				sum += m;
+				count++;
+			}
+		}
+		return count > 0 ? Number((sum / count).toFixed(3)) : 2.0;
+	});
+
+	let waterLegCalibResult = $derived.by(() => {
+		const deptAll = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
+		const phitRaw = wellData.curves['PHIT'] ?? wellData.curves['PHIE'] ?? [];
+		const rtRaw =
+			wellData.curves['RT'] ??
+			wellData.curves['RDEEP'] ??
+			wellData.curves['RD'] ??
+			wellData.curves['RDEP'] ??
+			wellData.curves['LLD'] ??
+			wellData.curves['ILD'] ??
+			[];
+		const vshRaw = wellData.curves['VSHALE'] ?? wellData.curves['VCLAY'] ?? [];
+		const rwCurve = wellData.curves['RW'] ?? [];
+		return calculateWaterLegCalibration(
+			deptAll,
+			phitRaw,
+			rtRaw,
+			vshRaw,
+			rwCurve,
+			wellData.visibleIndices,
+			depthDisplay.unit,
+			workbench.saturationParams,
+			(d: number) => wellData.resolveZoneAtDepth(d)
+		);
+	});
+
+	$effect(() => {
+		const res = waterLegCalibResult;
+		untrack(() => {
+			if (res.validCount > 0) {
+				workbench.saturationParams.waterLegCalibratedM = res.meanM;
+				workbench.saturationParams.waterLegFitSlope = res.slope;
+				workbench.saturationParams.waterLegFitIntercept = res.intercept;
+			} else {
+				workbench.saturationParams.waterLegCalibratedM = null;
+				workbench.saturationParams.waterLegFitSlope = null;
+				workbench.saturationParams.waterLegFitIntercept = null;
+			}
+		});
+	});
+
 	let hasTsAvailable = $derived.by(() => {
 		const ps = wellData.curves['PHIT_SAND'];
 		return thomasStieberAvailable(
@@ -323,6 +404,10 @@
 						vsh_cutoff: sp.vshCutoff,
 						enforce_fluid_segregation: sp.enforceSegregation,
 						allow_unconfirmed: sp.allowUnconfirmed,
+						apply_continuous_m: sp.applyContinuousM,
+						continuous_m_model: sp.continuousMModel ?? 'calibrated',
+						water_leg_slope: sp.applyContinuousM ? sp.waterLegFitSlope : null,
+						water_leg_intercept: sp.applyContinuousM ? sp.waterLegFitIntercept : null,
 						save: persist && !selectionMode
 					} as any
 				}
@@ -730,6 +815,320 @@
 				step={0.005}
 				decimals={3}
 			/>
+		</ParameterSection>
+
+		<!-- Water-Leg Calibration & Porosity-Dependent Empirical Models -->
+		<ParameterSection
+			title="Cementation Exponent m(Φ) Models"
+			badge={workbench.saturationParams.applyContinuousM
+				? workbench.saturationParams.continuousMModel === 'borai'
+					? 'Borai Continuous'
+					: workbench.saturationParams.continuousMModel === 'shell_lucia'
+						? 'Shell/Lucia Continuous'
+						: 'Calibrated Continuous'
+				: workbench.saturationParams.continuousMModel === 'borai'
+					? `Borai (Avg ${averageBoraiM})`
+					: workbench.saturationParams.continuousMModel === 'shell_lucia'
+						? `Shell/Lucia (Avg ${averageShellLuciaM})`
+						: workbench.saturationParams.waterLegCalibratedM
+							? `Calibrated m = ${workbench.saturationParams.waterLegCalibratedM}`
+							: 'Water Leg / Empirical'}
+		>
+			<div class="space-y-2 text-xs">
+				<label class="block space-y-1">
+					<span class="block text-[10px] text-[var(--text-muted)]"
+						>m(Φ) Determination Model</span
+					>
+					<select
+						class="w-full rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 py-1 text-[11px] text-[var(--text-primary)] focus:outline-hidden"
+						bind:value={workbench.saturationParams.continuousMModel}
+					>
+						<option value="calibrated"
+							>Water-Leg Linear Calibration (m = a·Φ + b)</option
+						>
+						<option value="borai">Borai (1987) Empirical [Carbonates/Tight]</option>
+						<option value="shell_lucia"
+							>Shell / Lucia (1983) Empirical [Carbonates]</option
+						>
+					</select>
+				</label>
+
+				{#if workbench.saturationParams.continuousMModel === 'calibrated'}
+					<div class="flex items-center justify-between gap-1 pt-0.5">
+						<span class="text-[11px] font-medium text-[var(--text-secondary)]"
+							>Interval</span
+						>
+						<div
+							class="flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-0.5 text-[10px]"
+						>
+							<button
+								type="button"
+								class="rounded-xs px-2 py-0.5 font-medium transition-colors {workbench
+									.saturationParams.waterLegIntervalMode === 'zone'
+									? 'bg-blue-600 text-white'
+									: 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+								onclick={() =>
+									(workbench.saturationParams.waterLegIntervalMode = 'zone')}
+							>
+								By Zone
+							</button>
+							<button
+								type="button"
+								class="rounded-xs px-2 py-0.5 font-medium transition-colors {workbench
+									.saturationParams.waterLegIntervalMode === 'depth'
+									? 'bg-blue-600 text-white'
+									: 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+								onclick={() =>
+									(workbench.saturationParams.waterLegIntervalMode = 'depth')}
+							>
+								By Depth MD
+							</button>
+						</div>
+					</div>
+
+					{#if workbench.saturationParams.waterLegIntervalMode === 'zone'}
+						<label class="block space-y-1">
+							<span class="block text-[10px] text-[var(--text-muted)]"
+								>Water-Bearing Zone / Formation</span
+							>
+							<select
+								class="w-full rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 py-1 text-[11px] text-[var(--text-primary)] focus:outline-hidden"
+								bind:value={workbench.saturationParams.waterLegSelectedZone}
+							>
+								<option value={null}>-- Automatic (Below FWL or Filtered) --</option
+								>
+								{#each availableZoneNames as zName}
+									<option value={zName}>{zName}</option>
+								{/each}
+							</select>
+						</label>
+					{:else}
+						<div class="grid grid-cols-2 gap-1.5">
+							<label class="block">
+								<span class="block text-[10px] text-[var(--text-muted)]"
+									>Top Depth ({depthDisplay.unit})</span
+								>
+								<input
+									type="number"
+									step="0.5"
+									class="w-full rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 py-0.5 text-[11px] text-[var(--text-primary)]"
+									placeholder="e.g. 3400"
+									bind:value={workbench.saturationParams.waterLegTopDepth}
+								/>
+							</label>
+							<label class="block">
+								<span class="block text-[10px] text-[var(--text-muted)]"
+									>Bottom Depth ({depthDisplay.unit})</span
+								>
+								<input
+									type="number"
+									step="0.5"
+									class="w-full rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 py-0.5 text-[11px] text-[var(--text-primary)]"
+									placeholder="e.g. 3600"
+									bind:value={workbench.saturationParams.waterLegBottomDepth}
+								/>
+							</label>
+						</div>
+					{/if}
+
+					<div class="grid grid-cols-2 gap-1.5 pt-1">
+						<label class="block">
+							<span class="block text-[10px] text-[var(--text-muted)]"
+								>Inversion Model</span
+							>
+							<select
+								class="w-full rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0.5 text-[11px] text-[var(--text-primary)]"
+								bind:value={workbench.saturationParams.waterLegMethod}
+							>
+								<option value="archie">Archie (Clean)</option>
+								<option value="indonesian">Indonesian (Shaly)</option>
+							</select>
+						</label>
+						<label class="block">
+							<span class="block text-[10px] text-[var(--text-muted)]"
+								>Max Clean Vsh Cutoff</span
+							>
+							<input
+								type="number"
+								step="0.05"
+								min="0.05"
+								max="0.8"
+								class="w-full rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0.5 text-[11px] text-[var(--text-primary)]"
+								bind:value={workbench.saturationParams.waterLegVshCutoff}
+							/>
+						</label>
+					</div>
+
+					<!-- Calibrated live metrics display -->
+					<div
+						class="rounded-xs border border-blue-200/60 bg-blue-50/40 p-2 text-[11px] dark:border-blue-900/60 dark:bg-blue-950/20"
+					>
+						<div class="flex items-center justify-between text-[11px]">
+							<span class="font-medium text-blue-900 dark:text-blue-300">
+								Calibrated Mean m:
+								{#if waterLegCalibResult.validCount > 0}
+									<span
+										class="text-[10px] font-normal text-blue-700/80 dark:text-blue-300/80"
+										>({waterLegCalibResult.validCount} pts)</span
+									>
+								{/if}
+							</span>
+							<span class="mono-num font-bold text-blue-900 dark:text-blue-200"
+								>{waterLegCalibResult.validCount > 0
+									? waterLegCalibResult.meanM.toFixed(3)
+									: '—'}</span
+							>
+						</div>
+						{#if waterLegCalibResult.validCount > 0}
+							<div
+								class="mt-0.5 flex items-center justify-between text-[10.5px] text-[var(--text-secondary)]"
+							>
+								<span
+									>Trend Fit{#if waterLegCalibResult.r2 > 0}
+										(R² = {waterLegCalibResult.r2.toFixed(2)}){/if}:</span
+								>
+								<span class="mono-num text-[10px]"
+									>m = {waterLegCalibResult.slope >= 0
+										? '+'
+										: ''}{waterLegCalibResult.slope.toFixed(2)}·Φ + {waterLegCalibResult.intercept.toFixed(
+										2
+									)}</span
+								>
+							</div>
+						{:else}
+							<div class="mt-1 text-[10px] text-amber-600 dark:text-amber-400">
+								No water-leg samples found in interval (check depth/zone range or
+								Vsh cutoff).
+							</div>
+						{/if}
+					</div>
+
+					<div class="flex gap-1.5 pt-1">
+						<button
+							type="button"
+							class="flex-1 rounded-xs border border-blue-500/40 bg-blue-600 px-2 py-1 text-[11px] font-medium text-white shadow-xs hover:bg-blue-700 disabled:opacity-40"
+							disabled={waterLegCalibResult.validCount === 0}
+							onclick={() => {
+								if (waterLegCalibResult.validCount > 0) {
+									workbench.saturationParams.m = waterLegCalibResult.meanM;
+									workbench.saturationParams.waterLegCalibratedM =
+										waterLegCalibResult.meanM;
+									workbench.saturationParams.waterLegFitSlope =
+										waterLegCalibResult.slope;
+									workbench.saturationParams.waterLegFitIntercept =
+										waterLegCalibResult.intercept;
+								}
+							}}
+						>
+							Apply Calibrated m ({waterLegCalibResult.validCount > 0
+								? waterLegCalibResult.meanM
+								: 2.0})
+						</button>
+					</div>
+				{:else if workbench.saturationParams.continuousMModel === 'borai'}
+					<div
+						class="space-y-1.5 rounded-xs border border-emerald-200/60 bg-emerald-50/40 p-2 text-[11px] dark:border-emerald-900/60 dark:bg-emerald-950/20"
+					>
+						<div class="flex items-center justify-between text-[11px]">
+							<span class="font-semibold text-emerald-900 dark:text-emerald-300"
+								>Borai (1987) Correlation</span
+							>
+							<span class="mono-num font-bold text-emerald-800 dark:text-emerald-200"
+								>Avg m = {averageBoraiM}</span
+							>
+						</div>
+						<div class="font-mono text-[10.5px] text-emerald-950 dark:text-emerald-300">
+							m(Φ) = 2.2 − 0.035 / (Φ + 0.042)
+						</div>
+						<div
+							class="text-[9.5px] leading-tight text-emerald-800/80 dark:text-emerald-400"
+						>
+							Accounts for reduced cementation in low-porosity carbonates and
+							clastics.
+						</div>
+					</div>
+
+					<div class="flex gap-1.5 pt-1">
+						<button
+							type="button"
+							class="flex-1 rounded-xs border border-emerald-500/40 bg-emerald-600 px-2 py-1 text-[11px] font-medium text-white shadow-xs hover:bg-emerald-700"
+							onclick={() => {
+								workbench.saturationParams.m = averageBoraiM;
+							}}
+						>
+							Apply Borai Avg m ({averageBoraiM})
+						</button>
+					</div>
+				{:else if workbench.saturationParams.continuousMModel === 'shell_lucia'}
+					<div
+						class="space-y-1.5 rounded-xs border border-amber-200/60 bg-amber-50/40 p-2 text-[11px] dark:border-amber-900/60 dark:bg-amber-950/20"
+					>
+						<div class="flex items-center justify-between text-[11px]">
+							<span class="font-semibold text-amber-900 dark:text-amber-300"
+								>Shell / Lucia (1983) Correlation</span
+							>
+							<span class="mono-num font-bold text-amber-800 dark:text-amber-200"
+								>Avg m = {averageShellLuciaM}</span
+							>
+						</div>
+						<div class="font-mono text-[10.5px] text-amber-950 dark:text-amber-300">
+							m(Φ) = 1.87 + 0.019 / Φ
+						</div>
+						<div
+							class="text-[9.5px] leading-tight text-amber-800/80 dark:text-amber-400"
+						>
+							Models increasing tortuosity & cementation exponent as carbonate matrix
+							porosity tightens.
+						</div>
+					</div>
+
+					<div class="flex gap-1.5 pt-1">
+						<button
+							type="button"
+							class="flex-1 rounded-xs border border-amber-500/40 bg-amber-600 px-2 py-1 text-[11px] font-medium text-white shadow-xs hover:bg-amber-700"
+							onclick={() => {
+								workbench.saturationParams.m = averageShellLuciaM;
+							}}
+						>
+							Apply Shell/Lucia Avg m ({averageShellLuciaM})
+						</button>
+					</div>
+				{/if}
+
+				<div class="flex flex-col gap-1.5 pt-1">
+					<div class="flex gap-1.5">
+						<button
+							type="button"
+							class="w-full rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2.5 py-1 text-[11px] font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
+							title="Switch right panel to the Water-Leg m vs Porosity crossplot"
+							onclick={() => {
+								workbench.crossplotTemplateOverride = 'water-leg-m';
+							}}
+						>
+							📈 View m vs Porosity Crossplot
+						</button>
+					</div>
+
+					<label
+						class="flex cursor-pointer items-center gap-1.5 text-[11px] font-medium text-[var(--text-primary)]"
+					>
+						<input
+							type="checkbox"
+							class="rounded-xs text-blue-600"
+							bind:checked={workbench.saturationParams.applyContinuousM}
+						/>
+						<span>
+							{#if workbench.saturationParams.continuousMModel === 'borai'}
+								Use Continuous Borai m(Φ) in Saturation Models
+							{:else if workbench.saturationParams.continuousMModel === 'shell_lucia'}
+								Use Continuous Shell/Lucia m(Φ) in Saturation Models
+							{:else}
+								Use Continuous Calibrated m(Φ) in Saturation Models
+							{/if}
+						</span>
+					</label>
+				</div>
+			</div>
 		</ParameterSection>
 
 		<ParameterSection

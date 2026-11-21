@@ -118,6 +118,7 @@ from quick_pp.rock_type import (
 )
 from quick_pp.saturation import (
     archie_saturation,
+    compute_continuous_m,
     dual_water_saturation,
     estimate_b_waxman_smits,
     estimate_qv,
@@ -1887,6 +1888,20 @@ class WorkspaceSaturationRequest(WorkspaceFilterBase):
     n: float = Field(2.0, description="Saturation exponent n")
     m_slope: float = Field(
         0.0, description="Optional Waxman-Smits m* slope vs VCLAY/PHIT"
+    )
+    water_leg_slope: Optional[float] = Field(
+        None, description="Optional linear slope a for continuous m = a*phi + b"
+    )
+    water_leg_intercept: Optional[float] = Field(
+        None, description="Optional linear intercept b for continuous m = a*phi + b"
+    )
+    continuous_m_model: str = Field(
+        "calibrated",
+        description="Continuous m model: 'calibrated' (water-leg fit), 'borai' (1987), or 'shell_lucia' (1983)",
+    )
+    apply_continuous_m: bool = Field(
+        False,
+        description="Apply continuous m(phi) = slope*phi + intercept across models",
     )
     rw: Optional[float] = Field(None, description="Explicit Rw override (ohm.m)")
     b_intercept: Optional[float] = Field(
@@ -4002,6 +4017,7 @@ def _batch_evaluate_zone(
             "B",
             "QVN",
             "M_STAR",
+            "M_CALC",
             "SWT_ARCHIE",
             "SWT_WAXMAN",
             "SWT_SIMANDOUX",
@@ -6738,6 +6754,19 @@ def workspace_saturation(
                 detail=f"Unsupported Qv estimation method: {req.qv_method}",
             )
 
+        # Determine continuous m if requested (water-leg calibrated, Borai, or Shell/Lucia)
+        m_calc_s = pd.Series(float(req.m), index=df.index, dtype=float)
+        if req.apply_continuous_m and phit.notna().any():
+            phi_raw = phit.to_numpy(dtype=float)
+            m_calc_arr = compute_continuous_m(
+                phi_raw,
+                method=req.continuous_m_model,
+                slope=req.water_leg_slope,
+                intercept=req.water_leg_intercept,
+                default_m=float(req.m),
+            )
+            m_calc_s = pd.Series(m_calc_arr, index=df.index, dtype=float)
+
         # 3. Archie SWT (strictly depth-aligned)
         swt_archie_s = pd.Series(np.nan, index=df.index, dtype=float)
         archie_mask = (
@@ -6749,12 +6778,17 @@ def workspace_saturation(
             & (phit > 0)
         )
         if archie_mask.any():
+            m_archie_arg = (
+                m_calc_s[archie_mask].to_numpy(dtype=float)
+                if req.apply_continuous_m
+                else req.m
+            )
             swt_a = archie_saturation(
                 rt[archie_mask].to_numpy(dtype=float),
                 rw_s[archie_mask].to_numpy(dtype=float),
                 phit[archie_mask].to_numpy(dtype=float),
                 req.a,
-                req.m,
+                m_archie_arg,
                 req.n,
             )
             swt_archie_s.loc[archie_mask] = np.clip(
@@ -6791,6 +6825,11 @@ def workspace_saturation(
         shale_mask = archie_mask & shale_volume.notna()
         swt_simandoux_s = pd.Series(np.nan, index=df.index, dtype=float)
         if shale_mask.any():
+            m_sim_arg = (
+                m_calc_s[shale_mask].to_numpy(dtype=float)
+                if req.apply_continuous_m
+                else float(req.m)
+            )
             swt_simandoux = simandoux_saturation(
                 rt[shale_mask].to_numpy(dtype=float),
                 rw_s[shale_mask].to_numpy(dtype=float),
@@ -6798,7 +6837,7 @@ def workspace_saturation(
                 shale_volume[shale_mask].clip(0.0, 1.0).to_numpy(dtype=float),
                 float(req.rsh),
                 float(req.a),
-                float(req.m),
+                m_sim_arg,
             )
             swt_simandoux_s.loc[shale_mask] = np.clip(
                 np.asarray(swt_simandoux, dtype=float).ravel(), 0.0, 1.0
@@ -6815,6 +6854,11 @@ def workspace_saturation(
         )
         swt_indonesian_s = pd.Series(np.nan, index=df.index, dtype=float)
         if indonesian_mask.any():
+            m_ind_arg = (
+                m_calc_s[indonesian_mask].to_numpy(dtype=float)
+                if req.apply_continuous_m
+                else float(req.m)
+            )
             swt_indonesian = indonesian_saturation(
                 rt[indonesian_mask].to_numpy(dtype=float),
                 rw_s[indonesian_mask].to_numpy(dtype=float),
@@ -6822,7 +6866,7 @@ def workspace_saturation(
                 shale_volume[indonesian_mask].clip(0.0, 1.0).to_numpy(dtype=float),
                 np.full(int(indonesian_mask.sum()), float(req.rsh), dtype=float),
                 float(req.a),
-                float(req.m),
+                m_ind_arg,
                 float(req.n),
             )
             swt_indonesian_s.loc[indonesian_mask] = np.clip(
@@ -6832,12 +6876,17 @@ def workspace_saturation(
         dual_water_mask = archie_mask & phit.notna()
         swt_dual_water_s = pd.Series(np.nan, index=df.index, dtype=float)
         if dual_water_mask.any():
+            m_dw_arg = (
+                m_calc_s[dual_water_mask].to_numpy(dtype=float)
+                if req.apply_continuous_m
+                else float(req.m)
+            )
             swt_dual_water = dual_water_saturation(
                 rt[dual_water_mask].to_numpy(dtype=float),
                 rw_s[dual_water_mask].to_numpy(dtype=float),
                 phit[dual_water_mask].to_numpy(dtype=float),
                 float(req.a),
-                float(req.m),
+                m_dw_arg,
                 float(req.n),
                 float(req.swb),
                 float(req.rwb),
@@ -6980,6 +7029,7 @@ def workspace_saturation(
                 "B": b_s,
                 "QVN": qvn_s,
                 "M_STAR": m_star_s,
+                "M_CALC": m_calc_s,
                 "SWT_ARCHIE": swt_archie_s,
                 "SWT_WAXMAN": swt_ws_s,
                 "SWT_SIMANDOUX": swt_simandoux_s,
@@ -14612,6 +14662,7 @@ CALCULATED_CURVES_BY_GROUP: Dict[str, Tuple[str, ...]] = {
         "QV_CORE",
         "QVN",
         "M_STAR",
+        "M_CALC",
         "VCL_OVER_PHI",
         "CWA",
         "SHF",

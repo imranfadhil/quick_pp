@@ -248,6 +248,17 @@ export interface SaturationModelParams {
 	vshCutoff: number;
 	enforceSegregation: boolean;
 	allowUnconfirmed: boolean;
+	waterLegIntervalMode: 'zone' | 'depth';
+	waterLegSelectedZone: string | null;
+	waterLegTopDepth: number | null;
+	waterLegBottomDepth: number | null;
+	waterLegMethod: 'archie' | 'indonesian';
+	waterLegVshCutoff: number;
+	waterLegCalibratedM: number | null;
+	waterLegFitSlope: number | null;
+	waterLegFitIntercept: number | null;
+	continuousMModel: 'calibrated' | 'borai' | 'shell_lucia';
+	applyContinuousM: boolean;
 }
 
 export interface ScalModelParams {
@@ -963,7 +974,18 @@ class WorkbenchState {
 		phitCutoff: 0.05,
 		vshCutoff: 0.50,
 		enforceSegregation: true,
-		allowUnconfirmed: true
+		allowUnconfirmed: true,
+		waterLegIntervalMode: 'zone',
+		waterLegSelectedZone: null,
+		waterLegTopDepth: null,
+		waterLegBottomDepth: null,
+		waterLegMethod: 'archie',
+		waterLegVshCutoff: 0.30,
+		waterLegCalibratedM: null,
+		waterLegFitSlope: null,
+		waterLegFitIntercept: null,
+		continuousMModel: 'calibrated',
+		applyContinuousM: false
 	});
 
 	scalParams = $state<ScalModelParams>({

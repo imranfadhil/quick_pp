@@ -32,6 +32,8 @@
 		fitBqvCrossplotWithFixedIntercept,
 		getBqvFitIndices
 	} from '$lib/utils/saturation';
+	import { depthDisplay } from '$lib/state/depthDisplay.svelte';
+	import { calculateWaterLegCalibration } from '$lib/utils/waterLegCalibration';
 	import CoreDepthShiftPanel from '$lib/components/workbench/CoreDepthShiftPanel.svelte';
 	import VshCalibrationPanel from '$lib/components/workbench/VshCalibrationPanel.svelte';
 	import PorosityComparisonCanvas from '$lib/components/workbench/PorosityComparisonCanvas.svelte';
@@ -168,6 +170,10 @@
 				return hasTrace(() => true)
 					? null
 					: 'No saturation or shale-volume data in the current selection. Calculate the curves or adjust the filters.';
+			case 'water-leg-m':
+				return hasTrace((name) => name === 'Water-leg samples')
+					? null
+					: 'No valid water-leg samples in the selected interval. Select a 100% water zone or adjust the depth filter.';
 			case 'toc-tracks':
 				return hasTrace(() => true)
 					? null
@@ -2688,19 +2694,21 @@
 				if (sp.rwMode === 'pickett' && Number.isFinite(sp.rwPickett) && sp.rwPickett > 0) {
 					return sp.rwPickett;
 				}
+				const sTemp = Number.isFinite(sp.surfaceTemp) ? sp.surfaceTemp : 25.0;
+				const tGrad = Number.isFinite(sp.tempGradient) ? sp.tempGradient : 30.0;
 				let tempC: number;
 				if (sp.measSystem === 'imperial') {
 					const tvdKft = (depthM * 3.28084) / 1000.0;
-					const tempF = sp.surfaceTemp + sp.tempGradient * tvdKft;
+					const tempF = sTemp + tGrad * tvdKft;
 					tempC = Math.max(5, Math.min(250, ((tempF - 32.0) * 5.0) / 9.0));
 				} else {
-					tempC = Math.max(
-						5,
-						Math.min(250, sp.surfaceTemp + sp.tempGradient * (depthM / 1000.0))
-					);
+					tempC = Math.max(5, Math.min(250, sTemp + tGrad * (depthM / 1000.0)));
 				}
 				const tempF = (tempC * 9.0) / 5.0 + 32.0;
-				const sal = Math.max(100, sp.waterSalinity);
+				const sal = Math.max(
+					100,
+					Number.isFinite(sp.waterSalinity) ? sp.waterSalinity : 35000
+				);
 				return Math.pow(400000.0 / (sal * tempF), 0.88);
 			};
 
@@ -2764,8 +2772,16 @@
 			// --- TRACK 2: m & m* (linear) ---
 			// X-Axis: 'x3' (xaxis3)
 			const mStarCurve = wellData.curves['M_STAR'] ?? [];
+			const mCalcCurve = wellData.curves['M_CALC'] ?? wellData.curves['M_CONTINUOUS'] ?? [];
 			const phitRaw = wellData.curves['PHIT'] ?? [];
 			const qvCurve = wellData.curves['QV'] ?? wellData.curves['QVN'] ?? [];
+			const isContinuousM =
+				sp.applyContinuousM &&
+				(sp.continuousMModel === 'borai' ||
+					sp.continuousMModel === 'shell_lucia' ||
+					(Number.isFinite(sp.waterLegFitSlope) &&
+						Number.isFinite(sp.waterLegFitIntercept)) ||
+					mCalcCurve.length > 0);
 			const mArchie = Number.isFinite(sp.m) && sp.m > 0 ? sp.m : 2.0;
 
 			const mX: number[] = [];
@@ -2776,14 +2792,38 @@
 			for (const idx of indices) {
 				const d = deptAll[idx];
 				if (!Number.isFinite(d)) continue;
-				mX.push(mArchie);
+				const phi = phitRaw[idx];
+				let mVal = mArchie;
+				if (isContinuousM) {
+					if (Number.isFinite(mCalcCurve[idx]) && mCalcCurve[idx] > 0) {
+						mVal = mCalcCurve[idx];
+					} else if (sp.continuousMModel === 'borai' && Number.isFinite(phi) && phi > 0) {
+						mVal = Math.max(1.0, Math.min(3.5, 2.2 - 0.035 / (phi + 0.042)));
+					} else if (
+						sp.continuousMModel === 'shell_lucia' &&
+						Number.isFinite(phi) &&
+						phi > 0
+					) {
+						mVal = Math.max(1.0, Math.min(3.5, 1.87 + 0.019 / Math.max(phi, 0.005)));
+					} else if (
+						Number.isFinite(sp.waterLegFitSlope) &&
+						Number.isFinite(sp.waterLegFitIntercept) &&
+						Number.isFinite(phi) &&
+						phi > 0
+					) {
+						mVal = Math.max(
+							1.0,
+							Math.min(3.5, sp.waterLegFitSlope! * phi + sp.waterLegFitIntercept!)
+						);
+					}
+				}
+				mX.push(mVal);
 				mY.push(d);
 
 				let mStarVal: number | null = null;
 				if (Number.isFinite(mStarCurve[idx]) && mStarCurve[idx] > 0) {
 					mStarVal = mStarCurve[idx];
 				} else {
-					const phi = phitRaw[idx];
 					if (Number.isFinite(phi) && phi > 0.02 && phi < 0.5) {
 						const rwVal =
 							Number.isFinite(rwCurve[idx]) && rwCurve[idx] > 0
@@ -2809,7 +2849,7 @@
 									: 0;
 						const factor = 1 + bVal * qvVal * rwVal;
 						if (factor >= 1) {
-							mStarVal = mArchie - Math.log(factor) / Math.log(phi);
+							mStarVal = mVal - Math.log(factor) / Math.log(phi);
 						}
 					}
 				}
@@ -2828,11 +2868,15 @@
 				traces.push({
 					type: 'scatter',
 					mode: 'lines',
-					name: 'm (Archie)',
+					name: isContinuousM ? 'm (Calibrated continuous)' : 'm (Archie)',
 					x: mX,
 					y: mY,
 					xaxis: 'x3',
-					line: { color: '#64748B', width: 1.2, dash: 'dot' },
+					line: {
+						color: isContinuousM ? '#0284C7' : '#64748B',
+						width: isContinuousM ? 1.6 : 1.2,
+						dash: isContinuousM ? 'solid' : 'dot'
+					},
 					hovertemplate: `Depth: %{y:.2f} m<br>m: %{x:.2f}<extra></extra>`
 				});
 			}
@@ -3160,12 +3204,16 @@
 
 			baseLayout.dragmode = 'pan';
 			// Track 1: Rw & Rt (log)
+			const minRwVal = rwX.length > 0 ? Math.min(...rwX) : 0.05;
+			const minRtVal = rtX.length > 0 ? Math.min(...rtX) : 0.2;
+			const minResVal = Math.min(minRwVal, minRtVal, 0.02);
+			const xMinLog = Math.floor(Math.log10(Math.max(1e-4, minResVal)));
 			baseLayout.xaxis = {
 				...baseLayout.xaxis,
 				domain: [0.0, 0.14],
 				title: { text: 'Rw & Rt (\u03a9\u00b7m)' },
 				type: 'log',
-				range: [Math.log10(0.2), Math.log10(2000)],
+				range: [Math.min(-2, xMinLog), Math.log10(2000)],
 				anchor: 'y',
 				fixedrange: true
 			};
@@ -3348,6 +3396,7 @@
 			let poroUnit = '\u00b5s/ft';
 			let poroColor = '#0EA5E9';
 			let poroRange: [number, number] = [140, 40]; // Sonic: standard reversed scale
+			let poroDtick = 20;
 
 			if (pType === 'density') {
 				poroRaw =
@@ -3359,6 +3408,7 @@
 				poroUnit = 'g/cm\u00b3';
 				poroColor = '#EF4444';
 				poroRange = [1.95, 2.95];
+				poroDtick = 0.2;
 			} else if (pType === 'neutron') {
 				poroRaw =
 					wellData.curves['NPHI_HC'] ??
@@ -3369,6 +3419,7 @@
 				poroUnit = 'v/v';
 				poroColor = '#3B82F6';
 				poroRange = [0.45, -0.15]; // Neutron: standard reversed scale
+				poroDtick = 0.15;
 			} else {
 				poroRaw =
 					wellData.curves['DTC'] ??
@@ -3381,6 +3432,7 @@
 				poroUnit = '\u00b5s/ft';
 				poroColor = '#0EA5E9';
 				poroRange = [140, 40];
+				poroDtick = 20;
 			}
 
 			const pX: (number | null)[] = [];
@@ -3530,57 +3582,235 @@
 			baseLayout.dragmode = 'pan';
 			baseLayout.shapes = shapes;
 
+			const trackAxisBase = {
+				showgrid: true,
+				gridcolor: '#E2E8F0',
+				zeroline: false,
+				automargin: true,
+				tickfont: { family: 'JetBrains Mono', size: 10, color: '#64748B' },
+				titlefont: { family: 'Inter', size: 11, color: '#0F172A' },
+				anchor: 'y',
+				fixedrange: true
+			};
+
 			// Track 1: VSHALE (linear [0, 1])
 			baseLayout.xaxis = {
-				...baseLayout.xaxis,
+				...trackAxisBase,
 				domain: [0.0, 0.22],
 				title: { text: 'Vshale (v/v)' },
 				type: 'linear',
 				range: [0, 1],
-				dtick: 0.25,
-				anchor: 'y',
-				fixedrange: true
+				dtick: 0.25
 			};
 
 			// Track 2: Rt & R_poro (log [0.2, 2000])
 			baseLayout.xaxis2 = {
-				...baseLayout.xaxis,
+				...trackAxisBase,
 				domain: [0.26, 0.48],
 				title: { text: 'Rt & R_poro (\u03a9\u00b7m)' },
 				type: 'log',
 				range: [Math.log10(0.2), Math.log10(2000)],
-				dtick: 1,
-				anchor: 'y',
-				fixedrange: true
+				dtick: 1
 			};
 
 			// Track 3: Porosity (DTC, RHOB, or NPHI)
 			baseLayout.xaxis3 = {
-				...baseLayout.xaxis,
+				...trackAxisBase,
 				domain: [0.52, 0.74],
 				title: { text: `${poroName} (${poroUnit})` },
 				type: 'linear',
 				range: poroRange,
-				anchor: 'y',
-				fixedrange: true
+				dtick: poroDtick
 			};
 
 			// Track 4: TOC wt% (linear [0, 10])
 			baseLayout.xaxis4 = {
-				...baseLayout.xaxis,
+				...trackAxisBase,
 				domain: [0.78, 1.0],
 				title: { text: 'TOC (wt%)' },
 				type: 'linear',
 				range: [0, 10],
-				dtick: 2,
-				anchor: 'y',
-				fixedrange: true
+				dtick: 2
 			};
 
 			baseLayout.yaxis.autorange = 'reversed';
 			baseLayout.yaxis.title = { text: 'Depth (m)' };
 			baseLayout.yaxis.fixedrange = false;
 			baseLayout.uirevision = `toc-tracks-${workbench.projectId}-${workbench.wellId}-${workbench.selectedZones.join(',')}-${workbench.depthFilter?.min ?? ''}_${workbench.depthFilter?.max ?? ''}`;
+
+			return { traces, layout: baseLayout };
+		}
+
+		if (effectiveMode === 'water-leg-m') {
+			const sp = workbench.saturationParams;
+			const vshKey = 'VSHALE';
+			const vshRaw = wellData.curves[vshKey] ?? wellData.curves['VCLAY'] ?? [];
+			const rtRaw =
+				wellData.curves['RT'] ??
+				wellData.curves['RD'] ??
+				wellData.curves['RDEP'] ??
+				wellData.curves['LLD'] ??
+				[];
+			const phitRaw = wellData.curves['PHIT'] ?? wellData.curves['PHIE'] ?? [];
+			const rwCurve = wellData.curves['RW'] ?? [];
+
+			const calib = calculateWaterLegCalibration(
+				deptAll,
+				phitRaw,
+				rtRaw,
+				vshRaw,
+				rwCurve,
+				indices,
+				depthDisplay.unit,
+				sp,
+				(d: number) => wellData.resolveZoneAtDepth(d)
+			);
+			const { xs, ys, vshs, depths, customIdx, meanM, slope, intercept, r2 } = calib;
+
+			if (calib.validCount > 0) {
+				sp.waterLegCalibratedM = calib.meanM;
+				sp.waterLegFitSlope = calib.slope;
+				sp.waterLegFitIntercept = calib.intercept;
+			}
+
+			// 1. Water-leg scatter points
+			traces.push({
+				type: 'scatter',
+				mode: 'markers',
+				name: 'Water-leg samples',
+				x: xs,
+				y: ys,
+				customdata: customIdx,
+				text: depths.map(
+					(d, i) =>
+						`Depth: ${d.toFixed(2)} m<br>Φ: ${xs[i].toFixed(3)}<br>m: ${ys[i].toFixed(2)}<br>Vsh: ${vshs[i].toFixed(2)}`
+				),
+				marker: {
+					size: 6.5,
+					color: vshs,
+					colorscale: 'Viridis',
+					cmin: 0,
+					cmax: 1,
+					colorbar: {
+						title: { text: 'Vsh (v/v)', font: { size: 10, color: '#64748B' } },
+						thickness: 10,
+						len: 0.65,
+						y: 0.5
+					},
+					line: { color: '#0F172A', width: 0.5 },
+					opacity: 0.85
+				},
+				hovertemplate: '%{text}<extra></extra>'
+			});
+
+			// 2. Linear Regression Fit
+			if (xs.length >= 3) {
+				const phiLine = [0.03, 0.4];
+				const mLine = phiLine.map((p) =>
+					Math.max(1.0, Math.min(3.5, slope * p + intercept))
+				);
+				const isFitActive = sp.continuousMModel === 'calibrated';
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: `Fit: m = ${slope >= 0 ? '+' : ''}${slope.toFixed(2)}·Φ + ${intercept.toFixed(2)} (R²=${r2.toFixed(2)})${isFitActive ? ' [Active]' : ''}`,
+					x: phiLine,
+					y: mLine,
+					line: {
+						color: '#0284C7',
+						width: isFitActive ? 2.5 : 1.5,
+						dash: isFitActive ? 'solid' : 'dash'
+					},
+					hoverinfo: 'skip'
+				});
+			}
+
+			// 3. Mean m line
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: `Mean m = ${meanM.toFixed(2)}`,
+				x: [0.02, 0.42],
+				y: [meanM, meanM],
+				line: { color: '#2563EB', width: 1.5, dash: 'dash' },
+				hoverinfo: 'skip'
+			});
+
+			// 4. Borai (1987) Empirical Model
+			const phiGrid = Array.from({ length: 40 }, (_, i) => 0.02 + i * 0.01);
+			const mBorai = phiGrid.map((p) =>
+				Math.max(1.0, Math.min(3.5, 2.2 - 0.035 / (p + 0.042)))
+			);
+			const isBoraiActive = sp.continuousMModel === 'borai';
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: `Borai (1987) Ref${isBoraiActive ? ' [Active]' : ''}`,
+				x: phiGrid,
+				y: mBorai,
+				line: {
+					color: '#059669',
+					width: isBoraiActive ? 2.5 : 1.5,
+					dash: isBoraiActive ? 'solid' : 'dot'
+				},
+				hoverinfo: 'skip'
+			});
+
+			// 5. Shell / Lucia (1983) Empirical Model
+			const mShellLucia = phiGrid.map((p) =>
+				Math.max(1.0, Math.min(3.5, 1.87 + 0.019 / Math.max(p, 0.005)))
+			);
+			const isShellActive = sp.continuousMModel === 'shell_lucia';
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: `Shell / Lucia (1983) Ref${isShellActive ? ' [Active]' : ''}`,
+				x: phiGrid,
+				y: mShellLucia,
+				line: {
+					color: '#D97706',
+					width: isShellActive ? 2.5 : 1.5,
+					dash: isShellActive ? 'solid' : 'dot'
+				},
+				hoverinfo: 'skip'
+			});
+
+			// 6. Archie default m = 2.0 Reference
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'Archie m=2.0 Baseline',
+				x: [0.02, 0.42],
+				y: [2.0, 2.0],
+				line: { color: '#94A3B8', width: 1.2, dash: 'dashdot' },
+				hoverinfo: 'skip'
+			});
+
+			baseLayout.xaxis = {
+				...baseLayout.xaxis,
+				title: {
+					text:
+						sp.waterLegMethod === 'indonesian'
+							? 'Effective Porosity Φe (v/v)'
+							: 'Total Porosity Φt (v/v)'
+				},
+				range: [0, 0.42],
+				fixedrange: false
+			};
+			baseLayout.yaxis = {
+				...baseLayout.yaxis,
+				title: { text: 'Cementation Exponent (m)' },
+				range: [1.2, 3.2],
+				fixedrange: false
+			};
+			baseLayout.legend = {
+				orientation: 'h',
+				x: 0,
+				y: 1.05,
+				xanchor: 'left',
+				yanchor: 'bottom',
+				font: { family: 'Inter', size: 9.5, color: '#334155' }
+			};
 
 			return { traces, layout: baseLayout };
 		}
@@ -6542,6 +6772,40 @@
 			void workbench.depthFilter;
 			void wellData.visibleIndices;
 			void wellData.tops;
+			void wellData.curves['M_CALC'];
+			void wellData.curves['M_CONTINUOUS'];
+			void workbench.saturationParams.applyContinuousM;
+			void workbench.saturationParams.continuousMModel;
+			void workbench.saturationParams.waterLegFitSlope;
+			void workbench.saturationParams.waterLegFitIntercept;
+		} else if (mode === 'water-leg-m') {
+			void wellData.curves['DEPT'];
+			void wellData.curves['DEPTH'];
+			void wellData.curves['RT'];
+			void wellData.curves['RD'];
+			void wellData.curves['RDEP'];
+			void wellData.curves['LLD'];
+			void wellData.curves['PHIT'];
+			void wellData.curves['PHIE'];
+			void wellData.curves['VSHALE'];
+			void wellData.curves['VCLAY'];
+			void wellData.curves['RW'];
+			void workbench.saturationParams.continuousMModel;
+			void workbench.saturationParams.waterLegIntervalMode;
+			void workbench.saturationParams.waterLegSelectedZone;
+			void workbench.saturationParams.waterLegTopDepth;
+			void workbench.saturationParams.waterLegBottomDepth;
+			void workbench.saturationParams.waterLegMethod;
+			void workbench.saturationParams.waterLegVshCutoff;
+			void workbench.saturationParams.fwl;
+			void workbench.saturationParams.rsh;
+			void workbench.saturationParams.surfaceTemp;
+			void workbench.saturationParams.tempGradient;
+			void workbench.saturationParams.waterSalinity;
+			void workbench.saturationParams.rwMode;
+			void workbench.saturationParams.rwPickett;
+			void wellData.tops;
+			void wellData.visibleIndices;
 		} else if (mode === 'bqv') {
 			void wellData.curves['RT'];
 			void wellData.curves['PHIT'];

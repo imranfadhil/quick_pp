@@ -10,6 +10,7 @@ export type CrossplotId =
 	| 'porosity-comparison'
 	| 'permeability-comparison'
 	| 'bqv'
+	| 'water-leg-m'
 	| 'fluid-typing'
 	| 'histogram'
 	| 'curve-depth'
@@ -140,6 +141,11 @@ export const CROSSPLOTS: readonly CrossplotDefinition[] = [
 	{
 		id: 'bqv',
 		label: 'Waxman–Smits BQv',
+		single: { group: 'Step 5 · Saturation', steps: ['saturation'] }
+	},
+	{
+		id: 'water-leg-m',
+		label: 'Water-Leg m vs Porosity',
 		single: { group: 'Step 5 · Saturation', steps: ['saturation'] }
 	},
 	{
