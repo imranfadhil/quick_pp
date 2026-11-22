@@ -236,6 +236,7 @@
 	let showMobility = $state(true);
 	let showTopLabels = $state(true);
 	let showInspectionLine = $state(false);
+	let isInspectionLocked = $state(false);
 	let isPointerOverPlot = $state(false);
 
 	const DTC_ALIASES = ['DTC', 'DT', 'DTCO', 'AC', 'DT4P'] as const;
@@ -3595,7 +3596,7 @@
 
 	let pointerMoveRaf = 0;
 	function handlePlotPointerMove(e: PointerEvent) {
-		if (!showInspectionLine || draggingMarker || selectingInterval || !plotContainer) return;
+		if (!showInspectionLine || isInspectionLocked || draggingMarker || selectingInterval || !plotContainer) return;
 		const rect = plotContainer.getBoundingClientRect();
 		const plotTop = rect.top + 6;
 		const plotHeight = Math.max(1, rect.height - 14);
@@ -3619,6 +3620,12 @@
 			if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
 			if (e.key === 'i' || e.key === 'I' || e.key === 'c' || e.key === 'C') {
 				showInspectionLine = !showInspectionLine;
+				if (!showInspectionLine) isInspectionLocked = false;
+			} else if (e.code === 'Space' || e.key === ' ') {
+				if (showInspectionLine) {
+					e.preventDefault();
+					isInspectionLocked = !isInspectionLocked;
+				}
 			}
 		};
 		window.addEventListener('keydown', handleKeyDown);
@@ -3863,7 +3870,10 @@
 			<button
 				type="button"
 				title="Toggle horizontal cursor inspection line across all tracks (Shortcut: 'I' or 'C')"
-				onclick={() => (showInspectionLine = !showInspectionLine)}
+				onclick={() => {
+					showInspectionLine = !showInspectionLine;
+					if (!showInspectionLine) isInspectionLocked = false;
+				}}
 				class="flex h-5 items-center gap-1 rounded-sm border px-1.5 text-[10px] font-semibold transition-colors {showInspectionLine
 					? 'border-indigo-600 bg-indigo-50 text-indigo-700 dark:border-indigo-500 dark:bg-indigo-950/60 dark:text-indigo-300'
 					: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
@@ -3880,6 +3890,18 @@
 				</svg>
 				<span>{showInspectionLine ? 'Inspection ON' : 'Inspection'}</span>
 			</button>
+			{#if showInspectionLine}
+				<button
+					type="button"
+					title="Lock / freeze inspection line at current depth (Shortcut: Space)"
+					onclick={() => (isInspectionLocked = !isInspectionLocked)}
+					class="flex h-5 items-center gap-1 rounded-sm border px-1.5 text-[10px] font-semibold transition-colors {isInspectionLocked
+						? 'border-amber-500 bg-amber-50 text-amber-800 dark:border-amber-600 dark:bg-amber-950/60 dark:text-amber-200 shadow-2xs'
+						: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+				>
+					<span>{isInspectionLocked ? '🔒 Locked' : '🔓 Lock (Space)'}</span>
+				</button>
+			{/if}
 			<button
 				type="button"
 				title="Drag vertically on tracks to select a depth interval and highlight points on the Crossplot (or hold Shift + Drag anytime)"
@@ -4706,8 +4728,26 @@
 				<!-- Horizontal line spanning all tracks -->
 				<div
 					style="top: {inspectionPct}%;"
-					class="pointer-events-none absolute right-0 left-0 z-25 -translate-y-1/2 border-t-[1.5px] border-indigo-500/95 shadow-[0_0_8px_rgba(99,102,241,0.45)]"
-				></div>
+					class="pointer-events-none absolute right-0 left-0 z-25 -translate-y-1/2 border-t-[1.5px] {isInspectionLocked
+						? 'border-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.55)]'
+						: 'border-indigo-500/95 shadow-[0_0_8px_rgba(99,102,241,0.45)]'}"
+				>
+					{#if isInspectionLocked}
+						<div
+							class="pointer-events-auto absolute left-2 -top-3 flex items-center gap-1 rounded-2xs border border-amber-300 bg-amber-50/95 px-1.5 py-0.2 text-[8px] font-bold text-amber-900 shadow-xs backdrop-blur-xs"
+						>
+							<span>🔒 Locked at {formatLogDepth(readout.DEPT ?? workbench.cursorDepth)}</span>
+							<button
+								type="button"
+								onclick={() => (isInspectionLocked = false)}
+								class="ml-0.5 text-[9px] font-bold text-amber-700 hover:text-amber-950"
+								title="Unlock crosshair (Space)"
+							>
+								×
+							</button>
+						</div>
+					{/if}
+				</div>
 
 				<!-- Track-respective hover boxes anchored with a 24px gap so curve response at the line is always visible -->
 				<div
@@ -5238,209 +5278,11 @@
 		</div>
 	</div>
 
-	<!-- Synchronized Bottom Cursor Readout Bar -->
-	<div
-		class="mono-num flex h-7 shrink-0 items-center justify-between border-t border-[var(--border-hairline)] bg-[var(--bg-app)] px-2.5 text-[11px] text-[var(--text-secondary)]"
-	>
-		<div class="flex flex-wrap items-center gap-x-3">
-			<span>
-				<strong class="text-[var(--text-primary)]">MD:</strong>
-				{formatLogDepth(readout.DEPT ?? workbench.cursorDepth)}
-			</span>
-			{#if readout.TVDSS !== null && readout.TVDSS !== undefined}
-				<span>
-					<strong class="text-sky-600">TVDSS:</strong>
-					{formatLogDepth(readout.TVDSS)}
-				</span>
-			{:else if readout.TVD !== null && readout.TVD !== undefined}
-				<span>
-					<strong class="text-sky-600">TVD:</strong>
-					{formatLogDepth(readout.TVD)}
-				</span>
-			{/if}
-			<span>
-				<strong style="color: {PETRO_COLORS.gr}">GR:</strong>
-				{fmtNum(readout.GR, 1)}
-			</span>
-			<span>
-				<strong style="color: {PETRO_COLORS.rt}">RT:</strong>
-				{fmtNum(readout.RT ?? readout.RD ?? readout.RDEP, 2)}
-			</span>
-			{#if tsOverlayActive && readout.RT_MOD !== null && readout.RT_MOD !== undefined}
-				<span>
-					<strong style="color: {PETRO_COLORS.rtMod}">RT_MOD:</strong>
-					{fmtNum(readout.RT_MOD, 2)}
-				</span>
-			{/if}
-			{#if (readout.RM ?? readout.RMED) !== null && (readout.RM ?? readout.RMED) !== undefined}
-				<span>
-					<strong style="color: {PETRO_COLORS.rm}">RM:</strong>
-					{fmtNum(readout.RM ?? readout.RMED, 2)}
-				</span>
-			{/if}
-			{#if (readout.RS ?? readout.RSHAL) !== null && (readout.RS ?? readout.RSHAL) !== undefined}
-				<span>
-					<strong style="color: {PETRO_COLORS.rs}">RS:</strong>
-					{fmtNum(readout.RS ?? readout.RSHAL, 2)}
-				</span>
-			{/if}
-			<span>
-				<strong style="color: {PETRO_COLORS.nphi}">NPHI:</strong>
-				{fmtNum(readout.NPHI, 3)}
-			</span>
-			<span>
-				<strong style="color: {PETRO_COLORS.rhob}">RHOB:</strong>
-				{fmtNum(readout.RHOB, 3)}
-			</span>
-			{#if hasDtc && showDtc && (readout.DTC ?? readout.DT ?? readout.DTCO ?? readout.AC ?? readout.DT4P) !== null && (readout.DTC ?? readout.DT ?? readout.DTCO ?? readout.AC ?? readout.DT4P) !== undefined}
-				<span>
-					<strong style="color: {PETRO_COLORS.dt}">DTC:</strong>
-					{fmtNum(
-						readout.DTC ?? readout.DT ?? readout.DTCO ?? readout.AC ?? readout.DT4P,
-						1
-					)}
-				</span>
-			{/if}
-			{#if hasSpectralGr && showSpectralGr}
-				{#if readout.POTA !== null && readout.POTA !== undefined}
-					<span>
-						<strong style="color: {PETRO_COLORS.pota}">POTA:</strong>
-						{fmtNum(readout.POTA, 2)}%
-					</span>
-				{/if}
-				{#if readout.THOR !== null && readout.THOR !== undefined}
-					<span>
-						<strong style="color: {PETRO_COLORS.thor}">THOR:</strong>
-						{fmtNum(readout.THOR, 1)}ppm
-					</span>
-				{/if}
-				{#if readout.URAN !== null && readout.URAN !== undefined}
-					<span>
-						<strong style="color: {PETRO_COLORS.uran}">URAN:</strong>
-						{fmtNum(readout.URAN, 1)}ppm
-					</span>
-				{/if}
-			{/if}
-			{#if readout.PEF !== null && readout.PEF !== undefined}
-				<span>
-					<strong style="color: {PETRO_COLORS.pef}">PEF:</strong>
-					{fmtNum(readout.PEF, 2)}
-				</span>
-			{/if}
-			{#if readout.DRHO !== null && readout.DRHO !== undefined}
-				<span>
-					<strong style="color: {PETRO_COLORS.drho}">DRHO:</strong>
-					{fmtNum(readout.DRHO, 3)}
-				</span>
-			{/if}
-			{#if tsOverlayActive && readout.VSH_LAM !== null && readout.VSH_LAM !== undefined}
-				<span>
-					<strong style="color: {PETRO_COLORS.vshLamStroke}">VSH_LAM:</strong>
-					{fmtNum(readout.VSH_LAM, 3)}
-				</span>
-				<span>
-					<strong style="color: {PETRO_COLORS.vshDisStroke}">VSH_DIS:</strong>
-					{fmtNum(readout.VSH_DIS, 3)}
-				</span>
-			{:else}
-				<span>
-					<strong>VCLAY:</strong>
-					{fmtNum(readout.VCLAY, 3)}
-				</span>
-			{/if}
-			{#if readout.VCALC !== null && readout.VCALC !== undefined && readout.VCALC > 1e-4}
-				<span>
-					<strong style="color: {PETRO_COLORS.calcStroke}">VCALC:</strong>
-					{fmtNum(readout.VCALC, 3)}
-				</span>
-			{/if}
-			{#if readout.VDOLO !== null && readout.VDOLO !== undefined && readout.VDOLO > 1e-4}
-				<span>
-					<strong style="color: {PETRO_COLORS.doloStroke}">VDOLO:</strong>
-					{fmtNum(readout.VDOLO, 3)}
-				</span>
-			{/if}
-			<span>
-				<strong style="color: {PETRO_COLORS.phit}">PHIT:</strong>
-				{fmtNum(readout.PHIT, 3)}
-			</span>
-			{#if readout.PHIE !== null && readout.PHIE !== undefined}
-				<span class="text-slate-500">
-					<strong>PHIE QC:</strong>
-					{fmtNum(readout.PHIE, 3)}
-				</span>
-			{/if}
-			{#if tsOverlayActive && readout.PHIT_SAND !== null && readout.PHIT_SAND !== undefined}
-				<span>
-					<strong style="color: {PETRO_COLORS.phitSand}">PHIT_SAND:</strong>
-					{fmtNum(readout.PHIT_SAND, 3)}
-				</span>
-			{/if}
-			{#if (readout.CPORE ?? readout.CORE_PORO) !== null && (readout.CPORE ?? readout.CORE_PORO) !== undefined}
-				<span>
-					<strong class="text-cyan-600 dark:text-cyan-400">CPORE:</strong>
-					{fmtNum(readout.CPORE ?? readout.CORE_PORO, 3)}
-				</span>
-			{/if}
-			<span>
-				<strong style="color: {PETRO_COLORS.perm}">PERM:</strong>
-				{fmtPerm(readout.PERM)}
-			</span>
-			{#if (readout.CPERM ?? readout.CORE_PERM) !== null && (readout.CPERM ?? readout.CORE_PERM) !== undefined}
-				<span>
-					<strong class="text-cyan-600 dark:text-cyan-400">CPERM:</strong>
-					{fmtPerm(readout.CPERM ?? readout.CORE_PERM)}
-				</span>
-			{/if}
-			{#if readout.PERM_TRANS !== null && readout.PERM_TRANS !== undefined}
-				<span>
-					<strong style="color: #7C3AED">PERM_TRANS:</strong>
-					{fmtPerm(readout.PERM_TRANS)}
-				</span>
-			{/if}
-			{#if (readout.ROCK_FLAG ?? readout.ROCK_FLAG_ML ?? readout.DRT) !== null && (readout.ROCK_FLAG ?? readout.ROCK_FLAG_ML ?? readout.DRT) !== undefined && Number(readout.ROCK_FLAG ?? readout.ROCK_FLAG_ML ?? readout.DRT) >= 1}
-				{@const rfVal = Math.round(
-					Number(readout.ROCK_FLAG ?? readout.ROCK_FLAG_ML ?? readout.DRT)
-				)}
-				<span class="inline-flex items-center gap-1">
-					<strong style="color: {getRockTypeColor(rfVal)}">RT:</strong>
-					<span
-						class="rounded-2xs px-1 py-0 text-[9.5px] font-bold text-white"
-						style="background-color: {getRockTypeColor(rfVal)}"
-					>
-						DRT {rfVal}
-					</span>
-				</span>
-			{/if}
-			{#if false}
-				<span> </span>
-			{/if}
-			<span>
-				<strong style="color: {PETRO_COLORS.water}">SW:</strong>
-				{fmtNum(readout.SWT ?? readout.SWE, 3)}
-			</span>
-			{#if readout.TOC !== null && readout.TOC !== undefined}
-				<span>
-					<strong class="text-emerald-700 dark:text-emerald-400">TOC:</strong>
-					{fmtNum(readout.TOC, 2)} <span class="text-[9px]">wt%</span>
-				</span>
-			{/if}
-			{#if readout.DELTA_LOG_R !== null && readout.DELTA_LOG_R !== undefined}
-				<span>
-					<strong class="text-sky-700 dark:text-sky-400">ΔlogR:</strong>
-					{fmtNum(readout.DELTA_LOG_R, 3)}
-				</span>
-			{/if}
-			{#if readout.BADHOLE !== null && readout.BADHOLE !== undefined && readout.BADHOLE >= 0.5}
-				<span
-					class="py-0.2 rounded-xs bg-red-100 px-1.5 text-[10px] font-bold text-red-800"
-				>
-					BADHOLE
-				</span>
-			{/if}
-		</div>
-
-		{#if workbench.brushedDepthIndices.size > 0}
+	<!-- Lasso / Interval Selection Toolbar (visible only when interval/depths are selected) -->
+	{#if workbench.brushedDepthIndices.size > 0}
+		<div
+			class="mono-num flex h-7 shrink-0 items-center justify-end border-t border-[var(--border-hairline)] bg-[var(--bg-app)] px-2.5 text-[11px] text-[var(--text-secondary)]"
+		>
 			<div class="flex items-center gap-1">
 				{#if workbench.scope === 'single-well'}
 					<label
@@ -5465,6 +5307,6 @@
 					Lasso: {workbench.brushedDepthIndices.size} pts (Clear ×)
 				</button>
 			</div>
-		{/if}
-	</div>
+		</div>
+	{/if}
 </div>

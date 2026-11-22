@@ -19,6 +19,13 @@ export interface StatusLogItem {
 	durationMs?: number;
 }
 
+export interface ToastNotification {
+	id: string;
+	level: 'success' | 'info' | 'warning' | 'error';
+	message: string;
+	detail?: string;
+}
+
 const MAX_HISTORY = 40;
 
 function nowTimeStr(): string {
@@ -38,8 +45,10 @@ class AppStatusState {
 	lastDurationMs = $state<number | null>(null);
 	history = $state<StatusLogItem[]>([]);
 	logPopoverOpen = $state<boolean>(false);
+	toast = $state<ToastNotification | null>(null);
 
 	private taskCounter = 0;
+	private toastTimer: ReturnType<typeof setTimeout> | null = null;
 
 	isBusy = $derived<boolean>(this.activeTasks.length > 0);
 	currentTask = $derived<ActiveTask | null>(
@@ -120,6 +129,13 @@ class AppStatusState {
 			this.lastDurationMs = durationMs;
 
 			if (nextLevel !== 'idle') {
+				if (durationMs >= 400 || nextLevel === 'error' || nextLevel === 'warning') {
+					this.showToast(
+						nextLevel === 'error' ? 'error' : nextLevel === 'warning' ? 'warning' : 'success',
+						nextMsg,
+						nextDetail ?? undefined
+					);
+				}
 				this.pushHistory({
 					level:
 						nextLevel === 'error'
@@ -189,6 +205,36 @@ class AppStatusState {
 
 	clearHistory() {
 		this.history = [];
+	}
+
+	showToast(
+		level: 'success' | 'info' | 'warning' | 'error',
+		message: string,
+		detail?: string,
+		durationMs = 4000
+	) {
+		if (this.toastTimer) {
+			clearTimeout(this.toastTimer);
+			this.toastTimer = null;
+		}
+		this.toast = {
+			id: `toast-${Date.now()}`,
+			level,
+			message,
+			detail
+		};
+		this.toastTimer = setTimeout(() => {
+			this.toast = null;
+			this.toastTimer = null;
+		}, durationMs);
+	}
+
+	dismissToast() {
+		if (this.toastTimer) {
+			clearTimeout(this.toastTimer);
+			this.toastTimer = null;
+		}
+		this.toast = null;
 	}
 
 	private pushHistory(item: Omit<StatusLogItem, 'id' | 'timestamp'>) {
