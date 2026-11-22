@@ -3266,6 +3266,23 @@ class Well(object):
                         }
                     )
 
+        # Ensure legacy 4-column PostgreSQL constraint missing 'pressure' is dropped
+        try:
+            bind = self.db_session.get_bind()
+            if bind and "postgresql" in bind.dialect.name:
+                self.db_session.execute(
+                    text(
+                        'ALTER TABLE "capillary_pressure" DROP CONSTRAINT IF EXISTS "capillary_pressure_sample_id_saturation_experiment_type_cyc_key"'
+                    )
+                )
+                self.db_session.execute(
+                    text(
+                        'ALTER TABLE "capillary_pressure" DROP CONSTRAINT IF EXISTS "capillary_pressure_sample_id_saturation_experiment_type_cycle_key"'
+                    )
+                )
+        except Exception:
+            pass
+
         if not append:
             for orm_sample in list(self._orm_well.core_samples):
                 orm_sample.capillary_pressure_data.clear()

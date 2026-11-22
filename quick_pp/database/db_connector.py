@@ -315,6 +315,7 @@ class DBConnector:
                     conn.execute(text('ALTER TABLE "core_samples" DROP CONSTRAINT IF EXISTS "core_samples_well_id_sample_name_key"'))
                     conn.execute(text('ALTER TABLE "core_samples" DROP CONSTRAINT IF EXISTS "core_samples_well_id_depth_key"'))
                     conn.execute(text('ALTER TABLE "capillary_pressure" DROP CONSTRAINT IF EXISTS "capillary_pressure_sample_id_saturation_experiment_type_cycle_key"'))
+                    conn.execute(text('ALTER TABLE "capillary_pressure" DROP CONSTRAINT IF EXISTS "capillary_pressure_sample_id_saturation_experiment_type_cyc_key"'))
             except Exception:
                 pass
 
