@@ -26,6 +26,7 @@ from quick_pp.database import objects as db_objects
 # absent GET endpoints aggregate across all wells in the project.
 router = APIRouter(prefix="/database/projects/{project_id}", tags=["Ancillary Data"])
 import_ancillary_router = APIRouter(prefix="/import/ancillary", tags=["Ancillary Data"])
+direct_ancillary_router = APIRouter(tags=["Well Surveys"])
 
 
 # ==============================================================================
@@ -2091,7 +2092,12 @@ def upload_well_surveys_project(
     summary="Calculate TVD from existing survey data and store as well curve (optional well_name)",
     tags=["Well Surveys"],
 )
-def calculate_tvd_project(project_id: int, well_name: Optional[str] = Query(None)):
+@router.post(
+    "/wells/{well_name}/well_surveys/calculate_tvd",
+    summary="Calculate TVD from existing survey data and store as well curve for a well",
+    tags=["Well Surveys"],
+)
+def calculate_tvd_project(project_id: int, well_name: Optional[str] = None):
     try:
         with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
@@ -2148,6 +2154,18 @@ def calculate_tvd_project(project_id: int, well_name: Optional[str] = Query(None
         raise HTTPException(
             status_code=500, detail=f"Failed to calculate TVD: {e}"
         ) from e
+
+
+@direct_ancillary_router.post(
+    "/well_surveys/calculate_tvd",
+    summary="Calculate TVD from existing survey data (compat endpoint with project_id in query)",
+    tags=["Well Surveys"],
+)
+def calculate_tvd_direct(
+    project_id: int = Query(...),
+    well_name: Optional[str] = Query(None),
+):
+    return calculate_tvd_project(project_id=project_id, well_name=well_name)
 
 
 # ==============================================================================

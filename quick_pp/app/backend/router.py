@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from .services.ancillary import import_ancillary_router
+from .services.ancillary import direct_ancillary_router, import_ancillary_router
 from .services.ancillary import router as ancillary_router
 from .services.auth import router as auth_router
 from .services.chat import router as chat_router
@@ -41,6 +41,7 @@ api_router.include_router(chat_router)
 api_router.include_router(database_router)
 api_router.include_router(plotter_router)
 api_router.include_router(ancillary_router)
+api_router.include_router(direct_ancillary_router)
 api_router.include_router(import_ancillary_router)
 api_router.include_router(qaqc_router)
 api_router.include_router(rock_typing_router)

@@ -626,6 +626,25 @@ export async function saveAncillaryItems(
 	return res.json();
 }
 
+export async function calculateSurveyTvd(
+	projectId: string | number,
+	wellName?: string
+) {
+	const query = wellName ? `?well_name=${encodeURIComponent(wellName)}` : '';
+	const url = `${API_BASE}/quick_pp/database/projects/${encodeURIComponent(String(projectId))}/well_surveys/calculate_tvd${query}`;
+	const res = await trackedFetch(
+		url,
+		{
+			method: 'POST',
+			credentials: 'include',
+			headers: authHeaders({ 'Content-Type': 'application/json' }),
+			body: JSON.stringify({})
+		},
+		'Failed to calculate TVD'
+	);
+	return res.json();
+}
+
 export async function deleteAncillaryItem(
 	projectId: string | number,
 	wellName: string,

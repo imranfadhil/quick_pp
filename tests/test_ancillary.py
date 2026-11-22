@@ -536,3 +536,60 @@ def test_rca_import_with_qv_without_cperm():
     assert abs(samples[0]["depth"] - 1550.0) < 1e-4
 
 
+def test_calculate_tvd_endpoints_routing():
+    project_name = f"TVDTestProj-{uuid4().hex}"
+    well_name = f"Well-{uuid4().hex}"
+    uwi = f"UWI-{uuid4().hex}"
+
+    # Create project and well
+    p_res = client.post("/quick_pp/database/projects", json={"name": project_name})
+    assert p_res.status_code == 200
+    pid = p_res.json()["project_id"]
+
+    w_res = client.post(
+        f"/quick_pp/database/projects/{pid}/wells",
+        json={"name": well_name, "uwi": uwi},
+    )
+    assert w_res.status_code == 200
+
+    # Add well surveys
+    surveys = [
+        {"md": 0.0, "inc": 0.0, "azim": 0.0},
+        {"md": 500.0, "inc": 2.0, "azim": 45.0},
+        {"md": 1000.0, "inc": 10.0, "azim": 90.0},
+    ]
+    s_res = client.post(
+        f"/quick_pp/database/projects/{pid}/wells/{well_name}/well_surveys",
+        json={"surveys": surveys},
+    )
+    assert s_res.status_code == 200
+
+    # 1. Test canonical endpoint: /quick_pp/database/projects/{pid}/well_surveys/calculate_tvd?well_name=...
+    res1 = client.post(
+        f"/quick_pp/database/projects/{pid}/well_surveys/calculate_tvd",
+        params={"well_name": well_name},
+    )
+    assert res1.status_code == 200
+    data1 = res1.json()
+    assert data1["success"] is True
+    assert data1["wells_processed"] == 1
+
+    # 2. Test well path endpoint: /quick_pp/database/projects/{pid}/wells/{well_name}/well_surveys/calculate_tvd
+    res2 = client.post(
+        f"/quick_pp/database/projects/{pid}/wells/{well_name}/well_surveys/calculate_tvd"
+    )
+    assert res2.status_code == 200
+    data2 = res2.json()
+    assert data2["success"] is True
+
+    # 3. Test compatibility endpoint: /quick_pp/well_surveys/calculate_tvd?project_id=...&well_name=...
+    res3 = client.post(
+        "/quick_pp/well_surveys/calculate_tvd",
+        params={"project_id": pid, "well_name": well_name},
+    )
+    assert res3.status_code == 200
+    data3 = res3.json()
+    assert data3["success"] is True
+
+
+

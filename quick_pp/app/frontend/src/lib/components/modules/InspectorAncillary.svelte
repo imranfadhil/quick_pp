@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { postJson, saveAncillaryItems } from '$lib/api/client';
+	import { calculateSurveyTvd, saveAncillaryItems } from '$lib/api/client';
 	import CompactDataGrid, {
 		type GridColumn
 	} from '$lib/components/workbench/CompactDataGrid.svelte';
@@ -254,10 +254,7 @@
 
 			// Call backend calculate_tvd endpoint if available
 			try {
-				await postJson(
-					`/quick_pp/well_surveys/calculate_tvd?project_id=${encodeURIComponent(workbench.projectId)}&well_name=${encodeURIComponent(workbench.wellId)}`,
-					{}
-				);
+				await calculateSurveyTvd(workbench.projectId, workbench.wellId);
 			} catch (err) {
 				console.warn('Backend calculate_tvd notice:', err);
 			}
