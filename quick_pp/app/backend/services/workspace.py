@@ -14758,7 +14758,7 @@ class WorkspaceSaveComputedRequest(BaseModel):
         default_factory=list,
         description="Depth array aligned with the provided curves",
     )
-    curves: Dict[str, List[Optional[float]]] = Field(
+    curves: Dict[str, List[Any]] = Field(
         default_factory=dict,
         description="Map of curve mnemonic -> values array aligned with depths",
     )
@@ -14790,7 +14790,15 @@ def workspace_save_computed_curves(
                 raise ValueError(
                     f"Curve '{col}' length ({len(vals)}) does not match depths length ({len(req.depths)})"
                 )
-            cols[col] = pd.to_numeric(pd.Series(vals), errors="coerce")
+            if col == "FLUID_TYPE" or any(
+                isinstance(v, str)
+                and not v.replace(".", "", 1).replace("-", "", 1).isdigit()
+                for v in vals
+                if v is not None
+            ):
+                cols[col] = pd.Series(vals, dtype=object)
+            else:
+                cols[col] = pd.to_numeric(pd.Series(vals), errors="coerce")
             saved_curve_names.append(col)
 
         if not saved_curve_names:
@@ -14829,7 +14837,7 @@ class WorkspaceSaveMultiWellComputedRequest(BaseModel):
         default_factory=list,
         description="Depth array aligned with well_names and curves",
     )
-    curves: Dict[str, List[Optional[float]]] = Field(
+    curves: Dict[str, List[Any]] = Field(
         default_factory=dict,
         description="Map of curve mnemonic -> values array aligned with well_names and depths",
     )
@@ -14865,7 +14873,15 @@ def workspace_save_multi_well_computed_curves(
                 raise ValueError(
                     f"Curve '{col}' length ({len(vals)}) does not match depths length ({n_rows})"
                 )
-            cols[col] = pd.to_numeric(pd.Series(vals), errors="coerce")
+            if col == "FLUID_TYPE" or any(
+                isinstance(v, str)
+                and not v.replace(".", "", 1).replace("-", "", 1).isdigit()
+                for v in vals
+                if v is not None
+            ):
+                cols[col] = pd.Series(vals, dtype=object)
+            else:
+                cols[col] = pd.to_numeric(pd.Series(vals), errors="coerce")
             saved_curve_names.append(col)
 
         if not saved_curve_names:

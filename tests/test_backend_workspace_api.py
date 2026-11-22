@@ -2384,3 +2384,27 @@ def test_workspace_source_rock_endpoint(client_and_project):
     assert "TOC" in body["data"]
     assert "stats" in body
     assert "TOC" in body["stats"]
+
+
+def test_workspace_save_computed_curves_with_fluid_type(client_and_project):
+    """Verify /save_computed endpoint accepts FLUID_TYPE strings without 422 validation errors."""
+    client, proj_id = client_and_project
+    well_name = "Well-A"
+    endpoint = f"/quick_pp/workspace/projects/{proj_id}/wells/{well_name}/save_computed"
+
+    depths = [1000.0, 1001.0, 1002.0]
+    payload = {
+        "module": "saturation",
+        "depths": depths,
+        "curves": {
+            "SWT": [0.25, 0.35, 1.0],
+            "BVW": [0.05, 0.07, 0.20],
+            "FLUID_TYPE": ["GAS", "OIL", "NON_RESERVOIR"],
+        },
+    }
+    r = client.post(endpoint, json=payload)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["saved"] is True
+    assert "FLUID_TYPE" in body["saved_curves"]
+    assert "SWT" in body["saved_curves"]
