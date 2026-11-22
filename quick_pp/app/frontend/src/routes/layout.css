@@ -9,79 +9,79 @@
 
 :root {
 	/* Precision Daylight Surface & Semantic Tokens */
-	--bg-app: #F8FAFC;
-	--bg-surface: #FFFFFF;
-	--bg-subtle: #F1F5F9;
-	--border-hairline: #E2E8F0;
-	--border-focus: #2563EB;
-	--text-primary: #0F172A;
+	--bg-app: #f8fafc;
+	--bg-surface: #ffffff;
+	--bg-subtle: #f1f5f9;
+	--border-hairline: #e2e8f0;
+	--border-focus: #2563eb;
+	--text-primary: #0f172a;
 	--text-secondary: #334155;
-	--text-muted: #64748B;
-	--accent-primary: #2563EB;
-	--status-ok: #16A34A;
-	--status-warn: #D97706;
-	--status-error: #DC2626;
+	--text-muted: #64748b;
+	--accent-primary: #2563eb;
+	--status-ok: #16a34a;
+	--status-warn: #d97706;
+	--status-error: #dc2626;
 
 	/* Subsurface Petrophysical Color Tokens */
 	/* Lithology Fills & Strokes */
-	--petro-sand-fill: #FDE047;
-	--petro-sand-stroke: #CA8A04;
-	--petro-shale-fill: #94A3B8;
+	--petro-sand-fill: #fde047;
+	--petro-sand-stroke: #ca8a04;
+	--petro-shale-fill: #94a3b8;
 	--petro-shale-stroke: #475569;
-	--petro-silt-fill: #FDBA74;
-	--petro-silt-stroke: #EA580C;
-	--petro-calc-fill: #38BDF8;
-	--petro-calc-stroke: #0284C7;
-	--petro-dolo-fill: #C084FC;
-	--petro-dolo-stroke: #7E22CE;
+	--petro-silt-fill: #fdba74;
+	--petro-silt-stroke: #ea580c;
+	--petro-calc-fill: #38bdf8;
+	--petro-calc-stroke: #0284c7;
+	--petro-dolo-fill: #c084fc;
+	--petro-dolo-stroke: #7e22ce;
 
 	/* Fluids & Saturation */
-	--petro-oil: #16A34A;
-	--petro-gas: #DC2626;
-	--petro-water: #2563EB;
+	--petro-oil: #16a34a;
+	--petro-gas: #dc2626;
+	--petro-water: #2563eb;
 
 	/* Standard Log Curves */
-	--curve-gr: #15803D;
-	--curve-rt: #DC2626;
-	--curve-rhob: #DC2626;
-	--curve-nphi: #2563EB;
-	--curve-dt: #9333EA;
+	--curve-gr: #15803d;
+	--curve-rt: #dc2626;
+	--curve-rhob: #dc2626;
+	--curve-nphi: #2563eb;
+	--curve-dt: #9333ea;
 	--curve-cali: #475569;
-	--curve-core: #0F172A;
+	--curve-core: #0f172a;
 
 	/* shadcn-svelte mapped to Precision Daylight */
 	--radius: 0.25rem;
-	--background: #F8FAFC;
-	--foreground: #0F172A;
-	--card: #FFFFFF;
-	--card-foreground: #0F172A;
-	--popover: #FFFFFF;
-	--popover-foreground: #0F172A;
-	--primary: #2563EB;
-	--primary-foreground: #FFFFFF;
-	--secondary: #F1F5F9;
-	--secondary-foreground: #0F172A;
-	--muted: #F1F5F9;
-	--muted-foreground: #64748B;
-	--accent: #F1F5F9;
-	--accent-foreground: #0F172A;
-	--destructive: #DC2626;
-	--border: #E2E8F0;
-	--input: #E2E8F0;
-	--ring: #2563EB;
-	--chart-1: #2563EB;
-	--chart-2: #16A34A;
-	--chart-3: #D97706;
-	--chart-4: #9333EA;
-	--chart-5: #DC2626;
-	--sidebar: #F8FAFC;
-	--sidebar-foreground: #0F172A;
-	--sidebar-primary: #2563EB;
-	--sidebar-primary-foreground: #FFFFFF;
-	--sidebar-accent: #F1F5F9;
-	--sidebar-accent-foreground: #0F172A;
-	--sidebar-border: #E2E8F0;
-	--sidebar-ring: #2563EB;
+	--background: #f8fafc;
+	--foreground: #0f172a;
+	--card: #ffffff;
+	--card-foreground: #0f172a;
+	--popover: #ffffff;
+	--popover-foreground: #0f172a;
+	--primary: #2563eb;
+	--primary-foreground: #ffffff;
+	--secondary: #f1f5f9;
+	--secondary-foreground: #0f172a;
+	--muted: #f1f5f9;
+	--muted-foreground: #64748b;
+	--accent: #f1f5f9;
+	--accent-foreground: #0f172a;
+	--destructive: #dc2626;
+	--border: #e2e8f0;
+	--input: #e2e8f0;
+	--ring: #2563eb;
+	--chart-1: #2563eb;
+	--chart-2: #16a34a;
+	--chart-3: #d97706;
+	--chart-4: #9333ea;
+	--chart-5: #dc2626;
+	--sidebar: #f8fafc;
+	--sidebar-foreground: #0f172a;
+	--sidebar-primary: #2563eb;
+	--sidebar-primary-foreground: #ffffff;
+	--sidebar-accent: #f1f5f9;
+	--sidebar-accent-foreground: #0f172a;
+	--sidebar-border: #e2e8f0;
+	--sidebar-ring: #2563eb;
 
 	--font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 	--font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
@@ -147,6 +147,17 @@
 		font-family: var(--font-mono);
 		font-variant-numeric: tabular-nums;
 	}
+	/* Prevent browser spinners from cutting into high-density numeric inputs */
+	input[type='number'].mono-num::-webkit-outer-spin-button,
+	input[type='number'].mono-num::-webkit-inner-spin-button {
+		-webkit-appearance: none;
+		appearance: none;
+		margin: 0;
+	}
+	input[type='number'].mono-num {
+		-moz-appearance: textfield;
+		appearance: textfield;
+	}
 	select {
 		padding-top: 0;
 		padding-bottom: 0;
@@ -172,9 +183,9 @@ select {
 	background: var(--bg-app);
 }
 ::-webkit-scrollbar-thumb {
-	background: #CBD5E1;
+	background: #cbd5e1;
 	border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-	background: #94A3B8;
+	background: #94a3b8;
 }

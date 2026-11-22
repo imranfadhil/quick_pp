@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { calculateSurveyTvd, saveAncillaryItems } from '$lib/api/client';
 	import CompactDataGrid, {
 		type GridColumn
@@ -18,22 +19,43 @@
 	let isSaving = $state(false);
 	let statusMsg = $state<string | null>(null);
 
-	// New item quick-entry drafts
+	// New item quick-entry drafts (expressed directly in depthDisplay.unit)
 	let newName = $state('');
-	let newDepth = $state<number>(1000);
-	let newVal1 = $state<number>(0.2);
-	let newVal2 = $state<number>(100);
-	let newScalPc = $state<number>(15);
-	let newScalSw = $state<number>(0.35);
+	let newDepth = $state<number | null>(null);
+	let newPerfTop = $state<number | null>(null);
+	let newPerfBottom = $state<number | null>(null);
+	let newPerfDesc = $state('');
+	let newVal1 = $state<number | null>(0.2);
+	let newVal2 = $state<number | null>(100);
+	let newScalPc = $state<number | null>(15);
+	let newScalSw = $state<number | null>(0.35);
 	let newScalCpore = $state<number | null>(null);
 	let newScalCperm = $state<number | null>(null);
-	let newPerfBottom = $state<number>(1005);
-	let newPerfDesc = $state('');
 	// Formation pressure test quick-entry drafts (optional fields may be left blank)
 	let newPressMob = $state<number | null>(null);
 	let newPressPerm = $state<number | null>(null);
 	let newPressTemp = $state<number | null>(null);
 	let newPressRemarks = $state('');
+
+	// Keep quick-entry drafts aligned if user switches display unit (e.g. m <-> ft)
+	let previousDepthUnit = depthDisplay.unit;
+	$effect(() => {
+		const unit = depthDisplay.unit;
+		untrack(() => {
+			const oldUnit = previousDepthUnit;
+			previousDepthUnit = unit;
+			if (oldUnit === unit) return;
+			if (newDepth !== null && Number.isFinite(newDepth)) {
+				newDepth = Number(depthFromMeters(depthToMeters(newDepth, oldUnit), unit).toFixed(2));
+			}
+			if (newPerfTop !== null && Number.isFinite(newPerfTop)) {
+				newPerfTop = Number(depthFromMeters(depthToMeters(newPerfTop, oldUnit), unit).toFixed(2));
+			}
+			if (newPerfBottom !== null && Number.isFinite(newPerfBottom)) {
+				newPerfBottom = Number(depthFromMeters(depthToMeters(newPerfBottom, oldUnit), unit).toFixed(2));
+			}
+		});
+	});
 
 	const TOP_COLS: GridColumn[] = [
 		{ key: 'name', label: 'Formation / Zone', editable: true },
@@ -288,30 +310,42 @@
 
 	async function addQuickRow() {
 		if (!workbench.projectId || !workbench.wellId) return;
-		if (
-			!Number.isFinite(newDepth) ||
-			(activeTab === 'perfs' && !Number.isFinite(newPerfBottom))
-		) {
+		if (activeTab === 'perfs') {
+			if (
+				newPerfTop === null ||
+				!Number.isFinite(newPerfTop) ||
+				newPerfBottom === null ||
+				!Number.isFinite(newPerfBottom)
+			) {
+				statusMsg = 'Enter valid top and bottom depths before adding a perforation.';
+				return;
+			}
+		} else if (newDepth === null || !Number.isFinite(newDepth)) {
 			statusMsg = 'Enter a valid depth before adding a row.';
 			return;
 		}
+
+		const depthM = newDepth !== null ? depthToMeters(Number(newDepth), depthDisplay.unit) : 0;
+
 		if (activeTab === 'tops') {
 			const name = newName.trim() || `Zone-${wellData.tops.length + 1}`;
 			wellData.tops = [
 				...wellData.tops,
-				{ id: `top-${Date.now()}`, name, depth: Number(newDepth) }
+				{ id: `top-${Date.now()}`, name, depth: depthM }
 			].sort((a, b) => a.depth - b.depth);
 			newName = '';
+			newDepth = null;
 		} else if (activeTab === 'contacts') {
 			const type = (newName.trim() || 'OWC').toUpperCase();
 			wellData.contacts = [
 				...wellData.contacts,
-				{ id: `contact-${Date.now()}`, type, name: type, depth: Number(newDepth) }
+				{ id: `contact-${Date.now()}`, type, name: type, depth: depthM }
 			];
 			newName = '';
+			newDepth = null;
 		} else if (activeTab === 'perfs') {
-			const t = Number(newDepth);
-			const b = Number(newPerfBottom);
+			const t = depthToMeters(Number(newPerfTop), depthDisplay.unit);
+			const b = depthToMeters(Number(newPerfBottom), depthDisplay.unit);
 			wellData.perforations = [
 				...wellData.perforations,
 				{
@@ -323,22 +357,26 @@
 				}
 			].sort((a, b2) => a.top - b2.top);
 			newName = '';
+			newPerfTop = null;
+			newPerfBottom = null;
 			newPerfDesc = '';
 		} else if (activeTab === 'core') {
-			let por = Number(newVal1);
-			if (Number.isFinite(por) && por > 1.0) por /= 100.0;
-			const perm = Number(newVal2);
+			let por = newVal1 !== null ? Number(newVal1) : null;
+			if (por !== null && Number.isFinite(por) && por > 1.0) por /= 100.0;
+			const perm =
+				newVal2 !== null && Number.isFinite(Number(newVal2)) ? Number(newVal2) : null;
 			wellData.coreSamples = [
 				...wellData.coreSamples,
 				{
 					sample_name: newName.trim() || `S-${wellData.coreSamples.length + 1}`,
-					depth: Number(newDepth),
+					depth: depthM,
 					porosity: Number.isFinite(por) ? por : null,
 					permeability: Number.isFinite(perm) ? perm : null,
 					rock_type: projectData.classifyRockType(por, perm)
 				}
 			];
 			newName = '';
+			newDepth = null;
 		} else if (activeTab === 'scal') {
 			// Keep sample_name, depth, cpore, cperm sticky so user can enter multiple (Pc, Sw) pairs for the same plug
 			const lastScal =
@@ -365,9 +403,9 @@
 				...wellData.scalPc,
 				{
 					sample_name: sampleName,
-					depth: Number(newDepth),
-					pc: Number(newScalPc),
-					sw: Number(newScalSw),
+					depth: depthM,
+					pc: Number(newScalPc ?? 0),
+					sw: Number(newScalSw ?? 0),
 					porosity: effPor,
 					permeability: effPerm,
 					rock_type: rt,
@@ -379,20 +417,22 @@
 			wellData.pressureTests = [
 				...wellData.pressureTests,
 				normalizePressureRow({
-					depth: newDepth,
-					pressure: newVal2,
+					depth: depthM,
+					pressure: Number(newVal2 ?? 0),
 					mobility: newPressMob,
 					permeability: newPressPerm,
 					temperature: newPressTemp,
 					remarks: newPressRemarks
 				})
 			].sort((a, b) => a.depth - b.depth);
+			newDepth = null;
 			newPressRemarks = '';
 		} else if (activeTab === 'survey') {
 			wellData.survey = [
 				...wellData.survey,
-				{ md: Number(newDepth), inc: Number(newVal1), azim: Number(newVal2) }
+				{ md: depthM, inc: Number(newVal1 ?? 0), azim: Number(newVal2 ?? 0) }
 			].sort((a, b) => a.md - b.md);
+			newDepth = null;
 			recomputeSurveyTrajectoryLocally();
 		}
 		await saveCurrentTab();
@@ -833,7 +873,7 @@
 
 	<!-- Quick Add Bar -->
 	<div
-		class="flex items-center gap-1 border-b border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5"
+		class="flex items-center gap-1 overflow-x-auto border-b border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5"
 	>
 		{#if activeTab === 'tops' || activeTab === 'contacts'}
 			<input
@@ -844,82 +884,70 @@
 			/>
 			<input
 				type="number"
-				step="0.5"
+				step="any"
 				placeholder="Depth"
 				aria-label="Depth ({depthDisplay.unit})"
 				title="Depth ({depthDisplay.unit})"
-				bind:value={
-					() => depthFromMeters(newDepth, depthDisplay.unit),
-					(v) => (newDepth = depthToMeters(v, depthDisplay.unit))
-				}
-				class="mono-num h-6 w-20 rounded-sm border border-[var(--border-hairline)] bg-white px-1.5 text-right text-xs"
+				bind:value={newDepth}
+				class="mono-num h-6 w-24 shrink-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1.5 text-right text-xs"
 			/>
 		{:else if activeTab === 'perfs'}
 			<input
 				type="text"
 				placeholder="Name"
 				bind:value={newName}
-				class="h-6 w-16 min-w-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-xs"
+				class="h-6 w-20 min-w-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1.5 text-xs"
 			/>
 			<input
 				type="number"
-				step="0.5"
+				step="any"
 				placeholder="Top"
 				title="Perforation Top MD ({depthDisplay.unit})"
-				bind:value={
-					() => depthFromMeters(newDepth, depthDisplay.unit),
-					(v) => (newDepth = depthToMeters(v, depthDisplay.unit))
-				}
-				class="mono-num h-6 w-16 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+				bind:value={newPerfTop}
+				class="mono-num h-6 w-24 shrink-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1.5 text-right text-xs"
 			/>
 			<input
 				type="number"
-				step="0.5"
+				step="any"
 				placeholder="Bottom"
 				title="Perforation Bottom MD ({depthDisplay.unit})"
-				bind:value={
-					() => depthFromMeters(newPerfBottom, depthDisplay.unit),
-					(v) => (newPerfBottom = depthToMeters(v, depthDisplay.unit))
-				}
-				class="mono-num h-6 w-16 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+				bind:value={newPerfBottom}
+				class="mono-num h-6 w-24 shrink-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1.5 text-right text-xs"
 			/>
 			<input
 				type="text"
 				placeholder="Description"
 				bind:value={newPerfDesc}
-				class="h-6 min-w-0 flex-1 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-xs"
+				class="h-6 min-w-0 flex-1 rounded-sm border border-[var(--border-hairline)] bg-white px-1.5 text-xs"
 			/>
 		{:else if activeTab === 'core'}
 			<input
 				type="text"
 				placeholder="Sample"
 				bind:value={newName}
-				class="h-6 w-14 min-w-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-xs"
+				class="h-6 w-16 min-w-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1.5 text-xs"
 			/>
 			<input
 				type="number"
-				step="0.5"
+				step="any"
 				placeholder="Depth"
 				title="Sample Depth ({depthDisplay.unit})"
-				bind:value={
-					() => depthFromMeters(newDepth, depthDisplay.unit),
-					(v) => (newDepth = depthToMeters(v, depthDisplay.unit))
-				}
-				class="mono-num h-6 w-16 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+				bind:value={newDepth}
+				class="mono-num h-6 w-24 shrink-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1.5 text-right text-xs"
 			/>
 			<input
 				type="number"
-				step="0.01"
+				step="any"
 				placeholder="CPORE"
 				bind:value={newVal1}
-				class="mono-num h-6 w-14 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+				class="mono-num h-6 w-16 shrink-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
 			/>
 			<input
 				type="number"
-				step="1"
+				step="any"
 				placeholder="CPERM"
 				bind:value={newVal2}
-				class="mono-num h-6 w-14 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+				class="mono-num h-6 w-16 shrink-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
 			/>
 		{:else if activeTab === 'scal'}
 			<input
@@ -927,75 +955,69 @@
 				placeholder="Sample"
 				bind:value={newName}
 				title="Sample Name (enter manually; stays sticky for multiple Pc-Sw pairs)"
-				class="h-6 w-14 min-w-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-xs"
+				class="h-6 w-16 min-w-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1.5 text-xs"
 			/>
 			<input
 				type="number"
-				step="0.5"
+				step="any"
 				placeholder="Depth"
-				bind:value={
-					() => depthFromMeters(newDepth, depthDisplay.unit),
-					(v) => (newDepth = depthToMeters(v, depthDisplay.unit))
-				}
+				bind:value={newDepth}
 				title="Sample Depth ({depthDisplay.unit})"
-				class="mono-num h-6 w-16 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+				class="mono-num h-6 w-24 shrink-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1.5 text-right text-xs"
 			/>
 			<input
 				type="number"
-				step="0.001"
+				step="any"
 				min="0"
 				max="1"
 				placeholder="CPORE"
 				bind:value={newScalCpore}
 				title="Core Porosity CPORE (v/v or %)"
-				class="mono-num h-6 w-14 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+				class="mono-num h-6 w-14 shrink-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
 			/>
 			<input
 				type="number"
-				step="0.1"
+				step="any"
 				min="0"
 				placeholder="CPERM"
 				bind:value={newScalCperm}
 				title="Core Permeability CPERM (mD)"
-				class="mono-num h-6 w-14 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+				class="mono-num h-6 w-14 shrink-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
 			/>
 			<input
 				type="number"
-				step="0.5"
+				step="any"
 				placeholder="Pc"
 				bind:value={newScalPc}
 				title="Capillary Pressure Pc (psi)"
-				class="mono-num h-6 w-12 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+				class="mono-num h-6 w-14 shrink-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
 			/>
 			<input
 				type="number"
-				step="0.01"
+				step="any"
 				min="0"
 				max="1"
 				placeholder="Sw"
 				bind:value={newScalSw}
 				title="Water Saturation Sw (v/v)"
-				class="mono-num h-6 w-12 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+				class="mono-num h-6 w-14 shrink-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
 			/>
 		{:else if activeTab === 'pressure'}
 			<input
 				type="number"
-				step="0.5"
+				step="any"
 				placeholder="Depth"
 				title="Test Depth MD ({depthDisplay.unit})"
-				bind:value={
-					() => depthFromMeters(newDepth, depthDisplay.unit),
-					(v) => (newDepth = depthToMeters(v, depthDisplay.unit))
-				}
-				class="mono-num h-6 w-14 min-w-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+				bind:value={newDepth}
+				class="mono-num h-6 w-24 min-w-0 shrink-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1.5 text-right text-xs"
 			/>
 			<input
 				type="number"
-				step="0.1"
+				step="any"
 				placeholder="Press"
 				title="Formation Pressure (psi)"
 				bind:value={newVal2}
-				class="mono-num h-6 w-14 min-w-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+				class="mono-num h-6 w-18 min-w-0 shrink-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
 			/>
 			<input
 				type="number"
@@ -1003,7 +1025,7 @@
 				placeholder="Mob"
 				title="Drawdown Mobility (mD/cP) — optional"
 				bind:value={newPressMob}
-				class="mono-num h-6 w-12 min-w-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+				class="mono-num h-6 w-12 min-w-0 shrink-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
 			/>
 			<input
 				type="number"
@@ -1011,46 +1033,43 @@
 				placeholder="Perm"
 				title="Permeability (mD) — optional"
 				bind:value={newPressPerm}
-				class="mono-num h-6 w-12 min-w-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+				class="mono-num h-6 w-12 min-w-0 shrink-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
 			/>
 			<input
 				type="number"
-				step="0.1"
+				step="any"
 				placeholder="Temp"
 				title="Temperature (degC) — optional"
 				bind:value={newPressTemp}
-				class="mono-num h-6 w-12 min-w-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+				class="mono-num h-6 w-12 min-w-0 shrink-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
 			/>
 			<input
 				type="text"
 				placeholder="Remarks"
 				title="Remarks (e.g. Valid, Tight, Supercharged, Lost seal)"
 				bind:value={newPressRemarks}
-				class="h-6 min-w-0 flex-1 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-xs"
+				class="h-6 min-w-0 flex-1 rounded-sm border border-[var(--border-hairline)] bg-white px-1.5 text-xs"
 			/>
 		{:else if activeTab === 'survey'}
 			<input
 				type="number"
-				step="1"
+				step="any"
 				placeholder="Depth / MD"
 				title="Depth / MD ({depthDisplay.unit})"
-				bind:value={
-					() => depthFromMeters(newDepth, depthDisplay.unit),
-					(v) => (newDepth = depthToMeters(v, depthDisplay.unit))
-				}
-				class="mono-num h-6 w-20 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+				bind:value={newDepth}
+				class="mono-num h-6 w-24 shrink-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1.5 text-right text-xs"
 			/>
 			<input
 				type="number"
-				step="0.1"
+				step="any"
 				placeholder="Inc"
 				title="Inclination (deg)"
 				bind:value={newVal1}
-				class="mono-num h-6 w-16 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+				class="mono-num h-6 w-16 shrink-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
 			/>
 			<input
 				type="number"
-				step="0.1"
+				step="any"
 				placeholder="Azim"
 				title="Azimuth (deg)"
 				bind:value={newVal2}
@@ -1059,19 +1078,17 @@
 		{:else}
 			<input
 				type="number"
-				step="1"
+				step="any"
 				placeholder="Depth / MD"
 				title="Depth / MD ({depthDisplay.unit})"
-				bind:value={
-					() => depthFromMeters(newDepth, depthDisplay.unit),
-					(v) => (newDepth = depthToMeters(v, depthDisplay.unit))
-				}
-				class="mono-num h-6 w-20 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+				bind:value={newDepth}
+				class="mono-num h-6 w-24 shrink-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1.5 text-right text-xs"
 			/>
 			<input
 				type="number"
-				step="1"
+				step="any"
 				placeholder="Azim"
+				title="Azimuth (deg)"
 				bind:value={newVal2}
 				class="mono-num h-6 flex-1 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
 			/>

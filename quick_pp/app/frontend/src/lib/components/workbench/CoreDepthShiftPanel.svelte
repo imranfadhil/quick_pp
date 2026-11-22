@@ -372,7 +372,7 @@
 									<td class="px-1 py-0.5 text-right">
 										<input
 											type="number"
-											step="0.1"
+											step="any"
 											value={tp.coreDepth}
 											onchange={(e) =>
 												updateTiePoint(
@@ -380,13 +380,13 @@
 													'coreDepth',
 													(e.currentTarget as HTMLInputElement).value
 												)}
-											class="mono-num h-5 w-20 rounded-2xs border border-[var(--border-hairline)] px-1 text-right text-[10.5px]"
+											class="mono-num h-5 w-24 rounded-2xs border border-[var(--border-hairline)] px-1.5 text-right text-[10.5px]"
 										/>
 									</td>
 									<td class="px-1 py-0.5 text-right">
 										<input
 											type="number"
-											step="0.1"
+											step="any"
 											value={tp.logDepth}
 											onchange={(e) =>
 												updateTiePoint(
@@ -394,7 +394,7 @@
 													'logDepth',
 													(e.currentTarget as HTMLInputElement).value
 												)}
-											class="mono-num h-5 w-20 rounded-2xs border border-[var(--border-hairline)] px-1 text-right text-[10.5px]"
+											class="mono-num h-5 w-24 rounded-2xs border border-[var(--border-hairline)] px-1.5 text-right text-[10.5px]"
 										/>
 									</td>
 									<td class="mono-num px-1.5 py-0.5 text-right font-semibold text-blue-700">
