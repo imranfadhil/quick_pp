@@ -2306,6 +2306,18 @@ class WorkspaceShfRequest(BaseModel):
     theta: float = Field(30.0)
     gw: float = Field(1.05)
     ghc: float = Field(0.8)
+    fluid_system: str = Field(
+        "auto",
+        description="Fluid system: 'auto' (inherit from well curves), 'gas', or 'oil'",
+    )
+    ggas: float = Field(0.15, description="Gas density (g/cc) for gas intervals")
+    ift_gas: float = Field(
+        70.0, description="Interfacial tension for gas-water systems (dyn/cm)"
+    )
+    use_fluid_typing: bool = Field(
+        True,
+        description="Whether to inherit single-well FLUID_TYPE, GAS_FLAG, and RHO_HC for interval buoyancy",
+    )
     leverett_a: Optional[float] = Field(
         None, description="Optional global override for 'a' parameter"
     )
@@ -10141,15 +10153,41 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                 p_list_w = p_s.tolist()
                 k_list_w = k_s.tolist()
                 rf_list_w = rf_s.tolist()
+
+                gas_flag_s_w = pd.Series(0, index=w_sorted.index, dtype=int)
+                if "GAS_FLAG" in w_sorted.columns:
+                    gas_flag_s_w = (
+                        pd.to_numeric(w_sorted["GAS_FLAG"], errors="coerce")
+                        .fillna(0)
+                        .astype(int)
+                    )
+                elif "FLUID_TYPE" in w_sorted.columns:
+                    gas_flag_s_w = (
+                        w_sorted["FLUID_TYPE"].astype(str).str.upper() == "GAS"
+                    ).astype(int)
+                elif "VGAS" in w_sorted.columns:
+                    gas_flag_s_w = (
+                        pd.to_numeric(w_sorted["VGAS"], errors="coerce").fillna(0.0)
+                        > 0.01
+                    ).astype(int)
+
+                rho_hc_s_w = pd.Series(np.nan, index=w_sorted.index, dtype=float)
+                if "RHO_HC" in w_sorted.columns:
+                    rho_hc_s_w = pd.to_numeric(w_sorted["RHO_HC"], errors="coerce")
+
+                gas_list_w = gas_flag_s_w.tolist()
+                rho_list_w = rho_hc_s_w.tolist()
                 well_rows_shf: List[Dict[str, Any]] = []
 
-                for md_v, tvd_v, p_v, k_v, rf_v, zn_v in zip(
+                for md_v, tvd_v, p_v, k_v, rf_v, zn_v, gas_v, rho_v in zip(
                     md_arr.tolist(),
                     tvd_arr_w.tolist(),
                     p_list_w,
                     k_list_w,
                     rf_list_w,
                     z_list_w,
+                    gas_list_w,
+                    rho_list_w,
                     strict=False,
                 ):
                     if (
@@ -10217,6 +10255,34 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                         fit_p = fits[rf_key]
                         a = float(fit_p.get("a", 0.2))
                         b = abs(float(fit_p.get("b", 0.3)))
+
+                        # Resolve effective hydrocarbon gradient & IFT based on fluid system and single-well logs
+                        is_gas = str(
+                            getattr(req, "fluid_system", "auto") or "auto"
+                        ).strip().lower() == "gas" or (
+                            bool(getattr(req, "use_fluid_typing", True))
+                            and (
+                                (gas_v == 1)
+                                or (pd.notna(rho_v) and 0.02 < float(rho_v) <= 0.40)
+                            )
+                        )
+                        sample_ghc = (
+                            float(getattr(req, "ggas", 0.15))
+                            if is_gas
+                            else float(req.ghc)
+                        )
+                        if (
+                            bool(getattr(req, "use_fluid_typing", True))
+                            and pd.notna(rho_v)
+                            and 0.05 <= float(rho_v) <= 0.95
+                        ):
+                            sample_ghc = float(rho_v)
+                        sample_ift = (
+                            float(getattr(req, "ift_gas", 70.0))
+                            if is_gas
+                            else float(req.ift)
+                        )
+
                         if model == "skelt_harrison":
                             c = float(fit_p.get("c", 1.5))
                             d_param = float(fit_p.get("d", 1.5))
@@ -10230,7 +10296,7 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                                     tvd_f,
                                     eff_fwl,
                                     req.gw,
-                                    req.ghc,
+                                    sample_ghc,
                                     a,
                                     b,
                                     unit=req.unit,
@@ -10259,10 +10325,10 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                                     p_f,
                                     tvd_f,
                                     eff_fwl,
-                                    req.ift,
+                                    sample_ift,
                                     req.theta,
                                     req.gw,
-                                    req.ghc,
+                                    sample_ghc,
                                     a,
                                     b,
                                     swirr=swirr_log_v,
@@ -11442,6 +11508,63 @@ def workspace_stick_plot(
                     else pd.Series(np.nan, index=wdf_sorted.index, dtype=float)
                 )
 
+                # Resolve fluid typing flags from single-well evaluation
+                gas_flag_s = pd.Series(0, index=wdf_sorted.index, dtype=int)
+                if (
+                    "GAS_FLAG" in wdf_sorted.columns
+                    and wdf_sorted["GAS_FLAG"].notna().any()
+                ):
+                    gas_flag_s = (
+                        pd.to_numeric(wdf_sorted["GAS_FLAG"], errors="coerce")
+                        .fillna(0)
+                        .astype(int)
+                    )
+                elif (
+                    "FLUID_TYPE" in wdf_sorted.columns
+                    and wdf_sorted["FLUID_TYPE"].notna().any()
+                ):
+                    gas_flag_s = (
+                        wdf_sorted["FLUID_TYPE"].astype(str).str.upper() == "GAS"
+                    ).astype(int)
+                elif "VGAS" in wdf_sorted.columns and wdf_sorted["VGAS"].notna().any():
+                    gas_flag_s = (
+                        pd.to_numeric(wdf_sorted["VGAS"], errors="coerce").fillna(0.0)
+                        > 0.01
+                    ).astype(int)
+
+                oil_flag_s = pd.Series(0, index=wdf_sorted.index, dtype=int)
+                if (
+                    "OIL_FLAG" in wdf_sorted.columns
+                    and wdf_sorted["OIL_FLAG"].notna().any()
+                ):
+                    oil_flag_s = (
+                        pd.to_numeric(wdf_sorted["OIL_FLAG"], errors="coerce")
+                        .fillna(0)
+                        .astype(int)
+                    )
+                elif (
+                    "FLUID_TYPE" in wdf_sorted.columns
+                    and wdf_sorted["FLUID_TYPE"].notna().any()
+                ):
+                    oil_flag_s = (
+                        wdf_sorted["FLUID_TYPE"].astype(str).str.upper() == "OIL"
+                    ).astype(int)
+                elif "VOIL" in wdf_sorted.columns and wdf_sorted["VOIL"].notna().any():
+                    oil_flag_s = (
+                        pd.to_numeric(wdf_sorted["VOIL"], errors="coerce").fillna(0.0)
+                        > 0.01
+                    ).astype(int)
+                else:
+                    oil_flag_s = ((bvo_s > 0.005) & (gas_flag_s == 0)).astype(int)
+
+                bvg_s = bvo_s.where(gas_flag_s == 1, 0.0)
+                bvo_pure_s = bvo_s.where(gas_flag_s == 0, 0.0)
+
+                wdf_sorted["GAS_FLAG"] = gas_flag_s
+                wdf_sorted["OIL_FLAG"] = oil_flag_s
+                wdf_sorted["BVG"] = bvg_s
+                wdf_sorted["BVO_PURE"] = bvo_pure_s
+
                 # Extract fluid contacts & map MD -> TVD
                 contacts_raw = anc.get("fluid_contacts")
                 if isinstance(contacts_raw, pd.DataFrame):
@@ -11463,12 +11586,20 @@ def workspace_stick_plot(
                     if c_depth is None or pd.isna(c_depth):
                         continue
                     c_md = float(c_depth)
-                    c_name = (
-                        str(c.get("name") or c.get("type") or "OWC").strip().upper()
+                    c_type = (
+                        str(
+                            c.get("contact_type")
+                            or c.get("type")
+                            or c.get("name")
+                            or "CONTACT"
+                        )
+                        .strip()
+                        .upper()
                     )
+                    c_name = c_type
                     contact_items.append(
                         {
-                            "type": c_name,
+                            "type": c_type,
                             "name": c_name,
                             "depth": round(c_md, 2),
                         }
@@ -11681,7 +11812,25 @@ def workspace_stick_plot(
                         if "SHF" in sub.columns
                         else [None] * len(sub),
                         "bvo": _clean_float_list(sub["BVO"], 4),
+                        "bvg": _clean_float_list(sub["BVG"], 4)
+                        if "BVG" in sub.columns
+                        else [0.0] * len(sub),
+                        "bvo_pure": _clean_float_list(sub["BVO_PURE"], 4)
+                        if "BVO_PURE" in sub.columns
+                        else _clean_float_list(sub["BVO"], 4),
                         "bvoh": _clean_float_list(sub["BVOH"], 4),
+                        "gas_flag": [
+                            int(x) if pd.notna(x) else 0
+                            for x in sub["GAS_FLAG"].tolist()
+                        ]
+                        if "GAS_FLAG" in sub.columns
+                        else [0] * len(sub),
+                        "oil_flag": [
+                            int(x) if pd.notna(x) else 0
+                            for x in sub["OIL_FLAG"].tolist()
+                        ]
+                        if "OIL_FLAG" in sub.columns
+                        else [0] * len(sub),
                         "fluid_flag": [
                             int(x) if pd.notna(x) else -1
                             for x in sub["FLUID_FLAG"].tolist()
@@ -11720,6 +11869,18 @@ class WorkspaceOptimizeFwlRequest(BaseModel):
     theta: float = Field(30.0)
     gw: float = Field(1.05)
     ghc: float = Field(0.80)
+    fluid_system: str = Field(
+        "auto",
+        description="Fluid system: 'auto' (inherit from well curves), 'gas', or 'oil'",
+    )
+    ggas: float = Field(0.15, description="Gas density (g/cc) for gas intervals")
+    ift_gas: float = Field(
+        70.0, description="Interfacial tension for gas-water systems (dyn/cm)"
+    )
+    use_fluid_typing: bool = Field(
+        True,
+        description="Whether to inherit single-well FLUID_TYPE, GAS_FLAG, and RHO_HC for interval buoyancy",
+    )
     loss: str = Field("bvw")
     pore_volume_weighted: bool = Field(False)
     equal_well_weights: bool = Field(False)
@@ -12804,6 +12965,13 @@ class WorkspaceExtractContactsRequest(BaseModel):
         True,
         description="Only extract contacts for zones containing confirmed hydrocarbon pay",
     )
+    fluid_system: Optional[str] = Field(
+        "auto", description="Fluid system: 'auto', 'gas_water', or 'oil_water'"
+    )
+    fwl: Optional[float] = Field(None, description="Global Free Water Level TVDSS")
+    fwl_by_zone: Optional[Dict[str, float]] = Field(
+        None, description="Per-zone Free Water Level mapping"
+    )
 
 
 @router.post(
@@ -12825,6 +12993,14 @@ def workspace_extract_and_save_contacts(
         if req.zones and "ZONES" in comb.columns:
             comb = comb[comb["ZONES"].isin(req.zones)]
 
+        fwl_dict: Dict[str, float] = {}
+        if req.fwl_by_zone:
+            fwl_dict.update(
+                {str(k): float(v) for k, v in req.fwl_by_zone.items() if v is not None}
+            )
+        if req.fwl is not None:
+            fwl_dict["default"] = float(req.fwl)
+
         contacts_df = extract_fluid_contacts_and_limits(
             df=comb,
             sw_pay_cutoff=req.sw_pay_cutoff,
@@ -12833,6 +13009,8 @@ def workspace_extract_and_save_contacts(
             vsh_cutoff=req.vsh_cutoff,
             min_sand_thickness=req.min_sand_thickness,
             require_pay=req.require_pay,
+            fluid_system=req.fluid_system or "auto",
+            fwl_dict=fwl_dict or None,
         )
 
         saved_count = 0

@@ -74,7 +74,9 @@
 			rafId = requestAnimationFrame(() => {
 				if (!plotContainer) return;
 				if (PlotlyLib && (plotContainer as any)._fullLayout) {
-					PlotlyLib.Plots.resize(plotContainer).then(syncPlotBounds).catch(syncPlotBounds);
+					PlotlyLib.Plots.resize(plotContainer)
+						.then(syncPlotBounds)
+						.catch(syncPlotBounds);
 				} else {
 					syncPlotBounds();
 				}
@@ -140,7 +142,13 @@
 			const wn = sr.well_names[i];
 			const d = sr.depths[i];
 			const s = sr.shf[i];
-			if (!wn || typeof d !== 'number' || s === null || s === undefined || !Number.isFinite(s)) {
+			if (
+				!wn ||
+				typeof d !== 'number' ||
+				s === null ||
+				s === undefined ||
+				!Number.isFinite(s)
+			) {
 				continue;
 			}
 			let arr = rawMap.get(wn);
@@ -229,13 +237,38 @@
 		return result;
 	});
 
-	const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+	const MONTH_NAMES = [
+		'Jan',
+		'Feb',
+		'Mar',
+		'Apr',
+		'May',
+		'Jun',
+		'Jul',
+		'Aug',
+		'Sep',
+		'Oct',
+		'Nov',
+		'Dec'
+	];
 	const MONTH_LOOKUP: Record<string, number> = {
-		JAN: 0, FEB: 1, MAR: 2, APR: 3, MAY: 4, JUN: 5,
-		JUL: 6, AUG: 7, SEP: 8, OCT: 9, NOV: 10, DEC: 11
+		JAN: 0,
+		FEB: 1,
+		MAR: 2,
+		APR: 3,
+		MAY: 4,
+		JUN: 5,
+		JUL: 6,
+		AUG: 7,
+		SEP: 8,
+		OCT: 9,
+		NOV: 10,
+		DEC: 11
 	};
 
-	function parseClientDateStr(raw: string | null | undefined): { label: string; iso: string } | null {
+	function parseClientDateStr(
+		raw: string | null | undefined
+	): { label: string; iso: string } | null {
 		if (!raw) return null;
 		const s = String(raw).trim();
 		if (!s || /^(none|null|n\/a|na|unknown|-999(\.25)?|0)$/i.test(s)) return null;
@@ -246,7 +279,9 @@
 		}
 
 		// ISO YYYY-MM-DD or YYYY/MM/DD or YYYY-MM
-		const isoMatch = s.match(/^(19\d\d|20\d\d)[-/.](0?[1-9]|1[0-2])(?:[-/.](0?[1-9]|[12]\d|3[01]))?/);
+		const isoMatch = s.match(
+			/^(19\d\d|20\d\d)[-/.](0?[1-9]|1[0-2])(?:[-/.](0?[1-9]|[12]\d|3[01]))?/
+		);
 		if (isoMatch) {
 			const yr = isoMatch[1];
 			const mIdx = parseInt(isoMatch[2], 10) - 1;
@@ -258,7 +293,9 @@
 		}
 
 		// DD-MMM-YYYY or DD/MMM/YYYY or DD MMM YYYY or MMM YYYY
-		const monMatch = s.toUpperCase().match(/\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[A-Z]*\b/);
+		const monMatch = s
+			.toUpperCase()
+			.match(/\b(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[A-Z]*\b/);
 		const yrMatch = s.match(/\b(19\d\d|20\d\d)\b/);
 		if (monMatch && yrMatch) {
 			const mIdx = MONTH_LOOKUP[monMatch[1]];
@@ -272,7 +309,9 @@
 		}
 
 		// DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY
-		const dmyMatch = s.match(/^(0?[1-9]|[12]\d|3[01])[-/.](0?[1-9]|1[0-2])[-/.](19\d\d|20\d\d)$/);
+		const dmyMatch = s.match(
+			/^(0?[1-9]|[12]\d|3[01])[-/.](0?[1-9]|1[0-2])[-/.](19\d\d|20\d\d)$/
+		);
 		if (dmyMatch) {
 			const day = dmyMatch[1].padStart(2, '0');
 			const mIdx = parseInt(dmyMatch[2], 10) - 1;
@@ -300,7 +339,9 @@
 		return { label: s.slice(0, 12), iso: '9999-12-31' };
 	}
 
-	function getWellDateDisplay(w: NonNullable<typeof projectData.stickPlotResult>['wells'][number]): {
+	function getWellDateDisplay(
+		w: NonNullable<typeof projectData.stickPlotResult>['wells'][number]
+	): {
 		label: string | null;
 		source: 'spud' | 'log' | null;
 		raw: string | null;
@@ -316,7 +357,12 @@
 		if (w.well_date) {
 			const src = w.well_date_source ?? (spudRaw ? 'spud' : logRaw ? 'log' : null);
 			const rawUsed = src === 'spud' ? spudRaw : src === 'log' ? logRaw : (spudRaw ?? logRaw);
-			const srcTitle = src === 'spud' ? 'Well Drilled (Spud Date)' : src === 'log' ? 'Log Acquired Date' : 'Well Date';
+			const srcTitle =
+				src === 'spud'
+					? 'Well Drilled (Spud Date)'
+					: src === 'log'
+						? 'Log Acquired Date'
+						: 'Well Date';
 			return {
 				label: w.well_date,
 				source: src,
@@ -395,7 +441,9 @@
 			});
 		}
 		if (sortMode === 'custom' && workbench.stickPlotCustomOrder.length > 0) {
-			const orderMap = new Map(workbench.stickPlotCustomOrder.map((name, idx) => [name, idx]));
+			const orderMap = new Map(
+				workbench.stickPlotCustomOrder.map((name, idx) => [name, idx])
+			);
 			return [...filtered].sort(
 				(a, b) => (orderMap.get(a.well_name) ?? 999) - (orderMap.get(b.well_name) ?? 999)
 			);
@@ -471,10 +519,7 @@
 		if (ptFits && Object.keys(ptFits).length > 0) {
 			const firstFit = Object.values(ptFits)[0];
 			if (firstFit && Number.isFinite(firstFit.a) && Number.isFinite(firstFit.b)) {
-				permEst = Math.max(
-					0.01,
-					Math.pow(10, firstFit.a * phit + firstFit.b)
-				);
+				permEst = Math.max(0.01, Math.pow(10, firstFit.a * phit + firstFit.b));
 			}
 		}
 
@@ -500,12 +545,14 @@
 			(fitKeys.length > 0 ? fits[fitKeys[Math.min(rt - 1, fitKeys.length - 1)]] : null);
 
 		const a = fit && Number.isFinite(fit.a) && fit.a > 0 ? Number(fit.a) : 0.22;
-		const b = fit && Number.isFinite(fit.b) && Math.abs(fit.b) > 0 ? Math.abs(Number(fit.b)) : 0.35;
+		const b =
+			fit && Number.isFinite(fit.b) && Math.abs(fit.b) > 0 ? Math.abs(Number(fit.b)) : 0.35;
 
 		if (model === 'skelt_harrison') {
 			const c = fit && Number.isFinite(fit.c) ? Number(fit.c) : 1.5;
 			const d = fit && Number.isFinite(fit.d) ? Number(fit.d) : 0.5;
-			const sw = 1.0 - a * Math.exp(-Math.pow(Math.max(b, 1e-4) / Math.max(hAboveFwl + d, 1e-4), c));
+			const sw =
+				1.0 - a * Math.exp(-Math.pow(Math.max(b, 1e-4) / Math.max(hAboveFwl + d, 1e-4), c));
 			return Math.max(0.02, Math.min(1.0, sw));
 		}
 		if (model === 'cuddy') {
@@ -528,7 +575,10 @@
 		const swirrVal =
 			(sp.swirrSource ?? 'poro_perm') === 'poro_perm'
 				? projectData.evalSwirrValue(phit, permEst, rt)
-				: Math.min(0.25, Math.max(0.04, 0.08 * Math.pow(permEst / Math.max(phit, 0.01), -0.12)));
+				: Math.min(
+						0.25,
+						Math.max(0.04, 0.08 * Math.pow(permEst / Math.max(phit, 0.01), -0.12))
+					);
 		return Math.max(swirrVal, Math.min(1.0, swirrVal + swn * (1.0 - swirrVal)));
 	}
 
@@ -608,6 +658,8 @@
 			// Dedicated non-null arrays for SVG 'tozerox' fill so Plotly never bridges diagonally across null gaps
 			const fillTvdArr: number[] = [];
 			const fillBvoArr: number[] = [];
+			const fillGasArr: number[] = [];
+			const fillOilArr: number[] = [];
 			const fillBvohArr: number[] = [];
 			let prevValidTvd: number | null = null;
 			const wellEffFwl = resolveEffectiveFwl(activeZone, w.zones);
@@ -626,6 +678,8 @@
 					// Clamp fill polygon back to x=0 across missing depth intervals
 					fillTvdArr.push(prevValidTvd, tvd);
 					fillBvoArr.push(0, 0);
+					fillGasArr.push(0, 0);
+					fillOilArr.push(0, 0);
 					fillBvohArr.push(0, 0);
 					// Break stroke lines across missing depth intervals
 					if (tvdArr.length > 0 && tvdArr[tvdArr.length - 1] !== null) {
@@ -649,6 +703,8 @@
 					// Keep fill anchored at x=0 in excluded zones so 'tozerox' never bridges across zones
 					fillTvdArr.push(tvd);
 					fillBvoArr.push(0);
+					fillGasArr.push(0);
+					fillOilArr.push(0);
 					fillBvohArr.push(0);
 					// Insert null break so line stroke doesn't bridge across excluded zones
 					if (tvdArr.length > 0 && tvdArr[tvdArr.length - 1] !== null) {
@@ -682,10 +738,11 @@
 					phit !== null &&
 					Number.isFinite(phit)
 				) {
-					const sampleFwl = resolveEffectiveFwl(
-						activeZone !== 'ALL' ? activeZone : zn,
-						[zn, ...w.zones]
-					) ?? wellEffFwl;
+					const sampleFwl =
+						resolveEffectiveFwl(activeZone !== 'ALL' ? activeZone : zn, [
+							zn,
+							...w.zones
+						]) ?? wellEffFwl;
 					shf = evalContinuousShfFallback(phit, tvd, sampleFwl);
 				}
 
@@ -694,9 +751,18 @@
 						? Math.max(0, Math.min(1, phit * (1 - shf)))
 						: w.bvoh[i];
 
-				// Map null BVO/BVOH to 0 in fill arrays so SVG 'tozerox' drops horizontally to 0 at null boundaries
+				const isGas =
+					(w.gas_flag && w.gas_flag[i] === 1) ||
+					(w.bvg && w.bvg[i] !== null && Number(w.bvg[i]) > 0.005);
+				const bvoVal = bvo !== null && Number.isFinite(bvo) ? Math.max(0, bvo) : 0;
+				const gasVal = isGas ? bvoVal : 0;
+				const oilVal = !isGas ? bvoVal : 0;
+
+				// Map null BVHC/BVOH to 0 in fill arrays so SVG 'tozerox' drops horizontally to 0 at null boundaries
 				fillTvdArr.push(tvd);
-				fillBvoArr.push(bvo !== null && Number.isFinite(bvo) ? Math.max(0, bvo) : 0);
+				fillBvoArr.push(bvoVal);
+				fillGasArr.push(gasVal);
+				fillOilArr.push(oilVal);
 				fillBvohArr.push(bvoh !== null && Number.isFinite(bvoh) ? Math.max(0, bvoh) : 0);
 
 				tvdArr.push(tvd);
@@ -712,7 +778,8 @@
 					bvoh,
 					phit,
 					swt,
-					shf
+					shf,
+					isGas
 				});
 			}
 
@@ -733,16 +800,34 @@
 				});
 			}
 
-			// BVO_Log Fill Trace (maps null -> 0 so SVG 'tozerox' never interpolates diagonally across null intervals)
-			if (fillTvdArr.length > 0) {
+			// Gas Fill Trace (maps null -> 0 so SVG 'tozerox' never interpolates diagonally across null intervals)
+			if (fillTvdArr.length > 0 && fillGasArr.some((v) => v > 0)) {
 				traces.push({
 					type: 'scatter',
 					mode: 'lines',
-					name: `BVO_FILL_${wIdx}`,
+					name: wIdx === 0 ? 'Gas (Log)' : `GAS_FILL_${wIdx}`,
 					showlegend: false,
 					xaxis: xAxisRef,
 					yaxis: 'y',
-					x: fillBvoArr,
+					x: fillGasArr,
+					y: fillTvdArr,
+					fill: 'tozerox',
+					fillcolor: 'rgba(239, 68, 68, 0.28)',
+					line: { width: 0, color: 'rgba(0,0,0,0)' },
+					hoverinfo: 'skip'
+				});
+			}
+
+			// Oil Fill Trace (maps null -> 0 so SVG 'tozerox' never interpolates diagonally across null intervals)
+			if (fillTvdArr.length > 0 && fillOilArr.some((v) => v > 0)) {
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: wIdx === 0 ? 'Oil (Log)' : `OIL_FILL_${wIdx}`,
+					showlegend: false,
+					xaxis: xAxisRef,
+					yaxis: 'y',
+					x: fillOilArr,
 					y: fillTvdArr,
 					fill: 'tozerox',
 					fillcolor: 'rgba(22, 163, 74, 0.22)',
@@ -751,25 +836,25 @@
 				});
 			}
 
-			// Primary BVO_Log = PHIT * (1 - SWT) Stroke Trace
+			// Primary BVHC_Log = PHIT * (1 - SWT) Stroke Trace
 			traces.push({
 				type: 'scatter',
 				mode: 'lines',
-				name: wIdx === 0 ? 'BVO (Log)' : undefined,
+				name: wIdx === 0 ? 'BVHC (Log)' : undefined,
 				showlegend: wIdx === 0,
 				xaxis: xAxisRef,
 				yaxis: 'y',
 				x: bvoArr,
 				y: tvdArr,
 				customdata: customDataArr,
-				line: { color: '#15803D', width: 1.5 },
+				line: { color: '#047857', width: 1.5 },
 				hovertemplate:
 					`<b>${w.well_name}</b><br>` +
 					'TVDSS: %{y:.1f} m<br>' +
-					'BVO (Log): %{x:.3f} v/v<extra></extra>'
+					'%{customdata.isGas ? "BVG (Gas)" : "BVO (Oil)"}: %{x:.3f} v/v<extra></extra>'
 			});
 
-			// BVO_SHF = PHIT * (1 - SHF) — tight 4px,2px dash + subtle fill for clean comparison against BVO (Log)
+			// BVHC_SHF = PHIT * (1 - SHF) — tight 4px,2px dash + subtle fill for clean comparison against BVHC (Log)
 			if (bvohArr.some((v) => v !== null && Number.isFinite(v))) {
 				if (fillTvdArr.length > 0) {
 					traces.push({
@@ -782,7 +867,7 @@
 						x: fillBvohArr,
 						y: fillTvdArr,
 						fill: 'tozerox',
-						fillcolor: 'rgba(220, 38, 38, 0.11)',
+						fillcolor: 'rgba(185, 28, 28, 0.10)',
 						line: { width: 0, color: 'rgba(0,0,0,0)' },
 						hoverinfo: 'skip'
 					});
@@ -790,22 +875,22 @@
 				traces.push({
 					type: 'scatter',
 					mode: 'lines',
-					name: wIdx === 0 ? 'BVO (SHF)' : undefined,
+					name: wIdx === 0 ? 'BVHC (SHF)' : undefined,
 					showlegend: wIdx === 0,
 					xaxis: xAxisRef,
 					yaxis: 'y',
 					x: bvohArr,
 					y: tvdArr,
 					customdata: customDataArr,
-					line: { color: '#DC2626', width: 1.55, dash: '4px,2px' },
+					line: { color: '#B91C1C', width: 1.6, dash: '4px,2px' },
 					hovertemplate:
 						`<b>${w.well_name}</b><br>` +
 						'TVDSS: %{y:.1f} m<br>' +
-						'BVO (SHF): %{x:.3f} v/v<extra></extra>'
+						'BVHC (SHF): %{x:.3f} v/v<extra></extra>'
 				});
 			}
 
-			// Fluid Contact Background Shading Bands & Contact Lines (like legacy stick_plot)
+			// Fluid Contact Background Shading Bands & Contact Lines (Consistent: Red=Gas, Green=Oil, Blue=Water)
 			if (workbench.stickPlotShowContacts) {
 				const contactMap: Record<string, number> = {};
 				for (const c of w.contacts || []) {
@@ -817,75 +902,163 @@
 				const wellTopTvd = w.min_tvd;
 				const wellBotTvd = w.max_tvd;
 
-				const goc = contactMap['GOC'] ?? contactMap['GDT'] ?? contactMap['GWC'] ?? null;
-				const gut = contactMap['GUT'] ?? wellTopTvd;
-				const owc =
-					contactMap['OWC'] ??
-					contactMap['ODT'] ??
-					contactMap['FWL'] ??
-					effFwl ??
-					null;
-				const out = contactMap['OUT'] ?? (goc !== null ? goc : wellTopTvd);
-				const wut = contactMap['WUT'] ?? owc ?? goc ?? null;
+				const fs = projectData.shfParams.fluidSystem ?? 'auto';
+				const hasGasLog = Boolean(
+					w.gas_flag?.some((f) => f === 1) ||
+					(w.bvg && w.bvg.some((v) => v !== null && Number(v) > 0.005))
+				);
+				const hasOilLog = Boolean(
+					w.oil_flag?.some((f) => f === 1) ||
+					(w.bvo_pure && w.bvo_pure.some((v) => v !== null && Number(v) > 0.005))
+				);
 
-				// 1. Gas Band (Red translucent background, matching legacy stick_plot FLUID_FLAG==2)
-				if (goc !== null && goc > gut) {
-					shapes.push({
-						type: 'rect',
-						xref: xAxisRef,
-						yref: 'y',
-						x0: 0,
-						x1: xMax,
-						y0: Math.max(wellTopTvd, gut),
-						y1: Math.min(wellBotTvd, goc),
-						fillcolor: 'rgba(239, 68, 68, 0.13)',
-						line: { width: 0 },
-						layer: 'below'
-					});
+				const goc = contactMap['GOC'] ?? null;
+				const gdt = contactMap['GDT'] ?? null;
+				const gwc = contactMap['GWC'] ?? null;
+				const owc = contactMap['OWC'] ?? contactMap['ODT'] ?? null;
+				const fwl = contactMap['FWL'] ?? effFwl ?? null;
+
+				// Regime determination:
+				// - 'gas_water' or 'gas' is strictly Gas-Water (no oil band)
+				// - 'oil_water' or 'oil' is strictly Oil-Water (no gas band)
+				// - 'auto' evaluates logs/contacts: if gas and no oil -> Gas-Water; if oil and no gas -> Oil-Water; if both -> mixed
+				const isGasRegime =
+					fs === 'gas_water' ||
+					fs === 'gas' ||
+					(fs === 'auto' && hasGasLog && !hasOilLog) ||
+					(gwc !== null && owc === null && goc === null);
+
+				const isOilRegime =
+					fs === 'oil_water' ||
+					fs === 'oil' ||
+					(fs === 'auto' && hasOilLog && !hasGasLog) ||
+					(owc !== null && gwc === null && goc === null);
+
+				if (isGasRegime) {
+					// 1. Gas-Water Regime: Red for Gas above GWC/FWL, Blue for Water below
+					const gasWaterContact = gwc ?? gdt ?? fwl ?? wellBotTvd;
+					if (gasWaterContact > wellTopTvd) {
+						shapes.push({
+							type: 'rect',
+							xref: xAxisRef,
+							yref: 'y',
+							x0: 0,
+							x1: xMax,
+							y0: wellTopTvd,
+							y1: Math.min(wellBotTvd, gasWaterContact),
+							fillcolor: 'rgba(239, 68, 68, 0.12)', // Red for Gas
+							line: { width: 0 },
+							layer: 'below'
+						});
+					}
+					if (wellBotTvd > gasWaterContact) {
+						shapes.push({
+							type: 'rect',
+							xref: xAxisRef,
+							yref: 'y',
+							x0: 0,
+							x1: xMax,
+							y0: Math.max(wellTopTvd, gasWaterContact),
+							y1: wellBotTvd,
+							fillcolor: 'rgba(37, 99, 235, 0.12)', // Blue for Water
+							line: { width: 0 },
+							layer: 'below'
+						});
+					}
+				} else if (isOilRegime) {
+					// 2. Oil-Water Regime: Green for Oil above OWC/FWL, Blue for Water below
+					const oilWaterContact = owc ?? fwl ?? wellBotTvd;
+					if (oilWaterContact > wellTopTvd) {
+						shapes.push({
+							type: 'rect',
+							xref: xAxisRef,
+							yref: 'y',
+							x0: 0,
+							x1: xMax,
+							y0: wellTopTvd,
+							y1: Math.min(wellBotTvd, oilWaterContact),
+							fillcolor: 'rgba(22, 163, 74, 0.12)', // Green for Oil
+							line: { width: 0 },
+							layer: 'below'
+						});
+					}
+					if (wellBotTvd > oilWaterContact) {
+						shapes.push({
+							type: 'rect',
+							xref: xAxisRef,
+							yref: 'y',
+							x0: 0,
+							x1: xMax,
+							y0: Math.max(wellTopTvd, oilWaterContact),
+							y1: wellBotTvd,
+							fillcolor: 'rgba(37, 99, 235, 0.12)', // Blue for Water
+							line: { width: 0 },
+							layer: 'below'
+						});
+					}
+				} else {
+					// 3. Mixed Regime (Gas Cap over Oil Leg over Water)
+					const gasBase = goc ?? gdt ?? gwc ?? (fwl !== null ? fwl - 15 : wellTopTvd);
+					const oilBase = owc ?? fwl ?? wellBotTvd;
+
+					// Red for Gas
+					if (gasBase > wellTopTvd) {
+						shapes.push({
+							type: 'rect',
+							xref: xAxisRef,
+							yref: 'y',
+							x0: 0,
+							x1: xMax,
+							y0: wellTopTvd,
+							y1: Math.min(wellBotTvd, gasBase),
+							fillcolor: 'rgba(239, 68, 68, 0.12)', // Red for Gas
+							line: { width: 0 },
+							layer: 'below'
+						});
+					}
+					// Green for Oil
+					if (oilBase > gasBase) {
+						shapes.push({
+							type: 'rect',
+							xref: xAxisRef,
+							yref: 'y',
+							x0: 0,
+							x1: xMax,
+							y0: Math.max(wellTopTvd, gasBase),
+							y1: Math.min(wellBotTvd, oilBase),
+							fillcolor: 'rgba(22, 163, 74, 0.12)', // Green for Oil
+							line: { width: 0 },
+							layer: 'below'
+						});
+					}
+					// Blue for Water
+					if (wellBotTvd > oilBase) {
+						shapes.push({
+							type: 'rect',
+							xref: xAxisRef,
+							yref: 'y',
+							x0: 0,
+							x1: xMax,
+							y0: Math.max(wellTopTvd, oilBase),
+							y1: wellBotTvd,
+							fillcolor: 'rgba(37, 99, 235, 0.12)', // Blue for Water
+							line: { width: 0 },
+							layer: 'below'
+						});
+					}
 				}
 
-				// 2. Oil Band (Green translucent background, matching legacy stick_plot FLUID_FLAG==1)
-				if (owc !== null && owc > out) {
-					shapes.push({
-						type: 'rect',
-						xref: xAxisRef,
-						yref: 'y',
-						x0: 0,
-						x1: xMax,
-						y0: Math.max(wellTopTvd, out),
-						y1: Math.min(wellBotTvd, owc),
-						fillcolor: 'rgba(22, 163, 74, 0.12)',
-						line: { width: 0 },
-						layer: 'below'
-					});
-				}
-
-				// 3. Water Zone Band (Blue translucent background below OWC/WUT/FWL, matching legacy FLUID_FLAG==0)
-				if (wut !== null && wellBotTvd > wut) {
-					shapes.push({
-						type: 'rect',
-						xref: xAxisRef,
-						yref: 'y',
-						x0: 0,
-						x1: xMax,
-						y0: Math.max(wellTopTvd, wut),
-						y1: wellBotTvd,
-						fillcolor: 'rgba(37, 99, 235, 0.12)',
-						line: { width: 0 },
-						layer: 'below'
-					});
-				}
-
-				// Contact Horizontal Lines (GOC, OWC, ODT, etc.)
+				// Render Contact Lines
+				const renderedContactTvds: number[] = [];
 				for (const c of w.contacts || []) {
 					if (!Number.isFinite(c.tvd)) continue;
 					const cType = c.type.toUpperCase();
-					const col =
-						cType.startsWith('G')
-							? '#DC2626'
-							: cType.startsWith('O')
-								? '#15803D'
-								: '#1D4ED8';
+					const col = cType.startsWith('G')
+						? '#DC2626'
+						: cType.startsWith('O')
+							? '#15803D'
+							: '#1D4ED8';
+					renderedContactTvds.push(c.tvd);
 					shapes.push({
 						type: 'line',
 						xref: xAxisRef,
@@ -906,7 +1079,44 @@
 						showarrow: false,
 						text: `${cType} ${c.tvd.toFixed(0)}m`,
 						font: { family: 'JetBrains Mono', size: 8.5, color: col },
-						bgcolor: 'rgba(255,255,255,0.82)'
+						bgcolor: 'rgba(255,255,255,0.85)'
+					});
+				}
+
+				// Modeled Contact Line from SHF (GWC for Gas, OWC for Oil)
+				const optContactTvd = projectData.shfResult?.owc;
+				if (
+					typeof optContactTvd === 'number' &&
+					Number.isFinite(optContactTvd) &&
+					!renderedContactTvds.some((tv) => Math.abs(tv - optContactTvd) < 1.0)
+				) {
+					const modeledType = isGasRegime ? 'GWC' : isOilRegime ? 'OWC' : 'Contact';
+					const modeledCol = isGasRegime
+						? '#DC2626'
+						: isOilRegime
+							? '#15803D'
+							: '#D97706';
+					shapes.push({
+						type: 'line',
+						xref: xAxisRef,
+						yref: 'y',
+						x0: 0,
+						x1: xMax,
+						y0: optContactTvd,
+						y1: optContactTvd,
+						line: { color: modeledCol, width: 1.6, dash: 'dot' }
+					});
+					annotations.push({
+						xref: xAxisRef,
+						yref: 'y',
+						x: rightLabelX,
+						y: optContactTvd,
+						xanchor: 'right',
+						yanchor: 'bottom',
+						showarrow: false,
+						text: `${modeledType} ${optContactTvd.toFixed(0)}m`,
+						font: { family: 'JetBrains Mono', size: 8.5, color: modeledCol },
+						bgcolor: 'rgba(255,255,255,0.85)'
 					});
 				}
 
@@ -1079,7 +1289,9 @@
 			maxTvd = projectData.stickPlotResult?.max_tvd ?? 2500;
 		}
 		const pad = Math.max(5, (maxTvd - minTvd) * 0.04);
-		const currentYRange = untrack(() => (yRange ? ([yRange[0], yRange[1]] as [number, number]) : null));
+		const currentYRange = untrack(() =>
+			yRange ? ([yRange[0], yRange[1]] as [number, number]) : null
+		);
 		const computedRange: [number, number] = currentYRange ?? [
 			Number((maxTvd + pad).toFixed(1)),
 			Number((minTvd - pad).toFixed(1))
@@ -1201,7 +1413,10 @@
 						typeof ev?.['yaxis.range[1]'] === 'number'
 					) {
 						yRange = [ev['yaxis.range[0]'], ev['yaxis.range[1]']];
-					} else if (Array.isArray(ev?.['yaxis.range']) && ev['yaxis.range'].length === 2) {
+					} else if (
+						Array.isArray(ev?.['yaxis.range']) &&
+						ev['yaxis.range'].length === 2
+					) {
 						yRange = [ev['yaxis.range'][0], ev['yaxis.range'][1]];
 					}
 				});
@@ -1270,15 +1485,19 @@
 			</div>
 
 			{#if (projectData.stickPlotResult?.skipped_no_tvd_wells?.length ?? projectData.wellsWithoutTvd.length) > 0}
-				{@const skippedList =
-					projectData.stickPlotResult?.skipped_no_tvd_wells?.length
-						? projectData.stickPlotResult.skipped_no_tvd_wells
-						: projectData.wellsWithoutTvd.map((w) => w.name)}
+				{@const skippedList = projectData.stickPlotResult?.skipped_no_tvd_wells?.length
+					? projectData.stickPlotResult.skipped_no_tvd_wells
+					: projectData.wellsWithoutTvd.map((w) => w.name)}
 				<span
-					title="Wells excluded because they lack TVDSS/TVD curve or directional survey (TVDSS ≠ MD): {skippedList.join(', ')}"
+					title="Wells excluded because they lack TVDSS/TVD curve or directional survey (TVDSS ≠ MD): {skippedList.join(
+						', '
+					)}"
 					class="inline-flex h-5 shrink-0 items-center gap-1 rounded-xs border border-amber-300 bg-amber-50 px-1.5 text-[10px] font-semibold text-amber-800"
 				>
-					<span>⚠ {skippedList.length} well{skippedList.length === 1 ? '' : 's'} without TVDSS excluded</span>
+					<span
+						>⚠ {skippedList.length} well{skippedList.length === 1 ? '' : 's'} without TVDSS
+						excluded</span
+					>
 				</span>
 			{/if}
 		</div>
@@ -1362,7 +1581,7 @@
 				{@const wDate = getWellDateDisplay(well)}
 				<div
 					style="left: {leftPct}%; width: {widthPct}%;"
-					class="absolute inset-y-0 flex flex-col justify-between border-x px-1 py-0.5 overflow-hidden transition-colors {isActiveWell
+					class="absolute inset-y-0 flex flex-col justify-between overflow-hidden border-x px-1 py-0.5 transition-colors {isActiveWell
 						? 'border-blue-300 bg-blue-50/40'
 						: 'border-slate-200/70'}"
 				>
@@ -1380,7 +1599,9 @@
 						<button
 							type="button"
 							onclick={() => projectData.selectWell(well.well_name)}
-							title="Click to inspect {well.well_name} (Top TVDSS: {dispTopTvd.toFixed(1)}m{wDate.label ? ` · ${wDate.tooltip}` : ''})"
+							title="Click to inspect {well.well_name} (Top TVDSS: {dispTopTvd.toFixed(
+								1
+							)}m{wDate.label ? ` · ${wDate.tooltip}` : ''})"
 							class="truncate font-sans text-[9.5px] font-bold hover:underline {isActiveWell
 								? 'text-[var(--accent-primary)]'
 								: 'text-[var(--text-primary)]'}"
@@ -1401,12 +1622,16 @@
 					<!-- Row 2: Well Drilled / Log Acquisition Date (Month & Year) -->
 					<div
 						title={wDate.tooltip}
-						class="mono-num flex items-center justify-center truncate rounded-2xs bg-slate-100/80 px-1 py-[1px] text-[7.5px] font-medium text-slate-600"
+						class="mono-num rounded-2xs flex items-center justify-center truncate bg-slate-100/80 px-1 py-[1px] text-[7.5px] font-medium text-slate-600"
 					>
 						{#if wDate.label}
 							<span class="truncate">
 								<span class="text-[7px] font-normal text-slate-400">
-									{wDate.source === 'spud' ? 'Spud:' : wDate.source === 'log' ? 'Log:' : ''}
+									{wDate.source === 'spud'
+										? 'Spud:'
+										: wDate.source === 'log'
+											? 'Log:'
+											: ''}
 								</span>
 								<span class="font-semibold text-slate-700">{wDate.label}</span>
 							</span>
@@ -1417,30 +1642,41 @@
 
 					<!-- Row 3: Top TVDSS & Cumulative Hydrocarbon Column (HCPV·m) -->
 					<div
-						class="mono-num flex items-center justify-between whitespace-nowrap text-[7.5px] text-[var(--text-muted)]"
+						class="mono-num flex items-center justify-between text-[7.5px] whitespace-nowrap text-[var(--text-muted)]"
 					>
-						<span title="Top TVDSS ({workbench.stickPlotZoneFilter})">Top:{dispTopTvd.toFixed(0)}m</span>
-						<span class="font-semibold text-emerald-700" title="Cumulative Hydrocarbon Pore Volume Column ({workbench.stickPlotZoneFilter})">
+						<span title="Top TVDSS ({workbench.stickPlotZoneFilter})"
+							>Top:{dispTopTvd.toFixed(0)}m</span
+						>
+						<span
+							class="font-semibold text-emerald-700"
+							title="Cumulative Hydrocarbon Pore Volume Column ({workbench.stickPlotZoneFilter})"
+						>
 							HCPV:{dispHcpv.toFixed(2)}m
 						</span>
 					</div>
 
-					<!-- Row 4: BVO_Log (Green) & BVO_SHF (Red) Scale Header -->
+					<!-- Row 4: BVHC_Log (Green/Red) & BVHC_SHF (Red Dashed) Scale Header -->
 					<div class="flex flex-col">
-						<div class="mono-num flex items-center justify-between text-[8px] font-semibold">
+						<div
+							class="mono-num flex items-center justify-between text-[8px] font-semibold"
+						>
 							<span class="text-emerald-700">0</span>
 							<span class="font-sans text-[8px] font-bold text-slate-700">
 								<span class="text-emerald-700">BVO</span>
 								/
-								<span class="text-red-600">SHF</span>
+								<span class="text-red-600">BVG</span>
+								/
+								<span class="font-bold text-red-700">SHF</span>
 							</span>
 							<span class="text-red-600">0.4</span>
 						</div>
 						<div class="mt-[1px] flex w-full items-center gap-0.5">
-							<div class="h-[1.5px] flex-1 bg-emerald-700"></div>
+							<div class="h-[1.5px] flex-1 bg-emerald-700" title="Oil (Log)"></div>
+							<div class="h-[1.5px] flex-1 bg-red-600" title="Gas (Log)"></div>
 							<div
 								class="h-[1.5px] flex-1"
-								style="background: repeating-linear-gradient(to right, #DC2626 0 4px, transparent 4px 6px);"
+								title="SHF Model"
+								style="background: repeating-linear-gradient(to right, #B91C1C 0 4px, transparent 4px 6px);"
 							></div>
 						</div>
 					</div>
@@ -1462,13 +1698,17 @@
 				class="flex h-full w-full flex-col items-center justify-center gap-2 p-6 text-center"
 			>
 				<div class="text-xs font-semibold text-[var(--text-primary)]">
-					Multi-Well Stick Plot Disabled — No Wells with True Vertical Depth Subsea (TVDSS)
+					Multi-Well Stick Plot Disabled — No Wells with True Vertical Depth Subsea
+					(TVDSS)
 				</div>
 				<p class="max-w-md text-[11px] leading-relaxed text-[var(--text-secondary)]">
-					None of the selected wells have a <span class="mono-num font-semibold">TVDSS</span> /
-					<span class="mono-num font-semibold">TVD</span> curve or directional survey (&ge; 2 stations).
-					True Vertical Depth Subsea is never assumed equal to Measured Depth (MD). Import directional
-					surveys or TVDSS/TVD curves to enable structural TVDSS stick plots.
+					None of the selected wells have a <span class="mono-num font-semibold"
+						>TVDSS</span
+					>
+					/
+					<span class="mono-num font-semibold">TVD</span> curve or directional survey (&ge;
+					2 stations). True Vertical Depth Subsea is never assumed equal to Measured Depth (MD).
+					Import directional surveys or TVDSS/TVD curves to enable structural TVDSS stick plots.
 				</p>
 				<button
 					type="button"
@@ -1538,16 +1778,18 @@
 
 		<div class="flex items-center gap-2 text-[10px]">
 			<span class="inline-flex items-center gap-1">
-				<span class="inline-block h-2 w-2 rounded-xs bg-red-500/30 border border-red-500"></span>
+				<span class="inline-block h-2 w-2 rounded-xs border border-red-500 bg-red-500/30"
+				></span>
 				Gas
 			</span>
 			<span class="inline-flex items-center gap-1">
-				<span class="inline-block h-2 w-2 rounded-xs bg-emerald-500/30 border border-emerald-600"
+				<span
+					class="inline-block h-2 w-2 rounded-xs border border-emerald-600 bg-emerald-500/30"
 				></span>
 				Oil
 			</span>
 			<span class="inline-flex items-center gap-1">
-				<span class="inline-block h-2 w-2 rounded-xs bg-blue-500/30 border border-blue-600"
+				<span class="inline-block h-2 w-2 rounded-xs border border-blue-600 bg-blue-500/30"
 				></span>
 				Water
 			</span>

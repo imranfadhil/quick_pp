@@ -444,7 +444,11 @@ class ProjectDataState {
 		ift: 30.0,
 		theta: 30.0,
 		gw: 1.05,
-		ghc: 0.8
+		ghc: 0.8,
+		fluidSystem: 'auto' as 'auto' | 'gas' | 'oil' | 'gas_water' | 'oil_water',
+		useFluidTyping: true,
+		ggas: 0.15,
+		iftGas: 70.0
 	});
 
 	swirrConfig = $state<SwirrModelConfig>({
@@ -604,6 +608,10 @@ class ProjectDataState {
 			}
 		>;
 		fwl_by_zone?: Record<string, number>;
+		owc?: number | null;
+		gwc?: number | null;
+		contact?: number | null;
+		contact_type?: string | null;
 		scal_data?: {
 			pc: number[];
 			sw: number[];
@@ -668,7 +676,11 @@ class ProjectDataState {
 			swt: (number | null)[];
 			shf: (number | null)[];
 			bvo: (number | null)[];
+			bvg?: (number | null)[];
+			bvo_pure?: (number | null)[];
 			bvoh: (number | null)[];
+			gas_flag?: number[];
+			oil_flag?: number[];
 			fluid_flag: number[];
 		}>;
 	} | null>(null);
@@ -1159,6 +1171,10 @@ class ProjectDataState {
 		this.shfParams.theta = 30.0;
 		this.shfParams.gw = 1.05;
 		this.shfParams.ghc = 0.8;
+		this.shfParams.fluidSystem = 'auto';
+		this.shfParams.useFluidTyping = true;
+		this.shfParams.ggas = 0.15;
+		this.shfParams.iftGas = 70.0;
 		this.shfOptParams.solvePerZone = false;
 		this.shfResult = null;
 		this.shfSavedFits = null;

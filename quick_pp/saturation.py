@@ -1749,7 +1749,8 @@ def predict_sw_shm(
 
     if model_clean in ("leverett_j", "j"):
         pc = h * (gw - ghc) * conv
-        denom = max(float(ift) * abs(np.cos(np.radians(theta))), 1e-9)
+        ift_arr = np.broadcast_to(np.asarray(ift, dtype=float), (n,))
+        denom = np.maximum(ift_arr * abs(np.cos(np.radians(theta))), 1e-9)
         j_val = (
             0.21665
             * (pc / denom)
@@ -1854,7 +1855,9 @@ def analyze_transition_zone(
     p = norm_map["default"]
     model_clean = model.strip().lower()
     conv = _gravity_conversion_factor(unit)
-    delta_rho_grad = max((gw - ghc) * conv, 1e-6)
+    ghc_rep = float(np.nanmedian(ghc)) if not np.isscalar(ghc) else float(ghc)
+    ift_rep = float(np.nanmedian(ift)) if not np.isscalar(ift) else float(ift)
+    delta_rho_grad = max((gw - ghc_rep) * conv, 1e-6)
 
     phi_rep = float(np.nanmedian(phit)) if not np.isscalar(phit) else float(phit)
     perm_rep = float(np.nanmedian(perm)) if not np.isscalar(perm) else float(perm)
@@ -1864,7 +1867,7 @@ def analyze_transition_zone(
     if model_clean in ("leverett_j", "j"):
         a = max(float(p.get("a", 0.15)), 1e-6)
         b = max(abs(float(p.get("b", 1.5))), 1e-3)
-        denom = float(ift) * abs(np.cos(np.radians(theta)))
+        denom = float(ift_rep) * abs(np.cos(np.radians(theta)))
         rqi_term = 0.21665 * np.sqrt(perm_rep / phi_rep)
 
         # Entry capillary pressure at Swn = 1.0 -> J_entry = a
@@ -1904,6 +1907,8 @@ def analyze_transition_zone(
     return {
         "fwl": float(fwl),
         "owc": owc,
+        "gwc": owc,
+        "contact": owc,
         "ttz": ttz,
         "capillary_entry_height": h_entry,
         "transition_zone_thickness": tz_thickness,
@@ -1920,6 +1925,10 @@ def optimize_fwl(
     theta: float = 30.0,
     gw: float = 1.05,
     ghc: float = 0.80,
+    fluid_system: str = "auto",
+    ggas: float = 0.15,
+    ift_gas: float = 70.0,
+    use_fluid_typing: bool = True,
     swirr=None,
     depth_col: str = "DEPTH",
     sw_col: str = "SWT",
@@ -2178,6 +2187,45 @@ def optimize_fwl(
     )
     wells_arr = work_df[well_col].astype(str).to_numpy()
 
+    # 2b. Fluid phase resolution (Gas vs Oil buoyancy & IFT)
+    fl_sys = str(fluid_system or "auto").strip().lower()
+    gas_mask_full = np.zeros(len(work_df), dtype=bool)
+    if "GAS_FLAG" in work_df.columns:
+        gas_mask_full = (
+            pd.to_numeric(work_df["GAS_FLAG"], errors="coerce").fillna(0) == 1
+        ).to_numpy()
+    elif "FLUID_TYPE" in work_df.columns:
+        gas_mask_full = (
+            work_df["FLUID_TYPE"].astype(str).str.upper() == "GAS"
+        ).to_numpy()
+    elif "VGAS" in work_df.columns:
+        gas_mask_full = (
+            pd.to_numeric(work_df["VGAS"], errors="coerce").fillna(0.0) > 0.01
+        ).to_numpy()
+
+    if fl_sys in ("gas", "gas_water", "gas-water"):
+        ghc_sample_arr = np.full(len(work_df), float(ggas), dtype=float)
+        ift_sample_arr = np.full(len(work_df), float(ift_gas), dtype=float)
+        is_gas_sys = True
+    elif fl_sys in ("oil", "oil_water", "oil-water"):
+        ghc_sample_arr = np.full(len(work_df), float(ghc), dtype=float)
+        ift_sample_arr = np.full(len(work_df), float(ift), dtype=float)
+        is_gas_sys = False
+    else:
+        # Auto-detect from single-well fluid typing curves
+        is_gas_sys = bool(np.any(gas_mask_full))
+        ghc_sample_arr = np.where(gas_mask_full, float(ggas), float(ghc))
+        ift_sample_arr = np.where(gas_mask_full, float(ift_gas), float(ift))
+
+        if use_fluid_typing and "RHO_HC" in work_df.columns:
+            rho_hc_vals = pd.to_numeric(work_df["RHO_HC"], errors="coerce").to_numpy()
+            valid_rho = (
+                np.isfinite(rho_hc_vals) & (rho_hc_vals >= 0.05) & (rho_hc_vals <= 0.95)
+            )
+            ghc_sample_arr = np.where(valid_rho, rho_hc_vals, ghc_sample_arr)
+
+    contact_type = "GWC" if is_gas_sys else "OWC"
+
     # 3. Build valid reservoir mask for optimization
     model_clean = model.strip().lower()
     is_leverett = model_clean in ("leverett_j", "j")
@@ -2286,10 +2334,10 @@ def optimize_fwl(
                 if isinstance(swirr, str) and swirr in work_df.columns
                 else swirr
             ),
-            ift=ift,
+            ift=ift_sample_arr[subset_mask],
             theta=theta,
             gw=gw,
-            ghc=ghc,
+            ghc=ghc_sample_arr[subset_mask],
             non_reservoir_flags=non_reservoir_flags,
             unit=unit,
             clip=True,
@@ -2419,10 +2467,10 @@ def optimize_fwl(
             model=model,
             shm_params=active_shm_params,
             swirr=swirr,
-            ift=ift,
+            ift=ift_sample_arr,
             theta=theta,
             gw=gw,
-            ghc=ghc,
+            ghc=ghc_sample_arr,
             depth_col=d_col,
             phit_col=phit_col,
             perm_col=perm_col,
@@ -2446,16 +2494,20 @@ def optimize_fwl(
         shm_params=active_shm_params,
         phit=tz_phit,
         perm=tz_perm,
-        ift=ift,
+        ift=ift_sample_arr[hc_sample_mask]
+        if np.any(hc_sample_mask)
+        else ift_sample_arr[res_mask],
         theta=theta,
         gw=gw,
-        ghc=ghc,
+        ghc=ghc_sample_arr[hc_sample_mask]
+        if np.any(hc_sample_mask)
+        else ghc_sample_arr[res_mask],
         unit=unit,
     )
 
     conv = _gravity_conversion_factor(unit)
     hafwl = np.maximum(opt_fwl - depth_arr, 0.0)
-    pc_res = hafwl * (gw - ghc) * conv
+    pc_res = hafwl * (gw - ghc_sample_arr) * conv
 
     tz_flag = np.where(
         depth_arr >= opt_fwl,
@@ -2515,10 +2567,10 @@ def optimize_fwl(
             shm_params=active_shm_params,
             phit=w_phi,
             perm=w_perm,
-            ift=ift,
+            ift=ift_sample_arr[w_mask],
             theta=theta,
             gw=gw,
-            ghc=ghc,
+            ghc=ghc_sample_arr[w_mask],
             unit=unit,
         )
 
@@ -2688,10 +2740,10 @@ def optimize_fwl(
                 shm_params=active_shm_params,
                 phit=z_tz_phi,
                 perm=z_tz_perm,
-                ift=ift,
+                ift=ift_sample_arr[z_mask],
                 theta=theta,
                 gw=gw,
-                ghc=ghc,
+                ghc=ghc_sample_arr[z_mask],
                 unit=unit,
             )
 
@@ -2703,10 +2755,10 @@ def optimize_fwl(
                     model=model,
                     shm_params=active_shm_params,
                     swirr=swirr[z_all_mask] if isinstance(swirr, np.ndarray) else swirr,
-                    ift=ift,
+                    ift=ift_sample_arr[z_all_mask],
                     theta=theta,
                     gw=gw,
-                    ghc=ghc,
+                    ghc=ghc_sample_arr[z_all_mask],
                     depth_col=d_col,
                     phit_col=phit_col,
                     perm_col=perm_col,
@@ -2723,7 +2775,7 @@ def optimize_fwl(
             sw_shm_full[z_all_mask] = z_sw_pred_all
             z_hafwl = np.maximum(fwl_zone_opt - depth_arr[z_all_mask], 0.0)
             hafwl[z_all_mask] = z_hafwl
-            pc_res[z_all_mask] = z_hafwl * (gw - ghc) * conv
+            pc_res[z_all_mask] = z_hafwl * (gw - ghc_sample_arr[z_all_mask]) * conv
 
             z_obs = sw_log_arr[z_mask]
             z_pred = sw_shm_full[z_mask]
@@ -2745,6 +2797,9 @@ def optimize_fwl(
                     "d_max": round(z_d_max, 2),
                     "fwl": round(float(fwl_zone_opt), 2),
                     "owc": round(float(z_tz["owc"]), 2),
+                    "gwc": round(float(z_tz["owc"]), 2) if is_gas_sys else None,
+                    "contact": round(float(z_tz["owc"]), 2),
+                    "contact_type": contact_type,
                     "ttz": round(float(z_tz["ttz"]), 2),
                     "capillary_entry_height": round(
                         float(z_tz["capillary_entry_height"]), 2
@@ -2792,12 +2847,16 @@ def optimize_fwl(
         zone_col=zone_col,
         pressure_df=pressure_df,
         fwl_dict=fwl_by_zone or {"default": opt_fwl},
+        fluid_system=fl_sys,
     )
 
     return {
         "fwl": opt_fwl,
         "fwl_by_zone": fwl_by_zone,
         "owc": tz_info["owc"],
+        "gwc": tz_info["owc"] if is_gas_sys else None,
+        "contact": tz_info["owc"],
+        "contact_type": contact_type,
         "ttz": tz_info["ttz"],
         "capillary_entry_height": tz_info["capillary_entry_height"],
         "transition_zone_thickness": tz_info["transition_zone_thickness"],
@@ -2835,6 +2894,7 @@ def extract_fluid_contacts_and_limits(
     min_sand_thickness: float = 1.0,
     min_sand_samples: int = 5,
     require_pay: bool = True,
+    fluid_system: str = "auto",
 ) -> pd.DataFrame:
     """Extract comprehensive petrophysical fluid limits and contacts per well and per zone.
 
@@ -3021,8 +3081,15 @@ def extract_fluid_contacts_and_limits(
         if require_pay and not np.any(is_hc):
             continue
 
-        # Gas vs Oil separation if gas indicator available
-        if has_gas_curve:
+        # Gas vs Oil separation if gas indicator or fluid system specified
+        fl_sys_norm = str(fluid_system or "auto").strip().lower()
+        if fl_sys_norm in ("gas", "gas_water", "gas-water"):
+            is_gas = is_hc
+            is_oil = np.zeros(len(depths), dtype=bool)
+        elif fl_sys_norm in ("oil", "oil_water", "oil-water"):
+            is_gas = np.zeros(len(depths), dtype=bool)
+            is_oil = is_hc
+        elif has_gas_curve:
             gas_col = "GAS_FLAG" if "GAS_FLAG" in valid.columns else "IS_GAS"
             is_gas = is_hc & (valid[gas_col].to_numpy() > 0.5)
             is_oil = is_hc & ~is_gas
