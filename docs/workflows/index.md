@@ -18,11 +18,13 @@ flowchart TD
             SW5 --> SW6["6. Reservoir Summary"]
             SW6 --> SW7["7. Well CPI Report"]
         end
-        subgraph SW_Stand["Standalone Lab Module"]
+        subgraph SW_Stand["Standalone Specialized Modules"]
             SW_LAB["Core & Pc Prep\n(Depth Shift, Stress Corrections, Lab Pc)"]
+            SW_TOC["Source Rock & TOC\n(Passey Delta Log R, LOM & Maturity)"]
         end
         SW_LAB -.->|Calibrated Core & Pc| SW3
         SW_LAB -.->|Calibrated Core Perm| SW4
+        SW_TOC -.->|TOC & Source Flags| SW3
     end
 
     subgraph MultiWellSpace["Multi-Well Space (Field Scale)"]
@@ -75,10 +77,11 @@ The right-pane crossplot selector shows only plots supported by the active singl
 | **Step 2** | `ancillary` | `InspectorAncillary.svelte` | [`#sw-step-2-ancillary`](single_well.md#sw-step-2-ancillary) | Minimum curvature trajectory & tops ingestion |
 | **Step 3** | `litho-poro` | `InspectorLithoPoro.svelte` | [`#sw-step-3-litho-poro`](single_well.md#sw-step-3-litho-poro) | $V_{\text{sh}}$, SSC ternary, multi-mineral SLSQP, $\phi_e$, $\phi_t$ & $\rho_{fl}$ |
 | **Step 4** | `perm` | `InspectorPerm.svelte` | [`#sw-step-4-perm`](single_well.md#sw-step-4-perm) | Choo, Timur-Coates, Tixier & Morris-Biggs permeability |
-| **Step 5** | `saturation` | `InspectorSaturation.svelte` | [`#sw-step-5-saturation`](single_well.md#sw-step-5-saturation) | Archie, Waxman-Smits ($Q_v, B$), Dual Water & Indonesian |
+| **Step 5** | `saturation` | `InspectorSaturation.svelte` | [`#sw-step-5-saturation`](single_well.md#sw-step-5-saturation) | Archie, Waxman-Smits ($Q_v, B$), Dual Water, Indonesian, water-leg $m$ calibration, empirical $m(\phi)$ & fluid typing |
 | **Step 6** | `ressum` | `InspectorResSum.svelte` | [`#sw-step-6-ressum`](single_well.md#sw-step-6-ressum) | Net Pay cutoffs, zonal summation & log blocking upscaling |
 | **Step 7** | `report` | `InspectorReport.svelte` | [`#sw-step-7-report`](single_well.md#sw-step-7-report) | Automated CPI well report compilation |
 | **Standalone** | `scal` | `InspectorScal.svelte` | [`#sw-standalone-core-pc`](single_well.md#sw-standalone-core-pc) | **Core & Pc Prep**: Depth shifting, stress corrections & lab-to-res $P_c$ |
+| **Standalone** | `toc` | `InspectorToc.svelte` | [`#sw-standalone-source-rock`](single_well.md#sw-standalone-source-rock) | **Source Rock & TOC**: Passey $\Delta\log R$, Hood LOM maturity, core geochemical calibration & log overlays |
 
 ### Multi-Well Space
 
@@ -102,7 +105,7 @@ The right-pane crossplot selector shows only plots supported by the active singl
 ## Detailed Technical References
 
 - [**Single-Well Petrophysical Workflow**](single_well.md):
-  Covers the 7-step deterministic evaluation pipeline and the standalone Core & Pc Prep module.
+  Covers the 7-step deterministic evaluation pipeline and standalone modules (Core & Pc Prep, Source Rock & TOC).
 
 - [**Multi-Well Field Evaluation Workflow**](multi_well.md):
   Covers the 7-step field characterization pipeline and the 5 standalone specialized modules (Multi-Well Evaluation, SCAL & Rel-Perm, Formation Pressure & Contacts, RT Classifier, Conformal PIML).

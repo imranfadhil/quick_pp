@@ -48,7 +48,7 @@ logging.getLogger("mlflow").setLevel(logging.WARNING)
 
 __author__ = """Imran Fadhil"""
 __email__ = "imranfadhil@gmail.com"
-__version__ = "0.3.6"  # Need to be updated manually when releasing a new version/ change in pyproject.toml
+__version__ = "0.3.7"  # Need to be updated manually when releasing a new version/ change in pyproject.toml
 
 # Expose core petrophysical submodules and key public functions at top-level package namespace
 from quick_pp import (  # noqa: E402
@@ -120,6 +120,10 @@ from quick_pp.rock_type import (  # noqa: E402
 from quick_pp.saturation import (  # noqa: E402
     ContactOptimizer,
     analyze_transition_zone,
+    calibrate_water_leg_m,
+    compute_continuous_m,
+    estimate_m_borai,
+    estimate_m_shell_lucia,
     estimate_mdt_fwl,
     extract_fluid_contacts_and_limits,
     fit_swirr_correlation,
@@ -225,11 +229,13 @@ __all__ = [
     "build_handover_archive_bytes",
     "build_vrf_kernel",
     "calc_stochastic_reservoir_summary",
+    "calibrate_water_leg_m",
     "cardwell_parsons_bounds",
     "check_interlog_depth_alignment",
     "classify_fluid_types",
     "collect_well_handover_dict",
     "compute_borehole_weights",
+    "compute_continuous_m",
     "compute_rock_flag_comparison",
     "conditioning",
     "corey_relperm",
@@ -244,6 +250,8 @@ __all__ = [
     "enforce_physical_constraints",
     "estimate_cbw_from_qv",
     "estimate_continuous_rho_fluid",
+    "estimate_m_borai",
+    "estimate_m_shell_lucia",
     "estimate_mdt_fwl",
     "estimate_noise_mad",
     "extract_fluid_contacts_and_limits",

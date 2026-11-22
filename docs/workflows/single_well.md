@@ -439,8 +439,36 @@ flowchart TD
       
       $$\text{Indonesian: } \frac{1}{\sqrt{R_t}} = \left( \sqrt{\frac{V_{\text{sh}}^{2 - V_{\text{sh}}}}{R_{\text{sh}}}} + \sqrt{\frac{\phi_e^m}{a \cdot R_w}} \right) \cdot S_w^{n/2}$$
 
-* **Input Curves:** `RT`, `PHIT`, `PHIE`, `VSH`, `VCLAY`, `TVD`  
-* **Output Curves:** `SWT`, `SWE`, `BVW` ($\phi_e \cdot S_{we}$), `BVW_IRR`
+    * **Cementation Exponent Calibration in 100% Water Leg ($m$):**
+      Inverts Archie (clean water sand) or Indonesian (shaly water sand) assuming $S_w = 1.0$ across depth- or zone-filtered water zones:
+      
+      $$\text{Archie: } m = \frac{\ln(R_w / R_t)}{\ln(\phi_t)}$$
+      
+      $$\text{Indonesian: } m = \frac{2}{\ln(\phi_t)} \ln\left(\sqrt{R_w}\left(\frac{1}{\sqrt{R_t}} - \frac{V_{\text{sh}}^{1 - 0.5 V_{\text{sh}}}}{\sqrt{R_{\text{sh}}}}\right)\right)$$
+      
+      Computes distribution metrics (mean, median, P10, P90) and calibrated linear regression $m = a \cdot \phi_t + b$ across valid physical points ($1.0 \le m \le 3.5$).
+
+    * **Continuous Depth-Variable Cementation Exponent Models ($m(\phi)$):**
+      Supports continuous calculation of $m(z)$ via:
+      1. *Calibrated Trend*: $m(z) = a \cdot \phi_t(z) + b$ from water-leg calibration.
+      2. *Borai (1987) Correlation (Low Porosity / Tight Formations)*:
+         $$m = 2.2 - \frac{0.035}{\phi_t + 0.042}$$
+      3. *Shell / Lucia (1983) Correlation (Carbonate & Fractured Systems)*:
+         $$m = 1.87 + \frac{0.019}{\phi_t}$$
+
+    * **Reservoir Fluid Typing & Phase Discrimination (`classify_fluid_types`, `fix_fluid_segregation`):**
+      Differentiates Gas, Oil, Unconfirmed Hydrocarbon, and Water phases across reservoir pay:
+      1. *Neutron-Density Porosity Crossover*: $\Delta\phi = \phi_D - \phi_N$. Gas: $\Delta\phi \ge \Delta\phi_{\text{gas}}$; Oil: $\Delta\phi \le \Delta\phi_{\text{oil}}$; Unconfirmed: buffer interval between cutoffs.
+      2. *Apparent Hydrocarbon Density ($\rho_{hc}$)*:
+         $$\rho_{hc} = \frac{\rho_b - (1-\phi_t)\rho_{ma} - \phi_t S_{wt}\rho_w}{\phi_t (1 - S_{wt})}$$
+         Gas: $\rho_{hc} \le 0.40\,\text{g/cm}^3$; Oil: $\rho_{hc} \ge 0.55\,\text{g/cm}^3$.
+      3. *Dipole Sonic Velocity Ratio ($V_p/V_s$)*: Gas: $V_p/V_s \le 1.60$; Oil: $V_p/V_s \ge 1.70$.
+      4. *Haworth (1985) Mud Gas Chromatography*: Gas Wetness ($W_h$), Light-to-Heavy Balance ($B_h$), and Character ($C_h$) from $C_1\text{–}C_5$ mud-gas readings.
+      5. *Physical Fluid Segregation*: Enforces gravity segregation (`fix_fluid_segregation`) ensuring lighter gas caps overlie oil legs within continuous stratigraphic zones or hydraulic flow compartments.
+      6. *Interactive Manual Overrides*: Allows point- or interval-specific overrides for $S_{wt}$ and fluid type flags (`FLUID_TYPE`).
+
+* **Input Curves:** `RT`, `PHIT`, `PHIE`, `VSH`, `VCLAY`, `TVD`, `NPHI`, `RHOB`, optional `DTC`, `DTS`, `C1`–`NC5`  
+* **Output Curves:** `SWT`, `SWE`, `BVW` ($\phi_e \cdot S_{we}$), `BVW_IRR`, `M_CALC`, `FLUID_TYPE`, `HC_FLAG`, `GAS_FLAG`, `OIL_FLAG`, `UNC_FLAG`, `RHO_HC`, `VOIL`, `VGAS`, `VUNC`, `BVHC`
 
 ---
 
@@ -544,3 +572,47 @@ flowchart TD
 
     * **Input Data:** Core plugs table (`DEPTH`, `CPORE`, `CPERM`, `CGRAIN_DENSITY`), Overburden stress parameters, Lab IFT and contact angle, driver logs (`GR`, `CGR`, `SGR`, `RHOB`, `NPHI`, `M_LITH`, `N_LITH`, `AI`)  
     * **Output Data:** `CPOR_SHIFTED`, `CPERM_SHIFTED`, `SV_EST`, `PP_EST`, `NU_DYN`, `NCS_EST`, Stress-corrected core properties, Scaled $P_c$ curves, Calibrated grain density correlation (project-scoped)
+
+---
+
+## 4. Standalone Module: Source Rock & Total Organic Carbon (TOC) (`InspectorToc`) {#sw-standalone-source-rock}
+
+* **Objective:** Identify organic-rich source rock intervals, model thermal maturity, and quantify continuous Total Organic Carbon ($\text{TOC}$, in wt%) profiles from wireline resistivity and porosity logs calibrated against core pyrolysis geochemical data.
+
+* **Technical Foundation:**
+
+    * **Passey et al. (1990) $\Delta\log R$ Technique:**
+      Overlays a properly scaled porosity log ($\Delta t$, $\rho_b$, or $\phi_N$) on deep resistivity ($R_t$) such that one logarithmic resistivity decade corresponds to $50\,\mu\text{s/ft}$ sonic transit time, $-0.25\,\text{g/cm}^3$ (or $-2.5$ scaling) bulk density, or $0.25\,\text{v/v}$ ($4.0$ scaling) neutron porosity:
+      
+      $$\Delta\log R = \log_{10}(R_t / R_{\text{baseline}}) + \text{coeff} \cdot (\text{Poro\_log} - \text{Poro\_baseline})$$
+      
+      where $R_{\text{baseline}}$ and $\text{Poro\_baseline}$ represent the baseline response in lean, non-source, water-saturated shale. In organically lean rocks, the two curves track together ($\Delta\log R \approx 0$). In organic-rich source rocks, kerogen lowers the bulk density, increases acoustic transit time, and raises formation resistivity due to generated hydrocarbons, creating a pronounced positive separation ($\Delta\log R > 0$).
+
+    * **Hood et al. (1975) Level of Organic Metamorphism (LOM):**
+      Converts measured Vitrinite Reflectance ($R_o\,\%$) to the continuous Hood maturity scale:
+      
+      $$\text{LOM} = 10.59 + 4.54 \cdot \ln(R_o)$$
+      
+      Spanning Immature ($R_o \approx 0.4 \implies \text{LOM} \approx 6.0$), Oil Window ($R_o \approx 0.8 \implies \text{LOM} \approx 9.6$), Condensate ($R_o \approx 1.0 \implies \text{LOM} \approx 10.6$), to Dry Gas ($\text{LOM} > 13.0$).
+
+    * **Continuous TOC Quantification:**
+      
+      $$\text{TOC} = \Delta\log R \cdot 10^{\left(2.297 - 0.1688 \cdot \text{LOM}\right)} + \text{TOC}_{\text{baseline}}$$
+      
+      where $\text{TOC}_{\text{baseline}}$ is background organic carbon in lean shale (default $0.8\,\text{wt}\%$). Negative $\Delta\log R$ separations in non-source rocks are clamped to $\text{TOC}_{\text{baseline}}$.
+
+    * **Core Geochemical Calibration (`calibrate_toc_to_core`):**
+      Regresses measured core pyrolysis TOC points against log-derived $\Delta\log R$:
+      
+      $$\text{TOC}_{\text{core}} = a \cdot \Delta\log R + b$$
+      
+      allowing direct derivation of the implied Level of Organic Metamorphism:
+      
+      $$\text{LOM}_{\text{implied}} = \frac{2.297 - \log_{10}(a)}{0.1688}$$
+
+    * **Composite Log Display & Overlays:**
+      - **Track 2**: Overlays deep resistivity ($R_t$) and the Passey porosity-equivalent resistivity $R_{\text{poro}} = R_{\text{baseline}} \cdot 10^{-\text{coeff}\cdot(\text{log} - \text{log}_{\text{baseline}})}$ on a logarithmic scale (0.2–2000 ohm.m), visually highlighting source rock separation.
+      - **Track 4**: Displays continuous TOC (0–10 wt%) with high-grade source rock threshold shading ($\text{TOC} \ge 2.0\,\text{wt}\%$).
+
+* **Input Data:** `RT`, Porosity Log (`DT`, `RHOB`, or `NPHI`), $R_{\text{baseline}}$, $\text{Poro\_baseline}$, $R_o\,\%$ or LOM, background $\text{TOC}_{\text{baseline}}$, optional Core TOC (`CTOC`)
+* **Output Data:** `DELTA_LOG_R`, `TOC`, `TOC_PASSEY`, `TOC_SHALE_FLAG`

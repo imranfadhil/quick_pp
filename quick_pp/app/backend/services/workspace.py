@@ -245,10 +245,21 @@ def _update_in_memory_well_cache(
         for col in updates.columns:
             if col == "WELL_NAME":
                 continue
+            is_str_col = updates[col].dtype == object or str(
+                updates[col].dtype
+            ).startswith(("string", "str"))
             if col not in indexed:
-                indexed[col] = np.nan
+                indexed[col] = (
+                    pd.Series(None, index=indexed.index, dtype=object)
+                    if is_str_col
+                    else np.nan
+                )
+            elif is_str_col and indexed[col].dtype != object:
+                indexed[col] = indexed[col].astype(object)
             indexed.loc[updates.index, col] = updates[col]
-            prior = isolated.updates.get(col, pd.Series(dtype=float))
+            prior = isolated.updates.get(
+                col, pd.Series(dtype=object if is_str_col else float)
+            )
             isolated.updates[col] = pd.concat(
                 [prior[~prior.index.isin(updates.index)], updates[col]]
             )
@@ -286,8 +297,17 @@ def _update_in_memory_well_cache(
                 merged_mem = base_df.copy()
                 for c in upd_cols:
                     ucol = str(c).upper()
+                    is_str_c = curves_df[c].dtype == object or str(
+                        curves_df[c].dtype
+                    ).startswith(("string", "str"))
                     if ucol not in merged_mem.columns:
-                        merged_mem[ucol] = np.nan
+                        merged_mem[ucol] = (
+                            pd.Series(None, index=merged_mem.index, dtype=object)
+                            if is_str_c
+                            else np.nan
+                        )
+                    elif is_str_c and merged_mem[ucol].dtype != object:
+                        merged_mem[ucol] = merged_mem[ucol].astype(object)
                     merged_mem.loc[curves_df.index, ucol] = curves_df[c].to_numpy()
             else:
                 upd = curves_df.drop(columns=["WELL_NAME"], errors="ignore").copy()

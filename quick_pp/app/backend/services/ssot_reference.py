@@ -66,6 +66,11 @@ STEP_ALIASES: Dict[str, Dict[str, str]] = {
         "shift": "sw-standalone-core-pc",
         "depth-shift": "sw-standalone-core-pc",
         "lab": "sw-standalone-core-pc",
+        # Standalone Source Rock / TOC Module
+        "toc": "sw-standalone-source-rock",
+        "source_rock": "sw-standalone-source-rock",
+        "source-rock": "sw-standalone-source-rock",
+        "passey": "sw-standalone-source-rock",
     },
     "multi-well": {
         "overview": "mw-level-1-2-diagrams",
@@ -161,9 +166,15 @@ class SSOTReferenceRegistry:
             return
 
         cache: Dict[str, Dict[str, Any]] = {
-            "single-well": self._parse_markdown_file(single_file, "Single-Well Petrophysics"),
-            "multi-well": self._parse_markdown_file(multi_file, "Multi-Well Field Evaluation"),
-            "overview": self._parse_markdown_file(index_file, "Dual-Space Workflow Architecture"),
+            "single-well": self._parse_markdown_file(
+                single_file, "Single-Well Petrophysics"
+            ),
+            "multi-well": self._parse_markdown_file(
+                multi_file, "Multi-Well Field Evaluation"
+            ),
+            "overview": self._parse_markdown_file(
+                index_file, "Dual-Space Workflow Architecture"
+            ),
         }
         self._cache = cache
         self._last_loaded = now
@@ -242,19 +253,135 @@ class SSOTReferenceRegistry:
         """Search SSOT documentation for keywords or formulas."""
         self._ensure_loaded()
         stopwords = {
-            "a", "about", "above", "after", "again", "against", "all", "am", "an", "and",
-            "any", "are", "as", "at", "be", "because", "been", "before", "being", "below",
-            "between", "both", "but", "by", "can", "could", "did", "do", "does", "doing",
-            "down", "during", "each", "few", "for", "from", "further", "had", "has", "have",
-            "having", "he", "her", "here", "hers", "herself", "him", "himself", "his", "how",
-            "i", "if", "in", "into", "is", "it", "its", "itself", "just", "me", "more", "most",
-            "my", "myself", "no", "nor", "not", "now", "of", "off", "on", "once", "only",
-            "or", "other", "our", "ours", "ourselves", "out", "over", "own", "same", "she",
-            "should", "so", "some", "such", "than", "that", "the", "their", "theirs", "them",
-            "themselves", "then", "there", "these", "they", "this", "those", "through", "to",
-            "too", "under", "until", "up", "very", "was", "we", "were", "what", "when",
-            "where", "which", "while", "who", "whom", "why", "with", "would", "you", "your",
-            "yours", "yourself", "yourselves", "tell", "please", "average", "value"
+            "a",
+            "about",
+            "above",
+            "after",
+            "again",
+            "against",
+            "all",
+            "am",
+            "an",
+            "and",
+            "any",
+            "are",
+            "as",
+            "at",
+            "be",
+            "because",
+            "been",
+            "before",
+            "being",
+            "below",
+            "between",
+            "both",
+            "but",
+            "by",
+            "can",
+            "could",
+            "did",
+            "do",
+            "does",
+            "doing",
+            "down",
+            "during",
+            "each",
+            "few",
+            "for",
+            "from",
+            "further",
+            "had",
+            "has",
+            "have",
+            "having",
+            "he",
+            "her",
+            "here",
+            "hers",
+            "herself",
+            "him",
+            "himself",
+            "his",
+            "how",
+            "i",
+            "if",
+            "in",
+            "into",
+            "is",
+            "it",
+            "its",
+            "itself",
+            "just",
+            "me",
+            "more",
+            "most",
+            "my",
+            "myself",
+            "no",
+            "nor",
+            "not",
+            "now",
+            "of",
+            "off",
+            "on",
+            "once",
+            "only",
+            "or",
+            "other",
+            "our",
+            "ours",
+            "ourselves",
+            "out",
+            "over",
+            "own",
+            "same",
+            "she",
+            "should",
+            "so",
+            "some",
+            "such",
+            "than",
+            "that",
+            "the",
+            "their",
+            "theirs",
+            "them",
+            "themselves",
+            "then",
+            "there",
+            "these",
+            "they",
+            "this",
+            "those",
+            "through",
+            "to",
+            "too",
+            "under",
+            "until",
+            "up",
+            "very",
+            "was",
+            "we",
+            "were",
+            "what",
+            "when",
+            "where",
+            "which",
+            "while",
+            "who",
+            "whom",
+            "why",
+            "with",
+            "would",
+            "you",
+            "your",
+            "yours",
+            "yourself",
+            "yourselves",
+            "tell",
+            "please",
+            "average",
+            "value",
         }
         raw_tokens = re.findall(r"\b[a-z0-9_-]{2,}\b", query.lower())
         meaningful_tokens = [t for t in raw_tokens if t not in stopwords]
@@ -262,7 +389,9 @@ class SSOTReferenceRegistry:
             return []
 
         results: List[Dict[str, Any]] = []
-        scopes_to_search = [scope] if scope and scope in self._cache else ["single-well", "multi-well"]
+        scopes_to_search = (
+            [scope] if scope and scope in self._cache else ["single-well", "multi-well"]
+        )
 
         for sc in scopes_to_search:
             sc_data = self._cache.get(sc, {})
@@ -271,11 +400,19 @@ class SSOTReferenceRegistry:
             for anchor_id, content in anchors.items():
                 content_lower = content.lower()
                 first_line = content.splitlines()[0] if content else anchor_id
-                clean_header = re.sub(r"\{#[\w\-]+\}", "", first_line).lstrip("#").strip()
+                clean_header = (
+                    re.sub(r"\{#[\w\-]+\}", "", first_line).lstrip("#").strip()
+                )
                 header_lower = clean_header.lower()
 
-                title_matches = sum(1 for token in meaningful_tokens if token in header_lower or token in anchor_id.lower())
-                body_matches = sum(content_lower.count(token) for token in meaningful_tokens)
+                title_matches = sum(
+                    1
+                    for token in meaningful_tokens
+                    if token in header_lower or token in anchor_id.lower()
+                )
+                body_matches = sum(
+                    content_lower.count(token) for token in meaningful_tokens
+                )
                 if title_matches > 0 or body_matches > 0:
                     score = title_matches * 5 + body_matches
                     results.append(
@@ -306,4 +443,3 @@ def query_workflow_reference(
 ) -> List[Dict[str, Any]]:
     """Convenience query function."""
     return ssot_registry.query_reference(query, scope, max_results)
-

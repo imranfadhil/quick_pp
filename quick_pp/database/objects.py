@@ -304,9 +304,7 @@ class Project(object):
             .scalars()
             .all()
         )
-        existing_names_by_uwi = {
-            well.uwi: well.name for well in existing_project_wells
-        }
+        existing_names_by_uwi = {well.uwi: well.name for well in existing_project_wells}
         incoming_names_by_uwi: Dict[str, str] = {}
         for parsed in parsed_files:
             well_name = parsed["well_name"]
@@ -2229,10 +2227,10 @@ class Well(object):
             if not t_name:
                 continue
             try:
-                d_val = round(float(top_data["depth"]), 4)
+                d_val = float(top_data["depth"])
             except (TypeError, ValueError):
                 continue
-            dedup_tops[(t_name.lower(), d_val)] = (t_name, d_val)
+            dedup_tops[(t_name.lower(), round(d_val, 4))] = (t_name, d_val)
 
         if not dedup_tops and not replace:
             return
@@ -2399,9 +2397,13 @@ class Well(object):
             if zones_to_clean:
                 self.delete_fluid_contacts(zones=list(zones_to_clean))
             # Also clean matching names for any unassigned general contacts (zone is None)
-            unassigned_names = [
-                name for name, item in parsed_contacts.items() if not item.get("zone")
-            ]
+            unassigned_names = list(
+                {
+                    item["name"]
+                    for item in parsed_contacts.values()
+                    if not item.get("zone")
+                }
+            )
             if unassigned_names:
                 self.db_session.query(ORMFluidContact).filter(
                     ORMFluidContact.well_id == self.well_id,
@@ -2989,7 +2991,9 @@ class Well(object):
                 )
                 raw_cycle = str(pc_point.get("cycle") or "drainage").strip().lower()
                 cycle_val = "imbibition" if raw_cycle.startswith("imb") else "drainage"
-                dedup_pc[(round(pres_val, 4), round(sat_val, 6), str(exp_type), cycle_val)] = {
+                dedup_pc[
+                    (round(pres_val, 4), round(sat_val, 6), str(exp_type), cycle_val)
+                ] = {
                     "saturation": sat_val,
                     "pressure": pres_val,
                     "experiment_type": str(exp_type),
@@ -3171,7 +3175,10 @@ class Well(object):
             # Clear all existing RCA measurements for this well, and remove any core sample that has no SCAL data
             for orm_sample in list(self._orm_well.core_samples):
                 orm_sample.measurements.clear()
-                if not orm_sample.capillary_pressure_data and not orm_sample.relperm_data:
+                if (
+                    not orm_sample.capillary_pressure_data
+                    and not orm_sample.relperm_data
+                ):
                     self.db_session.delete(orm_sample)
             self.db_session.flush()
 
@@ -3224,7 +3231,9 @@ class Well(object):
             por_val = _extract_prop(row, ("porosity", "cpore", "CPORE", "POR", "por"))
             if por_val is not None and por_val > 1.0:
                 por_val = por_val / 100.0
-            perm_val = _extract_prop(row, ("permeability", "cperm", "CPERM", "PERM", "perm"))
+            perm_val = _extract_prop(
+                row, ("permeability", "cperm", "CPERM", "PERM", "perm")
+            )
 
             entry = grouped.setdefault(
                 sname,
@@ -3409,7 +3418,7 @@ class Well(object):
         for s in samples:
             sn_key = str(s.sample_name or "").strip()
             sd_key = round(float(s.depth), 2)
-            for m in (s.measurements or []):
+            for m in s.measurements or []:
                 pname = str(m.property_name).upper()
                 try:
                     val = float(m.value)
@@ -3430,7 +3439,7 @@ class Well(object):
         for sample in samples:
             poro_val = None
             perm_val = None
-            for m in (sample.measurements or []):
+            for m in sample.measurements or []:
                 pname = str(m.property_name).upper()
                 try:
                     val = float(m.value)
@@ -3676,7 +3685,9 @@ class Well(object):
             if sample_key in core_data:
                 prev_sample = core_data[sample_key]
                 if abs(float(prev_sample["depth"]) - float(sample.depth)) >= 1e-3:
-                    prev_key = f"{prev_sample['sample_name']} ({prev_sample['depth']:.1f}m)"
+                    prev_key = (
+                        f"{prev_sample['sample_name']} ({prev_sample['depth']:.1f}m)"
+                    )
                     core_data[prev_key] = core_data.pop(sample_key)
                     sample_key = f"{sample.sample_name} ({sample.depth:.1f}m)"
             core_data[sample_key] = sample_data
