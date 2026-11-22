@@ -48,6 +48,7 @@
   let selectedWells: Record<string, string | null> = {};
   let globalError: string | null = null;
   let processing = false;
+  let processingStage: 'committing' | 'refreshing' | null = null;
   let results: Array<{ file: string; ok: boolean; status?: number; error?: string; sent?: number }> = [];
   let fileStatuses: Record<string, 'idle' | 'processing' | 'success' | 'error'> = {};
   let fileErrors: Record<string, string> = {};
@@ -383,6 +384,7 @@
     }
 
     processing = true;
+    processingStage = 'committing';
     const shiftPairs: Array<[number, number]> = coreDepthShiftRows
       .map((r) => [Number(r.coreDepth), Number(r.logDepth)] as [number, number])
       .filter(([c, l]) => Number.isFinite(c) && Number.isFinite(l));
@@ -446,10 +448,15 @@
       results = out;
       const okCount = out.filter((r) => r.ok).length;
       if (okCount > 0 && workbench.projectId) {
-        await projectData.selectProject(workbench.projectId, workbench.wellId);
-        if (workbench.wellId) {
-          await wellData.loadWellBundle(workbench.projectId, workbench.wellId);
+        processingStage = 'refreshing';
+        const targetWell = workbench.wellId || previews.map((p) => selectedWells[p.fileName]).find(Boolean);
+        if (targetWell && !workbench.wellId) {
+          workbench.wellId = targetWell;
         }
+        await Promise.all([
+          targetWell ? wellData.loadWellBundle(workbench.projectId, targetWell) : Promise.resolve(),
+          projectData.refreshSummary(workbench.projectId)
+        ]);
       }
       if (okCount === out.length) {
         appStatus.endTask(taskId, {
@@ -470,6 +477,7 @@
       });
     } finally {
       processing = false;
+      processingStage = null;
     }
   }
 </script>
@@ -832,7 +840,11 @@
           on:click={processAll}
           disabled={processing}
         >
-          {processing ? 'Committing & Aligning Data…' : `Commit & Import All (${previews.length} file${previews.length > 1 ? 's' : ''})`}
+          {processing
+            ? processingStage === 'refreshing'
+              ? 'Updating Workspace…'
+              : 'Committing & Aligning Data…'
+            : `Commit & Import All (${previews.length} file${previews.length > 1 ? 's' : ''})`}
         </button>
       </div>
     </div>
