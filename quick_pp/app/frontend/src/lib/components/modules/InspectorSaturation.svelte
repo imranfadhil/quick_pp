@@ -533,6 +533,30 @@
 		executeSaturation(false);
 	}
 
+	const allOverridesActive = $derived(
+		(workbench.saturationParams.manualOverrides ?? []).length > 0 &&
+			(workbench.saturationParams.manualOverrides ?? []).every((o) => o.enabled !== false)
+	);
+
+	let expandedOverrideNotes = $state<Record<string, boolean>>({});
+
+	function toggleNoteRow(id: string) {
+		expandedOverrideNotes[id] = !expandedOverrideNotes[id];
+	}
+
+	function sortOverridesByDepth() {
+		const sp = workbench.saturationParams;
+		if (!sp.manualOverrides || sp.manualOverrides.length <= 1) return;
+		sp.manualOverrides = [...sp.manualOverrides].sort((a, b) => (a.top ?? 0) - (b.top ?? 0));
+	}
+
+	function toggleAllOverrides(enabled: boolean) {
+		const sp = workbench.saturationParams;
+		if (!sp.manualOverrides) return;
+		sp.manualOverrides = sp.manualOverrides.map((o) => ({ ...o, enabled }));
+		executeSaturation(false);
+	}
+
 	function clearAllOverrides() {
 		workbench.saturationParams.manualOverrides = [];
 		executeSaturation(false);
@@ -924,8 +948,19 @@
 						title="Add a new custom depth interval override"
 						class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1 text-[10.5px] font-medium text-[var(--text-primary)] hover:border-[var(--border-focus)]"
 					>
-						+ Custom Override
+						+ Add Interval
 					</button>
+
+					{#if (workbench.saturationParams.manualOverrides?.length ?? 0) >= 2}
+						<button
+							type="button"
+							onclick={sortOverridesByDepth}
+							title="Sort all intervals from top to bottom by depth"
+							class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1 text-[10.5px] font-medium text-[var(--text-secondary)] hover:border-[var(--border-focus)] hover:text-[var(--text-primary)]"
+						>
+							↕ Sort Depth
+						</button>
+					{/if}
 
 					{#if (workbench.saturationParams.manualOverrides?.length ?? 0) > 0}
 						<button
@@ -939,7 +974,7 @@
 					{/if}
 				</div>
 
-				<!-- Overrides List / Cards -->
+				<!-- Overrides Table -->
 				{#if (workbench.saturationParams.manualOverrides?.length ?? 0) === 0}
 					<div
 						class="rounded-xs border border-dashed border-[var(--border-hairline)] bg-[var(--bg-app)] p-2 text-center text-[10.5px] text-[var(--text-muted)]"
@@ -948,169 +983,195 @@
 						clamp water saturation across intervals.
 					</div>
 				{:else}
-					<div class="space-y-2">
-						{#each workbench.saturationParams.manualOverrides ?? [] as ov, idx (ov.id)}
-							<div
-								class="rounded-xs border p-2 text-[11px] {ov.enabled !== false
-									? 'border-[var(--border-hairline)] bg-[var(--bg-app)]'
-									: 'border-dashed border-[var(--border-hairline)] bg-[var(--bg-app)] opacity-60'}"
+					<div
+						class="max-h-60 overflow-x-auto overflow-y-auto rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)]"
+					>
+						<table class="w-full border-collapse text-left text-[10px]">
+							<thead
+								class="sticky top-0 z-10 border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)] text-[var(--text-secondary)] shadow-2xs"
 							>
-								<!-- Row 1: Header / Depth Interval -->
-								<div
-									class="mb-1.5 flex items-center justify-between gap-1 border-b border-[var(--border-hairline)] pb-1.5"
-								>
-									<div
-										class="flex items-center gap-1.5 font-medium text-[var(--text-primary)]"
-									>
+								<tr>
+									<th class="w-6 px-1.5 py-1 text-center">
 										<input
 											type="checkbox"
-											checked={ov.enabled !== false}
-											onchange={() => toggleManualOverride(ov.id)}
-											title="Enable/disable this override"
-											class="h-3.5 w-3.5 rounded-xs text-[var(--accent-primary)]"
-										/>
-										<span
-											class="text-[10px] font-semibold text-[var(--text-muted)]"
-											>#{idx + 1}</span
-										>
-										<span class="text-[10px]">Depth:</span>
-										<input
-											type="number"
-											step="0.5"
-											value={ov.top}
+											checked={allOverridesActive}
 											onchange={(e) =>
-												updateManualOverride(ov.id, {
-													top: Number(e.currentTarget.value)
-												})}
-											class="mono-num rounded-2xs h-5 w-16 border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 py-0 text-right text-[10px] font-semibold"
+												toggleAllOverrides(e.currentTarget.checked)}
+											title="Toggle all overrides"
+											class="rounded-2xs h-3 w-3 text-[var(--accent-primary)]"
 										/>
-										<span class="text-[10px]">to</span>
-										<input
-											type="number"
-											step="0.5"
-											value={ov.bottom}
-											onchange={(e) =>
-												updateManualOverride(ov.id, {
-													bottom: Number(e.currentTarget.value)
-												})}
-											class="mono-num rounded-2xs h-5 w-16 border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 py-0 text-right text-[10px] font-semibold"
-										/>
-										<span class="text-[10px] text-[var(--text-muted)]">m</span>
-									</div>
-									<button
-										type="button"
-										onclick={() => removeManualOverride(ov.id)}
-										title="Delete this override"
-										class="px-1 text-xs font-bold text-[var(--text-muted)] hover:text-red-600"
+									</th>
+									<th class="px-1.5 py-1 font-semibold whitespace-nowrap"
+										>Depth (m)</th
 									>
-										×
-									</button>
-								</div>
-
-								<!-- Row 2: Fluid Phase & SWT Action Selectors -->
-								<div class="grid grid-cols-2 gap-2">
-									<div>
-										<span
-											class="mb-0.5 block text-[9.5px] font-semibold text-[var(--text-secondary)]"
-										>
-											Fluid Phase
-										</span>
-										<select
-											value={ov.fluidType ?? 'AUTO'}
-											onchange={(e) =>
-												updateManualOverride(ov.id, {
-													fluidType: e.currentTarget.value as any
-												})}
-											class="rounded-2xs h-6 w-full border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-[10px] font-semibold text-[var(--text-primary)]"
-										>
-											<option value="AUTO">AUTO (Model)</option>
-											<option value="GAS">GAS (Red)</option>
-											<option value="OIL">OIL (Green)</option>
-											<option value="WATER">WATER (Blue)</option>
-											<option value="UNCONFIRMED">UNCONFIRMED</option>
-											<option value="NON_RESERVOIR">NON_RESERVOIR</option>
-										</select>
-									</div>
-
-									<div>
-										<span
-											class="mb-0.5 block text-[9.5px] font-semibold text-[var(--text-secondary)]"
-										>
-											SWT Action
-										</span>
-										<select
-											value={ov.swtMode ?? 'keep'}
-											onchange={(e) =>
-												updateManualOverride(ov.id, {
-													swtMode: e.currentTarget.value as any
-												})}
-											class="rounded-2xs h-6 w-full border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-[10px] font-semibold text-[var(--text-primary)]"
-										>
-											<option value="keep">Keep Model SWT</option>
-											<option value="force_water_leg"
-												>Force Water Leg (1.0)</option
-											>
-											<option value="fixed_value">Set Fixed SWT</option>
-											<option value="cap_max">Cap Max SWT (Ceiling)</option>
-											<option value="floor_min">Floor Min SWT</option>
-										</select>
-									</div>
-								</div>
-
-								<!-- Row 3: SWT Value if applicable -->
-								{#if ov.swtMode === 'fixed_value' || ov.swtMode === 'cap_max' || ov.swtMode === 'floor_min'}
-									<div
-										class="mt-1.5 flex items-center justify-between gap-2 border-t border-[var(--border-hairline)] pt-1.5"
+									<th class="px-1 py-1 font-semibold whitespace-nowrap"
+										>Fluid Phase</th
 									>
-										<span
-											class="text-[10px] font-medium text-[var(--text-secondary)]"
-										>
-											SWT Target:
-										</span>
-										<div class="flex items-center gap-1">
+									<th class="px-1 py-1 font-semibold whitespace-nowrap"
+										>SWT Action</th
+									>
+									<th
+										class="w-6 px-1 py-1 text-center font-semibold"
+										title="Notes">💬</th
+									>
+									<th
+										class="w-6 px-1 py-1 text-center font-semibold"
+										title="Delete">×</th
+									>
+								</tr>
+							</thead>
+							<tbody class="divide-y divide-[var(--border-hairline)]">
+								{#each workbench.saturationParams.manualOverrides ?? [] as ov (ov.id)}
+									<tr
+										class="transition-colors hover:bg-slate-500/5 {ov.enabled ===
+										false
+											? 'bg-slate-100/50 line-through opacity-50'
+											: 'bg-[var(--bg-surface)]'}"
+									>
+										<td class="px-1.5 py-1 text-center">
 											<input
-												type="range"
-												min="0"
-												max="1"
-												step="0.01"
-												value={ov.swtValue ?? 1.0}
-												oninput={(e) =>
-													updateManualOverride(ov.id, {
-														swtValue: Number(e.currentTarget.value)
-													})}
-												class="h-1.5 w-24 accent-[var(--accent-primary)]"
+												type="checkbox"
+												checked={ov.enabled !== false}
+												onchange={() => toggleManualOverride(ov.id)}
+												title="Enable/disable override"
+												class="rounded-2xs h-3 w-3 text-[var(--accent-primary)]"
 											/>
-											<input
-												type="number"
-												min="0"
-												max="1"
-												step="0.01"
-												value={ov.swtValue ?? 1.0}
+										</td>
+										<td class="px-1 py-1 whitespace-nowrap">
+											<div class="flex items-center gap-0.5">
+												<input
+													type="number"
+													step="0.5"
+													value={ov.top}
+													onchange={(e) =>
+														updateManualOverride(ov.id, {
+															top: Number(e.currentTarget.value)
+														})}
+													title="Top Depth (m)"
+													class="mono-num rounded-2xs h-5 w-12 border border-[var(--border-hairline)] bg-[var(--bg-app)] px-0.5 text-right text-[9.5px] font-semibold"
+												/>
+												<span class="text-[9px] text-[var(--text-muted)]"
+													>-</span
+												>
+												<input
+													type="number"
+													step="0.5"
+													value={ov.bottom}
+													onchange={(e) =>
+														updateManualOverride(ov.id, {
+															bottom: Number(e.currentTarget.value)
+														})}
+													title="Bottom Depth (m)"
+													class="mono-num rounded-2xs h-5 w-12 border border-[var(--border-hairline)] bg-[var(--bg-app)] px-0.5 text-right text-[9.5px] font-semibold"
+												/>
+											</div>
+										</td>
+										<td class="px-1 py-1">
+											<select
+												value={ov.fluidType ?? 'AUTO'}
 												onchange={(e) =>
 													updateManualOverride(ov.id, {
-														swtValue: Number(e.currentTarget.value)
+														fluidType: e.currentTarget.value as any
 													})}
-												class="mono-num rounded-2xs h-5 w-14 border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 py-0 text-right text-[10px] font-bold"
-											/>
-										</div>
-									</div>
-								{/if}
-
-								<!-- Row 4: Optional Comment/Reason -->
-								<div class="mt-1 flex items-center gap-1">
-									<input
-										type="text"
-										placeholder="Optional comment/reason..."
-										value={ov.comment ?? ''}
-										onchange={(e) =>
-											updateManualOverride(ov.id, {
-												comment: e.currentTarget.value
-											})}
-										class="rounded-2xs h-5 w-full border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-[9.5px] text-[var(--text-secondary)] placeholder:text-[var(--text-muted)]"
-									/>
-								</div>
-							</div>
-						{/each}
+												class="rounded-2xs h-5.5 w-full border border-[var(--border-hairline)] bg-[var(--bg-app)] px-1 text-[9.5px] font-semibold text-[var(--text-primary)]"
+											>
+												<option value="AUTO">AUTO</option>
+												<option value="GAS">🔴 GAS</option>
+												<option value="OIL">🟢 OIL</option>
+												<option value="WATER">🔵 WATER</option>
+												<option value="UNCONFIRMED">🟡 UNC</option>
+												<option value="NON_RESERVOIR">⚪ NON_RES</option>
+											</select>
+										</td>
+										<td class="px-1 py-1">
+											<div class="flex items-center gap-1">
+												<select
+													value={ov.swtMode ?? 'keep'}
+													onchange={(e) =>
+														updateManualOverride(ov.id, {
+															swtMode: e.currentTarget.value as any
+														})}
+													class="rounded-2xs h-5.5 min-w-[65px] flex-1 border border-[var(--border-hairline)] bg-[var(--bg-app)] px-1 text-[9.5px] font-semibold text-[var(--text-primary)]"
+												>
+													<option value="keep">Keep</option>
+													<option value="force_water_leg"
+														>Water (1.0)</option
+													>
+													<option value="fixed_value">Fixed</option>
+													<option value="cap_max">Cap Max</option>
+													<option value="floor_min">Floor Min</option>
+												</select>
+												{#if ov.swtMode === 'fixed_value' || ov.swtMode === 'cap_max' || ov.swtMode === 'floor_min'}
+													<input
+														type="number"
+														min="0"
+														max="1"
+														step="0.01"
+														value={ov.swtValue ?? 1.0}
+														onchange={(e) =>
+															updateManualOverride(ov.id, {
+																swtValue: Number(
+																	e.currentTarget.value
+																)
+															})}
+														title="Target SWT value (0 - 1)"
+														class="mono-num rounded-2xs h-5.5 w-11 border border-[var(--border-hairline)] bg-[var(--bg-app)] px-0.5 text-right text-[9.5px] font-bold text-[var(--accent-primary)]"
+													/>
+												{/if}
+											</div>
+										</td>
+										<td class="px-1 py-1 text-center">
+											<button
+												type="button"
+												onclick={() => toggleNoteRow(ov.id)}
+												title={ov.comment
+													? `Comment: ${ov.comment}`
+													: 'Add note/reason'}
+												class="rounded-2xs p-0.5 text-[10px] hover:bg-slate-200/60 {ov.comment
+													? 'font-bold text-indigo-600'
+													: 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}"
+											>
+												{ov.comment ? '💬' : '✏️'}
+											</button>
+										</td>
+										<td class="px-1 py-1 text-center">
+											<button
+												type="button"
+												onclick={() => removeManualOverride(ov.id)}
+												title="Delete override"
+												class="rounded-2xs p-0.5 text-xs font-bold text-[var(--text-muted)] hover:bg-red-50 hover:text-red-600"
+											>
+												×
+											</button>
+										</td>
+									</tr>
+									{#if expandedOverrideNotes[ov.id]}
+										<tr
+											class="border-b border-[var(--border-hairline)] bg-indigo-50/20"
+										>
+											<td colspan="6" class="px-2 py-1">
+												<div class="flex items-center gap-1.5 text-[9.5px]">
+													<span
+														class="font-medium text-[var(--text-muted)]"
+														>Reason:</span
+													>
+													<input
+														type="text"
+														placeholder="Optional comment/reason (e.g. tight streak, low gas peak, known water leg)..."
+														value={ov.comment ?? ''}
+														onchange={(e) =>
+															updateManualOverride(ov.id, {
+																comment: e.currentTarget.value
+															})}
+														class="rounded-2xs h-5 flex-1 border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[9.5px] text-[var(--text-primary)] placeholder:text-[var(--text-muted)]"
+													/>
+												</div>
+											</td>
+										</tr>
+									{/if}
+								{/each}
+							</tbody>
+						</table>
 					</div>
 				{/if}
 			</div>
