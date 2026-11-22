@@ -671,6 +671,8 @@ class ProjectDataState {
 			depths: (number | null)[];
 			tvd: (number | null)[];
 			tvdss?: (number | null)[];
+			gr?: (number | null)[];
+			vcoal?: (number | null)[];
 			zones: string[];
 			phit: (number | null)[];
 			swt: (number | null)[];

@@ -24,6 +24,8 @@
 		swt: number | null;
 		shf: number | null;
 		hafwl: number | null;
+		gr: number | null;
+		vcoal: number | null;
 	}>({
 		well: null,
 		tvd: null,
@@ -34,7 +36,9 @@
 		phit: null,
 		swt: null,
 		shf: null,
-		hafwl: null
+		hafwl: null,
+		gr: null,
+		vcoal: null
 	});
 
 	function syncPlotBounds() {
@@ -94,6 +98,33 @@
 		const fromProj = projectData.allZones ?? [];
 		const merged = new Set<string>([...fromStick, ...fromProj].filter((z) => z && z !== 'ALL'));
 		return ['ALL', ...Array.from(merged).sort()];
+	});
+
+	let availableTops = $derived.by(() => {
+		const rawWells = projectData.stickPlotResult?.wells ?? [];
+		const set = new Set<string>();
+		for (const w of rawWells) {
+			for (const t of w.tops || []) {
+				if (t.name) set.add(t.name);
+			}
+		}
+		return Array.from(set).sort();
+	});
+
+	let effectiveFlattenTop = $derived.by(() => {
+		if (
+			workbench.stickPlotFlattenTop &&
+			availableTops.includes(workbench.stickPlotFlattenTop)
+		) {
+			return workbench.stickPlotFlattenTop;
+		}
+		if (
+			workbench.stickPlotZoneFilter !== 'ALL' &&
+			availableTops.includes(workbench.stickPlotZoneFilter)
+		) {
+			return workbench.stickPlotZoneFilter;
+		}
+		return availableTops[0] ?? '';
 	});
 
 	function findNearestDepthValue(
@@ -466,6 +497,9 @@
 		});
 	});
 
+	let minTrackWidth = $derived(workbench.stickPlotShowLogs ? 160 : 100);
+	let totalPlotMinWidth = $derived(Math.max(100, orderedWells.length * minTrackWidth));
+
 	function moveWellOrder(wellName: string, dir: -1 | 1) {
 		const currentNames = orderedWells.map((w) => w.well_name);
 		const idx = currentNames.indexOf(wellName);
@@ -583,10 +617,24 @@
 	}
 
 	let lastZoneFilter = $state<string>(workbench.stickPlotZoneFilter);
+	let lastDatumMode = $state<string>(workbench.stickPlotDatumMode);
+	let lastFlattenTop = $state<string>(workbench.stickPlotFlattenTop);
+	let lastShowLogs = $state<boolean>(workbench.stickPlotShowLogs);
 	$effect(() => {
 		const zf = workbench.stickPlotZoneFilter;
-		if (zf !== lastZoneFilter) {
+		const dm = workbench.stickPlotDatumMode;
+		const ft = workbench.stickPlotFlattenTop;
+		const sl = workbench.stickPlotShowLogs;
+		if (
+			zf !== lastZoneFilter ||
+			dm !== lastDatumMode ||
+			ft !== lastFlattenTop ||
+			sl !== lastShowLogs
+		) {
 			lastZoneFilter = zf;
+			lastDatumMode = dm;
+			lastFlattenTop = ft;
+			lastShowLogs = sl;
 			yRange = null;
 		}
 	});
@@ -612,14 +660,30 @@
 		const minD = workbench.depthFilter?.min ?? -Infinity;
 		const maxD = workbench.depthFilter?.max ?? Infinity;
 
+		const isFlattened = workbench.stickPlotDatumMode === 'flattened';
+		const targetTop = effectiveFlattenTop;
+		const showLogs = workbench.stickPlotShowLogs;
+
 		let minTvd = Infinity;
 		let maxTvd = -Infinity;
 
 		const xMax = 0.4;
 
 		wells.forEach((w, wIdx) => {
-			const axisSuffix = wIdx === 0 ? '' : String(wIdx + 1);
-			const xAxisRef = `x${axisSuffix}`;
+			const axisRefA = showLogs ? (wIdx === 0 ? 'x' : `x${2 * wIdx + 1}`) : null;
+			const axisRefB = showLogs ? `x${2 * wIdx + 2}` : wIdx === 0 ? 'x' : `x${wIdx + 1}`;
+
+			// Determine well-specific datum TVDSS for flattening
+			let datumDepth = 0;
+			if (isFlattened) {
+				const mTop = w.tops?.find((t) => t.name === targetTop && Number.isFinite(t.tvd));
+				if (mTop) {
+					datumDepth = mTop.tvd;
+				} else {
+					datumDepth = w.top_reservoir_tvd ?? w.min_tvd ?? 0;
+				}
+			}
+
 			// Keep right-anchored top/contact labels clear of the right-edge perforation strip
 			const hasPerfStrip = workbench.stickPlotShowPerfs && (w.perforations?.length ?? 0) > 0;
 			const rightLabelX = hasPerfStrip ? xMax * 0.8 : xMax * 0.98;
@@ -627,8 +691,11 @@
 			const zb = getWellZoneBounds(w, activeZone);
 
 			if (zb !== null && Number.isFinite(zb.startTvd)) {
-				if (zb.startTvd < minTvd) minTvd = zb.startTvd;
-				if (Number.isFinite(zb.endTvd) && zb.endTvd > maxTvd) maxTvd = zb.endTvd;
+				const startEff = isFlattened ? zb.startTvd - datumDepth : zb.startTvd;
+				const endEff =
+					isFlattened && Number.isFinite(zb.endTvd) ? zb.endTvd - datumDepth : zb.endTvd;
+				if (startEff < minTvd) minTvd = startEff;
+				if (Number.isFinite(endEff) && endEff > maxTvd) maxTvd = endEff;
 			}
 
 			// Compute dynamic TVD step threshold per well so downsampled stride never triggers false gaps
@@ -653,6 +720,7 @@
 			const bvoArr: (number | null)[] = [];
 			const bvohArr: (number | null)[] = [];
 			const phitArr: (number | null)[] = [];
+			const grArr: (number | null)[] = [];
 			const customDataArr: any[] = [];
 
 			// Dedicated non-null arrays for SVG 'tozerox' fill so Plotly never bridges diagonally across null gaps
@@ -661,6 +729,7 @@
 			const fillGasArr: number[] = [];
 			const fillOilArr: number[] = [];
 			const fillBvohArr: number[] = [];
+			const fillVcoalArr: number[] = [];
 			let prevValidTvd: number | null = null;
 			const wellEffFwl = resolveEffectiveFwl(activeZone, w.zones);
 
@@ -672,25 +741,29 @@
 				if (tvd === null || tvd === undefined || !Number.isFinite(tvd)) continue;
 				if (md !== null && (md < minD || md > maxD)) continue;
 
+				const effTvd = isFlattened ? tvd - datumDepth : tvd;
+
 				const hasDepthGap =
-					prevValidTvd !== null && Math.abs(tvd - prevValidTvd) > gapThreshold;
+					prevValidTvd !== null && Math.abs(effTvd - prevValidTvd) > gapThreshold;
 				if (hasDepthGap && prevValidTvd !== null) {
 					// Clamp fill polygon back to x=0 across missing depth intervals
-					fillTvdArr.push(prevValidTvd, tvd);
+					fillTvdArr.push(prevValidTvd, effTvd);
 					fillBvoArr.push(0, 0);
 					fillGasArr.push(0, 0);
 					fillOilArr.push(0, 0);
 					fillBvohArr.push(0, 0);
+					fillVcoalArr.push(0, 0);
 					// Break stroke lines across missing depth intervals
 					if (tvdArr.length > 0 && tvdArr[tvdArr.length - 1] !== null) {
 						tvdArr.push(null);
 						bvoArr.push(null);
 						bvohArr.push(null);
 						phitArr.push(null);
+						grArr.push(null);
 						customDataArr.push(null);
 					}
 				}
-				prevValidTvd = tvd;
+				prevValidTvd = effTvd;
 
 				const matchesActiveZone =
 					activeZone === 'ALL' ||
@@ -701,28 +774,32 @@
 
 				if (!zoneMatches) {
 					// Keep fill anchored at x=0 in excluded zones so 'tozerox' never bridges across zones
-					fillTvdArr.push(tvd);
+					fillTvdArr.push(effTvd);
 					fillBvoArr.push(0);
 					fillGasArr.push(0);
 					fillOilArr.push(0);
 					fillBvohArr.push(0);
+					fillVcoalArr.push(0);
 					// Insert null break so line stroke doesn't bridge across excluded zones
 					if (tvdArr.length > 0 && tvdArr[tvdArr.length - 1] !== null) {
 						tvdArr.push(null);
 						bvoArr.push(null);
 						bvohArr.push(null);
 						phitArr.push(null);
+						grArr.push(null);
 						customDataArr.push(null);
 					}
 					continue;
 				}
 
-				if (tvd < minTvd) minTvd = tvd;
-				if (tvd > maxTvd) maxTvd = tvd;
+				if (effTvd < minTvd) minTvd = effTvd;
+				if (effTvd > maxTvd) maxTvd = effTvd;
 
 				const phit = w.phit[i];
 				const swt = w.swt[i];
 				const bvo = w.bvo[i];
+				const grVal = w.gr ? w.gr[i] : null;
+				const vcoalVal = w.vcoal ? w.vcoal[i] : null;
 
 				// Prefer live SHF from projectData.shfResult if available (nearest-depth lookup within 2.5m),
 				// then saved w.shf[i], and fall back to continuous model evaluation when SHF is sparse/null
@@ -759,19 +836,28 @@
 				const oilVal = !isGas ? bvoVal : 0;
 
 				// Map null BVHC/BVOH to 0 in fill arrays so SVG 'tozerox' drops horizontally to 0 at null boundaries
-				fillTvdArr.push(tvd);
+				fillTvdArr.push(effTvd);
 				fillBvoArr.push(bvoVal);
 				fillGasArr.push(gasVal);
 				fillOilArr.push(oilVal);
 				fillBvohArr.push(bvoh !== null && Number.isFinite(bvoh) ? Math.max(0, bvoh) : 0);
 
-				tvdArr.push(tvd);
+				// Scale VCOAL (0-1) across track 1 scale (0-150)
+				const vcoalDisplay =
+					vcoalVal !== null && Number.isFinite(vcoalVal) && vcoalVal > 0.02
+						? Math.min(1.0, vcoalVal) * 150
+						: 0;
+				fillVcoalArr.push(vcoalDisplay);
+
+				tvdArr.push(effTvd);
 				bvoArr.push(bvo);
 				bvohArr.push(bvoh);
 				phitArr.push(phit);
+				grArr.push(grVal);
 				customDataArr.push({
 					well: w.well_name,
 					tvd,
+					effTvd,
 					md,
 					zone: activeZone !== 'ALL' && matchesActiveZone ? activeZone : zn,
 					bvo,
@@ -779,10 +865,52 @@
 					phit,
 					swt,
 					shf,
-					isGas
+					isGas,
+					gr: grVal,
+					vcoal: vcoalVal
 				});
 			}
 
+			// Track 1 (Stratigraphy: GR & Coal) Traces on axisRefA
+			if (showLogs && axisRefA) {
+				// VCOAL Area Fill (Charcoal/Dark gray)
+				if (fillTvdArr.length > 0 && fillVcoalArr.some((v) => v > 0)) {
+					traces.push({
+						type: 'scatter',
+						mode: 'lines',
+						name: wIdx === 0 ? 'VCOAL' : `VCOAL_${wIdx}`,
+						showlegend: false,
+						xaxis: axisRefA,
+						yaxis: 'y',
+						x: fillVcoalArr,
+						y: fillTvdArr,
+						fill: 'tozerox',
+						fillcolor: 'rgba(24, 24, 27, 0.75)',
+						line: { width: 0.5, color: '#18181B' },
+						hoverinfo: 'skip'
+					});
+				}
+
+				// GR Line Trace (green curve)
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: wIdx === 0 ? 'GR' : undefined,
+					showlegend: wIdx === 0,
+					xaxis: axisRefA,
+					yaxis: 'y',
+					x: grArr,
+					y: tvdArr,
+					customdata: customDataArr,
+					line: { color: '#15803D', width: 1.4 },
+					hovertemplate:
+						`<b>${w.well_name}</b><br>` +
+						`${isFlattened ? 'Rel Depth' : 'TVDSS'}: %{y:.1f} m<br>` +
+						'GR: %{x:.1f} gAPI<extra></extra>'
+				});
+			}
+
+			// Track 2 (Fluids / Pay) Traces on axisRefB
 			// Optional PHIT envelope curve
 			if (workbench.stickPlotShowPhit) {
 				traces.push({
@@ -790,7 +918,7 @@
 					mode: 'lines',
 					name: wIdx === 0 ? 'PHIT' : undefined,
 					showlegend: wIdx === 0,
-					xaxis: xAxisRef,
+					xaxis: axisRefB,
 					yaxis: 'y',
 					x: phitArr,
 					y: tvdArr,
@@ -800,14 +928,14 @@
 				});
 			}
 
-			// Gas Fill Trace (maps null -> 0 so SVG 'tozerox' never interpolates diagonally across null intervals)
+			// Gas Fill Trace
 			if (fillTvdArr.length > 0 && fillGasArr.some((v) => v > 0)) {
 				traces.push({
 					type: 'scatter',
 					mode: 'lines',
 					name: wIdx === 0 ? 'Gas (Log)' : `GAS_FILL_${wIdx}`,
 					showlegend: false,
-					xaxis: xAxisRef,
+					xaxis: axisRefB,
 					yaxis: 'y',
 					x: fillGasArr,
 					y: fillTvdArr,
@@ -818,14 +946,14 @@
 				});
 			}
 
-			// Oil Fill Trace (maps null -> 0 so SVG 'tozerox' never interpolates diagonally across null intervals)
+			// Oil Fill Trace
 			if (fillTvdArr.length > 0 && fillOilArr.some((v) => v > 0)) {
 				traces.push({
 					type: 'scatter',
 					mode: 'lines',
 					name: wIdx === 0 ? 'Oil (Log)' : `OIL_FILL_${wIdx}`,
 					showlegend: false,
-					xaxis: xAxisRef,
+					xaxis: axisRefB,
 					yaxis: 'y',
 					x: fillOilArr,
 					y: fillTvdArr,
@@ -836,13 +964,13 @@
 				});
 			}
 
-			// Primary BVHC_Log = PHIT * (1 - SWT) Stroke Trace
+			// Primary BVHC_Log Stroke Trace
 			traces.push({
 				type: 'scatter',
 				mode: 'lines',
 				name: wIdx === 0 ? 'BVHC (Log)' : undefined,
 				showlegend: wIdx === 0,
-				xaxis: xAxisRef,
+				xaxis: axisRefB,
 				yaxis: 'y',
 				x: bvoArr,
 				y: tvdArr,
@@ -850,11 +978,11 @@
 				line: { color: '#047857', width: 1.5 },
 				hovertemplate:
 					`<b>${w.well_name}</b><br>` +
-					'TVDSS: %{y:.1f} m<br>' +
+					`${isFlattened ? 'Rel Depth' : 'TVDSS'}: %{y:.1f} m<br>` +
 					'%{customdata.isGas ? "BVG (Gas)" : "BVO (Oil)"}: %{x:.3f} v/v<extra></extra>'
 			});
 
-			// BVHC_SHF = PHIT * (1 - SHF) — tight 4px,2px dash + subtle fill for clean comparison against BVHC (Log)
+			// BVHC_SHF Fill & Stroke
 			if (bvohArr.some((v) => v !== null && Number.isFinite(v))) {
 				if (fillTvdArr.length > 0) {
 					traces.push({
@@ -862,7 +990,7 @@
 						mode: 'lines',
 						name: `BVOH_FILL_${wIdx}`,
 						showlegend: false,
-						xaxis: xAxisRef,
+						xaxis: axisRefB,
 						yaxis: 'y',
 						x: fillBvohArr,
 						y: fillTvdArr,
@@ -877,7 +1005,7 @@
 					mode: 'lines',
 					name: wIdx === 0 ? 'BVHC (SHF)' : undefined,
 					showlegend: wIdx === 0,
-					xaxis: xAxisRef,
+					xaxis: axisRefB,
 					yaxis: 'y',
 					x: bvohArr,
 					y: tvdArr,
@@ -885,7 +1013,7 @@
 					line: { color: '#B91C1C', width: 1.6, dash: '4px,2px' },
 					hovertemplate:
 						`<b>${w.well_name}</b><br>` +
-						'TVDSS: %{y:.1f} m<br>' +
+						`${isFlattened ? 'Rel Depth' : 'TVDSS'}: %{y:.1f} m<br>` +
 						'BVHC (SHF): %{x:.3f} v/v<extra></extra>'
 				});
 			}
@@ -899,8 +1027,8 @@
 					}
 				}
 				const effFwl = resolveEffectiveFwl(activeZone, w.zones);
-				const wellTopTvd = w.min_tvd;
-				const wellBotTvd = w.max_tvd;
+				const wellTopTvd = isFlattened ? w.min_tvd - datumDepth : w.min_tvd;
+				const wellBotTvd = isFlattened ? w.max_tvd - datumDepth : w.max_tvd;
 
 				const fs = projectData.shfParams.fluidSystem ?? 'auto';
 				const hasGasLog = Boolean(
@@ -912,16 +1040,38 @@
 					(w.bvo_pure && w.bvo_pure.some((v) => v !== null && Number(v) > 0.005))
 				);
 
-				const goc = contactMap['GOC'] ?? null;
-				const gdt = contactMap['GDT'] ?? null;
-				const gwc = contactMap['GWC'] ?? null;
-				const owc = contactMap['OWC'] ?? contactMap['ODT'] ?? null;
-				const fwl = contactMap['FWL'] ?? effFwl ?? null;
+				const goc =
+					contactMap['GOC'] !== undefined
+						? isFlattened
+							? contactMap['GOC'] - datumDepth
+							: contactMap['GOC']
+						: null;
+				const gdt =
+					contactMap['GDT'] !== undefined
+						? isFlattened
+							? contactMap['GDT'] - datumDepth
+							: contactMap['GDT']
+						: null;
+				const gwc =
+					contactMap['GWC'] !== undefined
+						? isFlattened
+							? contactMap['GWC'] - datumDepth
+							: contactMap['GWC']
+						: null;
+				const owc =
+					(contactMap['OWC'] ?? contactMap['ODT']) !== undefined
+						? isFlattened
+							? (contactMap['OWC'] ?? contactMap['ODT']) - datumDepth
+							: (contactMap['OWC'] ?? contactMap['ODT'])
+						: null;
+				const fwl =
+					(contactMap['FWL'] ?? effFwl) !== null &&
+					(contactMap['FWL'] ?? effFwl) !== undefined
+						? isFlattened
+							? (contactMap['FWL'] ?? effFwl)! - datumDepth
+							: (contactMap['FWL'] ?? effFwl)!
+						: null;
 
-				// Regime determination:
-				// - 'gas_water' or 'gas' is strictly Gas-Water (no oil band)
-				// - 'oil_water' or 'oil' is strictly Oil-Water (no gas band)
-				// - 'auto' evaluates logs/contacts: if gas and no oil -> Gas-Water; if oil and no gas -> Oil-Water; if both -> mixed
 				const isGasRegime =
 					fs === 'gas_water' ||
 					fs === 'gas' ||
@@ -940,7 +1090,7 @@
 					if (gasWaterContact > wellTopTvd) {
 						shapes.push({
 							type: 'rect',
-							xref: xAxisRef,
+							xref: axisRefB,
 							yref: 'y',
 							x0: 0,
 							x1: xMax,
@@ -954,7 +1104,7 @@
 					if (wellBotTvd > gasWaterContact) {
 						shapes.push({
 							type: 'rect',
-							xref: xAxisRef,
+							xref: axisRefB,
 							yref: 'y',
 							x0: 0,
 							x1: xMax,
@@ -971,7 +1121,7 @@
 					if (oilWaterContact > wellTopTvd) {
 						shapes.push({
 							type: 'rect',
-							xref: xAxisRef,
+							xref: axisRefB,
 							yref: 'y',
 							x0: 0,
 							x1: xMax,
@@ -985,7 +1135,7 @@
 					if (wellBotTvd > oilWaterContact) {
 						shapes.push({
 							type: 'rect',
-							xref: xAxisRef,
+							xref: axisRefB,
 							yref: 'y',
 							x0: 0,
 							x1: xMax,
@@ -1005,7 +1155,7 @@
 					if (gasBase > wellTopTvd) {
 						shapes.push({
 							type: 'rect',
-							xref: xAxisRef,
+							xref: axisRefB,
 							yref: 'y',
 							x0: 0,
 							x1: xMax,
@@ -1020,7 +1170,7 @@
 					if (oilBase > gasBase) {
 						shapes.push({
 							type: 'rect',
-							xref: xAxisRef,
+							xref: axisRefB,
 							yref: 'y',
 							x0: 0,
 							x1: xMax,
@@ -1035,7 +1185,7 @@
 					if (wellBotTvd > oilBase) {
 						shapes.push({
 							type: 'rect',
-							xref: xAxisRef,
+							xref: axisRefB,
 							yref: 'y',
 							x0: 0,
 							x1: xMax,
@@ -1058,22 +1208,23 @@
 						: cType.startsWith('O')
 							? '#15803D'
 							: '#1D4ED8';
+					const cTvdEff = isFlattened ? c.tvd - datumDepth : c.tvd;
 					renderedContactTvds.push(c.tvd);
 					shapes.push({
 						type: 'line',
-						xref: xAxisRef,
+						xref: axisRefB,
 						yref: 'y',
 						x0: 0,
 						x1: xMax,
-						y0: c.tvd,
-						y1: c.tvd,
+						y0: cTvdEff,
+						y1: cTvdEff,
 						line: { color: col, width: 1.6, dash: 'dot' }
 					});
 					annotations.push({
-						xref: xAxisRef,
+						xref: axisRefB,
 						yref: 'y',
 						x: rightLabelX,
-						y: c.tvd,
+						y: cTvdEff,
 						xanchor: 'right',
 						yanchor: 'bottom',
 						showarrow: false,
@@ -1090,6 +1241,7 @@
 					Number.isFinite(optContactTvd) &&
 					!renderedContactTvds.some((tv) => Math.abs(tv - optContactTvd) < 1.0)
 				) {
+					const optEff = isFlattened ? optContactTvd - datumDepth : optContactTvd;
 					const modeledType = isGasRegime ? 'GWC' : isOilRegime ? 'OWC' : 'Contact';
 					const modeledCol = isGasRegime
 						? '#DC2626'
@@ -1098,19 +1250,19 @@
 							: '#D97706';
 					shapes.push({
 						type: 'line',
-						xref: xAxisRef,
+						xref: axisRefB,
 						yref: 'y',
 						x0: 0,
 						x1: xMax,
-						y0: optContactTvd,
-						y1: optContactTvd,
+						y0: optEff,
+						y1: optEff,
 						line: { color: modeledCol, width: 1.6, dash: 'dot' }
 					});
 					annotations.push({
-						xref: xAxisRef,
+						xref: axisRefB,
 						yref: 'y',
 						x: rightLabelX,
-						y: optContactTvd,
+						y: optEff,
 						xanchor: 'right',
 						yanchor: 'bottom',
 						showarrow: false,
@@ -1122,21 +1274,22 @@
 
 				// Active Field / Zone FWL Line from SHF module
 				if (effFwl !== null && Number.isFinite(effFwl)) {
+					const fwlEff = isFlattened ? effFwl - datumDepth : effFwl;
 					shapes.push({
 						type: 'line',
-						xref: xAxisRef,
+						xref: axisRefB,
 						yref: 'y',
 						x0: 0,
 						x1: xMax,
-						y0: effFwl,
-						y1: effFwl,
+						y0: fwlEff,
+						y1: fwlEff,
 						line: { color: '#1D4ED8', width: 1.8, dash: 'dash' }
 					});
 					annotations.push({
-						xref: xAxisRef,
+						xref: axisRefB,
 						yref: 'y',
 						x: xMax * 0.04,
-						y: effFwl,
+						y: fwlEff,
 						xanchor: 'left',
 						yanchor: 'top',
 						showarrow: false,
@@ -1162,19 +1315,41 @@
 					}
 				}
 				for (const grp of groupedTops) {
-					const isHighlighted = activeZone !== 'ALL' && grp.names.includes(activeZone);
+					const isHighlighted =
+						(activeZone !== 'ALL' && grp.names.includes(activeZone)) ||
+						(isFlattened && grp.names.includes(targetTop));
 					const labelText =
 						grp.names.length <= 2
 							? grp.names.join(' / ')
 							: `${grp.names.slice(0, 2).join(' / ')} +${grp.names.length - 2}`;
+					const grpTvdEff = isFlattened ? grp.tvd - datumDepth : grp.tvd;
+
+					if (showLogs && axisRefA) {
+						shapes.push({
+							type: 'line',
+							xref: axisRefA,
+							yref: 'y',
+							x0: 0,
+							x1: 150,
+							y0: grpTvdEff,
+							y1: grpTvdEff,
+							line: {
+								color: isHighlighted ? '#0F172A' : '#64748B',
+								width: isHighlighted ? 1.4 : 1,
+								dash: 'dashdot'
+							},
+							layer: 'below'
+						});
+					}
+
 					shapes.push({
 						type: 'line',
-						xref: xAxisRef,
+						xref: axisRefB,
 						yref: 'y',
 						x0: 0,
 						x1: xMax,
-						y0: grp.tvd,
-						y1: grp.tvd,
+						y0: grpTvdEff,
+						y1: grpTvdEff,
 						line: {
 							color: isHighlighted ? '#0F172A' : '#64748B',
 							width: isHighlighted ? 1.4 : 1,
@@ -1183,10 +1358,10 @@
 						layer: 'below'
 					});
 					annotations.push({
-						xref: xAxisRef,
+						xref: axisRefB,
 						yref: 'y',
 						x: rightLabelX,
-						y: grp.tvd,
+						y: grpTvdEff,
 						xanchor: 'right',
 						yanchor: 'top',
 						showarrow: false,
@@ -1201,7 +1376,7 @@
 				}
 			}
 
-			// Perforation intervals (TVDSS): orange perf-gun strip on the left of each well track + hoverable markers
+			// Perforation intervals (TVDSS): orange perf-gun strip on the right edge + hoverable markers
 			if (workbench.stickPlotShowPerfs && w.perforations?.length) {
 				for (const perf of w.perforations) {
 					const tTop = perf.top_tvd;
@@ -1215,16 +1390,20 @@
 						!Number.isFinite(tBot)
 					)
 						continue;
-					const y0 = Math.min(tTop, tBot);
-					const y1 = Math.max(tTop, tBot);
+					const y0 = isFlattened
+						? Math.min(tTop, tBot) - datumDepth
+						: Math.min(tTop, tBot);
+					const y1 = isFlattened
+						? Math.max(tTop, tBot) - datumDepth
+						: Math.max(tTop, tBot);
 					const descTxt = perf.description ? `<br>${perf.description}` : '';
 					const hoverTxt =
 						`<b>${w.well_name} — Perf ${perf.name}</b><br>` +
-						`TVDSS: ${y0.toFixed(1)} – ${y1.toFixed(1)} m<br>` +
+						`${isFlattened ? 'Rel Depth' : 'TVDSS'}: ${y0.toFixed(1)} – ${y1.toFixed(1)} m<br>` +
 						`MD: ${Number(perf.top).toFixed(1)} – ${Number(perf.bottom).toFixed(1)} m${descTxt}`;
 					shapes.push({
 						type: 'rect',
-						xref: xAxisRef,
+						xref: axisRefB,
 						yref: 'y',
 						x0: 0,
 						x1: xMax,
@@ -1236,7 +1415,7 @@
 					});
 					shapes.push({
 						type: 'rect',
-						xref: xAxisRef,
+						xref: axisRefB,
 						yref: 'y',
 						x0: xMax * 0.955,
 						x1: xMax,
@@ -1254,7 +1433,7 @@
 						mode: 'markers',
 						name: `PERF_${wIdx}_${perf.name}`,
 						showlegend: false,
-						xaxis: xAxisRef,
+						xaxis: axisRefB,
 						yaxis: 'y',
 						x: perfY.map(() => xMax * 0.93),
 						y: perfY,
@@ -1264,7 +1443,7 @@
 					});
 					// Vertical perf name label, reading bottom-to-top, just inside the right-edge perf strip
 					annotations.push({
-						xref: xAxisRef,
+						xref: axisRefB,
 						yref: 'y',
 						x: xMax * 0.875,
 						y: (y0 + y1) / 2,
@@ -1285,8 +1464,8 @@
 		});
 
 		if (!Number.isFinite(minTvd) || !Number.isFinite(maxTvd) || maxTvd <= minTvd) {
-			minTvd = projectData.stickPlotResult?.min_tvd ?? 2000;
-			maxTvd = projectData.stickPlotResult?.max_tvd ?? 2500;
+			minTvd = isFlattened ? -100 : (projectData.stickPlotResult?.min_tvd ?? 2000);
+			maxTvd = isFlattened ? 300 : (projectData.stickPlotResult?.max_tvd ?? 2500);
 		}
 		const pad = Math.max(5, (maxTvd - minTvd) * 0.04);
 		const currentYRange = untrack(() =>
@@ -1297,6 +1476,35 @@
 			Number((minTvd - pad).toFixed(1))
 		];
 
+		// Stratigraphic Datum flattening horizontal reference line at y = 0
+		if (isFlattened) {
+			shapes.push({
+				type: 'line',
+				xref: 'paper',
+				yref: 'y',
+				x0: 0,
+				x1: 1,
+				y0: 0,
+				y1: 0,
+				line: { color: '#2563EB', width: 2, dash: 'solid' },
+				layer: 'above'
+			});
+			annotations.push({
+				xref: 'paper',
+				yref: 'y',
+				x: 0.005,
+				y: 0,
+				xanchor: 'left',
+				yanchor: 'bottom',
+				showarrow: false,
+				text: `DATUM: ${targetTop || 'Top'} (0 m)`,
+				font: { family: 'Inter', size: 9, color: '#1D4ED8' },
+				bgcolor: 'rgba(239, 246, 255, 0.92)',
+				bordercolor: '#93C5FD',
+				borderwidth: 1
+			});
+		}
+
 		const layout: any = {
 			autosize: true,
 			margin: { l: 54, r: 12, t: 8, b: 26 },
@@ -1306,13 +1514,17 @@
 			showlegend: false,
 			yaxis: {
 				title: {
-					text: 'True Vertical Depth Subsea — TVDSS (m)',
+					text: isFlattened
+						? `Stratigraphic Depth Relative to ${targetTop || 'Top'} (m)`
+						: 'True Vertical Depth Subsea — TVDSS (m)',
 					font: { family: 'Inter', size: 10, color: '#334155' }
 				},
 				range: computedRange,
 				showgrid: true,
 				gridcolor: '#E2E8F0',
-				zeroline: false,
+				zeroline: isFlattened,
+				zerolinecolor: isFlattened ? '#2563EB' : undefined,
+				zerolinewidth: isFlattened ? 2 : undefined,
 				tickfont: { family: 'JetBrains Mono', size: 9.5, color: '#475569' }
 			},
 			shapes,
@@ -1320,31 +1532,93 @@
 		};
 
 		domains.forEach((dom, wIdx) => {
-			const axisKey = wIdx === 0 ? 'xaxis' : `xaxis${wIdx + 1}`;
-			// Emphasized 0.2 v/v midline for quick eyeballing of BVO magnitude across wells
-			shapes.push({
-				type: 'line',
-				xref: wIdx === 0 ? 'x' : `x${wIdx + 1}`,
-				yref: 'paper',
-				x0: 0.2,
-				x1: 0.2,
-				y0: 0,
-				y1: 1,
-				line: { color: '#94A3B8', width: 1, dash: 'dash' },
-				layer: 'below'
-			});
-			layout[axisKey] = {
-				domain: dom,
-				range: [0, xMax],
-				showgrid: true,
-				gridcolor: '#E2E8F0',
-				zeroline: true,
-				zerolinecolor: '#CBD5E1',
-				tickvals: [0, 0.1, 0.2, 0.3, 0.4],
-				ticktext: ['0', '', '.2', '', '.4'],
-				tickfont: { family: 'JetBrains Mono', size: 8.5, color: '#64748B' },
-				fixedrange: true
-			};
+			if (!showLogs) {
+				const axisKey = wIdx === 0 ? 'xaxis' : `xaxis${wIdx + 1}`;
+				// Emphasized 0.2 v/v midline for quick eyeballing of BVO magnitude across wells
+				shapes.push({
+					type: 'line',
+					xref: wIdx === 0 ? 'x' : `x${wIdx + 1}`,
+					yref: 'paper',
+					x0: 0.2,
+					x1: 0.2,
+					y0: 0,
+					y1: 1,
+					line: { color: '#94A3B8', width: 1, dash: 'dash' },
+					layer: 'below'
+				});
+				layout[axisKey] = {
+					domain: dom,
+					range: [0, xMax],
+					showgrid: true,
+					gridcolor: '#E2E8F0',
+					zeroline: true,
+					zerolinecolor: '#CBD5E1',
+					tickvals: [0, 0.1, 0.2, 0.3, 0.4],
+					ticktext: ['0', '', '.2', '', '.4'],
+					tickfont: { family: 'JetBrains Mono', size: 8.5, color: '#64748B' },
+					fixedrange: true
+				};
+			} else {
+				const [x0, x1] = dom;
+				const w = x1 - x0;
+				const domA: [number, number] = [x0, Number((x0 + w * 0.44).toFixed(4))];
+				const domB: [number, number] = [Number((x0 + w * 0.48).toFixed(4)), x1];
+
+				const axisKeyA = wIdx === 0 ? 'xaxis' : `xaxis${2 * wIdx + 1}`;
+				const axisKeyB = `xaxis${2 * wIdx + 2}`;
+				const refA = wIdx === 0 ? 'x' : `x${2 * wIdx + 1}`;
+				const refB = `x${2 * wIdx + 2}`;
+
+				// Track A (GR 0-150 gAPI) midline at 75
+				shapes.push({
+					type: 'line',
+					xref: refA,
+					yref: 'paper',
+					x0: 75,
+					x1: 75,
+					y0: 0,
+					y1: 1,
+					line: { color: '#E2E8F0', width: 0.8, dash: 'dot' },
+					layer: 'below'
+				});
+				layout[axisKeyA] = {
+					domain: domA,
+					range: [0, 150],
+					showgrid: true,
+					gridcolor: '#E2E8F0',
+					zeroline: true,
+					zerolinecolor: '#CBD5E1',
+					tickvals: [0, 50, 100, 150],
+					ticktext: ['0', '50', '100', '150'],
+					tickfont: { family: 'JetBrains Mono', size: 7.5, color: '#15803D' },
+					fixedrange: true
+				};
+
+				// Track B (Fluids 0-0.4 v/v) midline at 0.2
+				shapes.push({
+					type: 'line',
+					xref: refB,
+					yref: 'paper',
+					x0: 0.2,
+					x1: 0.2,
+					y0: 0,
+					y1: 1,
+					line: { color: '#94A3B8', width: 1, dash: 'dash' },
+					layer: 'below'
+				});
+				layout[axisKeyB] = {
+					domain: domB,
+					range: [0, xMax],
+					showgrid: true,
+					gridcolor: '#E2E8F0',
+					zeroline: true,
+					zerolinecolor: '#CBD5E1',
+					tickvals: [0, 0.1, 0.2, 0.3, 0.4],
+					ticktext: ['0', '', '.2', '', '.4'],
+					tickfont: { family: 'JetBrains Mono', size: 7.5, color: '#64748B' },
+					fixedrange: true
+				};
+			}
 		});
 
 		return { traces, layout };
@@ -1370,6 +1644,9 @@
 		void workbench.stickPlotShowContacts;
 		void workbench.stickPlotShowTops;
 		void workbench.stickPlotShowPerfs;
+		void workbench.stickPlotShowLogs;
+		void workbench.stickPlotDatumMode;
+		void workbench.stickPlotFlattenTop;
 		void workbench.selectedZones;
 		void workbench.depthFilter;
 
@@ -1400,7 +1677,9 @@
 							phit: cd.phit,
 							swt: cd.swt,
 							shf: cd.shf,
-							hafwl: fwl !== null && typeof cd.tvd === 'number' ? fwl - cd.tvd : null
+							hafwl: fwl !== null && typeof cd.tvd === 'number' ? fwl - cd.tvd : null,
+							gr: typeof cd.gr === 'number' ? cd.gr : null,
+							vcoal: typeof cd.vcoal === 'number' ? cd.vcoal : null
 						};
 						if (typeof cd.md === 'number') {
 							workbench.cursorDepth = cd.md;
@@ -1484,6 +1763,32 @@
 				</select>
 			</div>
 
+			<!-- Stratigraphic Datum Flattening Selector -->
+			<div class="flex shrink-0 items-center gap-1 text-[11px]">
+				<span class="text-[var(--text-muted)]">Datum:</span>
+				<select
+					bind:value={workbench.stickPlotDatumMode}
+					class="h-5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-0 pr-5 pl-1.5 text-[10.5px] font-medium text-[var(--text-primary)]"
+				>
+					<option value="structural">Structural (TVDSS)</option>
+					<option value="flattened">Stratigraphic (Flattened)</option>
+				</select>
+			</div>
+
+			{#if workbench.stickPlotDatumMode === 'flattened'}
+				<div class="flex shrink-0 items-center gap-1 text-[11px]">
+					<span class="text-[var(--text-muted)]">Top:</span>
+					<select
+						bind:value={workbench.stickPlotFlattenTop}
+						class="h-5 rounded-xs border border-blue-300 bg-blue-50/50 py-0 pr-5 pl-1.5 text-[10.5px] font-semibold text-blue-900"
+					>
+						{#each availableTops as topName (topName)}
+							<option value={topName}>{topName}</option>
+						{/each}
+					</select>
+				</div>
+			{/if}
+
 			{#if (projectData.stickPlotResult?.skipped_no_tvd_wells?.length ?? projectData.wellsWithoutTvd.length) > 0}
 				{@const skippedList = projectData.stickPlotResult?.skipped_no_tvd_wells?.length
 					? projectData.stickPlotResult.skipped_no_tvd_wells
@@ -1504,6 +1809,17 @@
 
 		<!-- Right Controls: Overlays & Reset -->
 		<div class="flex shrink-0 items-center gap-2">
+			<label
+				class="flex cursor-pointer items-center gap-1 text-[10.5px] text-[var(--text-secondary)]"
+				title="Toggle Log Tracks (GR & Coal Volume) for rapid geological correlation"
+			>
+				<input
+					type="checkbox"
+					bind:checked={workbench.stickPlotShowLogs}
+					class="h-3 w-3 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)] focus:ring-0"
+				/>
+				<span class="font-medium text-emerald-800">Logs (GR/Coal)</span>
+			</label>
 			<label
 				class="flex cursor-pointer items-center gap-1 text-[10.5px] text-[var(--text-secondary)]"
 			>
@@ -1559,168 +1875,244 @@
 				onclick={resetTvdZoom}
 				class="h-5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[10px] font-medium text-[var(--text-secondary)] hover:bg-slate-100"
 			>
-				Reset TVDSS Zoom
+				{workbench.stickPlotDatumMode === 'flattened'
+					? 'Reset Datum Zoom'
+					: 'Reset TVDSS Zoom'}
 			</button>
 		</div>
 	</div>
 
-	<!-- Per-Well Track Header Strip (aligned with Plotly subplot domains) -->
-	<div
-		style="padding-left: {plotAreaLeft}px; padding-right: {plotAreaRight}px;"
-		class="flex shrink-0 items-stretch border-b border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[9px] leading-tight"
-	>
-		<div class="relative flex h-[76px] w-full">
-			{#each orderedWells as well, wIdx (well.well_name)}
-				{@const dom = trackDomains[wIdx] ?? [0, 1]}
-				{@const leftPct = dom[0] * 100}
-				{@const widthPct = Math.max(2, (dom[1] - dom[0]) * 100)}
-				{@const isActiveWell = workbench.wellId === well.well_name}
-				{@const wMetrics = wellZoneMetrics.get(well.well_name)}
-				{@const dispTopTvd = wMetrics?.topTvd ?? well.top_reservoir_tvd}
-				{@const dispHcpv = wMetrics?.hcpv ?? well.cum_hcpv}
-				{@const wDate = getWellDateDisplay(well)}
-				<div
-					style="left: {leftPct}%; width: {widthPct}%;"
-					class="absolute inset-y-0 flex flex-col justify-between overflow-hidden border-x px-1 py-0.5 transition-colors {isActiveWell
-						? 'border-blue-300 bg-blue-50/40'
-						: 'border-slate-200/70'}"
-				>
-					<!-- Row 1: Reorder Arrows + Clickable Well Name -->
-					<div class="flex items-center justify-between gap-0.5">
-						<button
-							type="button"
-							disabled={wIdx === 0}
-							onclick={() => moveWellOrder(well.well_name, -1)}
-							title="Move well track left"
-							class="rounded-2xs px-0.5 text-[8px] text-slate-400 hover:bg-slate-200/70 hover:text-slate-700 disabled:opacity-20"
-						>
-							◀
-						</button>
-						<button
-							type="button"
-							onclick={() => projectData.selectWell(well.well_name)}
-							title="Click to inspect {well.well_name} (Top TVDSS: {dispTopTvd.toFixed(
-								1
-							)}m{wDate.label ? ` · ${wDate.tooltip}` : ''})"
-							class="truncate font-sans text-[9.5px] font-bold hover:underline {isActiveWell
-								? 'text-[var(--accent-primary)]'
-								: 'text-[var(--text-primary)]'}"
-						>
-							{well.well_name}
-						</button>
-						<button
-							type="button"
-							disabled={wIdx === orderedWells.length - 1}
-							onclick={() => moveWellOrder(well.well_name, 1)}
-							title="Move well track right"
-							class="rounded-2xs px-0.5 text-[8px] text-slate-400 hover:bg-slate-200/70 hover:text-slate-700 disabled:opacity-20"
-						>
-							▶
-						</button>
-					</div>
-
-					<!-- Row 2: Well Drilled / Log Acquisition Date (Month & Year) -->
-					<div
-						title={wDate.tooltip}
-						class="mono-num rounded-2xs flex items-center justify-center truncate bg-slate-100/80 px-1 py-[1px] text-[7.5px] font-medium text-slate-600"
-					>
-						{#if wDate.label}
-							<span class="truncate">
-								<span class="text-[7px] font-normal text-slate-400">
-									{wDate.source === 'spud'
-										? 'Spud:'
-										: wDate.source === 'log'
-											? 'Log:'
-											: ''}
-								</span>
-								<span class="font-semibold text-slate-700">{wDate.label}</span>
-							</span>
-						{:else}
-							<span class="text-[7px] text-slate-400">Date: —</span>
-						{/if}
-					</div>
-
-					<!-- Row 3: Top TVDSS & Cumulative Hydrocarbon Column (HCPV·m) -->
-					<div
-						class="mono-num flex items-center justify-between text-[7.5px] whitespace-nowrap text-[var(--text-muted)]"
-					>
-						<span title="Top TVDSS ({workbench.stickPlotZoneFilter})"
-							>Top:{dispTopTvd.toFixed(0)}m</span
-						>
-						<span
-							class="font-semibold text-emerald-700"
-							title="Cumulative Hydrocarbon Pore Volume Column ({workbench.stickPlotZoneFilter})"
-						>
-							HCPV:{dispHcpv.toFixed(2)}m
-						</span>
-					</div>
-
-					<!-- Row 4: BVHC_Log (Green/Red) & BVHC_SHF (Red Dashed) Scale Header -->
-					<div class="flex flex-col">
+	<!-- Scrollable Middle Region for Header Strip & Plot Canvas -->
+	<div class="flex min-h-0 flex-1 flex-col overflow-x-auto overflow-y-hidden">
+		<div style="min-width: {totalPlotMinWidth}px;" class="flex min-h-full flex-1 flex-col">
+			<!-- Per-Well Track Header Strip (aligned with Plotly subplot domains) -->
+			<div
+				style="padding-left: {plotAreaLeft}px; padding-right: {plotAreaRight}px;"
+				class="flex shrink-0 items-stretch border-b border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[9px] leading-tight"
+			>
+				<div class="relative flex h-[76px] w-full">
+					{#each orderedWells as well, wIdx (well.well_name)}
+						{@const dom = trackDomains[wIdx] ?? [0, 1]}
+						{@const leftPct = dom[0] * 100}
+						{@const widthPct = Math.max(2, (dom[1] - dom[0]) * 100)}
+						{@const isActiveWell = workbench.wellId === well.well_name}
+						{@const wMetrics = wellZoneMetrics.get(well.well_name)}
+						{@const dispTopTvd = wMetrics?.topTvd ?? well.top_reservoir_tvd}
+						{@const dispHcpv = wMetrics?.hcpv ?? well.cum_hcpv}
+						{@const wDate = getWellDateDisplay(well)}
 						<div
-							class="mono-num flex items-center justify-between text-[8px] font-semibold"
+							style="left: {leftPct}%; width: {widthPct}%;"
+							class="absolute inset-y-0 flex flex-col justify-between overflow-hidden border-x px-1 py-0.5 transition-colors {isActiveWell
+								? 'border-blue-300 bg-blue-50/40'
+								: 'border-slate-200/70'}"
 						>
-							<span class="text-emerald-700">0</span>
-							<span class="font-sans text-[8px] font-bold text-slate-700">
-								<span class="text-emerald-700">BVO</span>
-								/
-								<span class="text-red-600">BVG</span>
-								/
-								<span class="font-bold text-red-700">SHF</span>
-							</span>
-							<span class="text-red-600">0.4</span>
-						</div>
-						<div class="mt-[1px] flex w-full items-center gap-0.5">
-							<div class="h-[1.5px] flex-1 bg-emerald-700" title="Oil (Log)"></div>
-							<div class="h-[1.5px] flex-1 bg-red-600" title="Gas (Log)"></div>
-							<div
-								class="h-[1.5px] flex-1"
-								title="SHF Model"
-								style="background: repeating-linear-gradient(to right, #B91C1C 0 4px, transparent 4px 6px);"
-							></div>
-						</div>
-					</div>
-				</div>
-			{/each}
-		</div>
-	</div>
+							<!-- Row 1: Reorder Arrows + Clickable Well Name -->
+							<div class="flex items-center justify-between gap-0.5">
+								<button
+									type="button"
+									disabled={wIdx === 0}
+									onclick={() => moveWellOrder(well.well_name, -1)}
+									title="Move well track left"
+									class="rounded-2xs px-0.5 text-[8px] text-slate-400 hover:bg-slate-200/70 hover:text-slate-700 disabled:opacity-20"
+								>
+									◀
+								</button>
+								<button
+									type="button"
+									onclick={() => projectData.selectWell(well.well_name)}
+									title="Click to inspect {well.well_name} (Top TVDSS: {dispTopTvd.toFixed(
+										1
+									)}m{wDate.label ? ` · ${wDate.tooltip}` : ''})"
+									class="truncate font-sans text-[9.5px] font-bold hover:underline {isActiveWell
+										? 'text-[var(--accent-primary)]'
+										: 'text-[var(--text-primary)]'}"
+								>
+									{well.well_name}
+								</button>
+								<button
+									type="button"
+									disabled={wIdx === orderedWells.length - 1}
+									onclick={() => moveWellOrder(well.well_name, 1)}
+									title="Move well track right"
+									class="rounded-2xs px-0.5 text-[8px] text-slate-400 hover:bg-slate-200/70 hover:text-slate-700 disabled:opacity-20"
+								>
+									▶
+								</button>
+							</div>
 
-	<!-- Multi-Well TVDSS Stick Plot Canvas -->
-	<div class="relative min-h-0 flex-1 overflow-hidden">
-		{#if projectData.isLoadingStickPlot && orderedWells.length === 0}
-			<div
-				class="flex h-full w-full items-center justify-center text-xs text-[var(--text-muted)]"
-			>
-				Loading multi-well TVDSS stick plot...
-			</div>
-		{:else if orderedWells.length === 0}
-			<div
-				class="flex h-full w-full flex-col items-center justify-center gap-2 p-6 text-center"
-			>
-				<div class="text-xs font-semibold text-[var(--text-primary)]">
-					Multi-Well Stick Plot Disabled — No Wells with True Vertical Depth Subsea
-					(TVDSS)
+							<!-- Row 2: Well Drilled / Log Acquisition Date (Month & Year) -->
+							<div
+								title={wDate.tooltip}
+								class="mono-num rounded-2xs flex items-center justify-center truncate bg-slate-100/80 px-1 py-[1px] text-[7.5px] font-medium text-slate-600"
+							>
+								{#if wDate.label}
+									<span class="truncate">
+										<span class="text-[7px] font-normal text-slate-400">
+											{wDate.source === 'spud'
+												? 'Spud:'
+												: wDate.source === 'log'
+													? 'Log:'
+													: ''}
+										</span>
+										<span class="font-semibold text-slate-700"
+											>{wDate.label}</span
+										>
+									</span>
+								{:else}
+									<span class="text-[7px] text-slate-400">Date: —</span>
+								{/if}
+							</div>
+
+							<!-- Row 3: Top TVDSS & Cumulative Hydrocarbon Column (HCPV·m) -->
+							<div
+								class="mono-num flex items-center justify-between text-[7.5px] whitespace-nowrap text-[var(--text-muted)]"
+							>
+								<span title="Top TVDSS ({workbench.stickPlotZoneFilter})"
+									>Top:{dispTopTvd.toFixed(0)}m</span
+								>
+								<span
+									class="font-semibold text-emerald-700"
+									title="Cumulative Hydrocarbon Pore Volume Column ({workbench.stickPlotZoneFilter})"
+								>
+									HCPV:{dispHcpv.toFixed(2)}m
+								</span>
+							</div>
+
+							<!-- Row 4: Track Scale Headers (Dual micro-tracks when Logs enabled) -->
+							{#if workbench.stickPlotShowLogs}
+								<div class="flex items-center gap-1">
+									<!-- Track 1 Header: GR 0 - 150 & Coal -->
+									<div
+										class="flex w-[44%] flex-col border-r border-slate-200 pr-0.5"
+									>
+										<div
+											class="mono-num flex items-center justify-between text-[7px] font-semibold text-emerald-800"
+										>
+											<span>0</span>
+											<span class="font-sans font-bold text-slate-700"
+												>GR/Coal</span
+											>
+											<span>150</span>
+										</div>
+										<div class="mt-[1px] flex w-full items-center gap-0.5">
+											<div
+												class="h-[1.5px] flex-1 bg-emerald-700"
+												title="Gamma Ray (0-150 gAPI)"
+											></div>
+											<div
+												class="h-[2px] w-2.5 rounded-xs bg-zinc-900"
+												title="VCOAL (Coal marker)"
+											></div>
+										</div>
+									</div>
+									<!-- Track 2 Header: Fluids -->
+									<div class="flex w-[54%] flex-col pl-0.5">
+										<div
+											class="mono-num flex items-center justify-between text-[7px] font-semibold"
+										>
+											<span class="text-emerald-700">0</span>
+											<span class="font-sans font-bold text-slate-700">
+												<span class="text-emerald-700">BVO</span>/<span
+													class="text-red-600">BVG</span
+												>/<span class="text-red-700">SHF</span>
+											</span>
+											<span class="text-red-600">0.4</span>
+										</div>
+										<div class="mt-[1px] flex w-full items-center gap-0.5">
+											<div
+												class="h-[1.5px] flex-1 bg-emerald-700"
+												title="Oil (Log)"
+											></div>
+											<div
+												class="h-[1.5px] flex-1 bg-red-600"
+												title="Gas (Log)"
+											></div>
+											<div
+												class="h-[1.5px] flex-1"
+												title="SHF Model"
+												style="background: repeating-linear-gradient(to right, #B91C1C 0 4px, transparent 4px 6px);"
+											></div>
+										</div>
+									</div>
+								</div>
+							{:else}
+								<div class="flex flex-col">
+									<div
+										class="mono-num flex items-center justify-between text-[8px] font-semibold"
+									>
+										<span class="text-emerald-700">0</span>
+										<span class="font-sans text-[8px] font-bold text-slate-700">
+											<span class="text-emerald-700">BVO</span>
+											/
+											<span class="text-red-600">BVG</span>
+											/
+											<span class="font-bold text-red-700">SHF</span>
+										</span>
+										<span class="text-red-600">0.4</span>
+									</div>
+									<div class="mt-[1px] flex w-full items-center gap-0.5">
+										<div
+											class="h-[1.5px] flex-1 bg-emerald-700"
+											title="Oil (Log)"
+										></div>
+										<div
+											class="h-[1.5px] flex-1 bg-red-600"
+											title="Gas (Log)"
+										></div>
+										<div
+											class="h-[1.5px] flex-1"
+											title="SHF Model"
+											style="background: repeating-linear-gradient(to right, #B91C1C 0 4px, transparent 4px 6px);"
+										></div>
+									</div>
+								</div>
+							{/if}
+						</div>
+					{/each}
 				</div>
-				<p class="max-w-md text-[11px] leading-relaxed text-[var(--text-secondary)]">
-					None of the selected wells have a <span class="mono-num font-semibold"
-						>TVDSS</span
-					>
-					/
-					<span class="mono-num font-semibold">TVD</span> curve or directional survey (&ge;
-					2 stations). True Vertical Depth Subsea is never assumed equal to Measured Depth (MD).
-					Import directional surveys or TVDSS/TVD curves to enable structural TVDSS stick plots.
-				</p>
-				<button
-					type="button"
-					onclick={() => (workbench.centerPaneMultiWellView = 'logs')}
-					class="mt-1 h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 text-xs font-semibold text-[var(--accent-primary)] hover:bg-[var(--bg-subtle)]"
-				>
-					Switch to Single-Well Logs
-				</button>
 			</div>
-		{:else}
-			<div bind:this={plotContainer} class="h-full w-full"></div>
-		{/if}
+
+			<!-- Multi-Well TVDSS Stick Plot Canvas -->
+			<div class="relative min-h-0 flex-1 overflow-hidden">
+				{#if projectData.isLoadingStickPlot && orderedWells.length === 0}
+					<div
+						class="flex h-full w-full items-center justify-center text-xs text-[var(--text-muted)]"
+					>
+						Loading multi-well TVDSS stick plot...
+					</div>
+				{:else if orderedWells.length === 0}
+					<div
+						class="flex h-full w-full flex-col items-center justify-center gap-2 p-6 text-center"
+					>
+						<div class="text-xs font-semibold text-[var(--text-primary)]">
+							Multi-Well Stick Plot Disabled — No Wells with True Vertical Depth
+							Subsea (TVDSS)
+						</div>
+						<p
+							class="max-w-md text-[11px] leading-relaxed text-[var(--text-secondary)]"
+						>
+							None of the selected wells have a <span class="mono-num font-semibold"
+								>TVDSS</span
+							>
+							/
+							<span class="mono-num font-semibold">TVD</span> curve or directional survey
+							(&ge; 2 stations). True Vertical Depth Subsea is never assumed equal to Measured
+							Depth (MD). Import directional surveys or TVDSS/TVD curves to enable structural
+							TVDSS stick plots.
+						</p>
+						<button
+							type="button"
+							onclick={() => (workbench.centerPaneMultiWellView = 'logs')}
+							class="mt-1 h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-3 text-xs font-semibold text-[var(--accent-primary)] hover:bg-[var(--bg-subtle)]"
+						>
+							Switch to Single-Well Logs
+						</button>
+					</div>
+				{:else}
+					<div bind:this={plotContainer} class="h-full w-full"></div>
+				{/if}
+			</div>
+		</div>
 	</div>
 
 	<!-- Synchronized Bottom Readout Bar -->
@@ -1733,7 +2125,9 @@
 				{hoverReadout.well ?? workbench.wellId ?? '—'}
 			</span>
 			<span>
-				<strong class="text-[var(--text-primary)]">TVDSS:</strong>
+				<strong class="text-[var(--text-primary)]">
+					{workbench.stickPlotDatumMode === 'flattened' ? 'Rel Depth:' : 'TVDSS:'}
+				</strong>
 				{fmtDepth(hoverReadout.tvd)}
 			</span>
 			<span>
@@ -1744,6 +2138,18 @@
 				<span>
 					<strong>Zone:</strong>
 					{hoverReadout.zone}
+				</span>
+			{/if}
+			{#if hoverReadout.gr !== null && hoverReadout.gr !== undefined}
+				<span>
+					<strong class="text-emerald-700">GR:</strong>
+					{fmtNum(hoverReadout.gr, 1)} gAPI
+				</span>
+			{/if}
+			{#if hoverReadout.vcoal !== null && hoverReadout.vcoal !== undefined && hoverReadout.vcoal > 0.001}
+				<span>
+					<strong class="text-zinc-800">VCOAL:</strong>
+					{fmtNum(hoverReadout.vcoal, 3)}
 				</span>
 			{/if}
 			<span>
@@ -1777,6 +2183,19 @@
 		</div>
 
 		<div class="flex items-center gap-2 text-[10px]">
+			{#if workbench.stickPlotShowLogs}
+				<span class="inline-flex items-center gap-1">
+					<span class="inline-block h-2 w-2 rounded-xs border border-zinc-900 bg-zinc-900"
+					></span>
+					Coal
+				</span>
+				<span class="inline-flex items-center gap-1">
+					<span
+						class="inline-block h-2 w-2 rounded-xs border border-emerald-700 bg-emerald-700"
+					></span>
+					GR
+				</span>
+			{/if}
 			<span class="inline-flex items-center gap-1">
 				<span class="inline-block h-2 w-2 rounded-xs border border-red-500 bg-red-500/30"
 				></span>

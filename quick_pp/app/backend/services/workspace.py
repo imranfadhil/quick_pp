@@ -11739,9 +11739,18 @@ def workspace_stick_plot(
                     if z_str and z_str != "ALL":
                         all_zones_set.add(z_str)
 
-                # Focus sampling budget on the logged / formation interval while preserving hydrocarbon samples
+                # Focus sampling budget on the logged / formation interval while preserving hydrocarbon and coal samples
                 eval_mask = phit_s.notna() | swt_s.notna() | shf_s.notna()
-                for c_check in ("GR", "RT", "RHOB", "NPHI", "PERM", "PERM_TRANS"):
+                for c_check in (
+                    "GR",
+                    "RT",
+                    "RHOB",
+                    "NPHI",
+                    "PERM",
+                    "PERM_TRANS",
+                    "VCOAL",
+                    "V_COAL",
+                ):
                     if c_check in wdf_sorted.columns:
                         eval_mask = eval_mask | wdf_sorted[c_check].notna()
                 sub = wdf_sorted
@@ -11765,10 +11774,45 @@ def workspace_stick_plot(
                 if len(sub) > max_pts:
                     stride = max(1, len(sub) // max_pts)
                     stride_idx = np.arange(0, len(sub), stride, dtype=int)
+                    # Preserve thin coal beds and hydrocarbon intervals
+                    coal_s_raw = None
+                    for c in ("VCOAL", "V_COAL", "COAL", "VCOAL_FINAL"):
+                        if c in sub.columns:
+                            coal_s_raw = pd.to_numeric(sub[c], errors="coerce").fillna(
+                                0.0
+                            )
+                            break
+                    if coal_s_raw is None:
+                        rhob_c = next(
+                            (c for c in ("RHOB", "DEN", "RHOZ") if c in sub.columns),
+                            None,
+                        )
+                        nphi_c = next(
+                            (c for c in ("NPHI", "NEU", "TNPH") if c in sub.columns),
+                            None,
+                        )
+                        if rhob_c and nphi_c:
+                            coal_s_raw = (
+                                (
+                                    (pd.to_numeric(sub[rhob_c], errors="coerce") < 2.05)
+                                    & (
+                                        pd.to_numeric(sub[nphi_c], errors="coerce")
+                                        > 0.35
+                                    )
+                                )
+                                .astype(float)
+                                .fillna(0.0)
+                            )
+                        else:
+                            coal_s_raw = pd.Series(0.0, index=sub.index)
+
                     hc_mask = (
-                        pd.to_numeric(sub["BVO"], errors="coerce").fillna(0.0) > 0.005
-                    ) | (
-                        pd.to_numeric(sub["BVOH"], errors="coerce").fillna(0.0) > 0.005
+                        (pd.to_numeric(sub["BVO"], errors="coerce").fillna(0.0) > 0.005)
+                        | (
+                            pd.to_numeric(sub["BVOH"], errors="coerce").fillna(0.0)
+                            > 0.005
+                        )
+                        | (coal_s_raw > 0.05)
                     )
                     hc_idx = np.flatnonzero(hc_mask.to_numpy())
                     keep_idx = np.unique(np.concatenate([stride_idx, hc_idx]))
@@ -11784,6 +11828,48 @@ def workspace_stick_plot(
                         round(float(x), decimals) if pd.notna(x) else None
                         for x in s_num.tolist()
                     ]
+
+                # Extract GR series
+                gr_col = next(
+                    (c for c in ("GR", "GR_EDTC", "SGR", "GAMMA") if c in sub.columns),
+                    None,
+                )
+                gr_series = (
+                    sub[gr_col]
+                    if gr_col
+                    else pd.Series([None] * len(sub), index=sub.index)
+                )
+
+                # Extract or derive VCOAL series
+                vcoal_col = next(
+                    (
+                        c
+                        for c in ("VCOAL", "V_COAL", "COAL", "VCOAL_FINAL")
+                        if c in sub.columns
+                    ),
+                    None,
+                )
+                if vcoal_col:
+                    vcoal_series = sub[vcoal_col]
+                else:
+                    rhob_col = next(
+                        (c for c in ("RHOB", "DEN", "RHOZ") if c in sub.columns), None
+                    )
+                    nphi_col = next(
+                        (c for c in ("NPHI", "NEU", "TNPH") if c in sub.columns), None
+                    )
+                    if rhob_col and nphi_col:
+                        r_vals = pd.to_numeric(sub[rhob_col], errors="coerce")
+                        n_vals = pd.to_numeric(sub[nphi_col], errors="coerce")
+                        coal_mask = (
+                            (r_vals < 2.05)
+                            & (n_vals > 0.35)
+                            & r_vals.notna()
+                            & n_vals.notna()
+                        )
+                        vcoal_series = coal_mask.astype(float)
+                    else:
+                        vcoal_series = pd.Series([0.0] * len(sub), index=sub.index)
 
                 tvdss_clean_list = _clean_float_list(sub["TVD"], 2)
                 date_info = _resolve_well_date_info(project_id, wn, proj)
@@ -11805,6 +11891,8 @@ def workspace_stick_plot(
                         "depths": _clean_float_list(sub["DEPTH"], 2),
                         "tvd": tvdss_clean_list,
                         "tvdss": tvdss_clean_list,
+                        "gr": _clean_float_list(gr_series, 2),
+                        "vcoal": _clean_float_list(vcoal_series, 4),
                         "zones": sub["ZONES"].fillna("ALL").astype(str).tolist(),
                         "phit": _clean_float_list(sub["PHIT"], 4),
                         "swt": _clean_float_list(sub["SWT"], 4),

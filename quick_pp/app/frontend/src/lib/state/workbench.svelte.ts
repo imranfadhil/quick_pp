@@ -754,6 +754,9 @@ class WorkbenchState {
 	stickPlotCustomOrder = $state<string[]>([]);
 	stickPlotZoneFilter = $state<string>('ALL');
 	stickPlotShowPhit = $state<boolean>(false);
+	stickPlotShowLogs = $state<boolean>(false);
+	stickPlotDatumMode = $state<'structural' | 'flattened'>('structural');
+	stickPlotFlattenTop = $state<string>('');
 	stickPlotShowContacts = $state<boolean>(true);
 	stickPlotShowTops = $state<boolean>(true);
 	stickPlotShowPerfs = $state<boolean>(true);
