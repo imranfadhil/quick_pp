@@ -259,6 +259,18 @@ export interface SaturationModelParams {
 	waterLegFitIntercept: number | null;
 	continuousMModel: 'calibrated' | 'borai' | 'shell_lucia';
 	applyContinuousM: boolean;
+	manualOverrides?: FluidSwtOverride[];
+}
+
+export interface FluidSwtOverride {
+	id: string;
+	top: number;
+	bottom: number;
+	fluidType?: 'AUTO' | 'GAS' | 'OIL' | 'WATER' | 'UNCONFIRMED' | 'NON_RESERVOIR';
+	swtMode?: 'keep' | 'force_water_leg' | 'fixed_value' | 'cap_max' | 'floor_min';
+	swtValue?: number | null;
+	enabled?: boolean;
+	comment?: string;
 }
 
 export interface ScalModelParams {
@@ -988,7 +1000,8 @@ class WorkbenchState {
 		waterLegFitSlope: null,
 		waterLegFitIntercept: null,
 		continuousMModel: 'calibrated',
-		applyContinuousM: false
+		applyContinuousM: false,
+		manualOverrides: []
 	});
 
 	scalParams = $state<ScalModelParams>({

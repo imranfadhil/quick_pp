@@ -2722,6 +2722,29 @@
 			});
 		}
 
+		// Active Manual Overrides Indicator on Track 7
+		const activeOverrides = (workbench.saturationParams.manualOverrides ?? []).filter(
+			(o) => o.enabled !== false && Number.isFinite(o.top) && Number.isFinite(o.bottom)
+		);
+		for (const ov of activeOverrides) {
+			const t = Math.min(ov.top, ov.bottom);
+			const b = Math.max(ov.top, ov.bottom);
+			const flLabel = ov.fluidType && ov.fluidType !== 'AUTO' ? ov.fluidType : 'Auto';
+			const swtLabel = ov.swtMode && ov.swtMode !== 'keep' ? ov.swtMode : 'Model';
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: `OVERRIDE_${ov.id}`,
+				showlegend: false,
+				xaxis: 'x7',
+				yaxis: 'y',
+				x: [0.03, 0.03],
+				y: [t, b],
+				line: { color: '#8B5CF6', width: 4.0, dash: 'solid' },
+				hovertemplate: `<b>Manual Override</b><br>Fluid: ${flLabel}<br>SWT: ${swtLabel}<extra></extra>`
+			});
+		}
+
 		// Background shapes & native annotations for Formation Top intervals & Crossplot Lasso Brushing
 		const shapes: any[] = [];
 		const annotations: any[] = [];
@@ -3596,7 +3619,14 @@
 
 	let pointerMoveRaf = 0;
 	function handlePlotPointerMove(e: PointerEvent) {
-		if (!showInspectionLine || isInspectionLocked || draggingMarker || selectingInterval || !plotContainer) return;
+		if (
+			!showInspectionLine ||
+			isInspectionLocked ||
+			draggingMarker ||
+			selectingInterval ||
+			!plotContainer
+		)
+			return;
 		const rect = plotContainer.getBoundingClientRect();
 		const plotTop = rect.top + 6;
 		const plotHeight = Math.max(1, rect.height - 14);
@@ -3896,7 +3926,7 @@
 					title="Lock / freeze inspection line at current depth (Shortcut: Space)"
 					onclick={() => (isInspectionLocked = !isInspectionLocked)}
 					class="flex h-5 items-center gap-1 rounded-sm border px-1.5 text-[10px] font-semibold transition-colors {isInspectionLocked
-						? 'border-amber-500 bg-amber-50 text-amber-800 dark:border-amber-600 dark:bg-amber-950/60 dark:text-amber-200 shadow-2xs'
+						? 'border-amber-500 bg-amber-50 text-amber-800 shadow-2xs dark:border-amber-600 dark:bg-amber-950/60 dark:text-amber-200'
 						: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
 				>
 					<span>{isInspectionLocked ? '🔒 Locked' : '🔓 Lock (Space)'}</span>
@@ -4734,9 +4764,13 @@
 				>
 					{#if isInspectionLocked}
 						<div
-							class="pointer-events-auto absolute left-2 -top-3 flex items-center gap-1 rounded-2xs border border-amber-300 bg-amber-50/95 px-1.5 py-0.2 text-[8px] font-bold text-amber-900 shadow-xs backdrop-blur-xs"
+							class="rounded-2xs py-0.2 pointer-events-auto absolute -top-3 left-2 flex items-center gap-1 border border-amber-300 bg-amber-50/95 px-1.5 text-[8px] font-bold text-amber-900 shadow-xs backdrop-blur-xs"
 						>
-							<span>🔒 Locked at {formatLogDepth(readout.DEPT ?? workbench.cursorDepth)}</span>
+							<span
+								>🔒 Locked at {formatLogDepth(
+									readout.DEPT ?? workbench.cursorDepth
+								)}</span
+							>
 							<button
 								type="button"
 								onclick={() => (isInspectionLocked = false)}

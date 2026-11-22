@@ -1444,6 +1444,17 @@ class WellDataState {
 					continue;
 				}
 				if (col === 'WELL_NAME') continue;
+				if (col === 'FLUID_TYPE') {
+					const strMapped = (arr || []).map((v) =>
+						v !== null && v !== undefined && String(v).trim() !== '' && String(v) !== 'NaN'
+							? String(v)
+							: null
+					);
+					numericCurves[col] = strMapped as any;
+					origCopy[col] = [...strMapped] as any;
+					committedCopy[col] = [...strMapped] as any;
+					continue;
+				}
 				const mapped = (arr || []).map((v) =>
 					typeof v === 'number' && Number.isFinite(v) ? v : Number.NaN
 				);
@@ -2160,6 +2171,14 @@ class WellDataState {
 		) {
 			for (const [col, vals] of Object.entries(computedData)) {
 				if (col === 'WELL_NAME' || col === 'ZONES') continue;
+				if (col === 'FLUID_TYPE') {
+					updated[col] = vals.map((v) =>
+						v !== null && v !== undefined && String(v).trim() !== '' && String(v) !== 'NaN'
+							? String(v)
+							: null
+					) as any;
+					continue;
+				}
 				updated[col] = vals.map((v) =>
 					typeof v === 'number' && Number.isFinite(v) ? v : Number.NaN
 				);
@@ -2177,7 +2196,7 @@ class WellDataState {
 					continue;
 				const targetArr = updated[col]
 					? [...updated[col]]
-					: new Array(baseDept.length).fill(Number.NaN);
+					: new Array(baseDept.length).fill(col === 'FLUID_TYPE' ? null : Number.NaN);
 				const positionalRows = vals.length === baseDept.length;
 				const rowCount = incomingDept.length || (positionalRows ? vals.length : 0);
 				for (let i = 0; i < rowCount; i++) {
@@ -2194,8 +2213,15 @@ class WellDataState {
 						(!selectedIndices || selectedIndices.has(targetIdx))
 					) {
 						const v = vals[i];
-						targetArr[targetIdx] =
-							typeof v === 'number' && Number.isFinite(v) ? v : Number.NaN;
+						if (col === 'FLUID_TYPE') {
+							targetArr[targetIdx] =
+								v !== null && v !== undefined && String(v).trim() !== '' && String(v) !== 'NaN'
+									? (String(v) as any)
+									: null;
+						} else {
+							targetArr[targetIdx] =
+								typeof v === 'number' && Number.isFinite(v) ? v : Number.NaN;
+						}
 					}
 				}
 				updated[col] = targetArr;
@@ -2349,11 +2375,19 @@ class WellDataState {
 		const deptArr = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
 		if (deptArr.length === 0) return false;
 
-		const curvesPayload: Record<string, (number | null)[]> = {};
+		const curvesPayload: Record<string, (number | string | null)[]> = {};
 		for (const col of cols) {
 			const arr = this.curves[col];
 			if (arr && arr.length === deptArr.length) {
-				curvesPayload[col] = arr.map((v) => (Number.isFinite(v) ? v : null));
+				if (col === 'FLUID_TYPE') {
+					curvesPayload[col] = arr.map((v) =>
+						v !== null && v !== undefined && String(v).trim() !== '' && String(v) !== 'NaN'
+							? String(v)
+							: null
+					);
+				} else {
+					curvesPayload[col] = arr.map((v) => (Number.isFinite(v) ? (v as number) : null));
+				}
 			}
 		}
 		if (includeCoreShift) {

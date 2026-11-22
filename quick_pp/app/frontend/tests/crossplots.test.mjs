@@ -115,7 +115,7 @@ test('current-step plots are promoted and other plots retain workflow and standa
 	assert.equal(groups[0].label, 'Current step');
 	assert.deepEqual(
 		groups[0].plots.map((plot) => plot.id),
-		['sw-comparison', 'pickett', 'bqv', 'shf']
+		['sw-comparison', 'pickett', 'bqv', 'water-leg-m', 'fluid-typing', 'shf']
 	);
 	assert.ok(
 		groups

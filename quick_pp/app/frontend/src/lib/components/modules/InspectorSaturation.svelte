@@ -6,7 +6,7 @@
 	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
 	import { depthDisplay } from '$lib/state/depthDisplay.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
-	import { workbench } from '$lib/state/workbench.svelte';
+	import { workbench, type FluidSwtOverride } from '$lib/state/workbench.svelte';
 	import { thomasStieberAvailable } from '$lib/utils/lithology';
 	import { calculateWaterLegCalibration } from '$lib/utils/waterLegCalibration';
 	import {
@@ -408,6 +408,10 @@
 						continuous_m_model: sp.continuousMModel ?? 'calibrated',
 						water_leg_slope: sp.applyContinuousM ? sp.waterLegFitSlope : null,
 						water_leg_intercept: sp.applyContinuousM ? sp.waterLegFitIntercept : null,
+						manual_overrides: sp.manualOverrides?.filter((o) => o.enabled !== false)
+							.length
+							? sp.manualOverrides.filter((o) => o.enabled !== false)
+							: undefined,
 						save: persist && !selectionMode
 					} as any
 				}
@@ -462,6 +466,108 @@
 		if (bqvAutoFit.slope !== null) sp.bqvManualSlope = bqvAutoFit.slope;
 		if (bqvAutoFit.intercept !== null) sp.bqvManualIntercept = bqvAutoFit.intercept;
 		sp.bqvFitMode = 'manual';
+	}
+
+	function addManualOverride(partial?: Partial<FluidSwtOverride>) {
+		const sp = workbench.saturationParams;
+		const list = sp.manualOverrides ? [...sp.manualOverrides] : [];
+		let top = wellData.depthRange.min;
+		let bottom = wellData.depthRange.max;
+		if (workbench.brushedDepthIndices && workbench.brushedDepthIndices.size > 0) {
+			const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
+			let minD = Infinity;
+			let maxD = -Infinity;
+			for (const idx of workbench.brushedDepthIndices) {
+				const d = dept[idx];
+				if (typeof d === 'number' && Number.isFinite(d)) {
+					if (d < minD) minD = d;
+					if (d > maxD) maxD = d;
+				}
+			}
+			if (Number.isFinite(minD) && Number.isFinite(maxD)) {
+				top = Number(minD.toFixed(1));
+				bottom = Number(maxD.toFixed(1));
+			}
+		} else if (
+			workbench.depthFilter &&
+			Number.isFinite(workbench.depthFilter.min) &&
+			Number.isFinite(workbench.depthFilter.max)
+		) {
+			top = Number(workbench.depthFilter.min.toFixed(1));
+			bottom = Number(workbench.depthFilter.max.toFixed(1));
+		}
+
+		const newOv: FluidSwtOverride = {
+			id: `ov-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+			top: partial?.top ?? top,
+			bottom: partial?.bottom ?? bottom,
+			fluidType: partial?.fluidType ?? 'AUTO',
+			swtMode: partial?.swtMode ?? 'keep',
+			swtValue: partial?.swtValue ?? 1.0,
+			enabled: true,
+			comment: partial?.comment ?? ''
+		};
+		sp.manualOverrides = [...list, newOv];
+		executeSaturation(false);
+	}
+
+	function removeManualOverride(id: string) {
+		const sp = workbench.saturationParams;
+		sp.manualOverrides = (sp.manualOverrides ?? []).filter((o) => o.id !== id);
+		executeSaturation(false);
+	}
+
+	function toggleManualOverride(id: string) {
+		const sp = workbench.saturationParams;
+		sp.manualOverrides = (sp.manualOverrides ?? []).map((o) =>
+			o.id === id ? { ...o, enabled: o.enabled === false } : o
+		);
+		executeSaturation(false);
+	}
+
+	function updateManualOverride(id: string, updates: Partial<FluidSwtOverride>) {
+		const sp = workbench.saturationParams;
+		sp.manualOverrides = (sp.manualOverrides ?? []).map((o) =>
+			o.id === id ? { ...o, ...updates } : o
+		);
+		executeSaturation(false);
+	}
+
+	function clearAllOverrides() {
+		workbench.saturationParams.manualOverrides = [];
+		executeSaturation(false);
+	}
+
+	function forceWaterLegBelowContact() {
+		let contactDepth: number | null = null;
+		const owc = wellData.contacts.find((c) => /owc|gwc|fwl/i.test(c.type || c.name || ''));
+		if (owc && Number.isFinite(owc.depth)) {
+			contactDepth = owc.depth;
+		} else if (
+			workbench.saturationParams.fwl &&
+			Number.isFinite(workbench.saturationParams.fwl) &&
+			workbench.saturationParams.fwl > 0
+		) {
+			contactDepth = workbench.saturationParams.fwl;
+		} else if (
+			detectedContacts &&
+			detectedContacts.length > 0 &&
+			Number.isFinite(detectedContacts[0]?.depth)
+		) {
+			contactDepth = detectedContacts[0].depth;
+		}
+		const wellMax = wellData.depthRange.max;
+		const topD =
+			contactDepth !== null
+				? Number(contactDepth.toFixed(1))
+				: Math.round((wellData.depthRange.min + wellMax) / 2);
+		addManualOverride({
+			top: topD,
+			bottom: Number(wellMax.toFixed(1)),
+			fluidType: 'WATER',
+			swtMode: 'force_water_leg',
+			comment: 'Forced Water Leg below Contact'
+		});
 	}
 </script>
 
@@ -780,6 +886,234 @@
 					</div>
 				{/if}
 			{/if}
+		</ParameterSection>
+
+		<ParameterSection
+			title="Manual Overrides (Fluid Type & SWT)"
+			badge={(workbench.saturationParams.manualOverrides?.filter((o) => o.enabled !== false)
+				.length ?? 0) > 0
+				? `${workbench.saturationParams.manualOverrides?.filter((o) => o.enabled !== false).length} Active`
+				: 'None'}
+		>
+			<div class="space-y-2">
+				<!-- Quick Actions Bar -->
+				<div class="flex flex-wrap items-center gap-1.5">
+					<button
+						type="button"
+						onclick={forceWaterLegBelowContact}
+						title="Force 100% Water below detected contact or FWL"
+						class="rounded-xs border border-blue-300 bg-blue-50/80 px-2 py-1 text-[10.5px] font-semibold text-blue-800 hover:bg-blue-100/80"
+					>
+						+ Force Water Leg
+					</button>
+
+					{#if workbench.brushedDepthIndices && workbench.brushedDepthIndices.size > 0}
+						<button
+							type="button"
+							onclick={() => addManualOverride()}
+							title="Create an override across the currently brushed depth interval"
+							class="rounded-xs border border-indigo-300 bg-indigo-50/80 px-2 py-1 text-[10.5px] font-semibold text-indigo-800 hover:bg-indigo-100/80"
+						>
+							+ Override Brushed
+						</button>
+					{/if}
+
+					<button
+						type="button"
+						onclick={() => addManualOverride()}
+						title="Add a new custom depth interval override"
+						class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1 text-[10.5px] font-medium text-[var(--text-primary)] hover:border-[var(--border-focus)]"
+					>
+						+ Custom Override
+					</button>
+
+					{#if (workbench.saturationParams.manualOverrides?.length ?? 0) > 0}
+						<button
+							type="button"
+							onclick={clearAllOverrides}
+							title="Clear all manual overrides"
+							class="ml-auto text-[10px] font-medium text-red-600 hover:underline"
+						>
+							Clear All
+						</button>
+					{/if}
+				</div>
+
+				<!-- Overrides List / Cards -->
+				{#if (workbench.saturationParams.manualOverrides?.length ?? 0) === 0}
+					<div
+						class="rounded-xs border border-dashed border-[var(--border-hairline)] bg-[var(--bg-app)] p-2 text-center text-[10.5px] text-[var(--text-muted)]"
+					>
+						No manual overrides applied. Use buttons above to sculpt fluid phases or
+						clamp water saturation across intervals.
+					</div>
+				{:else}
+					<div class="space-y-2">
+						{#each workbench.saturationParams.manualOverrides ?? [] as ov, idx (ov.id)}
+							<div
+								class="rounded-xs border p-2 text-[11px] {ov.enabled !== false
+									? 'border-[var(--border-hairline)] bg-[var(--bg-app)]'
+									: 'border-dashed border-[var(--border-hairline)] bg-[var(--bg-app)] opacity-60'}"
+							>
+								<!-- Row 1: Header / Depth Interval -->
+								<div
+									class="mb-1.5 flex items-center justify-between gap-1 border-b border-[var(--border-hairline)] pb-1.5"
+								>
+									<div
+										class="flex items-center gap-1.5 font-medium text-[var(--text-primary)]"
+									>
+										<input
+											type="checkbox"
+											checked={ov.enabled !== false}
+											onchange={() => toggleManualOverride(ov.id)}
+											title="Enable/disable this override"
+											class="h-3.5 w-3.5 rounded-xs text-[var(--accent-primary)]"
+										/>
+										<span
+											class="text-[10px] font-semibold text-[var(--text-muted)]"
+											>#{idx + 1}</span
+										>
+										<span class="text-[10px]">Depth:</span>
+										<input
+											type="number"
+											step="0.5"
+											value={ov.top}
+											onchange={(e) =>
+												updateManualOverride(ov.id, {
+													top: Number(e.currentTarget.value)
+												})}
+											class="mono-num rounded-2xs h-5 w-16 border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 py-0 text-right text-[10px] font-semibold"
+										/>
+										<span class="text-[10px]">to</span>
+										<input
+											type="number"
+											step="0.5"
+											value={ov.bottom}
+											onchange={(e) =>
+												updateManualOverride(ov.id, {
+													bottom: Number(e.currentTarget.value)
+												})}
+											class="mono-num rounded-2xs h-5 w-16 border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 py-0 text-right text-[10px] font-semibold"
+										/>
+										<span class="text-[10px] text-[var(--text-muted)]">m</span>
+									</div>
+									<button
+										type="button"
+										onclick={() => removeManualOverride(ov.id)}
+										title="Delete this override"
+										class="px-1 text-xs font-bold text-[var(--text-muted)] hover:text-red-600"
+									>
+										×
+									</button>
+								</div>
+
+								<!-- Row 2: Fluid Phase & SWT Action Selectors -->
+								<div class="grid grid-cols-2 gap-2">
+									<div>
+										<span
+											class="mb-0.5 block text-[9.5px] font-semibold text-[var(--text-secondary)]"
+										>
+											Fluid Phase
+										</span>
+										<select
+											value={ov.fluidType ?? 'AUTO'}
+											onchange={(e) =>
+												updateManualOverride(ov.id, {
+													fluidType: e.currentTarget.value as any
+												})}
+											class="rounded-2xs h-6 w-full border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-[10px] font-semibold text-[var(--text-primary)]"
+										>
+											<option value="AUTO">AUTO (Model)</option>
+											<option value="GAS">GAS (Red)</option>
+											<option value="OIL">OIL (Green)</option>
+											<option value="WATER">WATER (Blue)</option>
+											<option value="UNCONFIRMED">UNCONFIRMED</option>
+											<option value="NON_RESERVOIR">NON_RESERVOIR</option>
+										</select>
+									</div>
+
+									<div>
+										<span
+											class="mb-0.5 block text-[9.5px] font-semibold text-[var(--text-secondary)]"
+										>
+											SWT Action
+										</span>
+										<select
+											value={ov.swtMode ?? 'keep'}
+											onchange={(e) =>
+												updateManualOverride(ov.id, {
+													swtMode: e.currentTarget.value as any
+												})}
+											class="rounded-2xs h-6 w-full border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-[10px] font-semibold text-[var(--text-primary)]"
+										>
+											<option value="keep">Keep Model SWT</option>
+											<option value="force_water_leg"
+												>Force Water Leg (1.0)</option
+											>
+											<option value="fixed_value">Set Fixed SWT</option>
+											<option value="cap_max">Cap Max SWT (Ceiling)</option>
+											<option value="floor_min">Floor Min SWT</option>
+										</select>
+									</div>
+								</div>
+
+								<!-- Row 3: SWT Value if applicable -->
+								{#if ov.swtMode === 'fixed_value' || ov.swtMode === 'cap_max' || ov.swtMode === 'floor_min'}
+									<div
+										class="mt-1.5 flex items-center justify-between gap-2 border-t border-[var(--border-hairline)] pt-1.5"
+									>
+										<span
+											class="text-[10px] font-medium text-[var(--text-secondary)]"
+										>
+											SWT Target:
+										</span>
+										<div class="flex items-center gap-1">
+											<input
+												type="range"
+												min="0"
+												max="1"
+												step="0.01"
+												value={ov.swtValue ?? 1.0}
+												oninput={(e) =>
+													updateManualOverride(ov.id, {
+														swtValue: Number(e.currentTarget.value)
+													})}
+												class="h-1.5 w-24 accent-[var(--accent-primary)]"
+											/>
+											<input
+												type="number"
+												min="0"
+												max="1"
+												step="0.01"
+												value={ov.swtValue ?? 1.0}
+												onchange={(e) =>
+													updateManualOverride(ov.id, {
+														swtValue: Number(e.currentTarget.value)
+													})}
+												class="mono-num rounded-2xs h-5 w-14 border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 py-0 text-right text-[10px] font-bold"
+											/>
+										</div>
+									</div>
+								{/if}
+
+								<!-- Row 4: Optional Comment/Reason -->
+								<div class="mt-1 flex items-center gap-1">
+									<input
+										type="text"
+										placeholder="Optional comment/reason..."
+										value={ov.comment ?? ''}
+										onchange={(e) =>
+											updateManualOverride(ov.id, {
+												comment: e.currentTarget.value
+											})}
+										class="rounded-2xs h-5 w-full border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-[9.5px] text-[var(--text-secondary)] placeholder:text-[var(--text-muted)]"
+									/>
+								</div>
+							</div>
+						{/each}
+					</div>
+				{/if}
+			</div>
 		</ParameterSection>
 
 		<ParameterSection title="Electrical Constants & Pickett Plot" badge="Live Pickett Line">

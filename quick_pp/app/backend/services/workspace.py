@@ -1991,6 +1991,10 @@ class WorkspaceSaturationRequest(WorkspaceFilterBase):
         True,
         description="Cater for unconfirmed fluid types in ambiguous crossover/density/sonic intervals",
     )
+    manual_overrides: Optional[List[Dict[str, Any]]] = Field(
+        None,
+        description="Optional interval manual overrides for FLUID_TYPE and SWT: [{'id': str, 'top': float, 'bottom': float, 'fluid_type': Optional[str], 'swt_mode': Optional[str], 'swt_value': Optional[float], 'comment': Optional[str]}]",
+    )
 
 
 class WorkspaceReservoirSummaryRequest(WorkspaceFilterBase):
@@ -7019,16 +7023,101 @@ def workspace_saturation(
             enforce_segregation=bool(req.enforce_fluid_segregation),
         )
 
-        gas_flag_s = classified["GAS_FLAG"]
-        oil_flag_s = classified["OIL_FLAG"]
-        unc_flag_s = classified.get("UNC_FLAG", pd.Series(0, index=classified.index))
-        hc_flag_s = classified["HC_FLAG"]
-        voil_s = classified["VOIL"]
-        vgas_s = classified["VGAS"]
-        vunc_s = classified.get("VUNC", pd.Series(0.0, index=classified.index))
-        bvhc_s = classified["BVHC"]
-        rho_hc_s = classified["RHO_HC"]
-        fluid_type_s = classified["FLUID_TYPE"]
+        gas_flag_s = classified["GAS_FLAG"].copy()
+        oil_flag_s = classified["OIL_FLAG"].copy()
+        unc_flag_s = classified.get(
+            "UNC_FLAG", pd.Series(0, index=classified.index)
+        ).copy()
+        hc_flag_s = classified["HC_FLAG"].copy()
+        voil_s = classified["VOIL"].copy()
+        vgas_s = classified["VGAS"].copy()
+        vunc_s = classified.get("VUNC", pd.Series(0.0, index=classified.index)).copy()
+        bvhc_s = classified["BVHC"].copy()
+        rho_hc_s = classified["RHO_HC"].copy()
+        fluid_type_s = classified["FLUID_TYPE"].copy()
+
+        # Apply manual interactive overrides if provided
+        if req.manual_overrides:
+            depth_series = df["DEPTH"]
+            for ov in req.manual_overrides:
+                if not isinstance(ov, dict):
+                    continue
+                top_d = ov.get("top")
+                bot_d = ov.get("bottom")
+                if top_d is None or bot_d is None:
+                    continue
+                try:
+                    t_val = min(float(top_d), float(bot_d))
+                    b_val = max(float(top_d), float(bot_d))
+                except (ValueError, TypeError):
+                    continue
+                mask = (depth_series >= t_val) & (depth_series <= b_val)
+                if not mask.any():
+                    continue
+
+                fl_type = (
+                    str(ov.get("fluidType") or ov.get("fluid_type") or "")
+                    .upper()
+                    .strip()
+                )
+                swt_mode = (
+                    str(ov.get("swtMode") or ov.get("swt_mode") or "keep")
+                    .lower()
+                    .strip()
+                )
+                swt_val_raw = (
+                    ov.get("swtValue")
+                    if ov.get("swtValue") is not None
+                    else ov.get("swt_value")
+                )
+
+                # 1. Apply Swt override
+                if swt_mode == "force_water_leg":
+                    primary_swt.loc[mask] = 1.0
+                    fl_type = "WATER"
+                elif swt_mode == "fixed_value" and swt_val_raw is not None:
+                    try:
+                        primary_swt.loc[mask] = float(
+                            np.clip(float(swt_val_raw), 0.0, 1.0)
+                        )
+                    except (ValueError, TypeError):
+                        pass
+                elif swt_mode == "cap_max" and swt_val_raw is not None:
+                    try:
+                        primary_swt.loc[mask] = np.minimum(
+                            primary_swt.loc[mask], float(swt_val_raw)
+                        )
+                    except (ValueError, TypeError):
+                        pass
+                elif swt_mode == "floor_min" and swt_val_raw is not None:
+                    try:
+                        primary_swt.loc[mask] = np.maximum(
+                            primary_swt.loc[mask], float(swt_val_raw)
+                        )
+                    except (ValueError, TypeError):
+                        pass
+
+                # 2. Apply Fluid Type override
+                if fl_type in ("GAS", "OIL", "WATER", "UNCONFIRMED", "NON_RESERVOIR"):
+                    fluid_type_s.loc[mask] = fl_type
+                    gas_flag_s.loc[mask] = 1 if fl_type == "GAS" else 0
+                    oil_flag_s.loc[mask] = 1 if fl_type == "OIL" else 0
+                    unc_flag_s.loc[mask] = 1 if fl_type == "UNCONFIRMED" else 0
+                    hc_flag_s.loc[mask] = (
+                        1 if fl_type in ("GAS", "OIL", "UNCONFIRMED") else 0
+                    )
+                    if fl_type == "WATER" and swt_mode == "keep":
+                        primary_swt.loc[mask] = np.maximum(
+                            primary_swt.loc[mask], float(req.sw_pay_cutoff)
+                        )
+
+            # 3. Synchronize coupled volumetric curves
+            hcpv_updated = (phit_bulk * (1.0 - primary_swt)).clip(lower=0.0)
+            bvw_s = phit_bulk * primary_swt
+            bvhc_s = hcpv_updated
+            voil_s = oil_flag_s * hcpv_updated
+            vgas_s = gas_flag_s * hcpv_updated
+            vunc_s = unc_flag_s * hcpv_updated
 
         out_df = pd.DataFrame(
             {
@@ -7076,6 +7165,7 @@ def workspace_saturation(
             "VOIL",
             "VGAS",
             "VUNC",
+            "FLUID_TYPE",
         ]
         if rho_hc_s.notna().any():
             save_sat_cols.append("RHO_HC")
@@ -7407,6 +7497,16 @@ def workspace_reservoir_summary(
                 "PHIT and SWT curves are required for reservoir summary calculation."
             )
 
+        fluid_type_col = next(
+            (
+                c
+                for c in ["FLUID_TYPE", "fluid_type"]
+                if c in df.columns and df[c].notna().any()
+            ),
+            None,
+        )
+        fluid_type_s = df[fluid_type_col] if fluid_type_col else None
+
         ressum_df = calc_reservoir_summary(
             depth=depth,
             vshale=vclay,
@@ -7415,14 +7515,23 @@ def workspace_reservoir_summary(
             perm=perm,
             zones=zones,
             cutoffs=req.cut_offs,
+            fluid_type=fluid_type_s,
         )
         ressum_df = ressum_df.dropna(how="all").reset_index(drop=True)
         res_flag = (
             (vclay < float(req.cut_offs.get("VSHALE", 0.4)))
             & (phit > float(req.cut_offs.get("PHIT", 0.05)))
         ).astype(int)
+        is_hc = (
+            ~fluid_type_s.astype(str)
+            .str.upper()
+            .str.strip()
+            .isin(["WATER", "NON_RESERVOIR", "DRY", "WET", "NONE", "NAN"])
+            if fluid_type_s is not None
+            else pd.Series(True, index=df.index)
+        )
         pay_flag = (
-            (res_flag == 1) & (swt < float(req.cut_offs.get("SWT", 0.8)))
+            (res_flag == 1) & (swt < float(req.cut_offs.get("SWT", 0.8))) & is_hc
         ).astype(int)
         flags_df = pd.DataFrame(
             {

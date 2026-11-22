@@ -93,7 +93,9 @@ def _weighted_zone_metrics(group: pd.DataFrame, omega: float = 0.33) -> pd.Serie
     # Permeability upscaling proxies (thickness-weighted)
     perm_valid = np.isfinite(perm) & np.isfinite(h) & (h > 0)
     if np.any(perm_valid):
-        av_perm_am = float(np.sum(perm[perm_valid] * h[perm_valid]) / np.sum(h[perm_valid]))
+        av_perm_am = float(
+            np.sum(perm[perm_valid] * h[perm_valid]) / np.sum(h[perm_valid])
+        )
         perm_pos = perm_valid & (perm > 0)
         if np.any(perm_pos):
             h_pos = h[perm_pos]
@@ -109,7 +111,12 @@ def _weighted_zone_metrics(group: pd.DataFrame, omega: float = 0.33) -> pd.Serie
             elif np.isclose(omega_val, -1.0, atol=1e-6):
                 av_perm_pw = av_perm_hm
             else:
-                av_perm_pw = float(np.power(np.sum(h_pos * np.power(k_pos, omega_val)) / h_pos_sum, 1.0 / omega_val))
+                av_perm_pw = float(
+                    np.power(
+                        np.sum(h_pos * np.power(k_pos, omega_val)) / h_pos_sum,
+                        1.0 / omega_val,
+                    )
+                )
         else:
             av_perm_gm = 0.0
             av_perm_hm = 0.0
@@ -137,7 +144,18 @@ def _weighted_zone_metrics(group: pd.DataFrame, omega: float = 0.33) -> pd.Serie
     )
 
 
-def calc_reservoir_summary(depth, vshale, phit, swt, perm, zones, cutoffs=None, h=None, omega: float = 0.33):
+def calc_reservoir_summary(
+    depth,
+    vshale,
+    phit,
+    swt,
+    perm,
+    zones,
+    cutoffs=None,
+    h=None,
+    omega: float = 0.33,
+    fluid_type=None,
+):
     """Calculate reservoir summary based on cutoffs on vshale, phit, and swt.
 
     This function aggregates petrophysical properties over specified zones and flags
@@ -197,8 +215,14 @@ def calc_reservoir_summary(depth, vshale, phit, swt, perm, zones, cutoffs=None, 
         df["h"] = float(step)
 
     df["bvhc"] = df["phit"] * (1 - df["swt"])
+    if fluid_type is not None:
+        df["fluid_type"] = fluid_type
     df["rock_flag"], df["reservoir_flag"], df["pay_flag"] = flag_interval(
-        df["vshale"], df["phit"], df["swt"], cutoffs
+        df["vshale"],
+        df["phit"],
+        df["swt"],
+        cutoffs,
+        fluid_type=df["fluid_type"] if "fluid_type" in df.columns else None,
     )
     df["all_flag"] = 1
 
@@ -309,7 +333,11 @@ def calc_reservoir_summary(depth, vshale, phit, swt, perm, zones, cutoffs=None, 
             lambda z, c=col: pay_zone_lookup.get(z, {}).get(c, np.nan)
         )
         # For valid non-pay flag rows in zones without pay, default to 0.0 so row-wise dropna preserves them
-        valid_non_pay = ressum_df["av_phit"].notna() & (ressum_df["flag"] != "pay") & ressum_df[col].isna()
+        valid_non_pay = (
+            ressum_df["av_phit"].notna()
+            & (ressum_df["flag"] != "pay")
+            & ressum_df[col].isna()
+        )
         ressum_df.loc[valid_non_pay, col] = 0.0
     valid_non_pay_kvkh = ressum_df["av_phit"].notna() & ressum_df["kv_kh_ratio"].isna()
     ressum_df.loc[valid_non_pay_kvkh, "kv_kh_ratio"] = 0.0
@@ -349,7 +377,7 @@ def calc_reservoir_summary(depth, vshale, phit, swt, perm, zones, cutoffs=None, 
     return ressum_df[cols]
 
 
-def flag_interval(vshale, phit, swt, cutoffs: dict):
+def flag_interval(vshale, phit, swt, cutoffs: dict, fluid_type=None):
     """Flag interval based on cutoffs.
 
     Args:
@@ -357,6 +385,7 @@ def flag_interval(vshale, phit, swt, cutoffs: dict):
         phit (np.ndarray or float): Total porosity values.
         swt (np.ndarray or float): Water saturation values.
         cutoffs (dict): A dictionary with 'VSHALE', 'PHIT', and 'SWT' cutoffs.
+        fluid_type (np.ndarray or pd.Series, optional): Categorical fluid types (e.g. 'GAS', 'OIL', 'WATER').
 
     Returns:
         tuple[np.ndarray, np.ndarray, np.ndarray]: A tuple containing the rock, reservoir, and pay flags.
@@ -377,6 +406,11 @@ def flag_interval(vshale, phit, swt, cutoffs: dict):
     rock_flag = np.where(vshale < cutoffs["VSHALE"], 1, 0)
     reservoir_flag = np.where(rock_flag == 1, np.where(phit > cutoffs["PHIT"], 1, 0), 0)
     pay_flag = np.where(reservoir_flag == 1, np.where(swt < cutoffs["SWT"], 1, 0), 0)
+    if fluid_type is not None:
+        ft_arr = np.asarray(fluid_type, dtype=object)
+        ft_series = pd.Series(ft_arr).astype(str).str.upper().str.strip()
+        is_hc = ~ft_series.isin(["WATER", "NON_RESERVOIR", "DRY", "WET", "NONE", "NAN"])
+        pay_flag = np.where(is_hc.to_numpy(), pay_flag, 0)
 
     return rock_flag, reservoir_flag, pay_flag
 
@@ -1046,4 +1080,3 @@ from quick_pp.upscaling import (  # noqa: E402
     upscale_logs,
     upscale_permeability,
 )
-
