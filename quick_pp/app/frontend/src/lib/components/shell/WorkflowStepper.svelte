@@ -6,7 +6,6 @@
 	} from '$lib/state/wellData.svelte';
 	import { projectData } from '$lib/state/projectData.svelte';
 	import { fpt } from '$lib/state/fpt.svelte';
-	import { appStatus } from '$lib/state/status.svelte';
 	import {
 		workbench,
 		type MultiWellStep,
@@ -196,7 +195,8 @@
 				'saturation': 'sw-step-5-saturation',
 				'ressum': 'sw-step-6-ressum',
 				'report': 'sw-step-7-report',
-				'scal': 'sw-standalone-core-pc'
+				'scal': 'sw-standalone-core-pc',
+				'toc': 'sw-standalone-source-rock'
 			};
 			return map[workbench.singleWellStep] ?? 'sw-step-1-qaqc';
 		}
@@ -298,6 +298,27 @@
 					{isScalDone && !isScalActive ? '✓' : 'LAB'}
 				</span>
 				<span>Core & Pc Prep</span>
+			</button>
+			{@const isTocActive = workbench.singleWellStep === 'toc'}
+			{@const isTocDone = Boolean(wellData.curves['TOC']?.some((v) => v !== null && !isNaN(v)))}
+			<button
+				type="button"
+				onclick={() => (workbench.singleWellStep = 'toc')}
+				title="Standalone Source Rock Identification & Total Organic Carbon (TOC) via Passey ΔlogR"
+				class="flex h-7 items-center gap-1.5 rounded-sm border px-2.5 text-xs font-medium whitespace-nowrap transition-colors {isTocActive
+					? 'border-[var(--accent-primary)] bg-blue-50/90 font-semibold text-[var(--accent-primary)]'
+					: 'border-[var(--border-hairline)] bg-[var(--bg-subtle)]/60 text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] hover:text-[var(--text-primary)]'}"
+			>
+				<span
+					class="mono-num flex h-4 items-center justify-center rounded-xs px-1 text-[9px] font-bold {isTocActive
+						? 'bg-[var(--accent-primary)] text-white'
+						: isTocDone
+							? 'bg-emerald-100 text-emerald-700'
+							: 'bg-slate-200 text-slate-600'}"
+				>
+					{isTocDone && !isTocActive ? '✓' : 'TOC'}
+				</span>
+				<span>Source Rock (TOC)</span>
 			</button>
 		{:else}
 			{#each MULTI_WELL_STEPS as step (step.id)}
@@ -459,29 +480,8 @@
 		{/if}
 	</div>
 
-	<!-- Right Pane Mode Switcher, Clear Calculated Curves & Live Status Pill -->
+	<!-- Right Pane Mode Switcher & Clear Calculated Curves -->
 	<div class="flex items-center gap-2">
-		{#if appStatus.isBusy || wellData.isCalculating || wellData.isSaving || projectData.isComputingMultiWell || projectData.isSavingMultiWell}
-			<button
-				type="button"
-				onclick={() => (appStatus.logPopoverOpen = !appStatus.logPopoverOpen)}
-				class="mono-num flex max-w-[260px] items-center gap-1.5 truncate rounded-xs border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700"
-				title={appStatus.displayMessage}
-			>
-				<span class="inline-block h-2 w-2 shrink-0 animate-ping rounded-full bg-blue-600"
-				></span>
-				<span class="truncate">{appStatus.displayMessage}</span>
-			</button>
-		{:else if wellData.lastSavedMessage}
-			<button
-				type="button"
-				onclick={() => (appStatus.logPopoverOpen = !appStatus.logPopoverOpen)}
-				class="mono-num shrink-0 whitespace-nowrap text-[11px] font-medium text-[var(--status-ok)] hover:underline"
-			>
-				{wellData.lastSavedMessage}
-			</button>
-		{/if}
-
 		{#if workbench.scope === 'single-well' && wellData.calculatedCurvesPresent.length > 0}
 			<div class="relative">
 				<button

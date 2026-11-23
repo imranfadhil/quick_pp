@@ -48,6 +48,7 @@
   let selectedWells: Record<string, string | null> = {};
   let globalError: string | null = null;
   let processing = false;
+  let processingStage: 'committing' | 'refreshing' | null = null;
   let results: Array<{ file: string; ok: boolean; status?: number; error?: string; sent?: number }> = [];
   let fileStatuses: Record<string, 'idle' | 'processing' | 'success' | 'error'> = {};
   let fileErrors: Record<string, string> = {};
@@ -57,6 +58,7 @@
   let coreSnapToleranceM = 0.08;
   let coreDepthShiftRows: Array<{ coreDepth: string; logDepth: string }> = [];
   let calculateSurveyTvd = true;
+  let importMode: 'merge' | 'append_only' | 'replace' = 'merge';
 
   const BACKEND_DATA_TYPE_MAP: Record<string, string> = {
     formation_tops: 'tops',
@@ -124,6 +126,7 @@
       { key: 'CPERM', label: 'CPERM — Horizontal Permeability (mD)' },
       { key: 'CPERMV', label: 'CPERMV — Vertical Permeability (mD)' },
       { key: 'CGRAIN_DENSITY', label: 'CGRAIN_DENSITY — Grain Density (g/cc)' },
+      { key: 'QV', label: 'QV — Cation Exchange Capacity per PV (meq/mL)' },
       { key: 'CSAT_WATER', label: 'CSAT_WATER — Core Water Saturation (Sw)' },
       { key: 'CSAT_OIL', label: 'CSAT_OIL — Core Oil Saturation (So)' },
       { key: 'DESCRIPTION', label: 'DESCRIPTION — Lithology / Facies Description' },
@@ -381,6 +384,7 @@
     }
 
     processing = true;
+    processingStage = 'committing';
     const shiftPairs: Array<[number, number]> = coreDepthShiftRows
       .map((r) => [Number(r.coreDepth), Number(r.logDepth)] as [number, number])
       .filter(([c, l]) => Number.isFinite(c) && Number.isFinite(l));
@@ -404,6 +408,7 @@
               project_id: Number(projectId),
               well_name: selectedWells[p.fileName] || null,
               data_type: BACKEND_DATA_TYPE_MAP[type] || 'tops',
+              import_mode: importMode,
               column_mappings: p.columnMappings,
               file_content_base64: b64,
               filename: p.fileName,
@@ -443,10 +448,15 @@
       results = out;
       const okCount = out.filter((r) => r.ok).length;
       if (okCount > 0 && workbench.projectId) {
-        await projectData.selectProject(workbench.projectId, workbench.wellId);
-        if (workbench.wellId) {
-          await wellData.loadWellBundle(workbench.projectId, workbench.wellId);
+        processingStage = 'refreshing';
+        const targetWell = workbench.wellId || previews.map((p) => selectedWells[p.fileName]).find(Boolean);
+        if (targetWell && !workbench.wellId) {
+          workbench.wellId = targetWell;
         }
+        await Promise.all([
+          targetWell ? wellData.loadWellBundle(workbench.projectId, targetWell) : Promise.resolve(),
+          projectData.refreshSummary(workbench.projectId)
+        ]);
       }
       if (okCount === out.length) {
         appStatus.endTask(taskId, {
@@ -467,6 +477,7 @@
       });
     } finally {
       processing = false;
+      processingStage = null;
     }
   }
 </script>
@@ -797,26 +808,56 @@
       </div>
     {/if}
 
-    <div class="flex flex-wrap items-center gap-3">
-      <button
-        type="button"
-        class="h-7 rounded-sm bg-[var(--accent-primary)] px-3 text-xs font-semibold text-white disabled:opacity-50"
-        on:click={processAll}
-        disabled={processing}
-      >
-        {processing ? 'Committing & Aligning Data…' : `Commit & Import All (${previews.length} file${previews.length > 1 ? 's' : ''})`}
-      </button>
+    <div class="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border-hairline)] pt-3">
+      <div class="flex flex-wrap items-center gap-2.5">
+        <label for="import-mode-select" class="text-xs font-semibold text-[var(--text-secondary)]">
+          Import Mode:
+        </label>
+        <select
+          id="import-mode-select"
+          bind:value={importMode}
+          class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2.5 pr-7 py-0 text-xs font-medium text-[var(--text-primary)]"
+        >
+          <option value="merge">Merge &amp; Update (Keep existing data, update matches &amp; append new)</option>
+          <option value="append_only">Append Only (Keep existing data, skip duplicates)</option>
+          <option value="replace">Replace All (Wipe existing {type.replace(/_/g, ' ')} before import)</option>
+        </select>
+        <span class="text-[11px] text-[var(--text-secondary)]">
+          {#if importMode === 'merge'}
+            Safely preserves existing shallower/deeper data, updating matching records and appending new depths.
+          {:else if importMode === 'append_only'}
+            Leaves all existing records untouched and only appends new records.
+          {:else}
+            <span class="font-medium text-amber-600">⚠️ All existing {type.replace(/_/g, ' ')} for target well(s) will be replaced.</span>
+          {/if}
+        </span>
+      </div>
 
-      {#if results.length > 0}
-        <div class="text-xs text-[var(--text-secondary)]">
-          {#each results as r}
-            <span class="mr-3">
-              <strong>{r.file}:</strong>
-              {r.ok ? `OK (${r.sent ?? 0} records)` : `FAILED — ${r.error ?? ''}`}
-            </span>
-          {/each}
-        </div>
-      {/if}
+      <div class="flex items-center gap-3">
+        <button
+          type="button"
+          class="h-7 rounded-sm bg-[var(--accent-primary)] px-4 text-xs font-semibold text-white disabled:opacity-50 hover:opacity-95"
+          on:click={processAll}
+          disabled={processing}
+        >
+          {processing
+            ? processingStage === 'refreshing'
+              ? 'Updating Workspace…'
+              : 'Committing & Aligning Data…'
+            : `Commit & Import All (${previews.length} file${previews.length > 1 ? 's' : ''})`}
+        </button>
+      </div>
     </div>
+
+    {#if results.length > 0}
+      <div class="text-xs text-[var(--text-secondary)]">
+        {#each results as r}
+          <span class="mr-3">
+            <strong>{r.file}:</strong>
+            {r.ok ? `OK (${r.sent ?? 0} records)` : `FAILED — ${r.error ?? ''}`}
+          </span>
+        {/each}
+      </div>
+    {/if}
   {/if}
 </div>

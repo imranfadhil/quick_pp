@@ -7,10 +7,10 @@
 	import VshCalibrationPanel from '$lib/components/workbench/VshCalibrationPanel.svelte';
 	import GammaSource from '$lib/components/workbench/GammaSource.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
-	import { workbench, computeSiltIntersection } from '$lib/state/workbench.svelte';
+	import { workbench, computeSiltIntersection, type LithoOverride } from '$lib/state/workbench.svelte';
 	import { fmtNum } from '$lib/utils/formatters';
 	import { calculateMethodComparison } from '$lib/utils/methodComparison';
-	import { gammaParameters, fluidDensityParameters } from '$lib/utils/lithology';
+	import { gammaParameters, fluidDensityParameters, gammaEndpoints, gammaLabel } from '$lib/utils/lithology';
 	import {
 		gorMetricToScfStb,
 		gorScfStbToMetric,
@@ -99,6 +99,7 @@
 		{ mnemonic: 'RHOB', label: 'Bulk Density' },
 		{ mnemonic: 'PEF', label: 'Photoelectric Factor' },
 		{ mnemonic: 'DTC', label: 'Sonic (DTC)' },
+		{ mnemonic: 'RT', label: 'Deep Resistivity (Rt)' },
 		{ mnemonic: 'POTA', label: 'Potassium' },
 		{ mnemonic: 'THOR', label: 'Thorium' },
 		{ mnemonic: 'URAN', label: 'Uranium' }
@@ -177,6 +178,10 @@
 		chi2_p50: number | null;
 		avg_error_mean: number | null;
 		success_rate: number | null;
+		rt_curve?: string | null;
+		sw_mean?: number | null;
+		voil_mean?: number | null;
+		vgas_mean?: number | null;
 	} | null>(null);
 
 	function setLogCorrectionMode(mode: 'none' | 'hc' | 'den') {
@@ -326,6 +331,11 @@
 	/** Mirrors the backend alias resolution: raw, hydrocarbon-corrected, or enhanced curve. */
 	function inputLogLoaded(mnemonic: string): boolean {
 		const keys = Object.keys(wellData.curves);
+		if (mnemonic === 'RT') {
+			return ['RT', 'RD', 'RDEP', 'RDEEP', 'LLD', 'RILD', 'RESD', 'ILD'].some((k) =>
+				keys.includes(k)
+			);
+		}
 		return [mnemonic, `${mnemonic}_HC`, `${mnemonic}_ENH`].some((k) => keys.includes(k));
 	}
 
@@ -402,13 +412,19 @@
 			save: persist && !selectionMode
 		};
 
+		const activeOverrides = (lp.manualOverrides ?? []).filter((o) => o.enabled !== false);
+
 		const coalArgs = {
 			enable_coal_flagging: lp.enableCoalFlagging,
 			coal_rhob_max: lp.coalRhobMax,
 			coal_nphi_min: lp.coalNphiMin,
 			coal_window_size: Math.round(lp.coalWindowSize),
 			coal_trend_factor: lp.coalTrendFactor,
-			badhole_treatment: lp.badholeTreatment
+			coal_buffer_pts: Math.round(lp.coalBufferPts ?? 1),
+			coal_bridge_gap: Math.round(lp.coalBridgeGap ?? 2),
+			coal_adaptive_shoulder: lp.coalAdaptiveShoulder ?? true,
+			badhole_treatment: lp.badholeTreatment,
+			manual_overrides: activeOverrides
 		};
 		const gammaArgs = gammaParameters(lp);
 
@@ -444,8 +460,9 @@
 						buffer: lp.hcBuffer,
 						flag_mode: lp.hcFlagMode ?? 'strict',
 						vsh_tol: lp.hcVshTol ?? 0.05,
-						gr_clean: lp.grClean,
-						gr_clay: lp.grClay,
+						gr_clean: lp.gammaSource === 'gr' ? lp.grClean : lp.gammaClean,
+						gr_clay: lp.gammaSource === 'gr' ? lp.grClay : lp.gammaShale,
+						...gammaArgs,
 						...coalArgs,
 						...filterArgs
 					}
@@ -472,13 +489,17 @@
 						phid_sh: lp.denCorrPhidSh,
 						scope: lp.denCorrScope,
 						vsh_mismatch_threshold: lp.denCorrMismatchThreshold,
-						gr_clean: lp.grClean,
-						gr_clay: lp.grClay,
+						gr_clean: lp.gammaSource === 'gr' ? lp.grClean : lp.gammaClean,
+						gr_clay: lp.gammaSource === 'gr' ? lp.grClay : lp.gammaShale,
+						...gammaArgs,
 						enable_coal_flagging: lp.enableCoalFlagging,
 						coal_rhob_max: lp.coalRhobMax,
 						coal_nphi_min: lp.coalNphiMin,
 						coal_window_size: Math.round(lp.coalWindowSize),
 						coal_trend_factor: lp.coalTrendFactor,
+						coal_buffer_pts: Math.round(lp.coalBufferPts ?? 1),
+						coal_bridge_gap: Math.round(lp.coalBridgeGap ?? 2),
+						coal_adaptive_shoulder: lp.coalAdaptiveShoulder ?? true,
 						...filterArgs
 					}
 				);
@@ -731,6 +752,112 @@
 	async function saveLithoPoro() {
 		await wellData.saveModuleComputed('litho-poro', 'Litho & Poro Saved ✓');
 	}
+
+	function addManualOverride(partial?: Partial<LithoOverride>) {
+		const lp = workbench.lithoParams;
+		const list = lp.manualOverrides ? [...lp.manualOverrides] : [];
+		let top = wellData.depthRange.min;
+		let bottom = wellData.depthRange.max;
+		if (workbench.brushedDepthIndices && workbench.brushedDepthIndices.size > 0) {
+			const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
+			let minD = Infinity;
+			let maxD = -Infinity;
+			for (const idx of workbench.brushedDepthIndices) {
+				const d = dept[idx];
+				if (typeof d === 'number' && Number.isFinite(d)) {
+					if (d < minD) minD = d;
+					if (d > maxD) maxD = d;
+				}
+			}
+			if (minD < Infinity && maxD > -Infinity) {
+				top = Number(minD.toFixed(1));
+				bottom = Number(maxD.toFixed(1));
+			}
+		} else if (
+			workbench.depthFilter &&
+			Number.isFinite(workbench.depthFilter.min) &&
+			Number.isFinite(workbench.depthFilter.max)
+		) {
+			top = Number(workbench.depthFilter.min.toFixed(1));
+			bottom = Number(workbench.depthFilter.max.toFixed(1));
+		}
+
+		const newOv: LithoOverride = {
+			id: `ov-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+			top: partial?.top ?? top,
+			bottom: partial?.bottom ?? bottom,
+			coalMode: partial?.coalMode ?? 'flag',
+			badholeMode: partial?.badholeMode ?? 'keep',
+			target: partial?.target,
+			action: partial?.action,
+			enabled: true,
+			comment: partial?.comment ?? ''
+		};
+		lp.manualOverrides = [...list, newOv];
+		syncOverridesToWell(lp.manualOverrides);
+		executeLithoPoro(false);
+	}
+
+	function syncOverridesToWell(overrides: LithoOverride[]) {
+		if (workbench.wellId) {
+			workbench.setWellLithoManualOverrides(workbench.wellId, overrides);
+		}
+	}
+
+	function removeManualOverride(id: string) {
+		const lp = workbench.lithoParams;
+		lp.manualOverrides = (lp.manualOverrides ?? []).filter((o) => o.id !== id);
+		syncOverridesToWell(lp.manualOverrides);
+		executeLithoPoro(false);
+	}
+
+	function updateManualOverride(id: string, updates: Partial<LithoOverride>) {
+		const lp = workbench.lithoParams;
+		lp.manualOverrides = (lp.manualOverrides ?? []).map((o) =>
+			o.id === id ? { ...o, ...updates } : o
+		);
+		syncOverridesToWell(lp.manualOverrides);
+		executeLithoPoro(false);
+	}
+
+	function toggleManualOverride(id: string) {
+		const lp = workbench.lithoParams;
+		lp.manualOverrides = (lp.manualOverrides ?? []).map((o) =>
+			o.id === id ? { ...o, enabled: o.enabled === false ? true : false } : o
+		);
+		syncOverridesToWell(lp.manualOverrides);
+		executeLithoPoro(false);
+	}
+
+	function toggleAllOverrides(enabled: boolean) {
+		const lp = workbench.lithoParams;
+		lp.manualOverrides = (lp.manualOverrides ?? []).map((o) => ({ ...o, enabled }));
+		syncOverridesToWell(lp.manualOverrides);
+		executeLithoPoro(false);
+	}
+
+	function clearAllOverrides() {
+		const lp = workbench.lithoParams;
+		lp.manualOverrides = [];
+		syncOverridesToWell([]);
+		executeLithoPoro(false);
+	}
+
+	function sortOverridesByDepth() {
+		const lp = workbench.lithoParams;
+		lp.manualOverrides = [...(lp.manualOverrides ?? [])].sort((a, b) => a.top - b.top);
+		syncOverridesToWell(lp.manualOverrides);
+	}
+
+	let expandedOverrideNotes = $state<Record<string, boolean>>({});
+	function toggleNoteRow(id: string) {
+		expandedOverrideNotes[id] = !expandedOverrideNotes[id];
+	}
+
+	const allOverridesActive = $derived.by(() => {
+		const list = workbench.lithoParams.manualOverrides ?? [];
+		return list.length > 0 && list.every((o) => o.enabled !== false);
+	});
 
 	async function executePretrainedMlInference(persist: boolean = false) {
 		if (!workbench.projectId || !workbench.wellId) return;
@@ -1129,6 +1256,36 @@
 								</span>
 							</div>
 						</div>
+						{#if mmSummary.rt_curve}
+							<div class="mt-1.5 border-t border-[var(--border-hairline)] pt-1.5 grid grid-cols-3 gap-1 text-[10px]">
+								<div class="flex flex-col">
+									<span class="text-[var(--text-muted)]">Resistivity</span>
+									<span class="mono-num text-[11px] font-semibold text-[var(--text-primary)]">
+										{mmSummary.rt_curve}
+									</span>
+								</div>
+								<div class="flex flex-col">
+									<span class="text-[var(--text-muted)]">Water Sat (Sw)</span>
+									<span class="mono-num text-[11px] font-semibold text-blue-600">
+										{mmSummary.sw_mean != null ? `${fmtNum(mmSummary.sw_mean * 100, 1)}%` : '—'}
+									</span>
+								</div>
+								<div class="flex flex-col">
+									<span class="text-[var(--text-muted)]">Fluids (v/v)</span>
+									<span class="mono-num text-[10px] font-semibold {(mmSummary.voil_mean ?? 0) > 0.001 || (mmSummary.vgas_mean ?? 0) > 0.001 ? 'text-emerald-600' : 'text-[var(--text-muted)]'}">
+										{#if (mmSummary.vgas_mean ?? 0) > 0.005 && (mmSummary.voil_mean ?? 0) > 0.005}
+											Oil {fmtNum(mmSummary.voil_mean ?? 0, 2)} | Gas {fmtNum(mmSummary.vgas_mean ?? 0, 2)}
+										{:else if (mmSummary.vgas_mean ?? 0) > 0.005}
+											Gas {fmtNum(mmSummary.vgas_mean ?? 0, 3)}
+										{:else if (mmSummary.voil_mean ?? 0) > 0.005}
+											Oil {fmtNum(mmSummary.voil_mean ?? 0, 3)}
+										{:else}
+											Water-filled
+										{/if}
+									</span>
+								</div>
+							</div>
+						{/if}
 					</div>
 				{/if}
 
@@ -1255,13 +1412,13 @@
 			{/if}
 		</ParameterSection>
 
-		{#if workbench.lithoParams.model === 'vsh_gr' || (workbench.lithoParams.model !== 'vsh_bulk' && wellData.vshComparison.allGood.count > 0)}
+		{#if ['vsh_gr', 'ssc', 'sand_shale', 'vsh_nd'].includes(workbench.lithoParams.model) || (workbench.lithoParams.model !== 'vsh_bulk' && wellData.vshComparison.allGood.count > 0)}
 			{@const vStat = wellData.vshComparison.active}
 			<ParameterSection
 				title="Vshale Calibration (VSH_GR × VSH_DN)"
 				badge={vStat.rmse !== null ? `RMSE=${fmtNum(vStat.rmse, 3)} · n=${vStat.count}` : `n=${vStat.count}`}
 			>
-				{#if workbench.lithoParams.model === 'vsh_gr'}
+				{#if ['vsh_gr', 'ssc', 'sand_shale', 'vsh_nd'].includes(workbench.lithoParams.model)}
 					<GammaSource onchange={() => {
 						wellData.applyLiveVshGr();
 						executeLithoPoro(false);
@@ -1317,11 +1474,11 @@
 			badge={workbench.lithoParams.logCorrectionMode === 'hc'
 				? hcSummary
 					? `HC · ${hcSummary.hc_flagged_count} pts`
-					: `HC · VSH_GR (${fmtNum(workbench.lithoParams.grClean, 0)}–${fmtNum(workbench.lithoParams.grClay, 0)})`
+					: `HC · ${gammaLabel(workbench.lithoParams)} (${fmtNum(gammaEndpoints(workbench.lithoParams).clean, 0)}–${fmtNum(gammaEndpoints(workbench.lithoParams).shale, 0)})`
 				: workbench.lithoParams.logCorrectionMode === 'den'
 					? denSummary
 						? `Den · ${denSummary.corrected_count} pts`
-						: `Den · VSH_GR (${fmtNum(workbench.lithoParams.grClean, 0)}–${fmtNum(workbench.lithoParams.grClay, 0)})`
+						: `Den · ${gammaLabel(workbench.lithoParams)} (${fmtNum(gammaEndpoints(workbench.lithoParams).clean, 0)}–${fmtNum(gammaEndpoints(workbench.lithoParams).shale, 0)})`
 					: 'Off'}
 		>
 			<div class="mb-1.5 grid grid-cols-3 gap-1">
@@ -1351,11 +1508,11 @@
 			{#if workbench.lithoParams.logCorrectionMode === 'hc'}
 				<div class="my-1.5 rounded-xs border border-emerald-200 bg-emerald-50/70 px-2 py-1 text-[10px] leading-snug text-emerald-950">
 					{#if workbench.lithoParams.hcCorrectionMethod === 'invaded_zone_standard'}
-						Applies the invaded-zone correction equations and selects S<sub>hi</sub> (0–1) in 0.01 increments to match the solid-relative clay fraction to VSH<sub>GR</sub>.
+						Applies the invaded-zone correction equations and selects S<sub>hi</sub> (0–1) in 0.01 increments to match the solid-relative clay fraction to {gammaLabel(workbench.lithoParams)}.
 					{:else if workbench.lithoParams.model === 'ssc'}
-						Shifts HC-flagged <span class="mono-num font-semibold">(NPHI, RHOB)</span> points along the fluid correction angle toward SSC non-sand fraction matching calibrated <span class="mono-num font-semibold">VSH_GR</span> (<span class="mono-num font-semibold">{fmtNum(workbench.lithoParams.grClean, 1)}–{fmtNum(workbench.lithoParams.grClay, 1)} gAPI</span>) spanning Sand to Silt line.
+						Shifts HC-flagged <span class="mono-num font-semibold">(NPHI, RHOB)</span> points along the fluid correction angle toward SSC non-sand fraction matching calibrated <span class="mono-num font-semibold">{gammaLabel(workbench.lithoParams)}</span> (<span class="mono-num font-semibold">{fmtNum(gammaEndpoints(workbench.lithoParams).clean, 1)}–{fmtNum(gammaEndpoints(workbench.lithoParams).shale, 1)} gAPI</span>) spanning Sand to Silt line.
 					{:else}
-						Shifts HC-flagged <span class="mono-num font-semibold">(NPHI, RHOB)</span> points along the fluid correction angle toward a binary solid-relative clay fraction matching calibrated <span class="mono-num font-semibold">VSH_GR</span> (<span class="mono-num font-semibold">{fmtNum(workbench.lithoParams.grClean, 1)}–{fmtNum(workbench.lithoParams.grClay, 1)} gAPI</span>).
+						Shifts HC-flagged <span class="mono-num font-semibold">(NPHI, RHOB)</span> points along the fluid correction angle toward a binary solid-relative clay fraction matching calibrated <span class="mono-num font-semibold">{gammaLabel(workbench.lithoParams)}</span> (<span class="mono-num font-semibold">{fmtNum(gammaEndpoints(workbench.lithoParams).clean, 1)}–{fmtNum(gammaEndpoints(workbench.lithoParams).shale, 1)} gAPI</span>).
 					{/if}
 				</div>
 				<div class="grid grid-cols-2 gap-1">
@@ -1811,6 +1968,35 @@
 					decimals={0}
 					onrun={() => executeLithoPoro(false)}
 				/>
+				<NumericScrubber
+					label="Boundary Buffer"
+					bind:value={workbench.lithoParams.coalBufferPts}
+					unit="pts"
+					min={0}
+					max={5}
+					step={1}
+					decimals={0}
+					onrun={() => executeLithoPoro(false)}
+				/>
+				<NumericScrubber
+					label="Gap Bridging"
+					bind:value={workbench.lithoParams.coalBridgeGap}
+					unit="pts"
+					min={0}
+					max={6}
+					step={1}
+					decimals={0}
+					onrun={() => executeLithoPoro(false)}
+				/>
+				<label class="flex items-center gap-2 py-0.5 text-xs font-medium cursor-pointer">
+					<input
+						type="checkbox"
+						bind:checked={workbench.lithoParams.coalAdaptiveShoulder}
+						class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+						onchange={() => executeLithoPoro(false)}
+					/>
+					<span>Adaptive Shoulder Recovery</span>
+				</label>
 			{/if}
 		</ParameterSection>
 
@@ -1869,6 +2055,270 @@
 					Nullifies (<span class="mono-num">NaN</span>) lithology volumes and porosity curves in flagged badhole intervals and excludes them from Core QC.
 				{:else}
 					Evaluates NPHI/RHOB normally without overriding washout intervals.
+				{/if}
+			</div>
+		</ParameterSection>
+
+		<ParameterSection
+			title="Manual Overrides (Coal & Badhole)"
+			badge={(workbench.lithoParams.manualOverrides?.length ?? 0) > 0
+				? `${(workbench.lithoParams.manualOverrides ?? []).filter((o) => o.enabled !== false).length} Active`
+				: 'None'}
+		>
+			<div class="space-y-2">
+				<!-- Quick Actions Toolbar -->
+				<div class="flex flex-wrap items-center gap-1">
+					<button
+						type="button"
+						onclick={() => addManualOverride({ coalMode: 'flag', badholeMode: 'keep' })}
+						title="Flag custom interval as Coal (VCOAL=1, other minerals=0, PHIT=0)"
+						class="rounded-xs border border-slate-700 bg-slate-800 px-2 py-1 text-[10.5px] font-semibold text-white hover:bg-slate-900"
+					>
+						+ Flag Coal
+					</button>
+
+					<button
+						type="button"
+						onclick={() => addManualOverride({ coalMode: 'clear', badholeMode: 'keep' })}
+						title="Clear / prevent coal flagging across interval"
+						class="rounded-xs border border-slate-300 bg-slate-100 px-2 py-1 text-[10.5px] font-medium text-slate-700 hover:bg-slate-200"
+					>
+						+ Clear Coal
+					</button>
+
+					<button
+						type="button"
+						onclick={() => addManualOverride({ coalMode: 'keep', badholeMode: 'flag' })}
+						title="Flag custom interval as Badhole / Washout"
+						class="rounded-xs border border-red-300 bg-red-50/80 px-2 py-1 text-[10.5px] font-semibold text-red-800 hover:bg-red-100/80"
+					>
+						+ Flag Badhole
+					</button>
+
+					<button
+						type="button"
+						onclick={() => addManualOverride({ coalMode: 'keep', badholeMode: 'clear' })}
+						title="Clear / force good hole across interval"
+						class="rounded-xs border border-emerald-300 bg-emerald-50/80 px-2 py-1 text-[10.5px] font-medium text-emerald-800 hover:bg-emerald-100/80"
+					>
+						+ Clear Badhole
+					</button>
+
+					{#if workbench.brushedDepthIndices && workbench.brushedDepthIndices.size > 0}
+						<button
+							type="button"
+							onclick={() => addManualOverride({ coalMode: 'flag', badholeMode: 'keep' })}
+							title="Create an override across the currently brushed depth interval"
+							class="rounded-xs border border-indigo-300 bg-indigo-50/80 px-2 py-1 text-[10.5px] font-semibold text-indigo-800 hover:bg-indigo-100/80"
+						>
+							+ Override Brushed
+						</button>
+					{/if}
+
+					<button
+						type="button"
+						onclick={() => addManualOverride()}
+						title="Add a new custom depth interval override"
+						class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1 text-[10.5px] font-medium text-[var(--text-primary)] hover:border-[var(--border-focus)]"
+					>
+						+ Add Interval
+					</button>
+
+					{#if (workbench.lithoParams.manualOverrides?.length ?? 0) >= 2}
+						<button
+							type="button"
+							onclick={sortOverridesByDepth}
+							title="Sort all intervals from top to bottom by depth"
+							class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1 text-[10.5px] font-medium text-[var(--text-secondary)] hover:border-[var(--border-focus)] hover:text-[var(--text-primary)]"
+						>
+							↕ Sort Depth
+						</button>
+					{/if}
+
+					{#if (workbench.lithoParams.manualOverrides?.length ?? 0) > 0}
+						<button
+							type="button"
+							onclick={clearAllOverrides}
+							title="Clear all manual overrides"
+							class="ml-auto text-[10px] font-medium text-red-600 hover:underline"
+						>
+							Clear All
+						</button>
+					{/if}
+				</div>
+
+				<!-- Overrides Table -->
+				{#if (workbench.lithoParams.manualOverrides?.length ?? 0) === 0}
+					<div
+						class="rounded-xs border border-dashed border-[var(--border-hairline)] bg-[var(--bg-app)] p-2 text-center text-[10.5px] text-[var(--text-muted)]"
+					>
+						No manual overrides applied. Use buttons above to flag or clear coal seams and badhole intervals.
+					</div>
+				{:else}
+					<div
+						class="max-h-60 overflow-x-auto overflow-y-auto rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)]"
+					>
+						<table class="w-full border-collapse text-left text-[10px]">
+							<thead
+								class="sticky top-0 z-10 border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)] text-[var(--text-secondary)] shadow-2xs"
+							>
+								<tr>
+									<th class="w-6 px-1.5 py-1 text-center">
+										<input
+											type="checkbox"
+											checked={allOverridesActive}
+											onchange={(e) =>
+												toggleAllOverrides(e.currentTarget.checked)}
+											title="Toggle all overrides"
+											class="rounded-2xs h-3 w-3 text-[var(--accent-primary)]"
+										/>
+									</th>
+									<th class="px-1.5 py-1 font-semibold whitespace-nowrap"
+										>Depth (m)</th
+									>
+									<th class="px-1 py-1 font-semibold whitespace-nowrap"
+										>Coal Action</th
+									>
+									<th class="px-1 py-1 font-semibold whitespace-nowrap"
+										>Badhole Action</th
+									>
+									<th
+										class="w-6 px-1 py-1 text-center font-semibold"
+										title="Notes">💬</th
+									>
+									<th
+										class="w-6 px-1 py-1 text-center font-semibold"
+										title="Delete">×</th
+									>
+								</tr>
+							</thead>
+							<tbody class="divide-y divide-[var(--border-hairline)]">
+								{#each workbench.lithoParams.manualOverrides ?? [] as ov (ov.id)}
+									<tr
+										class="transition-colors hover:bg-slate-500/5 {ov.enabled ===
+										false
+											? 'bg-slate-100/50 line-through opacity-50'
+											: 'bg-[var(--bg-surface)]'}"
+									>
+										<td class="px-1.5 py-1 text-center">
+											<input
+												type="checkbox"
+												checked={ov.enabled !== false}
+												onchange={() => toggleManualOverride(ov.id)}
+												title="Enable/disable override"
+												class="rounded-2xs h-3 w-3 text-[var(--accent-primary)]"
+											/>
+										</td>
+										<td class="px-1 py-1 whitespace-nowrap">
+											<div class="flex items-center gap-0.5">
+												<input
+													type="number"
+													step="0.5"
+													value={ov.top}
+													onchange={(e) =>
+														updateManualOverride(ov.id, {
+															top: Number(e.currentTarget.value)
+														})}
+													title="Top Depth (m)"
+													class="mono-num rounded-2xs h-5 w-12 border border-[var(--border-hairline)] bg-[var(--bg-app)] px-0.5 text-right text-[9.5px] font-semibold"
+												/>
+												<span class="text-[9px] text-[var(--text-muted)]"
+													>-</span
+												>
+												<input
+													type="number"
+													step="0.5"
+													value={ov.bottom}
+													onchange={(e) =>
+														updateManualOverride(ov.id, {
+															bottom: Number(e.currentTarget.value)
+														})}
+													title="Bottom Depth (m)"
+													class="mono-num rounded-2xs h-5 w-12 border border-[var(--border-hairline)] bg-[var(--bg-app)] px-0.5 text-right text-[9.5px] font-semibold"
+												/>
+											</div>
+										</td>
+										<td class="px-1 py-1">
+											<select
+												value={ov.coalMode ?? 'keep'}
+												onchange={(e) =>
+													updateManualOverride(ov.id, {
+														coalMode: e.currentTarget.value as any
+													})}
+												class="rounded-2xs h-5.5 w-full border border-[var(--border-hairline)] bg-[var(--bg-app)] px-1 text-[9.5px] font-semibold text-[var(--text-primary)]"
+											>
+												<option value="keep">Keep (Auto)</option>
+												<option value="flag">⬛ Flag Coal</option>
+												<option value="clear">⚪ Clear (Not Coal)</option>
+											</select>
+										</td>
+										<td class="px-1 py-1">
+											<select
+												value={ov.badholeMode ?? 'keep'}
+												onchange={(e) =>
+													updateManualOverride(ov.id, {
+														badholeMode: e.currentTarget.value as any
+													})}
+												class="rounded-2xs h-5.5 w-full border border-[var(--border-hairline)] bg-[var(--bg-app)] px-1 text-[9.5px] font-semibold text-[var(--text-primary)]"
+											>
+												<option value="keep">Keep (Auto)</option>
+												<option value="flag">🔴 Flag Badhole</option>
+												<option value="clear">🟢 Clear (Good Hole)</option>
+											</select>
+										</td>
+										<td class="px-1 py-1 text-center">
+											<button
+												type="button"
+												onclick={() => toggleNoteRow(ov.id)}
+												title={ov.comment
+													? `Comment: ${ov.comment}`
+													: 'Add note/reason'}
+												class="rounded-2xs p-0.5 text-[10px] hover:bg-slate-200/60 {ov.comment
+													? 'font-bold text-indigo-600'
+													: 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}"
+											>
+												{ov.comment ? '💬' : '✏️'}
+											</button>
+										</td>
+										<td class="px-1 py-1 text-center">
+											<button
+												type="button"
+												onclick={() => removeManualOverride(ov.id)}
+												title="Delete override"
+												class="rounded-2xs p-0.5 text-xs font-bold text-[var(--text-muted)] hover:bg-red-50 hover:text-red-600"
+											>
+												×
+											</button>
+										</td>
+									</tr>
+									{#if expandedOverrideNotes[ov.id]}
+										<tr
+											class="border-b border-[var(--border-hairline)] bg-indigo-50/20"
+										>
+											<td colspan="6" class="px-2 py-1">
+												<div class="flex items-center gap-1.5 text-[9.5px]">
+													<span
+														class="font-medium text-[var(--text-muted)]"
+														>Reason:</span
+													>
+													<input
+														type="text"
+														placeholder="Optional comment/reason (e.g. false coal spike, caliper washout missed, core-verified seam)..."
+														value={ov.comment ?? ''}
+														onchange={(e) =>
+															updateManualOverride(ov.id, {
+																comment: e.currentTarget.value
+															})}
+														class="rounded-2xs h-5 flex-1 border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[9.5px] text-[var(--text-primary)] placeholder:text-[var(--text-muted)]"
+													/>
+												</div>
+											</td>
+										</tr>
+									{/if}
+								{/each}
+							</tbody>
+						</table>
+					</div>
 				{/if}
 			</div>
 		</ParameterSection>

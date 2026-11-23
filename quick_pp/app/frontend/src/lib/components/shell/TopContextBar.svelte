@@ -253,6 +253,18 @@
 	let hasActiveFilter = $derived(
 		hasWellFilter || workbench.selectedZones.length > 0 || workbench.depthFilter !== null
 	);
+
+	let sortedProjects = $derived(
+		[...projectData.projects].sort((a, b) =>
+			(a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })
+		)
+	);
+
+	let sortedWells = $derived(
+		[...projectData.wells].sort((a, b) =>
+			(a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })
+		)
+	);
 </script>
 
 <header
@@ -295,12 +307,12 @@
 				onchange={handleProjectChange}
 				class="h-7 min-w-[130px] rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 py-0 text-xs font-medium text-[var(--text-primary)] focus:border-[var(--border-focus)] focus:outline-none"
 			>
-				{#if projectData.projects.length === 0}
+				{#if sortedProjects.length === 0}
 					<option value="">No Projects</option>
 				{:else}
 					<option value="">— Select Project —</option>
 				{/if}
-				{#each projectData.projects as proj (proj.project_id)}
+				{#each sortedProjects as proj (proj.project_id)}
 					<option value={String(proj.project_id)}>{proj.name}</option>
 				{/each}
 			</select>
@@ -499,7 +511,7 @@
 		</div>
 
 		<!-- Well Switcher (< Well Dropdown >) -->
-		{#if projectData.wells.length > 0}
+		{#if sortedWells.length > 0}
 			<span class="text-[var(--border-hairline)]">/</span>
 			<div class="relative flex items-center gap-0.5">
 				<button
@@ -515,7 +527,7 @@
 					onchange={handleWellChange}
 					class="mono-num h-7 min-w-[125px] border-y border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 py-0 text-xs font-semibold text-[var(--text-primary)] focus:outline-none"
 				>
-					{#each projectData.wells as w (w.name)}
+					{#each sortedWells as w (w.name)}
 						<option value={w.name}>{w.name}</option>
 					{/each}
 				</select>
@@ -708,7 +720,7 @@
 							</div>
 						</div>
 						<div class="max-h-32 space-y-1 overflow-y-auto rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
-							{#each projectData.wells as w (w.name)}
+							{#each sortedWells as w (w.name)}
 								<label class="flex cursor-pointer items-center justify-between gap-1.5 text-xs hover:bg-[var(--bg-subtle)] px-1 py-0.5 rounded-xs">
 									<span class="flex items-center gap-1.5 min-w-0">
 										<input

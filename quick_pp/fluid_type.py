@@ -211,13 +211,9 @@ def estimate_fluid_properties(
     a = 0.03 + 0.00527 * (3.5 - t_pr) ** 3
     b = 0.642 * t_pr - 0.007 * t_pr**4 - 0.52
     c = 0.109 * (3.85 - t_pr) ** 2
-    d = np.exp(
-        -(0.45 + 8.0 * (0.56 - 1.0 / t_pr) ** 2) * p_pr**1.2 / t_pr
-    )
+    d = np.exp(-(0.45 + 8.0 * (0.56 - 1.0 / t_pr) ** 2) * p_pr**1.2 / t_pr)
     z_factor = np.maximum(a * p_pr + b + c * d, 0.30)
-    rho_g = 28.8 * gas_gravity * pressure_mpa / (
-        z_factor * 8.31446 * (temp_c + 273.15)
-    )
+    rho_g = 28.8 * gas_gravity * pressure_mpa / (z_factor * 8.31446 * (temp_c + 273.15))
     rho_g_app = 1.335 * rho_g - 0.188
     w_h_g = (4.0 - gas_gravity) / (15.0 + 3.0 * gas_gravity)
     methane_hydrogen_factor = 9.0 * (4.0 - 0.554) / (15.0 + 3.0 * 0.554)
@@ -225,13 +221,13 @@ def estimate_fluid_properties(
     hi_g = 9.0 * rho_g * w_h_g * (2.25 / methane_hydrogen_factor)
 
     rho_o0 = 141.5 / (oil_api + 131.5)
-    rs_max = 2.03 * gas_gravity * (
-        pressure_mpa * np.exp(4.12 / rho_o0 - 0.0091 * temp_c)
-    ) ** 1.205
-    rs_eff = np.minimum(gor, rs_max)
-    bo_base = (
-        2.495 * rs_eff * np.sqrt(gas_gravity / rho_o0) + temp_c + 17.8
+    rs_max = (
+        2.03
+        * gas_gravity
+        * (pressure_mpa * np.exp(4.12 / rho_o0 - 0.0091 * temp_c)) ** 1.205
     )
+    rs_eff = np.minimum(gor, rs_max)
+    bo_base = 2.495 * rs_eff * np.sqrt(gas_gravity / rho_o0) + temp_c + 17.8
     if np.any(np.isfinite(bo_base) & (bo_base <= 0)):
         raise ValueError(
             "Oil temperature and GOR produce an invalid formation volume factor."
@@ -240,8 +236,7 @@ def estimate_fluid_properties(
     rho_o_g = (rho_o0 + 0.0012 * gas_gravity * rs_eff) / bo
     rho_o_p = (
         rho_o_g
-        + (0.00277 * pressure_mpa - 1.71e-7 * pressure_mpa**3)
-        * (rho_o_g - 1.15) ** 2
+        + (0.00277 * pressure_mpa - 1.71e-7 * pressure_mpa**3) * (rho_o_g - 1.15) ** 2
         + 3.49e-4 * pressure_mpa
     )
     if gor == 0:
@@ -437,6 +432,38 @@ def fix_fluid_segregation(df: pd.DataFrame) -> pd.DataFrame:
         pd.DataFrame: The DataFrame with corrected fluid volume assignments.
     """
     logger.info("Generating fluid volume fractions from OIL_FLAG and GAS_FLAG")
+    df = df.copy()
+    if "WELL_NAME" not in df.columns:
+        df["WELL_NAME"] = "Well_1"
+    if "DEPTH" not in df.columns:
+        for c in ("DEPT", "TVDSS", "TVD"):
+            if c in df.columns:
+                df["DEPTH"] = df[c]
+                break
+    if "VHC" not in df.columns:
+        if (
+            "VOIL" in df.columns
+            and "VGAS" in df.columns
+            and (df["VOIL"].notna().any() or df["VGAS"].notna().any())
+        ):
+            df["VHC"] = df["VOIL"].fillna(0) + df["VGAS"].fillna(0)
+        elif "PHIT" in df.columns and "SWT" in df.columns:
+            df["VHC"] = pd.to_numeric(df["PHIT"], errors="coerce").fillna(0.2) * (
+                1.0
+                - pd.to_numeric(df["SWT"], errors="coerce").fillna(1.0).clip(0.0, 1.0)
+            )
+        elif "BVHC" in df.columns:
+            df["VHC"] = df["BVHC"]
+        else:
+            df["VHC"] = np.where(
+                (df.get("OIL_FLAG", 0) == 1) | (df.get("GAS_FLAG", 0) == 1), 1.0, 0.0
+            )
+
+    if "OIL_FLAG" not in df.columns:
+        df["OIL_FLAG"] = 0
+    if "GAS_FLAG" not in df.columns:
+        df["GAS_FLAG"] = 0
+
     df["VOIL"] = df["OIL_FLAG"] * df["VHC"]
     df["VGAS"] = df["GAS_FLAG"] * df["VHC"]
 
@@ -444,44 +471,421 @@ def fix_fluid_segregation(df: pd.DataFrame) -> pd.DataFrame:
         df.groupby("WELL_NAME"), desc="Fixing fluid segregation"
     ):
         tqdm.write(f"Processing well {well_name}")
-        # Fix fluid segregation issues bounded by continuous hydrocarbon intervals
-        hc_mask = (well_df["VHC"] >= 1e-2).astype(int)
-        # Identify continuous hydrocarbon intervals
-        hc_groups = (hc_mask.diff() != 0).cumsum()
+        # Identify hydrocarbon-bearing samples
+        hc_active = (
+            (well_df["GAS_FLAG"] == 1)
+            | (well_df["OIL_FLAG"] == 1)
+            | (well_df.get("UNC_FLAG", 0) == 1)
+            | (well_df["VHC"] >= 1e-2)
+        )
+        if not hc_active.any():
+            continue
 
-        for _, group_df in well_df.groupby(hc_groups):
-            # Process only hydrocarbon-bearing intervals
-            if hc_mask.loc[group_df.index].sum() > 0:
-                # If both gas and oil are predicted in the same interval
-                if (group_df["GAS_FLAG"] == 1).any() and (
-                    group_df["OIL_FLAG"] == 1
-                ).any():
-                    # Find the deepest depth where gas is predicted
-                    last_gas_depth = group_df[group_df["GAS_FLAG"] == 1]["DEPTH"].max()
-                    # Identify indices of oil intervals above this deepest gas
-                    oil_above_gas_indices = group_df[
-                        (group_df["DEPTH"] <= last_gas_depth)
-                        & (group_df["OIL_FLAG"] == 1)
+        # If geological ZONES are present, segregate within each zone;
+        # otherwise bridge small intra-reservoir shale baffles (<= 10m / 35ft) into contiguous accumulations
+        depths_arr = well_df["DEPTH"].to_numpy(dtype=float)
+        has_zones = "ZONES" in well_df.columns and well_df["ZONES"].notna().any()
+
+        if has_zones:
+            group_keys = well_df["ZONES"].fillna("_NO_ZONE_")
+        else:
+            bridged = hc_active.to_numpy().copy()
+            last_hc = -1
+            for i in range(len(bridged)):
+                if hc_active.iloc[i]:
+                    if last_hc >= 0:
+                        dz = abs(depths_arr[i] - depths_arr[last_hc])
+                        if dz <= 10.0:  # bridge intra-reservoir non-pay streaks <= 10m
+                            bridged[last_hc:i] = True
+                    last_hc = i
+            group_keys = pd.Series(
+                (pd.Series(bridged).diff() != 0).cumsum().to_numpy(),
+                index=well_df.index,
+            )
+
+        for _, group_df in well_df.groupby(group_keys):
+            active_in_group = hc_active.loc[group_df.index]
+            if not active_in_group.any():
+                continue
+
+            has_gas = (group_df["GAS_FLAG"] == 1).any()
+            has_oil = (group_df["OIL_FLAG"] == 1).any()
+
+            if has_gas and has_oil:
+                # Find deepest gas in this continuous accumulation / zone
+                deepest_gas_depth = group_df[group_df["GAS_FLAG"] == 1]["DEPTH"].max()
+
+                # 1. Any oil or unconfirmed at or above deepest gas MUST be Gas (gas cap)
+                in_gas_cap = group_df[
+                    (group_df["DEPTH"] <= deepest_gas_depth)
+                    & ((group_df["OIL_FLAG"] == 1) | (group_df.get("UNC_FLAG", 0) == 1))
+                ].index
+                df.loc[in_gas_cap, "VGAS"] = df.loc[in_gas_cap, "VHC"]
+                df.loc[in_gas_cap, "VOIL"] = 0
+                df.loc[in_gas_cap, "GAS_FLAG"] = 1
+                df.loc[in_gas_cap, "OIL_FLAG"] = 0
+                if "UNC_FLAG" in df.columns:
+                    df.loc[in_gas_cap, "UNC_FLAG"] = 0
+                    if "VUNC" in df.columns:
+                        df.loc[in_gas_cap, "VUNC"] = 0
+
+                # 2. Check for remaining oil strictly below deepest gas
+                oil_below_gas = group_df[
+                    (group_df["DEPTH"] > deepest_gas_depth)
+                    & (group_df["OIL_FLAG"] == 1)
+                ]
+                if len(oil_below_gas) > 0:
+                    first_oil_below_gas_depth = oil_below_gas["DEPTH"].min()
+                    # Any unconfirmed at or below first confirmed oil belongs to the oil leg
+                    in_oil_leg = group_df[
+                        (group_df["DEPTH"] >= first_oil_below_gas_depth)
+                        & (group_df.get("UNC_FLAG", 0) == 1)
                     ].index
-                    # Re-assign oil volumes to gas for these intervals in the main dataframe
-                    df.loc[oil_above_gas_indices, "VGAS"] = df.loc[
-                        oil_above_gas_indices, "VHC"
-                    ]
-                    df.loc[oil_above_gas_indices, "VOIL"] = 0
-                if (group_df["GAS_FLAG"] == 1).any() and (
-                    group_df["OIL_FLAG"] == 0
-                ).all():
-                    df.loc[group_df.index, "VGAS"] = df.loc[group_df.index, "VHC"]
-                    df.loc[group_df.index, "VHC"] = 0
-                if (group_df["OIL_FLAG"] == 1).any() and (
-                    group_df["GAS_FLAG"] == 0
-                ).all():
-                    df.loc[group_df.index, "VOIL"] = df.loc[group_df.index, "VHC"]
-                    df.loc[group_df.index, "VHC"] = 0
+                    if len(in_oil_leg) > 0:
+                        df.loc[in_oil_leg, "VOIL"] = df.loc[in_oil_leg, "VHC"]
+                        df.loc[in_oil_leg, "VGAS"] = 0
+                        df.loc[in_oil_leg, "OIL_FLAG"] = 1
+                        df.loc[in_oil_leg, "GAS_FLAG"] = 0
+                        if "UNC_FLAG" in df.columns:
+                            df.loc[in_oil_leg, "UNC_FLAG"] = 0
+                            if "VUNC" in df.columns:
+                                df.loc[in_oil_leg, "VUNC"] = 0
+            elif has_gas and not has_oil:
+                # Accumulation is gas: all unconfirmed pay at or above deepest gas belongs to gas cap
+                deepest_gas_depth = group_df[group_df["GAS_FLAG"] == 1]["DEPTH"].max()
+                gas_indices = group_df[
+                    (group_df["DEPTH"] <= deepest_gas_depth)
+                    & ((group_df["GAS_FLAG"] == 1) | (group_df.get("UNC_FLAG", 0) == 1))
+                ].index
+                df.loc[gas_indices, "VGAS"] = df.loc[gas_indices, "VHC"]
+                df.loc[gas_indices, "VOIL"] = 0
+                df.loc[gas_indices, "GAS_FLAG"] = 1
+                if "UNC_FLAG" in df.columns:
+                    df.loc[gas_indices, "UNC_FLAG"] = 0
+                    if "VUNC" in df.columns:
+                        df.loc[gas_indices, "VUNC"] = 0
+            elif has_oil and not has_gas:
+                # Accumulation is oil: unconfirmed pay in this oil accumulation belongs to oil leg
+                oil_indices = group_df[
+                    (group_df["OIL_FLAG"] == 1) | (group_df.get("UNC_FLAG", 0) == 1)
+                ].index
+                df.loc[oil_indices, "VOIL"] = df.loc[oil_indices, "VHC"]
+                df.loc[oil_indices, "VGAS"] = 0
+                df.loc[oil_indices, "OIL_FLAG"] = 1
+                if "UNC_FLAG" in df.columns:
+                    df.loc[oil_indices, "UNC_FLAG"] = 0
+                    if "VUNC" in df.columns:
+                        df.loc[oil_indices, "VUNC"] = 0
 
+    df["OIL_FLAG"] = (df["VOIL"] > 0).astype(int)
+    df["GAS_FLAG"] = (df["VGAS"] > 0).astype(int)
+    if "UNC_FLAG" in df.columns:
+        df["UNC_FLAG"] = np.where(
+            (df["GAS_FLAG"] == 1) | (df["OIL_FLAG"] == 1), 0, df["UNC_FLAG"]
+        )
+        if "VUNC" in df.columns:
+            df["VUNC"] = df["UNC_FLAG"] * df["VHC"]
     df["VHC"] = np.where((df["VOIL"] > 0) | (df["VGAS"] > 0), 0, df["VHC"])
+    df["GAS_FLAG"] = np.where(df["VGAS"] > 0, 1, 0)
+    df["OIL_FLAG"] = np.where(df["VOIL"] > 0, 1, 0)
 
     return df
+
+
+def classify_fluid_types(
+    df: pd.DataFrame,
+    method: Literal[
+        "neutron_density",
+        "rho_hc",
+        "sonic_vp_vs",
+        "mud_gas",
+        "oil_only",
+        "gas_only",
+        "none",
+    ] = "neutron_density",
+    sw_cutoff: float = 0.65,
+    phit_cutoff: float = 0.05,
+    vsh_cutoff: float = 0.50,
+    crossover_cutoff: float = 0.04,
+    crossover_oil_cutoff: float = 0.01,
+    rho_hc_cutoff: float = 0.40,
+    rho_hc_oil_cutoff: float = 0.55,
+    vp_vs_cutoff: float = 1.60,
+    vp_vs_oil_cutoff: float = 1.70,
+    rho_ma: float = 2.65,
+    rho_w: float = 1.05,
+    allow_unconfirmed: bool = True,
+    enforce_segregation: bool = True,
+    sw_col: str = "SWT",
+    phit_col: str = "PHIT",
+    vsh_col: Optional[str] = "VSHALE",
+    nphi_col: Optional[str] = "NPHI",
+    rhob_col: Optional[str] = "RHOB",
+    dtc_col: Optional[str] = "DTC",
+    dts_col: Optional[str] = "DTS",
+    c1_col: Optional[str] = "C1",
+    c2_col: Optional[str] = "C2",
+    c3_col: Optional[str] = "C3",
+    ic4_col: Optional[str] = "IC4",
+    nc4_col: Optional[str] = "NC4",
+    ic5_col: Optional[str] = "IC5",
+    nc5_col: Optional[str] = "NC5",
+) -> pd.DataFrame:
+    """Classify reservoir fluid types (GAS, OIL, UNCONFIRMED, WATER) from log curves.
+
+    Differentiates hydrocarbon phases using petrophysical crossplots and log indicators:
+    1. 'neutron_density': Neutron-density porosity crossover (Gas: Delta_Phi >= crossover_cutoff,
+       Oil: Delta_Phi <= crossover_oil_cutoff, Unconfirmed: between cutoffs)
+    2. 'rho_hc': Inverted apparent hydrocarbon density (Gas: rho_hc <= rho_hc_cutoff,
+       Oil: rho_hc >= rho_hc_oil_cutoff, Unconfirmed: between cutoffs)
+    3. 'sonic_vp_vs': Dipole sonic velocity ratio (Vp/Vs <= vp_vs_cutoff). Requires valid paired DTC & DTS logs.
+    4. 'mud_gas': Surface mud gas chromatography using Haworth (1985) ratios (C1-C5). Requires valid gas curves.
+    5. 'oil_only': Assign all hydrocarbon pay to oil
+    6. 'gas_only': Assign all hydrocarbon pay to gas
+    7. 'none': Clear all fluid flags
+
+    Optionally enforces physical gravity segregation (gas sitting above oil within
+    continuous reservoir compartments).
+
+    Args:
+        df (pd.DataFrame): Well log DataFrame containing depth, saturation, porosity, etc.
+        method (str): Identification method. Defaults to 'neutron_density'.
+        sw_cutoff (float): Maximum water saturation for hydrocarbon pay. Defaults to 0.65.
+        phit_cutoff (float): Minimum total porosity for reservoir. Defaults to 0.05.
+        vsh_cutoff (float): Maximum shale/clay volume for reservoir. Defaults to 0.50.
+        crossover_cutoff (float): Porosity crossover threshold (Phi_D - Phi_N) for gas. Defaults to 0.04.
+        crossover_oil_cutoff (float): Porosity crossover threshold for oil. Defaults to 0.01.
+        rho_hc_cutoff (float): Hydrocarbon density threshold in g/cc for gas. Defaults to 0.40.
+        rho_hc_oil_cutoff (float): Hydrocarbon density threshold in g/cc for oil. Defaults to 0.55.
+        vp_vs_cutoff (float): Vp/Vs ratio threshold for gas. Defaults to 1.60.
+        vp_vs_oil_cutoff (float): Vp/Vs ratio threshold for oil. Defaults to 1.70.
+        rho_ma (float): Matrix density in g/cc for rho_hc computation. Defaults to 2.65.
+        rho_w (float): Formation water density in g/cc. Defaults to 1.05.
+        allow_unconfirmed (bool): Cater for unconfirmed fluid types in ambiguous transition buffers. Defaults to True.
+        enforce_segregation (bool): Enforce gas above oil physically. Defaults to True.
+        sw_col (str): Column name for water saturation. Defaults to 'SWT'.
+        phit_col (str): Column name for total porosity. Defaults to 'PHIT'.
+        vsh_col (str, optional): Column name for shale volume. Defaults to 'VSHALE'.
+        nphi_col (str, optional): Column name for neutron porosity. Defaults to 'NPHI'.
+        rhob_col (str, optional): Column name for bulk density. Defaults to 'RHOB'.
+        dtc_col (str, optional): Column name for compressional sonic slowness. Defaults to 'DTC'.
+        dts_col (str, optional): Column name for shear sonic slowness. Defaults to 'DTS'.
+        c1_col..nc5_col (str, optional): Column names for mud gas chromatograph components.
+
+    Returns:
+        pd.DataFrame: Copy of DataFrame with added or updated columns:
+            ['HC_FLAG', 'GAS_FLAG', 'OIL_FLAG', 'UNC_FLAG', 'RHO_HC', 'VOIL', 'VGAS', 'VUNC', 'BVHC', 'FLUID_TYPE']
+    """
+    logger.info(
+        f"Classifying fluid types using method='{method}' (Sw_cutoff={sw_cutoff}, Phit_cutoff={phit_cutoff}, allow_unc={allow_unconfirmed})"
+    )
+    out = df.copy()
+    n = len(out)
+    if n == 0:
+        for c in [
+            "HC_FLAG",
+            "GAS_FLAG",
+            "OIL_FLAG",
+            "UNC_FLAG",
+            "RHO_HC",
+            "VOIL",
+            "VGAS",
+            "VUNC",
+            "BVHC",
+            "FLUID_TYPE",
+        ]:
+            out[c] = pd.Series(dtype=float if c != "FLUID_TYPE" else object)
+        return out
+
+    def _resolve(target: Optional[str], fallbacks: Sequence[str]) -> pd.Series:
+        if (
+            target
+            and target in out.columns
+            and pd.to_numeric(out[target], errors="coerce").notna().any()
+        ):
+            return pd.to_numeric(out[target], errors="coerce")
+        for fb in fallbacks:
+            if (
+                fb in out.columns
+                and pd.to_numeric(out[fb], errors="coerce").notna().any()
+            ):
+                return pd.to_numeric(out[fb], errors="coerce")
+        return pd.Series(np.nan, index=out.index, dtype=float)
+
+    sw = _resolve(
+        sw_col,
+        [
+            "SWT",
+            "SWE",
+            "SW",
+            "SW_ARCHIE",
+            "SW_WS",
+            "SW_SIMANDOUX",
+            "SW_INDONESIAN",
+            "SW_DUAL_WATER",
+        ],
+    ).clip(0.0, 1.0)
+    phit = _resolve(phit_col, ["PHIT", "PHIE", "POR", "POROSITY"]).clip(0.0, 0.5)
+    vsh = (
+        _resolve(vsh_col, ["VSHALE", "VCLAY", "VSH", "VCL", "VSH_GR"])
+        .clip(0.0, 1.0)
+        .fillna(0.0)
+    )
+    rhob = _resolve(rhob_col, ["RHOB", "RHOB_ENH", "RHOZ", "DEN"])
+    nphi = _resolve(nphi_col, ["NPHI", "NPHI_ENH", "TNPH", "NPOR", "NEU"])
+    dtc = _resolve(dtc_col, ["DTC", "DT", "DTCO", "AC"])
+    dts = _resolve(dts_col, ["DTS", "DTSM", "DT4S", "DTSH"])
+
+    # 1. Identify Reservoir and Hydrocarbon Pay
+    is_res = (phit >= float(phit_cutoff)) & (vsh <= float(vsh_cutoff)) & phit.notna()
+    # Hydrocarbon-bearing rock: permits slightly shaly sand within HC column to prevent single-sample dropout gaps
+    is_hc = (
+        (sw <= float(sw_cutoff))
+        & sw.notna()
+        & phit.notna()
+        & (phit >= min(float(phit_cutoff), 0.03))
+        & (vsh <= max(float(vsh_cutoff) + 0.10, 0.60))
+    )
+    is_water = is_res & (sw > float(sw_cutoff)) & sw.notna()
+
+    # 2. Compute Apparent Hydrocarbon Density RHO_HC
+    # rho_b = (1 - phi)*rho_ma + phi*[Sw*rho_w + (1 - Sw)*rho_hc]
+    # rho_hc = [rho_b - (1 - phi)*rho_ma - phi*Sw*rho_w] / [phi*(1 - Sw)]
+    hcpv = phit * (1.0 - sw)
+    hcpv_mask = (hcpv >= 0.01) & rhob.notna()
+    rho_hc = pd.Series(np.nan, index=out.index, dtype=float)
+    if hcpv_mask.any():
+        num = (
+            rhob[hcpv_mask]
+            - (1.0 - phit[hcpv_mask]) * float(rho_ma)
+            - phit[hcpv_mask] * sw[hcpv_mask] * float(rho_w)
+        )
+        den = hcpv[hcpv_mask]
+        calc_rho = (num / den).clip(-0.1, 1.5)
+        rho_hc.loc[hcpv_mask] = calc_rho
+
+    # 3. Gas vs Oil discrimination
+    norm_method = (method or "neutron_density").lower().strip()
+    is_gas = np.zeros(n, dtype=bool)
+    is_oil = np.zeros(n, dtype=bool)
+    is_unc = np.zeros(n, dtype=bool)
+
+    if norm_method == "neutron_density":
+        # Density porosity: Phi_D = (rho_ma - rhob) / (rho_ma - rho_fl)
+        rho_fl = 1.0
+        phid = (float(rho_ma) - rhob) / (float(rho_ma) - rho_fl)
+        delta_phi = phid - nphi
+        valid_nd = is_hc & delta_phi.notna()
+        is_gas = valid_nd & (delta_phi >= float(crossover_cutoff))
+        if allow_unconfirmed:
+            is_oil = valid_nd & (delta_phi <= float(crossover_oil_cutoff))
+            is_unc = is_hc & ~is_gas & ~is_oil
+        else:
+            is_oil = is_hc & ~is_gas
+    elif norm_method == "rho_hc":
+        valid_rho = is_hc & rho_hc.notna()
+        is_gas = valid_rho & (rho_hc <= float(rho_hc_cutoff))
+        if allow_unconfirmed:
+            is_oil = valid_rho & (rho_hc >= float(rho_hc_oil_cutoff))
+            is_unc = is_hc & ~is_gas & ~is_oil
+        else:
+            is_oil = is_hc & ~is_gas
+    elif norm_method == "sonic_vp_vs":
+        valid_sonic = dtc.notna() & (dtc > 0) & dts.notna() & (dts > 0)
+        if not valid_sonic.any():
+            raise ValueError(
+                "Dipole sonic fluid typing requires valid compressional (DTC) and shear (DTS) sonic logs, "
+                "but no valid paired sonic data was found in the well."
+            )
+        vp_vs = dts / dtc
+        valid_vp = is_hc & valid_sonic
+        is_gas = valid_vp & (vp_vs <= float(vp_vs_cutoff))
+        if allow_unconfirmed:
+            is_oil = valid_vp & (vp_vs >= float(vp_vs_oil_cutoff))
+            is_unc = is_hc & ~is_gas & ~is_oil
+        else:
+            is_oil = is_hc & ~is_gas
+    elif norm_method == "mud_gas":
+        gas_cols = [c1_col, c2_col, c3_col, ic4_col, nc4_col, ic5_col, nc5_col]
+        missing_cols = [
+            c
+            for c in gas_cols
+            if c is None
+            or c not in out.columns
+            or not pd.to_numeric(out[c], errors="coerce").notna().any()
+        ]
+        if missing_cols:
+            raise ValueError(
+                f"Mud gas fluid typing requires valid gas chromatography logs (C1-C5), "
+                f"but required curves are missing or empty: {', '.join(str(c) for c in missing_cols)}."
+            )
+        try:
+            g_res = gas_composition_analysis(
+                out[c1_col],
+                out[c2_col],
+                out[c3_col],
+                out[ic4_col],
+                out[nc4_col],
+                out[ic5_col],
+                out[nc5_col],
+            )
+            hc_flag_type = g_res["HC_TYPE_FLAG"]
+            is_gas = is_hc & (hc_flag_type.isin([1, 2]))
+            if allow_unconfirmed:
+                is_oil = is_hc & (hc_flag_type.isin([4, 5]))
+                is_unc = is_hc & (
+                    hc_flag_type.isin([0, 3]) | ~hc_flag_type.isin([1, 2, 4, 5])
+                )
+            else:
+                is_oil = is_hc & ~is_gas
+        except Exception as e_mg:
+            raise ValueError(f"Mud gas analysis failed: {e_mg}") from e_mg
+    elif norm_method == "oil_only":
+        is_gas = np.zeros(n, dtype=bool)
+        is_oil = is_hc.to_numpy(dtype=bool)
+    elif norm_method == "gas_only":
+        is_gas = is_hc.to_numpy(dtype=bool)
+        is_oil = np.zeros(n, dtype=bool)
+    elif norm_method in ("none", "off"):
+        is_gas = np.zeros(n, dtype=bool)
+        is_oil = np.zeros(n, dtype=bool)
+    else:
+        raise ValueError(f"Unknown fluid typing method '{method}'")
+
+    if allow_unconfirmed:
+        is_unc = is_hc & ~is_gas & ~is_oil
+    else:
+        is_unc = np.zeros(n, dtype=bool)
+
+    out["GAS_FLAG"] = np.where(is_gas, 1, 0)
+    out["OIL_FLAG"] = np.where(is_oil, 1, 0)
+    out["UNC_FLAG"] = np.where(is_unc, 1, 0)
+    out["HC_FLAG"] = np.where(is_gas | is_oil | is_unc, 1, 0)
+    out["VHC"] = hcpv
+
+    # 4. Enforce physical gravity segregation (Gas above Oil and Unconfirmed alignment)
+    if enforce_segregation and (
+        ((out["GAS_FLAG"] == 1).any() and (out["OIL_FLAG"] == 1).any())
+        or ((out["GAS_FLAG"] == 1).any() and (out["UNC_FLAG"] == 1).any())
+        or ((out["OIL_FLAG"] == 1).any() and (out["UNC_FLAG"] == 1).any())
+    ):
+        out = fix_fluid_segregation(out)
+
+    # 5. Populate volume fractions and categorical fluid type
+    out["VOIL"] = out["OIL_FLAG"] * hcpv
+    out["VGAS"] = out["GAS_FLAG"] * hcpv
+    out["VUNC"] = out["UNC_FLAG"] * hcpv
+    out["BVHC"] = out["VOIL"] + out["VGAS"] + out["VUNC"]
+    out["RHO_HC"] = rho_hc
+
+    fluid_type = np.full(n, "NON_RESERVOIR", dtype=object)
+    fluid_type[is_water] = "WATER"
+    fluid_type[out["UNC_FLAG"] == 1] = "UNCONFIRMED"
+    fluid_type[out["OIL_FLAG"] == 1] = "OIL"
+    fluid_type[out["GAS_FLAG"] == 1] = "GAS"
+    out["FLUID_TYPE"] = fluid_type
+
+    return out
 
 
 # =============================================================================
@@ -624,6 +1028,7 @@ class FluidGradientResult:
         Returns:
             Dict[str, Any]: Dictionary containing gradient, intercept, density, R2, covariance, and warnings.
         """
+
         def _f(v: Any) -> Optional[float]:
             try:
                 fv = float(v)
@@ -673,6 +1078,7 @@ class FluidContactResult:
         Returns:
             Dict[str, Any]: Dictionary containing P10/P50/P90 contact TVDSS, contact pressure, and fluid densities.
         """
+
         def _f(v: Any) -> Optional[float]:
             try:
                 fv = float(v)
@@ -912,10 +1318,16 @@ class FormationPressureAnalyzer:
         df = self.df
         if min_mobility is not None and self.mobility_col in df.columns:
             mob = pd.to_numeric(df[self.mobility_col], errors="coerce")
-            tight = (df[self.quality_col] == "VALID") & mob.notna() & (mob < float(min_mobility))
+            tight = (
+                (df[self.quality_col] == "VALID")
+                & mob.notna()
+                & (mob < float(min_mobility))
+            )
             df.loc[tight, self.quality_col] = "TIGHT"
 
-        allowed_set = {f.upper() for f in allowed_fluids} if allowed_fluids else set(FLUID_PHASES)
+        allowed_set = (
+            {f.upper() for f in allowed_fluids} if allowed_fluids else set(FLUID_PHASES)
+        )
         has_gas = "GAS" in allowed_set
         has_oil = "OIL" in allowed_set
         has_water = "WATER" in allowed_set
@@ -1030,7 +1442,9 @@ class FormationPressureAnalyzer:
                 n = int(inl.sum())
             else:
                 m, c, cov, r2 = _linear_fit_stats(z, p)
-                used_method = "ols" if method == "ols" else f"ols ({method} needs more points)"
+                used_method = (
+                    "ols" if method == "ols" else f"ols ({method} needs more points)"
+                )
 
         density = self.to_density(m)
         res = FluidGradientResult(
@@ -1106,16 +1520,20 @@ class FormationPressureAnalyzer:
         """
         overrides = {(_norm_fluid(k)): v for k, v in (overrides or {}).items() if v}
         self.gradients = {}
-        allowed_set = {f.upper() for f in allowed_fluids} if allowed_fluids else set(FLUID_PHASES)
+        allowed_set = (
+            {f.upper() for f in allowed_fluids} if allowed_fluids else set(FLUID_PHASES)
+        )
         for fl in FLUID_PHASES:
             if fl not in allowed_set:
                 continue
             ov = overrides.get(fl) or {}
             grad = ov.get("gradient")
             try:
-                if grad is not None and ov.get("anchor_tvdss") is not None and ov.get(
-                    "anchor_pressure"
-                ) is not None:
+                if (
+                    grad is not None
+                    and ov.get("anchor_tvdss") is not None
+                    and ov.get("anchor_pressure") is not None
+                ):
                     self.set_manual_gradient(
                         fl,
                         float(grad),
@@ -1161,7 +1579,9 @@ class FormationPressureAnalyzer:
         P10 / P50 / P90 depth uncertainty from Monte Carlo sampling of the fit covariances."""
         self.contacts = {}
         rng = np.random.default_rng(random_state)
-        allowed_set = {f.upper() for f in allowed_fluids} if allowed_fluids else set(FLUID_PHASES)
+        allowed_set = (
+            {f.upper() for f in allowed_fluids} if allowed_fluids else set(FLUID_PHASES)
+        )
         have = set(self.gradients.keys()) & allowed_set
         for label, up_fl, lo_fl in CONTACT_PAIRS:
             if up_fl not in have or lo_fl not in have:
@@ -1189,11 +1609,15 @@ class FormationPressureAnalyzer:
             n_ok = 0
             if n_simulations > 0 and (np.any(up.cov_matrix) or np.any(lo.cov_matrix)):
                 th1 = rng.multivariate_normal(
-                    [up.gradient, up.intercept], up.cov_matrix, size=int(n_simulations),
+                    [up.gradient, up.intercept],
+                    up.cov_matrix,
+                    size=int(n_simulations),
                     check_valid="ignore",
                 )
                 th2 = rng.multivariate_normal(
-                    [lo.gradient, lo.intercept], lo.cov_matrix, size=int(n_simulations),
+                    [lo.gradient, lo.intercept],
+                    lo.cov_matrix,
+                    size=int(n_simulations),
                     check_valid="ignore",
                 )
                 dms = th2[:, 0] - th1[:, 0]
@@ -1249,7 +1673,11 @@ class FormationPressureAnalyzer:
         if datum_tvdss is not None and datum_pressure is not None:
             return m_ref, float(datum_tvdss), float(datum_pressure)
         if water is not None:
-            z0 = float(datum_tvdss) if datum_tvdss is not None else float(np.mean(water.tvdss_range))
+            z0 = (
+                float(datum_tvdss)
+                if datum_tvdss is not None
+                else float(np.mean(water.tvdss_range))
+            )
             return m_ref, z0, float(water.pressure_at(z0))
         fin = self.valid_mask()
         if not fin.any():
@@ -1270,7 +1698,9 @@ class FormationPressureAnalyzer:
         datum_pressure: Optional[float] = None,
     ) -> pd.Series:
         """P_excess(z) = P_measured(z) - [P_datum + m_ref * (z - z_datum)]."""
-        m_ref, z0, p0 = self.reference_line(ref_water_gradient, datum_tvdss, datum_pressure)
+        m_ref, z0, p0 = self.reference_line(
+            ref_water_gradient, datum_tvdss, datum_pressure
+        )
         z = self.df[self.tvdss_col]
         return self.df[self.pressure_col] - (p0 + m_ref * (z - z0))
 
@@ -1280,8 +1710,12 @@ class FormationPressureAnalyzer:
         """Pre-sampled (pressure, tvdss) end-points of each gradient line over [z_min, z_max]."""
         fin = self._finite_mask()
         zs = self.df.loc[fin, self.tvdss_col]
-        lo = float(z_min) if z_min is not None else (float(zs.min()) if len(zs) else 0.0)
-        hi = float(z_max) if z_max is not None else (float(zs.max()) if len(zs) else 1.0)
+        lo = (
+            float(z_min) if z_min is not None else (float(zs.min()) if len(zs) else 0.0)
+        )
+        hi = (
+            float(z_max) if z_max is not None else (float(zs.max()) if len(zs) else 1.0)
+        )
         out: Dict[str, List[Tuple[float, float]]] = {}
         for fl, g in self.gradients.items():
             out[fl] = [(float(g.pressure_at(lo)), lo), (float(g.pressure_at(hi)), hi)]

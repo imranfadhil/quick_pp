@@ -1,3 +1,5 @@
+from typing import Optional
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -88,15 +90,129 @@ def rock_flag_gr(gr, no_of_rocks=5):
     return rock_typing(vsh_gr, cut_offs=cutoffs, higher_is_better=False)
 
 
+def refine_coal_mask(
+    base_mask: np.ndarray,
+    rhob: Optional[np.ndarray] = None,
+    nphi: Optional[np.ndarray] = None,
+    buffer_pts: int = 1,
+    bridge_gap: int = 2,
+    adaptive_shoulder: bool = True,
+    max_adaptive_pts: int = 2,
+    rhob_shoulder_max: float = 2.35,
+) -> np.ndarray:
+    """Refine a boolean coal mask by bridging thin non-coal gaps, applying top/bottom buffers,
+    and adaptively recovering shoulder bed transition samples.
+
+    Args:
+        base_mask (np.ndarray): 1D boolean array indicating initially flagged coal intervals.
+        rhob (np.ndarray, optional): Bulk density array [g/cm³].
+        nphi (np.ndarray, optional): Neutron porosity array [v/v].
+        buffer_pts (int, optional): Symmetric boundary buffer samples to expand top and bottom. Defaults to 1.
+        bridge_gap (int, optional): Maximum sample gap between adjacent coal seams to bridge. Defaults to 2.
+        adaptive_shoulder (bool, optional): Whether to dynamically extend boundaries into continuous density recovery ramps. Defaults to True.
+        max_adaptive_pts (int, optional): Maximum additional samples to trace into the shoulder ramp. Defaults to 2.
+        rhob_shoulder_max (float, optional): Maximum bulk density considered part of the coal shoulder transition. Defaults to 2.35.
+
+    Returns:
+        np.ndarray: 1D boolean array of refined coal/shoulder flags.
+    """
+    mask = np.asarray(base_mask, dtype=bool).copy()
+    n = len(mask)
+    if n == 0 or not mask.any():
+        return mask
+
+    # 1. Morphological Gap Bridging: close narrow non-coal gaps between coal seams
+    if bridge_gap > 0:
+        true_indices = np.where(mask)[0]
+        if len(true_indices) > 1:
+            diffs = np.diff(true_indices)
+            for k in range(len(diffs)):
+                gap_len = diffs[k] - 1
+                if 0 < gap_len <= bridge_gap:
+                    mask[true_indices[k] + 1 : true_indices[k + 1]] = True
+
+    # 2. Boundary Buffer: symmetric dilation at top and bottom edges
+    if buffer_pts > 0 and mask.any():
+        dilated = mask.copy()
+        for step in range(1, buffer_pts + 1):
+            dilated[step:] |= mask[:-step]
+            dilated[:-step] |= mask[step:]
+        mask = dilated
+
+    # 3. Adaptive Shoulder Recovery: trace upward and downward through the density transition ramp
+    if adaptive_shoulder and rhob is not None and mask.any() and max_adaptive_pts > 0:
+        rhob_arr = np.asarray(rhob, dtype=float)
+        nphi_arr = np.asarray(nphi, dtype=float) if nphi is not None else None
+
+        padded = np.pad(mask, (1, 1), mode="constant", constant_values=False)
+        diffs = np.diff(padded.astype(np.int8))
+        run_starts = np.where(diffs == 1)[0]
+        run_ends = np.where(diffs == -1)[0]  # exclusive end indices
+
+        for start, end in zip(run_starts, run_ends, strict=False):
+            # Trace upward (towards shallower depth, decreasing index)
+            cur_idx = start - 1
+            steps = 0
+            prev_rhob = rhob_arr[start] if np.isfinite(rhob_arr[start]) else 2.0
+            while cur_idx >= 0 and steps < max_adaptive_pts:
+                r_val = rhob_arr[cur_idx]
+                if not np.isfinite(r_val) or r_val > rhob_shoulder_max:
+                    break
+                # Must be transitioning away from coal (density increasing away from bed)
+                # with small allowance for noise (0.05 g/cc)
+                if r_val < prev_rhob - 0.05:
+                    break
+                # Guard against gas sand: low NPHI with crossover
+                if nphi_arr is not None:
+                    n_val = nphi_arr[cur_idx]
+                    if np.isfinite(n_val) and n_val < 0.12 and r_val > 2.10:
+                        break
+                mask[cur_idx] = True
+                prev_rhob = r_val
+                cur_idx -= 1
+                steps += 1
+
+            # Trace downward (towards deeper depth, increasing index)
+            cur_idx = end
+            steps = 0
+            prev_rhob = rhob_arr[end - 1] if np.isfinite(rhob_arr[end - 1]) else 2.0
+            while cur_idx < n and steps < max_adaptive_pts:
+                r_val = rhob_arr[cur_idx]
+                if not np.isfinite(r_val) or r_val > rhob_shoulder_max:
+                    break
+                if r_val < prev_rhob - 0.05:
+                    break
+                if nphi_arr is not None:
+                    n_val = nphi_arr[cur_idx]
+                    if np.isfinite(n_val) and n_val < 0.12 and r_val > 2.10:
+                        break
+                mask[cur_idx] = True
+                prev_rhob = r_val
+                cur_idx += 1
+                steps += 1
+
+    return mask
+
+
 def coal_flagging(
-    nphi, rhob, rhob_threshold=2.0, nphi_threshold=0.3, window_size=21, trend_factor=0.1
+    nphi,
+    rhob,
+    rhob_threshold=2.0,
+    nphi_threshold=0.3,
+    window_size=21,
+    trend_factor=0.1,
+    buffer_pts=0,
+    bridge_gap=0,
+    adaptive_shoulder=False,
+    max_adaptive_pts=2,
 ):
     """Flag coal intervals based on high NPHI and low RHOB, considering log trends.
 
     Coal is typically characterized by very low bulk density and high
     apparent neutron porosity. This function combines absolute thresholds with
     a trend-based approach, flagging points where values deviate significantly
-    from their rolling average.
+    from their rolling average, with optional boundary buffering, gap bridging,
+    and adaptive shoulder recovery.
 
     Args:
         nphi (pd.Series): Neutron porosity log [v/v].
@@ -105,6 +221,10 @@ def coal_flagging(
         nphi_threshold (float, optional): Absolute NPHI threshold for coal. Defaults to 0.3.
         window_size (int, optional): The size of the rolling window to calculate trends. Defaults to 21.
         trend_factor (float, optional): A factor to control sensitivity to trend deviation. Defaults to 0.1.
+        buffer_pts (int, optional): Symmetric boundary buffer samples to expand top and bottom. Defaults to 0.
+        bridge_gap (int, optional): Maximum sample gap between adjacent coal seams to bridge. Defaults to 0.
+        adaptive_shoulder (bool, optional): Whether to dynamically extend boundaries into continuous density recovery ramps. Defaults to False.
+        max_adaptive_pts (int, optional): Maximum additional samples to trace into the shoulder ramp. Defaults to 2.
 
     Returns:
         pd.Series: A series of floats (0.0 or 1.0), where 1.0 indicates coal.
@@ -118,6 +238,29 @@ def coal_flagging(
         nphi > nphi_trend * (1 + trend_factor)
     )
     threshold_condition = (rhob < rhob_threshold) & (nphi > nphi_threshold)
+    raw_mask = (
+        (trend_condition & threshold_condition).fillna(False).to_numpy(dtype=bool)
+    )
+
+    if buffer_pts > 0 or bridge_gap > 0 or adaptive_shoulder:
+        refined = refine_coal_mask(
+            raw_mask,
+            rhob=rhob.to_numpy(dtype=float)
+            if hasattr(rhob, "to_numpy")
+            else np.asarray(rhob),
+            nphi=nphi.to_numpy(dtype=float)
+            if hasattr(nphi, "to_numpy")
+            else np.asarray(nphi),
+            buffer_pts=buffer_pts,
+            bridge_gap=bridge_gap,
+            adaptive_shoulder=adaptive_shoulder,
+            max_adaptive_pts=max_adaptive_pts,
+            rhob_shoulder_max=min(float(rhob_threshold) + 0.35, 2.40),
+        )
+        return pd.Series(
+            refined.astype(float),
+            index=rhob.index if hasattr(rhob, "index") else None,
+        )
 
     return (trend_condition & threshold_condition).astype(float)
 
@@ -453,9 +596,7 @@ def generate_fe_features(df):
 
     # Physics-derived domain features
     sonic_col = (
-        df["DTC"]
-        if "DTC" in df.columns
-        else (df["DT"] if "DT" in df.columns else None)
+        df["DTC"] if "DTC" in df.columns else (df["DT"] if "DT" in df.columns else None)
     )
     df["RHOMA_APP"] = apparent_matrix_density(df["RHOB"], df["NPHI"])
     df["AI"] = acoustic_impedance_feature(df["RHOB"], sonic_col)

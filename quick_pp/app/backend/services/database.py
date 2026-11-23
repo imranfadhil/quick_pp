@@ -31,7 +31,8 @@ from quick_pp.app.backend.utils.auth import (
     is_demo_mode,
 )
 from quick_pp.app.backend.utils.db import get_db
-from quick_pp.app.backend.utils.utils import sanitize_filename
+from quick_pp.app.backend.utils.utils import natural_sort_key, sanitize_filename
+from quick_pp.config import Config
 from quick_pp.database import models as db_models
 from quick_pp.database import objects as db_objects
 
@@ -253,7 +254,7 @@ async def list_projects(request: Request):
                     .scalars()
                     .all()
                 }
-                return [
+                project_list = [
                     {
                         "project_id": r.project_id,
                         "name": r.name,
@@ -265,7 +266,9 @@ async def list_projects(request: Request):
                     for r in rows
                     if r.created_by == uid or r.project_id in pms
                 ]
-            return [
+                project_list.sort(key=lambda p: natural_sort_key(p["name"]))
+                return project_list
+            project_list = [
                 {
                     "project_id": r.project_id,
                     "name": r.name,
@@ -274,6 +277,8 @@ async def list_projects(request: Request):
                 }
                 for r in rows
             ]
+            project_list.sort(key=lambda p: natural_sort_key(p["name"]))
+            return project_list
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to list projects: {e}"
@@ -640,6 +645,7 @@ async def list_wells(project_id: int):
                     wells.append(
                         {"id": f"eph_{eph_name}", "name": eph_name, "uwi": eph_name}
                     )
+            wells.sort(key=lambda w: natural_sort_key(w.get("name", "")))
             return {"project_id": proj.project_id, "wells": wells}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
@@ -925,21 +931,9 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
             wells_summary = []
             total_depth_sum = 0.0
 
-            canonical_zone_curve_aliases: Dict[str, Tuple[str, ...]] = {
-                "TVD": ("TVD", "DEPT_TVD", "DEPTH_TVD"),
-                "TVDSS": ("TVDSS", "DEPT_TVDSS", "DEPTH_TVDSS", "TVD_SS"),
-                "GR": ("GR", "GAMMA", "GR_ARC", "GR_EDTC"),
-                "RT": ("RT", "RD", "RDEP", "RDEEP", "LLD", "RILD"),
-                "NPHI": ("NPHI", "TNPH", "NPOR", "CNCF"),
-                "RHOB": ("RHOB", "RHOZ", "DEN", "ZDEN"),
-                "VCLAY": ("VCLAY", "VSH", "VSHALE", "VCL", "VSH_GR"),
-                "PHIT": ("PHIT", "PHIE", "POROSITY", "POR"),
-                "PERM": ("PERM", "KLOGH", "PERMEABILITY", "K"),
-                "SWT": ("SWT", "SWE", "SW"),
-                "ROCK_FLAG": ("ROCK_FLAG", "ROCK_FLAG_ML", "ROCK_FLAG_CUTOFF"),
-                "PERM_TRANS": ("PERM_TRANS",),
-                "SHF": ("SHF", "SW_SHF"),
-            }
+            canonical_zone_curve_aliases: Dict[str, Tuple[str, ...]] = (
+                Config.CANONICAL_CURVE_ALIASES
+            )
             computed_curve_keys = (
                 "VCLAY",
                 "PHIT",
@@ -1235,6 +1229,7 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                     }
                 )
 
+            wells_summary.sort(key=lambda w: natural_sort_key(w.get("name", "")))
             return _sanitize_for_json(
                 {
                     "project_id": int(proj.project_id),
@@ -1843,7 +1838,7 @@ def _get_merged_dataframe_sync(
             and cached_ts >= mem_ts
             and (is_demo_mode() or (now - cached_ts < _cache_ttl))
         ):
-            return cached_df.copy()
+            return Config.canonicalize_dataframe(cached_df.copy())
         else:
             _merged_data_cache.pop(cache_key, None)
 
@@ -1852,15 +1847,17 @@ def _get_merged_dataframe_sync(
             with open(mem_pkl_path, "rb") as fh:
                 shared_df = pickle.load(fh)
             if isinstance(shared_df, pd.DataFrame) and not shared_df.empty:
-                _merged_data_cache[cache_key] = (mem_ts, shared_df)
-                return shared_df.copy()
+                canonical_shared = Config.canonicalize_dataframe(shared_df)
+                _merged_data_cache[cache_key] = (mem_ts, canonical_shared)
+                return canonical_shared.copy()
         except Exception:
             pass
 
     eph_df = _ephemeral_wells.get(project_id, {}).get(well_name)
     if eph_df is not None:
-        _merged_data_cache[cache_key] = (now, eph_df.copy())
-        return eph_df.copy()
+        canonical_eph = Config.canonicalize_dataframe(eph_df)
+        _merged_data_cache[cache_key] = (now, canonical_eph.copy())
+        return canonical_eph.copy()
 
     def _normalize_df_depth(dframe):
         """Optimize depth normalization with minimal copying."""
@@ -1899,7 +1896,7 @@ def _get_merged_dataframe_sync(
                 and cached_ts >= mem_ts
                 and (is_demo_mode() or (now - cached_ts < _cache_ttl))
             ):
-                return cached_df.copy()
+                return Config.canonicalize_dataframe(cached_df.copy())
 
         try:
             db_well_name = resolve_db_well_name(project_id, well_name)
@@ -2245,6 +2242,7 @@ def _get_merged_dataframe_sync(
 
             merged = merged.replace([np.inf, -np.inf], np.nan)
             merged.columns = [c.upper() for c in merged.columns]
+            merged = Config.canonicalize_dataframe(merged)
 
             # Evict oldest entry if cache is full
             if len(_merged_data_cache) >= _cache_max_entries:

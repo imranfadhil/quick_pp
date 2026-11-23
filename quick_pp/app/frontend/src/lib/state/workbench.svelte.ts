@@ -8,6 +8,7 @@ export type SingleWellStep =
 	| 'saturation'
 	| 'ressum'
 	| 'scal'
+	| 'toc'
 	| 'report';
 export type MultiWellStep =
 	| 'inventory'
@@ -159,6 +160,9 @@ export interface LithoEndpointParams {
 	coalNphiMin: number;
 	coalWindowSize: number;
 	coalTrendFactor: number;
+	coalBufferPts: number;
+	coalBridgeGap: number;
+	coalAdaptiveShoulder: boolean;
 	badholeTreatment: BadholeTreatmentMode;
 	/** Continuous apparent fluid density (RHO_FL) engine mode. */
 	fluidDensityMode: 'static' | 'zonal_coupled' | 'iterative_sxo';
@@ -172,6 +176,19 @@ export interface LithoEndpointParams {
 	fluidDensityFlushExponent: number;
 	fluidDensityShrGas: number;
 	fluidDensityShrOil: number;
+	manualOverrides?: LithoOverride[];
+}
+
+export interface LithoOverride {
+	id: string;
+	top: number;
+	bottom: number;
+	coalMode?: 'keep' | 'flag' | 'clear';
+	badholeMode?: 'keep' | 'flag' | 'clear';
+	target?: 'COAL' | 'BADHOLE' | 'BOTH';
+	action?: 'flag' | 'clear';
+	enabled?: boolean;
+	comment?: string;
 }
 
 export interface ThomasStieberParams {
@@ -200,6 +217,15 @@ export interface ResolutionEnhancementParams {
 	noiseCapMult: number;
 }
 
+export type FluidTypingMethod =
+	| 'neutron_density'
+	| 'rho_hc'
+	| 'sonic_vp_vs'
+	| 'mud_gas'
+	| 'oil_only'
+	| 'gas_only'
+	| 'none';
+
 export interface SaturationModelParams {
 	fwl: number;
 	method: 'waxman_smits' | 'archie' | 'simandoux' | 'indonesian' | 'dual_water';
@@ -226,6 +252,38 @@ export interface SaturationModelParams {
 	rsh: number;
 	swb: number;
 	rwb: number;
+	fluidTypingMethod: FluidTypingMethod;
+	gasCrossoverCutoff: number;
+	rhoHcCutoff: number;
+	vpVsCutoff: number;
+	swPayCutoff: number;
+	phitCutoff: number;
+	vshCutoff: number;
+	enforceSegregation: boolean;
+	allowUnconfirmed: boolean;
+	waterLegIntervalMode: 'zone' | 'depth';
+	waterLegSelectedZone: string | null;
+	waterLegTopDepth: number | null;
+	waterLegBottomDepth: number | null;
+	waterLegMethod: 'archie' | 'indonesian';
+	waterLegVshCutoff: number;
+	waterLegCalibratedM: number | null;
+	waterLegFitSlope: number | null;
+	waterLegFitIntercept: number | null;
+	continuousMModel: 'calibrated' | 'borai' | 'shell_lucia';
+	applyContinuousM: boolean;
+	manualOverrides?: FluidSwtOverride[];
+}
+
+export interface FluidSwtOverride {
+	id: string;
+	top: number;
+	bottom: number;
+	fluidType?: 'AUTO' | 'GAS' | 'OIL' | 'WATER' | 'UNCONFIRMED' | 'NON_RESERVOIR';
+	swtMode?: 'keep' | 'force_water_leg' | 'fixed_value' | 'cap_max' | 'floor_min';
+	swtValue?: number | null;
+	enabled?: boolean;
+	comment?: string;
 }
 
 export interface ScalModelParams {
@@ -338,10 +396,26 @@ export interface PermModelParams {
 	swirr: number;
 }
 
+export interface TocModelParams {
+	resCurve: string;
+	poroCurve: string;
+	porosityType: 'sonic' | 'density' | 'neutron';
+	rBaseline: number;
+	poroBaseline: number;
+	scalingCoeff: number | null;
+	maturityMode: 'lom' | 'ro';
+	lom: number;
+	ro: number;
+	tocBaseline: number;
+	clampNegative: boolean;
+}
+
 export interface ResSumParams {
 	vshMax: number;
 	phitMin: number;
 	swtMax: number;
+	applyPermCutoff: boolean;
+	permMin: number;
 	includeUpscaling: boolean;
 	byZone: boolean;
 	cellSize: number;
@@ -707,6 +781,9 @@ class WorkbenchState {
 	stickPlotCustomOrder = $state<string[]>([]);
 	stickPlotZoneFilter = $state<string>('ALL');
 	stickPlotShowPhit = $state<boolean>(false);
+	stickPlotShowLogs = $state<boolean>(false);
+	stickPlotDatumMode = $state<'structural' | 'flattened'>('structural');
+	stickPlotFlattenTop = $state<string>('');
 	stickPlotShowContacts = $state<boolean>(true);
 	stickPlotShowTops = $state<boolean>(true);
 	stickPlotShowPerfs = $state<boolean>(true);
@@ -833,6 +910,9 @@ class WorkbenchState {
 		coalNphiMin: 0.3,
 		coalWindowSize: 41,
 		coalTrendFactor: 0.05,
+		coalBufferPts: 1,
+		coalBridgeGap: 2,
+		coalAdaptiveShoulder: true,
 		badholeTreatment: 'vsh_gr',
 		fluidDensityMode: 'static',
 		fluidDensityMudType: 'WBM',
@@ -844,7 +924,8 @@ class WorkbenchState {
 		fluidDensityRtCurve: 'RT',
 		fluidDensityFlushExponent: 0.2,
 		fluidDensityShrGas: 0.25,
-		fluidDensityShrOil: 0.15
+		fluidDensityShrOil: 0.15,
+		manualOverrides: []
 	});
 
 	tsParams = $state<ThomasStieberParams>({
@@ -915,7 +996,28 @@ class WorkbenchState {
 		rsh: 2.0,
 		swb: 0.2,
 		rwb: 0.1,
-		fwl: 0
+		fwl: 0,
+		fluidTypingMethod: 'neutron_density',
+		gasCrossoverCutoff: 0.04,
+		rhoHcCutoff: 0.40,
+		vpVsCutoff: 1.60,
+		swPayCutoff: 0.65,
+		phitCutoff: 0.05,
+		vshCutoff: 0.50,
+		enforceSegregation: true,
+		allowUnconfirmed: true,
+		waterLegIntervalMode: 'zone',
+		waterLegSelectedZone: null,
+		waterLegTopDepth: null,
+		waterLegBottomDepth: null,
+		waterLegMethod: 'archie',
+		waterLegVshCutoff: 0.30,
+		waterLegCalibratedM: null,
+		waterLegFitSlope: null,
+		waterLegFitIntercept: null,
+		continuousMModel: 'calibrated',
+		applyContinuousM: false,
+		manualOverrides: []
 	});
 
 	scalParams = $state<ScalModelParams>({
@@ -1013,10 +1115,26 @@ class WorkbenchState {
 		swirr: 0.2
 	});
 
+	tocParams = $state<TocModelParams>({
+		resCurve: 'RD',
+		poroCurve: 'DT',
+		porosityType: 'sonic',
+		rBaseline: 2.0,
+		poroBaseline: 80.0,
+		scalingCoeff: null,
+		maturityMode: 'lom',
+		lom: 10.5,
+		ro: 0.8,
+		tocBaseline: 0.8,
+		clampNegative: true
+	});
+
 	resSumParams = $state<ResSumParams>({
 		vshMax: 0.4,
 		phitMin: 0.05,
 		swtMax: 0.75,
+		applyPermCutoff: false,
+		permMin: 1.0,
 		includeUpscaling: true,
 		byZone: false,
 		cellSize: 2.0,
@@ -1303,6 +1421,34 @@ class WorkbenchState {
 			type: 'focus',
 			seq: this.sectionBulkAction.seq + 1
 		};
+	}
+
+	/** Per-well cache of saturation manual overrides so they are strictly well-specific and isolated. */
+	wellManualOverrides = $state<Record<string, FluidSwtOverride[]>>({});
+
+	getWellManualOverrides(wellName?: string | null): FluidSwtOverride[] {
+		if (!wellName) return [];
+		const list = this.wellManualOverrides[wellName];
+		return Array.isArray(list) ? JSON.parse(JSON.stringify(list)) : [];
+	}
+
+	setWellManualOverrides(wellName: string, overrides: FluidSwtOverride[]) {
+		if (!wellName) return;
+		this.wellManualOverrides[wellName] = JSON.parse(JSON.stringify(overrides ?? []));
+	}
+
+	/** Per-well cache of lithology & porosity manual overrides so they are strictly well-specific and isolated. */
+	wellLithoManualOverrides = $state<Record<string, LithoOverride[]>>({});
+
+	getWellLithoManualOverrides(wellName?: string | null): LithoOverride[] {
+		if (!wellName) return [];
+		const list = this.wellLithoManualOverrides[wellName];
+		return Array.isArray(list) ? JSON.parse(JSON.stringify(list)) : [];
+	}
+
+	setWellLithoManualOverrides(wellName: string, overrides: LithoOverride[]) {
+		if (!wellName) return;
+		this.wellLithoManualOverrides[wellName] = JSON.parse(JSON.stringify(overrides ?? []));
 	}
 }
 

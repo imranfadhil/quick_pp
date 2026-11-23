@@ -12,8 +12,16 @@
 	} from '$lib/utils/petrophysicsColors';
 	import { fmtDepth, fmtNum } from '$lib/utils/formatters';
 	import { crossplotGroups, crossplotLabel, resolveCrossplot } from '$lib/utils/crossplots';
-	import { spectralCrossplotPoints, spectralPlotNote, spectralYAxisRange } from '$lib/utils/spectralCrossplot';
-	import { curveDepthSeries, enhancedVsRawSeries, ENHANCED_CURVE_PAIRS } from '$lib/utils/curveDepth';
+	import {
+		spectralCrossplotPoints,
+		spectralPlotNote,
+		spectralYAxisRange
+	} from '$lib/utils/spectralCrossplot';
+	import {
+		curveDepthSeries,
+		enhancedVsRawSeries,
+		ENHANCED_CURVE_PAIRS
+	} from '$lib/utils/curveDepth';
 	import { gammaEndpoints, gammaLabel } from '$lib/utils/lithology';
 	import { normalizedScalSaturation, poreThroatDistribution } from '$lib/utils/poreThroat';
 	import {
@@ -24,6 +32,8 @@
 		fitBqvCrossplotWithFixedIntercept,
 		getBqvFitIndices
 	} from '$lib/utils/saturation';
+	import { depthDisplay } from '$lib/state/depthDisplay.svelte';
+	import { calculateWaterLegCalibration } from '$lib/utils/waterLegCalibration';
 	import CoreDepthShiftPanel from '$lib/components/workbench/CoreDepthShiftPanel.svelte';
 	import VshCalibrationPanel from '$lib/components/workbench/VshCalibrationPanel.svelte';
 	import PorosityComparisonCanvas from '$lib/components/workbench/PorosityComparisonCanvas.svelte';
@@ -47,7 +57,9 @@
 	let showCoreShiftDrawer = $state<boolean>(false);
 	let showVshCalibDrawer = $state<boolean>(false);
 	let emptyPlotMessage = $state<string | null>(null);
-	let spectralReferences = $state<Record<string, { POTA: number; THOR: number; PEF: number }>>({});
+	let spectralReferences = $state<Record<string, { POTA: number; THOR: number; PEF: number }>>(
+		{}
+	);
 	let spectralReferenceError = $state<string | null>(null);
 
 	$effect(() => {
@@ -57,22 +69,34 @@
 		spectralReferenceError = null;
 		getJson<Record<string, { POTA: number; THOR: number; PEF: number }>>(
 			`/quick_pp/workspace/projects/${encodeURIComponent(projectId)}/spectral_mineral_references`
-		).then((data) => { if (!cancelled) spectralReferences = data; }).catch((error: unknown) => {
-			if (!cancelled) spectralReferenceError = error instanceof Error ? error.message : String(error);
-		});
-		return () => { cancelled = true; };
+		)
+			.then((data) => {
+				if (!cancelled) spectralReferences = data;
+			})
+			.catch((error: unknown) => {
+				if (!cancelled)
+					spectralReferenceError = error instanceof Error ? error.message : String(error);
+			});
+		return () => {
+			cancelled = true;
+		};
 	});
 
 	let effectiveMode = $derived(workbench.effectiveCrossplot);
 	let autoMode = $derived(resolveCrossplot(workbench.crossplotContext, 'auto'));
 	let plotGroups = $derived(crossplotGroups(workbench.crossplotContext));
 	let spectralNote = $derived.by(() => {
-		if (effectiveMode !== 'th-k' && effectiveMode !== 'pef-k' && effectiveMode !== 'pef-th-k') return null;
-		const points = spectralCrossplotPoints(effectiveMode, {
-			...wellData.curves,
-			POTA: wellData.curves[workbench.lithoParams.potassiumCurve] ?? [],
-			THOR: wellData.curves[workbench.lithoParams.thoriumCurve] ?? []
-		}, wellData.visibleIndices);
+		if (effectiveMode !== 'th-k' && effectiveMode !== 'pef-k' && effectiveMode !== 'pef-th-k')
+			return null;
+		const points = spectralCrossplotPoints(
+			effectiveMode,
+			{
+				...wellData.curves,
+				POTA: wellData.curves[workbench.lithoParams.potassiumCurve] ?? [],
+				THOR: wellData.curves[workbench.lithoParams.thoriumCurve] ?? []
+			},
+			wellData.visibleIndices
+		);
 		return spectralPlotNote(effectiveMode, points.y);
 	});
 
@@ -85,27 +109,38 @@
 			traces.some(
 				(trace) =>
 					matches(String(trace.name ?? '')) &&
-					(Array.isArray(trace.x) ? trace.x.length > 0 : Array.isArray(trace.y) && trace.y.length > 0)
+					(Array.isArray(trace.x)
+						? trace.x.length > 0
+						: Array.isArray(trace.y) && trace.y.length > 0)
 			);
 		switch (mode) {
-		case 'enhanced-vs-raw':
-			return traces.some((trace) =>
-				trace.x?.some((value: number | null) => value !== null)
-			)
-				? null
-				: 'No resolution-enhanced curves found. Run Raw Log Resolution Enhancement in Data & QAQC first.';
-		case 'curve-depth':
-			return traces.some((trace) => trace.x?.some((value: number | null) => value !== null))
-				? null
-				: 'No curve values in the current depth and zone selection.';
-		case 'histogram':
-				return hasTrace(() => true) ? null : 'No values for the selected curve. Select a populated curve or adjust the depth and zone filters.';
+			case 'enhanced-vs-raw':
+				return traces.some((trace) =>
+					trace.x?.some((value: number | null) => value !== null)
+				)
+					? null
+					: 'No resolution-enhanced curves found. Run Raw Log Resolution Enhancement in Data & QAQC first.';
+			case 'curve-depth':
+				return traces.some((trace) =>
+					trace.x?.some((value: number | null) => value !== null)
+				)
+					? null
+					: 'No curve values in the current depth and zone selection.';
+			case 'histogram':
+				return hasTrace(() => true)
+					? null
+					: 'No values for the selected curve. Select a populated curve or adjust the depth and zone filters.';
 			case 'mw-distribution':
 				return projectData.multiWellQaqcResult?.plot_data?.well_names?.length
 					? null
 					: 'No multi-well distribution data. Load wells and run Data & QAQC.';
 			case 'nphi-rhob':
-				return hasTrace((name) => name.startsWith('Log Data') || name.startsWith('Coal Flagged') || name.startsWith('Badhole Flagged'))
+				return hasTrace(
+					(name) =>
+						name.startsWith('Log Data') ||
+						name.startsWith('Coal Flagged') ||
+						name.startsWith('Badhole Flagged')
+				)
 					? null
 					: 'No paired NPHI and RHOB values in the current selection. Load the curves or adjust the filters.';
 			case 'mn-plot':
@@ -120,6 +155,13 @@
 				return hasTrace((name) => name === 'Pickett (Rt vs Φ)')
 					? null
 					: 'No valid RT and PHIT pairs in the current selection. Load or calculate the curves, or adjust the filters.';
+			case 'fluid-typing':
+				return hasTrace(
+					(name) =>
+						name?.includes('Pay') || name?.includes('Leg') || name?.includes('Non-Pay')
+				)
+					? null
+					: 'No valid NPHI and RHOB samples in the current selection. Ensure porosity logs are loaded and saturation is run.';
 			case 'bqv':
 				return hasTrace((name) => name === 'Log samples')
 					? null
@@ -128,6 +170,14 @@
 				return hasTrace(() => true)
 					? null
 					: 'No saturation or shale-volume data in the current selection. Calculate the curves or adjust the filters.';
+			case 'water-leg-m':
+				return hasTrace((name) => name === 'Water-leg samples')
+					? null
+					: 'No valid water-leg samples in the selected interval. Select a 100% water zone or adjust the depth filter.';
+			case 'toc-tracks':
+				return hasTrace(() => true)
+					? null
+					: 'No source rock or log data in the current selection. Run Source Rock (TOC) or adjust the filters.';
 			case 'core-qc':
 				return wellData.coreComparison.rows.length
 					? null
@@ -204,9 +254,7 @@
 		);
 		const anchoredAutoFit = fitBqvCrossplotWithFixedIntercept(
 			selectedFit.points,
-			params.a > 0 && referenceRw.rw > 0
-				? 1 / (params.a * referenceRw.rw)
-				: Number.NaN
+			params.a > 0 && referenceRw.rw > 0 ? 1 / (params.a * referenceRw.rw) : Number.NaN
 		);
 		const fit =
 			params.bqvFitMode === 'manual'
@@ -259,7 +307,9 @@
 		add(sp.gd_driver_col);
 		GD_GAMMA_FALLBACKS.forEach(add);
 		Object.keys(wellData.curves)
-			.filter((c) => /^(CGR|SGR|GR|GAMMA|RHOB|NPHI|M_LITH|N_LITH|AI|DPHI|VSH|DTC|DTS)$/i.test(c))
+			.filter((c) =>
+				/^(CGR|SGR|GR|GAMMA|RHOB|NPHI|M_LITH|N_LITH|AI|DPHI|VSH|DTC|DTS)$/i.test(c)
+			)
 			.forEach(add);
 		return result;
 	});
@@ -344,11 +394,15 @@
 
 		if (effectiveMode === 'th-k' || effectiveMode === 'pef-k' || effectiveMode === 'pef-th-k') {
 			baseLayout.margin.t = 70;
-			const points = spectralCrossplotPoints(effectiveMode, {
-				...wellData.curves,
-				POTA: wellData.curves[workbench.lithoParams.potassiumCurve] ?? [],
-				THOR: wellData.curves[workbench.lithoParams.thoriumCurve] ?? []
-			}, indices);
+			const points = spectralCrossplotPoints(
+				effectiveMode,
+				{
+					...wellData.curves,
+					POTA: wellData.curves[workbench.lithoParams.potassiumCurve] ?? [],
+					THOR: wellData.curves[workbench.lithoParams.thoriumCurve] ?? []
+				},
+				indices
+			);
 			traces.push({
 				type: 'scatter',
 				mode: 'markers',
@@ -356,7 +410,9 @@
 				x: points.x,
 				y: points.y,
 				customdata: points.customdata,
-				text: points.depths.map((depth) => depth === null ? 'Depth unavailable' : `Depth: ${fmtNum(depth, 2)} m`),
+				text: points.depths.map((depth) =>
+					depth === null ? 'Depth unavailable' : `Depth: ${fmtNum(depth, 2)} m`
+				),
 				marker: {
 					size: 5.5,
 					color: points.depths,
@@ -372,16 +428,35 @@
 			for (const [name, ref] of Object.entries(spectralReferences)) {
 				const x = effectiveMode === 'pef-th-k' ? ref.THOR / ref.POTA : ref.POTA;
 				const y = effectiveMode === 'th-k' ? ref.THOR : ref.PEF;
-				if (!Number.isFinite(x) || !Number.isFinite(y) || (effectiveMode === 'pef-th-k' && x <= 0)) continue;
-				refX.push(x); refY.push(y); refNames.push(name);
+				if (
+					!Number.isFinite(x) ||
+					!Number.isFinite(y) ||
+					(effectiveMode === 'pef-th-k' && x <= 0)
+				)
+					continue;
+				refX.push(x);
+				refY.push(y);
+				refNames.push(name);
 			}
-			if (refX.length) traces.push({
-				type: 'scatter', mode: 'markers+text', name: 'Illustrative mineral endpoints',
-				x: refX, y: refY, text: refNames, textposition: 'top center',
-				textfont: { size: 9, color: '#334155' },
-				marker: { size: 9, color: '#FFFFFF', symbol: 'diamond', line: { color: '#334155', width: 1.5 } },
-				hovertemplate: '%{text}<br>X: %{x:.3g}<br>Y: %{y:.3g}<extra>Configured endpoint; not a classification</extra>'
-			});
+			if (refX.length)
+				traces.push({
+					type: 'scatter',
+					mode: 'markers+text',
+					name: 'Illustrative mineral endpoints',
+					x: refX,
+					y: refY,
+					text: refNames,
+					textposition: 'top center',
+					textfont: { size: 9, color: '#334155' },
+					marker: {
+						size: 9,
+						color: '#FFFFFF',
+						symbol: 'diamond',
+						line: { color: '#334155', width: 1.5 }
+					},
+					hovertemplate:
+						'%{text}<br>X: %{x:.3g}<br>Y: %{y:.3g}<extra>Configured endpoint; not a classification</extra>'
+				});
 			baseLayout.xaxis.title = {
 				text: effectiveMode === 'pef-th-k' ? 'Th/K (ppm / %)' : 'Potassium (%)'
 			};
@@ -397,13 +472,22 @@
 				for (const ratio of [0.3, 0.6, 2, 3.5, 12, 25]) {
 					const xEnd = Math.min(maxK, maxTh / ratio);
 					shapes.push({
-						type: 'line', x0: 0, y0: 0, x1: xEnd, y1: xEnd * ratio,
+						type: 'line',
+						x0: 0,
+						y0: 0,
+						x1: xEnd,
+						y1: xEnd * ratio,
 						line: { color: '#94A3B8', width: 1, dash: 'dot' }
 					});
 					traces.push({
-						type: 'scatter', mode: 'text', x: [xEnd], y: [xEnd * ratio],
-						text: [`${ratio}`], textposition: 'top left',
-						textfont: { size: 9, color: '#64748B' }, hoverinfo: 'skip',
+						type: 'scatter',
+						mode: 'text',
+						x: [xEnd],
+						y: [xEnd * ratio],
+						text: [`${ratio}`],
+						textposition: 'top left',
+						textfont: { size: 9, color: '#64748B' },
+						hoverinfo: 'skip',
 						showlegend: false
 					});
 				}
@@ -415,18 +499,20 @@
 		if (effectiveMode === 'grain-density') {
 			baseLayout.margin.t = 70;
 			const sp = workbench.scalParams;
-					const multivariate =
-						sp.gd_mode === 'multivariate' && sp.gd_driver_cols.length > 0 && sp.gd_coef.length > 0;
+			const multivariate =
+				sp.gd_mode === 'multivariate' &&
+				sp.gd_driver_cols.length > 0 &&
+				sp.gd_coef.length > 0;
 
-					// Resolve the x-axis driver: the explicit crossplot selection when it is available,
-					// else the first selected multi-log driver (multivariate), else the
-					// calibrated/single gamma driver with CGR/GR fallbacks.
+			// Resolve the x-axis driver: the explicit crossplot selection when it is available,
+			// else the first selected multi-log driver (multivariate), else the
+			// calibrated/single gamma driver with CGR/GR fallbacks.
 			const curveNames = Object.keys(wellData.curves);
 			const upperMap = new Map(curveNames.map((c) => [c.toUpperCase(), c]));
-					const plotChoice = sp.gd_plot_driver_col ?? null;
-					const driverCandidates = multivariate
-						? [plotChoice, ...sp.gd_driver_cols, sp.gd_driver_col]
-						: [plotChoice, sp.gd_driver_col, ...GD_GAMMA_FALLBACKS];
+			const plotChoice = sp.gd_plot_driver_col ?? null;
+			const driverCandidates = multivariate
+				? [plotChoice, ...sp.gd_driver_cols, sp.gd_driver_col]
+				: [plotChoice, sp.gd_driver_col, ...GD_GAMMA_FALLBACKS];
 			let driverCol: string | null = null;
 			for (const cand of driverCandidates) {
 				const hit = upperMap.get(String(cand || '').toUpperCase());
@@ -449,7 +535,8 @@
 			const depthPts: Array<number | null> = [];
 
 			const nearestDriver = (depth: number): number => {
-				if (deptAll.length === 0 || driverCurve.length !== deptAll.length) return Number.NaN;
+				if (deptAll.length === 0 || driverCurve.length !== deptAll.length)
+					return Number.NaN;
 				let lo = 0;
 				let hi = deptAll.length - 1;
 				while (lo < hi) {
@@ -457,12 +544,22 @@
 					if (deptAll[mid] < depth) lo = mid + 1;
 					else hi = mid;
 				}
-				if (lo > 0 && Math.abs(deptAll[lo - 1] - depth) < Math.abs(deptAll[lo] - depth)) lo = lo - 1;
+				if (lo > 0 && Math.abs(deptAll[lo - 1] - depth) < Math.abs(deptAll[lo] - depth))
+					lo = lo - 1;
 				return Math.abs(deptAll[lo] - depth) <= 0.5 ? driverCurve[lo] : Number.NaN;
 			};
 
 			const readCgd = (s: Record<string, any>): number => {
-				for (const key of ['grain_density', 'CGD', 'grainDensity', 'GRDEN', 'RHOG', 'rhog', 'rhoma', 'RHOMA']) {
+				for (const key of [
+					'grain_density',
+					'CGD',
+					'grainDensity',
+					'GRDEN',
+					'RHOG',
+					'rhog',
+					'rhoma',
+					'RHOMA'
+				]) {
 					const v = Number(s[key]);
 					if (Number.isFinite(v) && v > 0) return v;
 				}
@@ -474,7 +571,8 @@
 					const origS = wellData.originalCoreSamples[idx];
 					const dCur = Number(s.depth ?? s.DEPTH ?? origS?.depth);
 					const dRaw = Number(s.raw_depth ?? origS?.raw_depth ?? dCur);
-					if (wellData.hasActiveFilter && !wellData.isCorePlugInActiveFilter(dRaw, dCur)) return;
+					if (wellData.hasActiveFilter && !wellData.isCorePlugInActiveFilter(dRaw, dCur))
+						return;
 					const cgd = readCgd(s);
 					if (!Number.isFinite(cgd)) return;
 					const sampleVal = Number(s[driverCol ?? '']);
@@ -485,7 +583,11 @@
 					depthPts.push(Number.isFinite(dCur) ? dCur : null);
 				});
 			}
-			if (xPts.length === 0 && cgdCurve.length === deptAll.length && driverCurve.length === deptAll.length) {
+			if (
+				xPts.length === 0 &&
+				cgdCurve.length === deptAll.length &&
+				driverCurve.length === deptAll.length
+			) {
 				for (const i of indices) {
 					const cgd = Number(cgdCurve[i]);
 					const driver = Number(driverCurve[i]);
@@ -504,7 +606,9 @@
 					name: 'Core grain density',
 					x: xPts,
 					y: yPts,
-					text: depthPts.map((d) => (d === null ? 'Depth unavailable' : `Depth: ${fmtNum(d, 2)} m`)),
+					text: depthPts.map((d) =>
+						d === null ? 'Depth unavailable' : `Depth: ${fmtNum(d, 2)} m`
+					),
 					marker: {
 						size: 7,
 						color: depthPts.map((d) => (d === null ? 0 : d)),
@@ -512,38 +616,39 @@
 						opacity: 0.85,
 						colorbar: { title: { text: 'Depth (m)' }, thickness: 10 }
 					},
-					hovertemplate: '%{text}<br>Driver: %{x:.3g}<br>CGD: %{y:.4g} g/cc<extra></extra>'
+					hovertemplate:
+						'%{text}<br>Driver: %{x:.3g}<br>CGD: %{y:.4g} g/cc<extra></extra>'
 				});
 
-						const clamp = (v: number) =>
-							Math.min(sp.gd_rho_ma_max, Math.max(sp.gd_rho_ma_min, v));
-						const xMin = Math.min(...xPts);
-						const xMax = Math.max(...xPts);
-						const lineX = [xMin, xMax];
+				const clamp = (v: number) =>
+					Math.min(sp.gd_rho_ma_max, Math.max(sp.gd_rho_ma_min, v));
+				const xMin = Math.min(...xPts);
+				const xMax = Math.max(...xPts);
+				const lineX = [xMin, xMax];
 
-						if (multivariate) {
-							// Sweep the plotted driver while holding the other drivers at their fitted
-							// centers (z = 0), which is the marginal 1-D slice of the multi-log model.
-							const xIdx = sp.gd_driver_cols.findIndex(
-								(c) => c.toUpperCase() === (driverCol ?? '').toUpperCase()
-							);
-							if (xIdx >= 0 && sp.gd_intercept !== null) {
-								const lineY = lineX.map((x) => {
-									const z = (x - (sp.gd_center[xIdx] ?? 0)) / (sp.gd_scale[xIdx] || 1);
-									return clamp((sp.gd_intercept ?? 0) + (sp.gd_coef[xIdx] ?? 0) * z);
-								});
-								traces.push({
-									type: 'scatter',
-									mode: 'lines',
-									name: `Multi-log fit (${sp.gd_driver_cols.length} drivers)`,
-									x: lineX,
-									y: lineY,
-									line: { color: '#DC2626', width: 2 },
-									hovertemplate:
-										'Driver: %{x:.3g}<br>ρma: %{y:.4g} g/cc<extra>Multi-log fit</extra>'
-								});
-							}
-						} else if (sp.gd_calibrated && Number.isFinite(sp.gd_k)) {
+				if (multivariate) {
+					// Sweep the plotted driver while holding the other drivers at their fitted
+					// centers (z = 0), which is the marginal 1-D slice of the multi-log model.
+					const xIdx = sp.gd_driver_cols.findIndex(
+						(c) => c.toUpperCase() === (driverCol ?? '').toUpperCase()
+					);
+					if (xIdx >= 0 && sp.gd_intercept !== null) {
+						const lineY = lineX.map((x) => {
+							const z = (x - (sp.gd_center[xIdx] ?? 0)) / (sp.gd_scale[xIdx] || 1);
+							return clamp((sp.gd_intercept ?? 0) + (sp.gd_coef[xIdx] ?? 0) * z);
+						});
+						traces.push({
+							type: 'scatter',
+							mode: 'lines',
+							name: `Multi-log fit (${sp.gd_driver_cols.length} drivers)`,
+							x: lineX,
+							y: lineY,
+							line: { color: '#DC2626', width: 2 },
+							hovertemplate:
+								'Driver: %{x:.3g}<br>ρma: %{y:.4g} g/cc<extra>Multi-log fit</extra>'
+						});
+					}
+				} else if (sp.gd_calibrated && Number.isFinite(sp.gd_k)) {
 					const lineY = lineX.map((x) =>
 						clamp(sp.gd_rho_ma_clean + sp.gd_k * (x - sp.gd_driver_clean))
 					);
@@ -554,14 +659,15 @@
 						x: lineX,
 						y: lineY,
 						line: { color: '#DC2626', width: 2 },
-						hovertemplate: 'Driver: %{x:.3g}<br>ρma: %{y:.4g} g/cc<extra>Calibrated fit</extra>'
+						hovertemplate:
+							'Driver: %{x:.3g}<br>ρma: %{y:.4g} g/cc<extra>Calibrated fit</extra>'
 					});
 				}
 			}
 
 			baseLayout.xaxis.title = {
-							text: `${driverCol ?? 'GR/CGR'} (${multivariate ? 'driver unit' : 'GAPI'})`
-						};
+				text: `${driverCol ?? 'GR/CGR'} (${multivariate ? 'driver unit' : 'GAPI'})`
+			};
 			baseLayout.yaxis.title = { text: 'Grain / Matrix Density (g/cc)' };
 			return { traces, layout: baseLayout };
 		}
@@ -571,7 +677,8 @@
 				wellData.curves,
 				deptAll,
 				indices,
-				workbench.enhanceCompareCurve ?? undefined			);
+				workbench.enhanceCompareCurve ?? undefined
+			);
 			const colorFor = (raw: string) =>
 				raw === 'GR' ? '#16A34A' : raw === 'NPHI' ? '#2563EB' : '#DC2626';
 			// Each curve family (GR, NPHI, RHOB) gets its own side-by-side track with
@@ -725,7 +832,15 @@
 		}
 
 		if (effectiveMode === 'histogram') {
-			const curveName = workbench.selectedQaqcCurve || 'GR';
+			const defaultCurve = workbench.singleWellStep === 'toc' ? 'TOC' : 'GR';
+			const curveName =
+				workbench.singleWellStep === 'toc'
+					? workbench.selectedQaqcCurve && wellData.curves[workbench.selectedQaqcCurve]
+						? workbench.selectedQaqcCurve
+						: wellData.curves[defaultCurve]
+							? defaultCurve
+							: 'GR'
+					: workbench.selectedQaqcCurve || 'GR';
 			const raw = wellData.curves[curveName] ?? [];
 			const vals = indices.map((i) => raw[i]).filter((v) => Number.isFinite(v));
 			const st = wellData.stats[curveName];
@@ -849,18 +964,8 @@
 						type: 'scatter',
 						mode: 'lines+markers+text',
 						name: 'Sand-Shale Endpoints',
-						x: [
-							lp.drySandNphi,
-							lp.dryClayNphi,
-							lp.fluidNphi,
-							lp.drySandNphi
-						],
-						y: [
-							lp.drySandRhob,
-							lp.dryClayRhob,
-							lp.fluidRhob,
-							lp.drySandRhob
-						],
+						x: [lp.drySandNphi, lp.dryClayNphi, lp.fluidNphi, lp.drySandNphi],
+						y: [lp.drySandRhob, lp.dryClayRhob, lp.fluidRhob, lp.drySandRhob],
 						text: ['Sand', 'Clay', 'Fluid', ''],
 						textposition: 'top center',
 						textfont: { family: 'Inter', size: 10, color: '#0F172A' },
@@ -1449,18 +1554,8 @@
 					type: 'scatter',
 					mode: 'lines+markers+text',
 					name: 'Sand-Shale Endpoints',
-					x: [
-						lp.drySandNphi,
-						lp.dryClayNphi,
-						lp.fluidNphi,
-						lp.drySandNphi
-					],
-					y: [
-						lp.drySandRhob,
-						lp.dryClayRhob,
-						lp.fluidRhob,
-						lp.drySandRhob
-					],
+					x: [lp.drySandNphi, lp.dryClayNphi, lp.fluidNphi, lp.drySandNphi],
+					y: [lp.drySandRhob, lp.dryClayRhob, lp.fluidRhob, lp.drySandRhob],
 					text: ['Sand', 'Clay', 'Fluid', ''],
 					textposition: 'top center',
 					textfont: { family: 'Inter', size: 10, color: '#0F172A' },
@@ -1708,9 +1803,14 @@
 							? 'RFN'
 							: 'FZI';
 
-				if (projectData.rockTypingPlotView === 'lorenz' && diag.lorenz?.lorenz_curve?.storage_cdf) {
+				if (
+					projectData.rockTypingPlotView === 'lorenz' &&
+					diag.lorenz?.lorenz_curve?.storage_cdf
+				) {
 					const lc = diag.lorenz.lorenz_curve;
-					const infPts = (diag.lorenz.inflection_points ?? []) as Array<Record<string, any>>;
+					const infPts = (diag.lorenz.inflection_points ?? []) as Array<
+						Record<string, any>
+					>;
 					const lorenzCoeff = diag.lorenz.lorenz_coeff ?? 0;
 
 					// 1:1 Homogeneous line
@@ -1964,7 +2064,9 @@
 							? new Set(projectData.selectedWellNames)
 							: null;
 					const carbAllowedZones =
-						workbench.selectedZones.length > 0 ? new Set(workbench.selectedZones) : null;
+						workbench.selectedZones.length > 0
+							? new Set(workbench.selectedZones)
+							: null;
 					const carbMinD = workbench.depthFilter?.min ?? -Infinity;
 					const carbMaxD = workbench.depthFilter?.max ?? Infinity;
 
@@ -2000,7 +2102,12 @@
 								matY.push(k as number);
 							}
 						}
-						if (Number.isFinite(pt) && ps !== null && ps !== undefined && Number.isFinite(ps)) {
+						if (
+							Number.isFinite(pt) &&
+							ps !== null &&
+							ps !== undefined &&
+							Number.isFinite(ps)
+						) {
 							phitVsPhisX.push(pt as number);
 							phitVsPhisY.push(ps as number);
 							phitVsPhisColor.push(isVug ? '#DC2626' : getRockTypeColor(rf));
@@ -2039,7 +2146,9 @@
 						const kCurve = luciaGrid.map((phi) =>
 							Math.pow(
 								10,
-								9.7892 - 12.0838 * logRfn + (8.6711 - 8.2965 * logRfn) * Math.log10(phi)
+								9.7892 -
+									12.0838 * logRfn +
+									(8.6711 - 8.2965 * logRfn) * Math.log10(phi)
 							)
 						);
 						traces.push({
@@ -2133,7 +2242,9 @@
 						diag.classifier.feature_importances ?? [];
 					const compRows: Array<Record<string, any>> =
 						diag.classifier.comparison?.per_drt ?? [];
-					const strLabels = labels.map((l) => (Number(l) === 0 ? 'DRT 0 (Non-Res)' : `DRT ${l}`));
+					const strLabels = labels.map((l) =>
+						Number(l) === 0 ? 'DRT 0 (Non-Res)' : `DRT ${l}`
+					);
 
 					const textGrid = counts.map((row, rIdx) =>
 						row.map(
@@ -2310,7 +2421,8 @@
 						return;
 					const k = rt.perm[i];
 					const rfRaw = rt.rock_flags[i];
-					if (rfRaw === null || rfRaw === undefined || !Number.isFinite(Number(rfRaw))) return;
+					if (rfRaw === null || rfRaw === undefined || !Number.isFinite(Number(rfRaw)))
+						return;
 					const rf = Number(rfRaw);
 					if (Number.isFinite(p) && Number.isFinite(k) && k > 0) {
 						if (!grouped.has(rf)) grouped.set(rf, { x: [], y: [], wells: [] });
@@ -2338,7 +2450,10 @@
 					traces.push({
 						type: 'scatter',
 						mode: 'markers',
-						name: Number(rf) === 0 ? `DRT 0 Non-Res (${poroLbl}/${permLbl})` : `DRT ${rf} (${poroLbl}/${permLbl})`,
+						name:
+							Number(rf) === 0
+								? `DRT 0 Non-Res (${poroLbl}/${permLbl})`
+								: `DRT ${rf} (${poroLbl}/${permLbl})`,
 						x: g.x,
 						y: g.y,
 						text: g.wells,
@@ -2447,9 +2562,7 @@
 					const kCurve = luciaPhiGrid.map((phi) =>
 						Math.pow(
 							10,
-							9.7892 -
-								12.0838 * logRfn +
-								(8.6711 - 8.2965 * logRfn) * Math.log10(phi)
+							9.7892 - 12.0838 * logRfn + (8.6711 - 8.2965 * logRfn) * Math.log10(phi)
 						)
 					);
 					traces.push({
@@ -2484,7 +2597,12 @@
 			// Fitted power-law Perm Transform lines per Rock Type: K = a * phi^b (strictly reservoir DRTs >= 1)
 			if (workbench.scope === 'multi-well' && projectData.permTransformResult?.fits) {
 				for (const [rf, fit] of Object.entries(projectData.permTransformResult.fits)) {
-					if (!fit || Number(rf) < 1 || !Number.isFinite(fit.a) || !Number.isFinite(fit.b))
+					if (
+						!fit ||
+						Number(rf) < 1 ||
+						!Number.isFinite(fit.a) ||
+						!Number.isFinite(fit.b)
+					)
 						continue;
 					const kFit = phiGrid.map((phi) => fit.a * Math.pow(phi, fit.b));
 					const rtCol = getRockTypeColor(rf);
@@ -2527,10 +2645,10 @@
 			const isMwPhiK = workbench.scope === 'multi-well';
 			const isCoreAxis =
 				isMwPhiK &&
-				(((mwSource as any)?.data_source ??
+				((mwSource as any)?.data_source ??
 					(workbench.multiWellStep === 'perm-transform'
 						? projectData.permTransformDataSource
-						: projectData.drtDataSource)) !== 'log');
+						: projectData.drtDataSource)) !== 'log';
 			baseLayout.xaxis.title = {
 				text: isMwPhiK
 					? isCoreAxis
@@ -2570,6 +2688,455 @@
 				}
 				return savedVshale[index];
 			};
+
+			const sp = workbench.saturationParams;
+			const getRwAtDepth = (depthM: number) => {
+				if (sp.rwMode === 'pickett' && Number.isFinite(sp.rwPickett) && sp.rwPickett > 0) {
+					return sp.rwPickett;
+				}
+				const sTemp = Number.isFinite(sp.surfaceTemp) ? sp.surfaceTemp : 25.0;
+				const tGrad = Number.isFinite(sp.tempGradient) ? sp.tempGradient : 30.0;
+				let tempC: number;
+				if (sp.measSystem === 'imperial') {
+					const tvdKft = (depthM * 3.28084) / 1000.0;
+					const tempF = sTemp + tGrad * tvdKft;
+					tempC = Math.max(5, Math.min(250, ((tempF - 32.0) * 5.0) / 9.0));
+				} else {
+					tempC = Math.max(5, Math.min(250, sTemp + tGrad * (depthM / 1000.0)));
+				}
+				const tempF = (tempC * 9.0) / 5.0 + 32.0;
+				const sal = Math.max(
+					100,
+					Number.isFinite(sp.waterSalinity) ? sp.waterSalinity : 35000
+				);
+				return Math.pow(400000.0 / (sal * tempF), 0.88);
+			};
+
+			// --- TRACK 1: Rw & Rt (log) ---
+			// X-Axis: 'x' (xaxis)
+			const rtRaw =
+				wellData.curves['RT'] ??
+				wellData.curves['RD'] ??
+				wellData.curves['RDEP'] ??
+				wellData.curves['LLD'] ??
+				[];
+			const rwCurve = wellData.curves['RW'] ?? [];
+			const rtX: number[] = [];
+			const rtY: number[] = [];
+			const rwX: number[] = [];
+			const rwY: number[] = [];
+
+			for (const idx of indices) {
+				const d = deptAll[idx];
+				if (!Number.isFinite(d)) continue;
+				const rtVal = rtRaw[idx];
+				if (Number.isFinite(rtVal) && rtVal > 0) {
+					rtX.push(rtVal);
+					rtY.push(d);
+				}
+				const rwVal =
+					Number.isFinite(rwCurve[idx]) && rwCurve[idx] > 0
+						? rwCurve[idx]
+						: getRwAtDepth(d);
+				if (Number.isFinite(rwVal) && rwVal > 0) {
+					rwX.push(rwVal);
+					rwY.push(d);
+				}
+			}
+
+			if (rtX.length > 0) {
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'Rt',
+					x: rtX,
+					y: rtY,
+					xaxis: 'x',
+					line: { color: '#DC2626', width: 1.5 },
+					hovertemplate: `Depth: %{y:.2f} m<br>Rt: %{x:.2f} ohm·m<extra></extra>`
+				});
+			}
+			if (rwX.length > 0) {
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'Rw',
+					x: rwX,
+					y: rwY,
+					xaxis: 'x',
+					line: { color: '#2563EB', width: 1.5, dash: 'dash' },
+					hovertemplate: `Depth: %{y:.2f} m<br>Rw: %{x:.4f} ohm·m<extra></extra>`
+				});
+			}
+
+			// --- TRACK 2: m & m* (linear) ---
+			// X-Axis: 'x3' (xaxis3)
+			const mStarCurve = wellData.curves['M_STAR'] ?? [];
+			const mCalcCurve = wellData.curves['M_CALC'] ?? wellData.curves['M_CONTINUOUS'] ?? [];
+			const phitRaw = wellData.curves['PHIT'] ?? [];
+			const qvCurve = wellData.curves['QV'] ?? wellData.curves['QVN'] ?? [];
+			const isContinuousM =
+				sp.applyContinuousM &&
+				(sp.continuousMModel === 'borai' ||
+					sp.continuousMModel === 'shell_lucia' ||
+					(Number.isFinite(sp.waterLegFitSlope) &&
+						Number.isFinite(sp.waterLegFitIntercept)) ||
+					mCalcCurve.length > 0);
+			const mArchie = Number.isFinite(sp.m) && sp.m > 0 ? sp.m : 2.0;
+
+			const mX: number[] = [];
+			const mY: number[] = [];
+			const mStarX: number[] = [];
+			const mStarY: number[] = [];
+
+			for (const idx of indices) {
+				const d = deptAll[idx];
+				if (!Number.isFinite(d)) continue;
+				const phi = phitRaw[idx];
+				let mVal = mArchie;
+				if (isContinuousM) {
+					if (Number.isFinite(mCalcCurve[idx]) && mCalcCurve[idx] > 0) {
+						mVal = mCalcCurve[idx];
+					} else if (sp.continuousMModel === 'borai' && Number.isFinite(phi) && phi > 0) {
+						mVal = Math.max(1.0, Math.min(3.5, 2.2 - 0.035 / (phi + 0.042)));
+					} else if (
+						sp.continuousMModel === 'shell_lucia' &&
+						Number.isFinite(phi) &&
+						phi > 0
+					) {
+						mVal = Math.max(1.0, Math.min(3.5, 1.87 + 0.019 / Math.max(phi, 0.005)));
+					} else if (
+						Number.isFinite(sp.waterLegFitSlope) &&
+						Number.isFinite(sp.waterLegFitIntercept) &&
+						Number.isFinite(phi) &&
+						phi > 0
+					) {
+						mVal = Math.max(
+							1.0,
+							Math.min(3.5, sp.waterLegFitSlope! * phi + sp.waterLegFitIntercept!)
+						);
+					}
+				}
+				mX.push(mVal);
+				mY.push(d);
+
+				let mStarVal: number | null = null;
+				if (Number.isFinite(mStarCurve[idx]) && mStarCurve[idx] > 0) {
+					mStarVal = mStarCurve[idx];
+				} else {
+					if (Number.isFinite(phi) && phi > 0.02 && phi < 0.5) {
+						const rwVal =
+							Number.isFinite(rwCurve[idx]) && rwCurve[idx] > 0
+								? rwCurve[idx]
+								: getRwAtDepth(d);
+						let tempC =
+							sp.surfaceTemp +
+							(sp.measSystem === 'imperial'
+								? (sp.tempGradient * ((d * 3.28084) / 1000) * 5) / 9
+								: sp.tempGradient * (d / 1000));
+						tempC = Math.max(5, Math.min(250, tempC));
+						const bVal = Math.max(
+							0,
+							(-1.28 + 0.225 * tempC - 0.0004059 * tempC ** 2) /
+								(1 + Math.pow(rwVal, 1.23) * (0.045 * tempC - 0.27))
+						);
+						const vsh = getVshale(idx);
+						const qvVal =
+							Number.isFinite(qvCurve[idx]) && qvCurve[idx] >= 0
+								? qvCurve[idx]
+								: Number.isFinite(vsh) && vsh >= 0
+									? (0.16 * vsh) / phi
+									: 0;
+						const factor = 1 + bVal * qvVal * rwVal;
+						if (factor >= 1) {
+							mStarVal = mVal - Math.log(factor) / Math.log(phi);
+						}
+					}
+				}
+				if (
+					mStarVal !== null &&
+					Number.isFinite(mStarVal) &&
+					mStarVal >= 1.0 &&
+					mStarVal <= 4.0
+				) {
+					mStarX.push(mStarVal);
+					mStarY.push(d);
+				}
+			}
+
+			if (mX.length > 0) {
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: isContinuousM ? 'm (Calibrated continuous)' : 'm (Archie)',
+					x: mX,
+					y: mY,
+					xaxis: 'x3',
+					line: {
+						color: isContinuousM ? '#0284C7' : '#64748B',
+						width: isContinuousM ? 1.6 : 1.2,
+						dash: isContinuousM ? 'solid' : 'dot'
+					},
+					hovertemplate: `Depth: %{y:.2f} m<br>m: %{x:.2f}<extra></extra>`
+				});
+			}
+			if (mStarX.length > 0) {
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'm* (WS)',
+					x: mStarX,
+					y: mStarY,
+					xaxis: 'x3',
+					line: { color: '#7C3AED', width: 1.6 },
+					hovertemplate: `Depth: %{y:.2f} m<br>m*: %{x:.2f}<extra></extra>`
+				});
+			}
+
+			// --- TRACK 3: PHIT & CPORE (linear reversed) ---
+			// X-Axis: 'x4' (xaxis4)
+			const phitX: number[] = [];
+			const phitY: number[] = [];
+			for (const idx of indices) {
+				const d = deptAll[idx];
+				const phi = phitRaw[idx];
+				if (Number.isFinite(d) && Number.isFinite(phi) && phi >= 0 && phi <= 0.6) {
+					phitX.push(phi);
+					phitY.push(d);
+				}
+			}
+			if (phitX.length > 0) {
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'PHIT',
+					x: phitX,
+					y: phitY,
+					xaxis: 'x4',
+					line: { color: '#0284C7', width: 1.5 },
+					hovertemplate: `Depth: %{y:.2f} m<br>PHIT: %{x:.3f} v/v<extra></extra>`
+				});
+			}
+
+			const isSampleInActiveFilter = (s: any, depth: number) => {
+				if (!Number.isFinite(depth)) return false;
+				if (!wellData.hasActiveFilter) return true;
+				const sampleZone = s?.zone ?? s?.formation ?? s?.name;
+				if (
+					workbench.selectedZones.length > 0 &&
+					typeof sampleZone === 'string' &&
+					sampleZone.trim()
+				) {
+					const allowed = new Set(workbench.selectedZones.map((z) => z.trim()));
+					if (!allowed.has(sampleZone.trim())) return false;
+				}
+				return wellData.isDepthInActiveFilter(depth);
+			};
+
+			// Discrete CPORE core samples
+			const cporeX: number[] = [];
+			const cporeY: number[] = [];
+			const cporeLabels: string[] = [];
+			if (wellData.coreSamples && wellData.coreSamples.length > 0) {
+				const seenPoro = new Set<string>();
+				let sampleSeq = 1;
+				wellData.coreSamples.forEach((s, idx) => {
+					const origS = wellData.originalCoreSamples?.[idx];
+					const dCur = Number(s.depth ?? s.DEPTH ?? origS?.depth);
+					const dRaw = Number(s.raw_depth ?? origS?.raw_depth ?? dCur);
+					const sd = Number.isFinite(dCur) ? dCur : dRaw;
+					if (!isSampleInActiveFilter(s, sd)) return;
+					const pRaw = Number(s.porosity ?? s.CPORE ?? s.poro);
+					const pVal =
+						Number.isFinite(pRaw) && pRaw > 0
+							? pRaw > 1.0
+								? pRaw / 100.0
+								: pRaw
+							: null;
+					if (pVal !== null && pVal >= 0 && pVal <= 0.6) {
+						const key = `${sd.toFixed(3)}_${pVal.toFixed(5)}`;
+						if (!seenPoro.has(key)) {
+							seenPoro.add(key);
+							cporeX.push(pVal);
+							cporeY.push(sd);
+							const sName = String(
+								s.sample_name ?? s.SAMPLE ?? `Plug #${sampleSeq++}`
+							).trim();
+							cporeLabels.push(sName);
+						}
+					}
+				});
+			}
+
+			// Fallback to continuous CPORE curve if no discrete samples in this zone
+			if (cporeX.length === 0) {
+				const cporeRaw = wellData.curves['CPORE'] ?? wellData.curves['CORE_PORO'];
+				if (cporeRaw && cporeRaw.length === deptAll.length) {
+					for (const idx of indices) {
+						const d = deptAll[idx];
+						const pRaw = Number(cporeRaw[idx]);
+						const pVal =
+							Number.isFinite(pRaw) && pRaw > 0
+								? pRaw > 1.0
+									? pRaw / 100.0
+									: pRaw
+								: null;
+						if (Number.isFinite(d) && pVal !== null && pVal >= 0 && pVal <= 0.6) {
+							cporeX.push(pVal);
+							cporeY.push(d);
+							cporeLabels.push('');
+						}
+					}
+				}
+			}
+
+			if (cporeX.length > 0) {
+				traces.push({
+					type: 'scatter',
+					mode: 'markers',
+					name: 'CPORE',
+					x: cporeX,
+					y: cporeY,
+					xaxis: 'x4',
+					text: cporeLabels.map((lbl) => (lbl ? `<br>${lbl}` : '')),
+					marker: {
+						symbol: 'circle',
+						color: '#0F172A',
+						size: 6,
+						line: { color: '#FFFFFF', width: 0.5 }
+					},
+					hovertemplate: `Depth: %{y:.2f} m<br>CPORE: %{x:.3f} v/v%{text}<extra></extra>`
+				});
+			}
+
+			// --- TRACK 4: Qv & Qv core (linear) ---
+			// X-Axis: 'x5' (xaxis5)
+			const qvLogX: number[] = [];
+			const qvLogY: number[] = [];
+			for (const idx of indices) {
+				const d = deptAll[idx];
+				if (!Number.isFinite(d)) continue;
+				let qVal = qvCurve[idx];
+				if (!Number.isFinite(qVal)) {
+					const phi = phitRaw[idx];
+					const vsh = getVshale(idx);
+					if (Number.isFinite(phi) && phi > 0.02 && Number.isFinite(vsh) && vsh >= 0) {
+						qVal = (0.16 * vsh) / phi;
+					}
+				}
+				if (Number.isFinite(qVal) && qVal >= 0 && qVal <= 3.0) {
+					qvLogX.push(qVal);
+					qvLogY.push(d);
+				}
+			}
+			if (qvLogX.length > 0) {
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'Qv',
+					x: qvLogX,
+					y: qvLogY,
+					xaxis: 'x5',
+					line: { color: '#D97706', width: 1.5 },
+					hovertemplate: `Depth: %{y:.2f} m<br>Qv: %{x:.3f} meq/mL<extra></extra>`
+				});
+			}
+
+			// Discrete Qv Core samples
+			const qvCoreX: number[] = [];
+			const qvCoreY: number[] = [];
+			const qvCoreLabels: string[] = [];
+			if (wellData.coreSamples && wellData.coreSamples.length > 0) {
+				const seenQv = new Set<string>();
+				let sampleSeq = 1;
+				wellData.coreSamples.forEach((s, idx) => {
+					const origS = wellData.originalCoreSamples?.[idx];
+					const dCur = Number(s.depth ?? s.DEPTH ?? origS?.depth);
+					const dRaw = Number(s.raw_depth ?? origS?.raw_depth ?? dCur);
+					const sd = Number.isFinite(dCur) ? dCur : dRaw;
+					if (!isSampleInActiveFilter(s, sd)) return;
+					const qvRaw = Number(s.qv ?? s.QV ?? s.qv_core ?? s.QV_CORE);
+					if (Number.isFinite(sd) && Number.isFinite(qvRaw) && qvRaw >= 0) {
+						const key = `${sd.toFixed(3)}_${qvRaw.toFixed(4)}`;
+						if (!seenQv.has(key)) {
+							seenQv.add(key);
+							qvCoreX.push(qvRaw);
+							qvCoreY.push(sd);
+							const sName = String(
+								s.sample_name ?? s.SAMPLE ?? `Plug #${sampleSeq++}`
+							).trim();
+							qvCoreLabels.push(sName);
+						}
+					}
+				});
+			}
+
+			// Fallback to continuous QV_CORE curve if no discrete samples in this zone
+			if (qvCoreX.length === 0) {
+				const qvCoreRaw = wellData.curves['QV_CORE'];
+				if (qvCoreRaw && qvCoreRaw.length === deptAll.length) {
+					for (const idx of indices) {
+						const d = deptAll[idx];
+						const qvRaw = Number(qvCoreRaw[idx]);
+						if (Number.isFinite(d) && Number.isFinite(qvRaw) && qvRaw >= 0) {
+							qvCoreX.push(qvRaw);
+							qvCoreY.push(d);
+							qvCoreLabels.push('');
+						}
+					}
+				}
+			}
+
+			if (qvCoreX.length > 0) {
+				traces.push({
+					type: 'scatter',
+					mode: 'markers',
+					name: 'Qv Core',
+					x: qvCoreX,
+					y: qvCoreY,
+					xaxis: 'x5',
+					text: qvCoreLabels.map((lbl) => (lbl ? `<br>${lbl}` : '')),
+					marker: {
+						symbol: 'diamond',
+						color: '#B45309',
+						size: 6,
+						line: { color: '#FFFFFF', width: 0.6 }
+					},
+					hovertemplate: `Depth: %{y:.2f} m<br>Qv Core: %{x:.3f} meq/mL%{text}<extra></extra>`
+				});
+			}
+
+			// --- TRACK 5: VSHALE ---
+			// X-Axis: 'x6' (xaxis6)
+			const vshX: number[] = [];
+			const vshY: number[] = [];
+			const vshIndices: number[] = [];
+			for (const idx of indices) {
+				const vsh = getVshale(idx);
+				const depth = deptAll[idx];
+				if (Number.isFinite(vsh) && vsh >= 0 && vsh <= 1 && Number.isFinite(depth)) {
+					vshX.push(vsh);
+					vshY.push(depth);
+					vshIndices.push(idx);
+				}
+			}
+
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: vshKey,
+				x: vshX,
+				y: vshY,
+				xaxis: 'x6',
+				customdata: vshIndices,
+				line: { color: '#16A34A', width: 1.5 },
+				fill: 'tozerox',
+				fillcolor: 'rgba(22, 163, 74, 0.16)',
+				hovertemplate: `${vshKey}: %{x:.3f} v/v<br>Depth: %{y:.2f} m<extra></extra>`
+			});
+
+			// --- TRACK 6: Sw Comparison ---
+			// X-Axis: 'x2' (xaxis2)
 			const models = [
 				{ key: 'SWT_ARCHIE', label: 'Archie', color: '#64748B', method: 'archie' },
 				{
@@ -2593,33 +3160,6 @@
 				}
 			] as const;
 
-			const vshX: number[] = [];
-			const vshY: number[] = [];
-			const vshIndices: number[] = [];
-			for (const idx of indices) {
-				const vsh = getVshale(idx);
-				const depth = deptAll[idx];
-				if (Number.isFinite(vsh) && vsh >= 0 && vsh <= 1 && Number.isFinite(depth)) {
-					vshX.push(vsh);
-					vshY.push(depth);
-					vshIndices.push(idx);
-				}
-			}
-
-			traces.push({
-				type: 'scatter',
-				mode: 'lines',
-				name: vshKey,
-				x: vshX,
-				y: vshY,
-				xaxis: 'x',
-				customdata: vshIndices,
-				line: { color: '#16A34A', width: 1.5 },
-				fill: 'tozerox',
-				fillcolor: 'rgba(22, 163, 74, 0.16)',
-				hovertemplate: `${vshKey}: %{x:.3f} v/v<br>Depth: %{y:.2f} m<extra></extra>`
-			});
-
 			for (const model of models) {
 				const modelSw = wellData.curves[model.key] ?? [];
 				const xs: number[] = [];
@@ -2638,9 +3178,7 @@
 						ys.push(deptAll[idx]);
 						customIdx.push(idx);
 						const vsh = getVshale(idx);
-						vshAtDepth.push(
-							Number.isFinite(vsh) && vsh >= 0 && vsh <= 1 ? vsh : null
-						);
+						vshAtDepth.push(Number.isFinite(vsh) && vsh >= 0 && vsh <= 1 ? vsh : null);
 					}
 				}
 				const isSelected = workbench.saturationParams.method === model.method;
@@ -2664,21 +3202,616 @@
 				});
 			}
 
-			baseLayout.dragmode = 'lasso';
-			baseLayout.xaxis.domain = [0, 0.24];
-			baseLayout.xaxis.title = { text: `${vshKey} (v/v)` };
-			baseLayout.xaxis.range = [0, 1];
-			baseLayout.xaxis.anchor = 'y';
-			baseLayout.xaxis.fixedrange = true;
+			baseLayout.dragmode = 'pan';
+			// Track 1: Rw & Rt (log)
+			const minRwVal = rwX.length > 0 ? Math.min(...rwX) : 0.05;
+			const minRtVal = rtX.length > 0 ? Math.min(...rtX) : 0.2;
+			const minResVal = Math.min(minRwVal, minRtVal, 0.02);
+			const xMinLog = Math.floor(Math.log10(Math.max(1e-4, minResVal)));
+			baseLayout.xaxis = {
+				...baseLayout.xaxis,
+				domain: [0.0, 0.14],
+				title: { text: 'Rw & Rt (\u03a9\u00b7m)' },
+				type: 'log',
+				range: [Math.min(-2, xMinLog), Math.log10(2000)],
+				anchor: 'y',
+				fixedrange: true
+			};
+			// Track 2: m & m* (linear)
+			baseLayout.xaxis3 = {
+				...baseLayout.xaxis,
+				domain: [0.17, 0.29],
+				title: { text: 'm & m*' },
+				type: 'linear',
+				range: [1.0, 3.0],
+				anchor: 'y',
+				fixedrange: true
+			};
+			// Track 3: PHIT & CPORE (linear reversed)
+			baseLayout.xaxis4 = {
+				...baseLayout.xaxis,
+				domain: [0.32, 0.46],
+				title: { text: 'PHIT & CPORE' },
+				type: 'linear',
+				range: [0.45, 0],
+				anchor: 'y',
+				fixedrange: true
+			};
+			// Track 4: Qv & Qv Core (linear)
+			baseLayout.xaxis5 = {
+				...baseLayout.xaxis,
+				domain: [0.49, 0.63],
+				title: { text: 'Qv (meq/mL)' },
+				type: 'linear',
+				range: [0, 1.5],
+				anchor: 'y',
+				fixedrange: true
+			};
+			// Track 5: VSHALE (linear)
+			baseLayout.xaxis6 = {
+				...baseLayout.xaxis,
+				domain: [0.66, 0.78],
+				title: { text: `${vshKey} (v/v)` },
+				type: 'linear',
+				range: [0, 1],
+				anchor: 'y',
+				fixedrange: true
+			};
+			// Track 6: Sw comparison (linear reversed)
 			baseLayout.xaxis2 = {
 				...baseLayout.xaxis,
-				domain: [0.34, 1],
-				title: { text: 'Water Saturation Sw (v/v)' },
+				domain: [0.81, 1.0],
+				title: { text: 'Sw (v/v)' },
+				type: 'linear',
 				range: [1, 0],
-				anchor: 'y'
+				anchor: 'y',
+				fixedrange: true
 			};
 			baseLayout.yaxis.autorange = 'reversed';
 			baseLayout.yaxis.title = { text: 'Depth (m)' };
+			baseLayout.yaxis.fixedrange = false;
+			baseLayout.uirevision = `sw-comp-${workbench.projectId}-${workbench.wellId}-${workbench.selectedZones.join(',')}-${workbench.depthFilter?.min ?? ''}_${workbench.depthFilter?.max ?? ''}`;
+			return { traces, layout: baseLayout };
+		}
+
+		if (effectiveMode === 'toc-tracks') {
+			const tp = workbench.tocParams;
+			const pType = tp.porosityType; // 'sonic' | 'density' | 'neutron'
+
+			// --- TRACK 1: Vshale / Lithology ---
+			// X-Axis: 'x' (xaxis)
+			const vclay = wellData.curves['VCLAY'] ?? [];
+			const vsilt = wellData.curves['VSILT'] ?? [];
+			const savedVshale = wellData.curves['VSHALE'] ?? [];
+			const vshGr = wellData.curves['VSH_GR'] ?? [];
+			const isSscModel = workbench.lithoParams.model === 'ssc';
+			const getVshale = (index: number) => {
+				const saved = savedVshale[index];
+				if (Number.isFinite(saved) && saved >= 0 && saved <= 1) return saved;
+				const clay = vclay[index];
+				const silt = vsilt[index];
+				if (isSscModel && Number.isFinite(clay) && Number.isFinite(silt))
+					return clay + silt;
+				if (!isSscModel && Number.isFinite(clay)) return clay;
+				const vg = vshGr[index];
+				if (Number.isFinite(vg) && vg >= 0 && vg <= 1) return vg;
+				return Number.isFinite(saved) ? saved : null;
+			};
+
+			const vshX: (number | null)[] = [];
+			const vshY: (number | null)[] = [];
+
+			for (const idx of indices) {
+				const d = deptAll[idx];
+				if (!Number.isFinite(d)) continue;
+				const vsh = getVshale(idx);
+				vshX.push(
+					vsh !== null && Number.isFinite(vsh) ? Math.max(0, Math.min(1, vsh)) : null
+				);
+				vshY.push(d);
+			}
+
+			if (vshX.some((v) => v !== null)) {
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'VSHALE',
+					x: vshX,
+					y: vshY,
+					xaxis: 'x',
+					line: { color: '#16A34A', width: 1.6 },
+					fill: 'tozerox',
+					fillcolor: 'rgba(22, 163, 74, 0.16)',
+					hovertemplate: 'Depth: %{y:.2f} m<br>Vshale: %{x:.3f} v/v<extra></extra>'
+				});
+			}
+
+			// --- TRACK 2: Deep Resistivity & Passey Porosity Overlay ---
+			// X-Axis: 'x2' (xaxis2, log)
+			const rtRaw =
+				wellData.curves['RT'] ??
+				wellData.curves['RD'] ??
+				wellData.curves['RDEP'] ??
+				wellData.curves['RDEEP'] ??
+				wellData.curves['LLD'] ??
+				wellData.curves['AHT90'] ??
+				wellData.curves['ILD'] ??
+				[];
+			const dlogrRaw = wellData.curves['DELTA_LOG_R'] ?? [];
+
+			const rtX: (number | null)[] = [];
+			const rtY: (number | null)[] = [];
+			const rPoroX: (number | null)[] = [];
+			const rPoroY: (number | null)[] = [];
+
+			for (const idx of indices) {
+				const d = deptAll[idx];
+				if (!Number.isFinite(d)) continue;
+				const r = rtRaw[idx];
+				const validR = Number.isFinite(r) && r > 0 ? r : null;
+				rtX.push(validR);
+				rtY.push(d);
+
+				const dlr = dlogrRaw[idx];
+				if (validR !== null && dlr !== null && Number.isFinite(dlr)) {
+					const rp = validR / Math.pow(10, dlr);
+					rPoroX.push(Number.isFinite(rp) && rp > 0 ? rp : null);
+				} else {
+					rPoroX.push(null);
+				}
+				rPoroY.push(d);
+			}
+
+			if (rtX.some((v) => v !== null)) {
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'Rt',
+					x: rtX,
+					y: rtY,
+					xaxis: 'x2',
+					line: { color: '#DC2626', width: 1.6 },
+					hovertemplate: 'Depth: %{y:.2f} m<br>Rt: %{x:.2f} \u03a9\u00b7m<extra></extra>'
+				});
+			}
+
+			if (rPoroX.some((v) => v !== null)) {
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'R_poro (Overlay)',
+					x: rPoroX,
+					y: rPoroY,
+					xaxis: 'x2',
+					line: { color: '#0284C7', width: 1.5, dash: 'dash' },
+					hovertemplate:
+						'Depth: %{y:.2f} m<br>R_poro: %{x:.2f} \u03a9\u00b7m<extra></extra>'
+				});
+			}
+
+			// --- TRACK 3: Porosity Curve (Sonic DTC, RHOB, or NPHI) ---
+			// X-Axis: 'x3' (xaxis3)
+			let poroRaw: number[] = [];
+			let poroName = 'DTC';
+			let poroUnit = '\u00b5s/ft';
+			let poroColor = '#0EA5E9';
+			let poroRange: [number, number] = [140, 40]; // Sonic: standard reversed scale
+			let poroDtick = 20;
+
+			if (pType === 'density') {
+				poroRaw =
+					wellData.curves['RHOB_HC'] ??
+					wellData.curves['RHOB'] ??
+					wellData.curves['DEN'] ??
+					[];
+				poroName = 'RHOB';
+				poroUnit = 'g/cm\u00b3';
+				poroColor = '#EF4444';
+				poroRange = [1.95, 2.95];
+				poroDtick = 0.2;
+			} else if (pType === 'neutron') {
+				poroRaw =
+					wellData.curves['NPHI_HC'] ??
+					wellData.curves['NPHI'] ??
+					wellData.curves['NEU'] ??
+					[];
+				poroName = 'NPHI';
+				poroUnit = 'v/v';
+				poroColor = '#3B82F6';
+				poroRange = [0.45, -0.15]; // Neutron: standard reversed scale
+				poroDtick = 0.15;
+			} else {
+				poroRaw =
+					wellData.curves['DTC'] ??
+					wellData.curves['DT'] ??
+					wellData.curves['DTCO'] ??
+					wellData.curves['AC'] ??
+					wellData.curves['DT4P'] ??
+					[];
+				poroName = 'DTC';
+				poroUnit = '\u00b5s/ft';
+				poroColor = '#0EA5E9';
+				poroRange = [140, 40];
+				poroDtick = 20;
+			}
+
+			const pX: (number | null)[] = [];
+			const pY: (number | null)[] = [];
+			for (const idx of indices) {
+				const d = deptAll[idx];
+				if (!Number.isFinite(d)) continue;
+				const v = poroRaw[idx];
+				pX.push(Number.isFinite(v) ? v : null);
+				pY.push(d);
+			}
+
+			if (pX.some((v) => v !== null)) {
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: poroName,
+					x: pX,
+					y: pY,
+					xaxis: 'x3',
+					line: { color: poroColor, width: 1.6 },
+					hovertemplate: `Depth: %{y:.2f} m<br>${poroName}: %{x:.2f} ${poroUnit}<extra></extra>`
+				});
+			}
+
+			const shapes: any[] = [];
+			const pBaseline = tp.poroBaseline;
+			if (Number.isFinite(pBaseline) && pBaseline > 0) {
+				shapes.push({
+					type: 'line',
+					xref: 'x3',
+					yref: 'paper',
+					x0: pBaseline,
+					x1: pBaseline,
+					y0: 0,
+					y1: 1,
+					line: { color: poroColor, width: 1.2, dash: 'dot' }
+				});
+			}
+
+			const rBaseline = tp.rBaseline;
+			if (Number.isFinite(rBaseline) && rBaseline > 0) {
+				shapes.push({
+					type: 'line',
+					xref: 'x2',
+					yref: 'paper',
+					x0: rBaseline,
+					x1: rBaseline,
+					y0: 0,
+					y1: 1,
+					line: { color: '#DC2626', width: 1.2, dash: 'dot' }
+				});
+			}
+
+			// --- TRACK 4: Total Organic Carbon (TOC wt%) ---
+			// X-Axis: 'x4' (xaxis4)
+			const tocRaw = wellData.curves['TOC'] ?? wellData.curves['TOC_PASSEY'] ?? [];
+			const tocX: (number | null)[] = [];
+			const tocY: (number | null)[] = [];
+
+			for (const idx of indices) {
+				const d = deptAll[idx];
+				if (!Number.isFinite(d)) continue;
+				const t = tocRaw[idx];
+				tocX.push(Number.isFinite(t) ? t : null);
+				tocY.push(d);
+			}
+
+			if (tocX.some((v) => v !== null)) {
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: 'TOC',
+					x: tocX,
+					y: tocY,
+					xaxis: 'x4',
+					line: { color: '#059669', width: 2.2 },
+					fill: 'tozerox',
+					fillcolor: 'rgba(5, 150, 105, 0.12)',
+					hovertemplate: 'Depth: %{y:.2f} m<br>TOC: %{x:.2f} wt%<extra></extra>'
+				});
+			}
+
+			// Add TOC cutoff reference lines
+			shapes.push({
+				type: 'line',
+				xref: 'x4',
+				yref: 'paper',
+				x0: 1.0,
+				x1: 1.0,
+				y0: 0,
+				y1: 1,
+				line: { color: '#64748B', width: 1.0, dash: 'dot' }
+			});
+			shapes.push({
+				type: 'line',
+				xref: 'x4',
+				yref: 'paper',
+				x0: 2.0,
+				x1: 2.0,
+				y0: 0,
+				y1: 1,
+				line: { color: '#D97706', width: 1.2, dash: 'dash' }
+			});
+
+			// Core TOC samples (if present)
+			const coreTocX: number[] = [];
+			const coreTocY: number[] = [];
+			const coreTocLabels: string[] = [];
+			if (wellData.coreSamples && wellData.coreSamples.length > 0) {
+				wellData.coreSamples.forEach((s) => {
+					const sd = Number(s.depth ?? s.DEPTH);
+					const tocVal = Number(s.toc ?? s.TOC ?? s.core_toc ?? s.CORE_TOC);
+					if (Number.isFinite(sd) && Number.isFinite(tocVal) && tocVal >= 0) {
+						if (
+							workbench.depthFilter &&
+							(sd < workbench.depthFilter.min || sd > workbench.depthFilter.max)
+						) {
+							return;
+						}
+						coreTocX.push(tocVal);
+						coreTocY.push(sd);
+						coreTocLabels.push(String(s.sample_name ?? s.SAMPLE ?? 'Core Plug'));
+					}
+				});
+			}
+			if (coreTocX.length > 0) {
+				traces.push({
+					type: 'scatter',
+					mode: 'markers',
+					name: 'Core TOC',
+					x: coreTocX,
+					y: coreTocY,
+					xaxis: 'x4',
+					marker: {
+						symbol: 'circle',
+						color: '#0F172A',
+						size: 6,
+						line: { color: '#FFFFFF', width: 1 }
+					},
+					text: coreTocLabels,
+					hovertemplate:
+						'Depth: %{y:.2f} m<br>Core TOC: %{x:.2f} wt%<br>%{text}<extra></extra>'
+				});
+			}
+
+			baseLayout.dragmode = 'pan';
+			baseLayout.shapes = shapes;
+
+			const trackAxisBase = {
+				showgrid: true,
+				gridcolor: '#E2E8F0',
+				zeroline: false,
+				automargin: true,
+				tickfont: { family: 'JetBrains Mono', size: 10, color: '#64748B' },
+				titlefont: { family: 'Inter', size: 11, color: '#0F172A' },
+				anchor: 'y',
+				fixedrange: true
+			};
+
+			// Track 1: VSHALE (linear [0, 1])
+			baseLayout.xaxis = {
+				...trackAxisBase,
+				domain: [0.0, 0.22],
+				title: { text: 'Vshale (v/v)' },
+				type: 'linear',
+				range: [0, 1],
+				dtick: 0.25
+			};
+
+			// Track 2: Rt & R_poro (log [0.2, 2000])
+			baseLayout.xaxis2 = {
+				...trackAxisBase,
+				domain: [0.26, 0.48],
+				title: { text: 'Rt & R_poro (\u03a9\u00b7m)' },
+				type: 'log',
+				range: [Math.log10(0.2), Math.log10(2000)],
+				dtick: 1
+			};
+
+			// Track 3: Porosity (DTC, RHOB, or NPHI)
+			baseLayout.xaxis3 = {
+				...trackAxisBase,
+				domain: [0.52, 0.74],
+				title: { text: `${poroName} (${poroUnit})` },
+				type: 'linear',
+				range: poroRange,
+				dtick: poroDtick
+			};
+
+			// Track 4: TOC wt% (linear [0, 10])
+			baseLayout.xaxis4 = {
+				...trackAxisBase,
+				domain: [0.78, 1.0],
+				title: { text: 'TOC (wt%)' },
+				type: 'linear',
+				range: [0, 10],
+				dtick: 2
+			};
+
+			baseLayout.yaxis.autorange = 'reversed';
+			baseLayout.yaxis.title = { text: 'Depth (m)' };
+			baseLayout.yaxis.fixedrange = false;
+			baseLayout.uirevision = `toc-tracks-${workbench.projectId}-${workbench.wellId}-${workbench.selectedZones.join(',')}-${workbench.depthFilter?.min ?? ''}_${workbench.depthFilter?.max ?? ''}`;
+
+			return { traces, layout: baseLayout };
+		}
+
+		if (effectiveMode === 'water-leg-m') {
+			const sp = workbench.saturationParams;
+			const vshKey = 'VSHALE';
+			const vshRaw = wellData.curves[vshKey] ?? wellData.curves['VCLAY'] ?? [];
+			const rtRaw =
+				wellData.curves['RT'] ??
+				wellData.curves['RD'] ??
+				wellData.curves['RDEP'] ??
+				wellData.curves['LLD'] ??
+				[];
+			const phitRaw = wellData.curves['PHIT'] ?? wellData.curves['PHIE'] ?? [];
+			const rwCurve = wellData.curves['RW'] ?? [];
+
+			const calib = calculateWaterLegCalibration(
+				deptAll,
+				phitRaw,
+				rtRaw,
+				vshRaw,
+				rwCurve,
+				indices,
+				depthDisplay.unit,
+				sp,
+				(d: number) => wellData.resolveZoneAtDepth(d)
+			);
+			const { xs, ys, vshs, depths, customIdx, meanM, slope, intercept, r2 } = calib;
+
+			if (calib.validCount > 0) {
+				sp.waterLegCalibratedM = calib.meanM;
+				sp.waterLegFitSlope = calib.slope;
+				sp.waterLegFitIntercept = calib.intercept;
+			}
+
+			// 1. Water-leg scatter points
+			traces.push({
+				type: 'scatter',
+				mode: 'markers',
+				name: 'Water-leg samples',
+				x: xs,
+				y: ys,
+				customdata: customIdx,
+				text: depths.map(
+					(d, i) =>
+						`Depth: ${d.toFixed(2)} m<br>Φ: ${xs[i].toFixed(3)}<br>m: ${ys[i].toFixed(2)}<br>Vsh: ${vshs[i].toFixed(2)}`
+				),
+				marker: {
+					size: 6.5,
+					color: vshs,
+					colorscale: 'Viridis',
+					cmin: 0,
+					cmax: 1,
+					colorbar: {
+						title: { text: 'Vsh (v/v)', font: { size: 10, color: '#64748B' } },
+						thickness: 10,
+						len: 0.65,
+						y: 0.5
+					},
+					line: { color: '#0F172A', width: 0.5 },
+					opacity: 0.85
+				},
+				hovertemplate: '%{text}<extra></extra>'
+			});
+
+			// 2. Linear Regression Fit
+			if (xs.length >= 3) {
+				const phiLine = [0.03, 0.4];
+				const mLine = phiLine.map((p) =>
+					Math.max(1.0, Math.min(3.5, slope * p + intercept))
+				);
+				const isFitActive = sp.continuousMModel === 'calibrated';
+				traces.push({
+					type: 'scatter',
+					mode: 'lines',
+					name: `Fit: m = ${slope >= 0 ? '+' : ''}${slope.toFixed(2)}·Φ + ${intercept.toFixed(2)} (R²=${r2.toFixed(2)})${isFitActive ? ' [Active]' : ''}`,
+					x: phiLine,
+					y: mLine,
+					line: {
+						color: '#0284C7',
+						width: isFitActive ? 2.5 : 1.5,
+						dash: isFitActive ? 'solid' : 'dash'
+					},
+					hoverinfo: 'skip'
+				});
+			}
+
+			// 3. Mean m line
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: `Mean m = ${meanM.toFixed(2)}`,
+				x: [0.02, 0.42],
+				y: [meanM, meanM],
+				line: { color: '#2563EB', width: 1.5, dash: 'dash' },
+				hoverinfo: 'skip'
+			});
+
+			// 4. Borai (1987) Empirical Model
+			const phiGrid = Array.from({ length: 40 }, (_, i) => 0.02 + i * 0.01);
+			const mBorai = phiGrid.map((p) =>
+				Math.max(1.0, Math.min(3.5, 2.2 - 0.035 / (p + 0.042)))
+			);
+			const isBoraiActive = sp.continuousMModel === 'borai';
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: `Borai (1987) Ref${isBoraiActive ? ' [Active]' : ''}`,
+				x: phiGrid,
+				y: mBorai,
+				line: {
+					color: '#059669',
+					width: isBoraiActive ? 2.5 : 1.5,
+					dash: isBoraiActive ? 'solid' : 'dot'
+				},
+				hoverinfo: 'skip'
+			});
+
+			// 5. Shell / Lucia (1983) Empirical Model
+			const mShellLucia = phiGrid.map((p) =>
+				Math.max(1.0, Math.min(3.5, 1.87 + 0.019 / Math.max(p, 0.005)))
+			);
+			const isShellActive = sp.continuousMModel === 'shell_lucia';
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: `Shell / Lucia (1983) Ref${isShellActive ? ' [Active]' : ''}`,
+				x: phiGrid,
+				y: mShellLucia,
+				line: {
+					color: '#D97706',
+					width: isShellActive ? 2.5 : 1.5,
+					dash: isShellActive ? 'solid' : 'dot'
+				},
+				hoverinfo: 'skip'
+			});
+
+			// 6. Archie default m = 2.0 Reference
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'Archie m=2.0 Baseline',
+				x: [0.02, 0.42],
+				y: [2.0, 2.0],
+				line: { color: '#94A3B8', width: 1.2, dash: 'dashdot' },
+				hoverinfo: 'skip'
+			});
+
+			baseLayout.xaxis = {
+				...baseLayout.xaxis,
+				title: {
+					text:
+						sp.waterLegMethod === 'indonesian'
+							? 'Effective Porosity Φe (v/v)'
+							: 'Total Porosity Φt (v/v)'
+				},
+				range: [0, 0.42],
+				fixedrange: false
+			};
+			baseLayout.yaxis = {
+				...baseLayout.yaxis,
+				title: { text: 'Cementation Exponent (m)' },
+				range: [1.2, 3.2],
+				fixedrange: false
+			};
+			baseLayout.legend = {
+				orientation: 'h',
+				x: 0,
+				y: 1.05,
+				xanchor: 'left',
+				yanchor: 'bottom',
+				font: { family: 'Inter', size: 9.5, color: '#334155' }
+			};
+
 			return { traces, layout: baseLayout };
 		}
 
@@ -2879,7 +4012,8 @@
 				textposition: 'top center',
 				textfont: { family: 'Inter', size: 9, color: '#0F172A' },
 				marker: { size: 9, color: '#0F172A', symbol: 'diamond' },
-				hovertemplate: '%{text}<br>N: %{x:.3f}<br>M: %{y:.3f}<extra>Fixed reference endpoint</extra>'
+				hovertemplate:
+					'%{text}<br>N: %{x:.3f}<br>M: %{y:.3f}<extra>Fixed reference endpoint</extra>'
 			});
 
 			baseLayout.dragmode = 'lasso';
@@ -2983,6 +4117,161 @@
 			baseLayout.yaxis.title = { text: 'Porosity Φ (v/v)' };
 			baseLayout.yaxis.type = 'log';
 			baseLayout.yaxis.range = [-2, -0.3];
+			return { traces, layout: baseLayout };
+		}
+
+		if (effectiveMode === 'fluid-typing') {
+			const nphiArr = wellData.curves['NPHI'] ?? [];
+			const rhobArr = wellData.curves['RHOB'] ?? [];
+			const gasFlag = wellData.curves['GAS_FLAG'] ?? [];
+			const oilFlag = wellData.curves['OIL_FLAG'] ?? [];
+			const uncFlag = wellData.curves['UNC_FLAG'] ?? [];
+			const fluidTypeArr = wellData.curves['FLUID_TYPE'] ?? [];
+			const swtArr = wellData.curves['SWT'] ?? [];
+			const phitArr = wellData.curves['PHIT'] ?? wellData.curves['PHIE'] ?? [];
+			const vshArr = wellData.curves['VSHALE'] ?? wellData.curves['VCLAY'] ?? [];
+			const phitCutoff = workbench.saturationParams.phitCutoff ?? 0.05;
+			const vshCutoff = workbench.saturationParams.vshCutoff ?? 0.5;
+			const swPayCutoff = workbench.saturationParams.swPayCutoff ?? 0.65;
+
+			const gasXs: number[] = [],
+				gasYs: number[] = [],
+				gasCustom: number[] = [];
+			const oilXs: number[] = [],
+				oilYs: number[] = [],
+				oilCustom: number[] = [];
+			const uncXs: number[] = [],
+				uncYs: number[] = [],
+				uncCustom: number[] = [];
+			const waterXs: number[] = [],
+				waterYs: number[] = [],
+				waterCustom: number[] = [];
+			const otherXs: number[] = [],
+				otherYs: number[] = [],
+				otherCustom: number[] = [];
+
+			for (const idx of indices) {
+				const x = nphiArr[idx];
+				const y = rhobArr[idx];
+				if (Number.isFinite(x) && Number.isFinite(y)) {
+					const ftStr = String(fluidTypeArr[idx] ?? '');
+					if (gasFlag[idx] === 1 || ftStr === 'GAS') {
+						gasXs.push(x);
+						gasYs.push(y);
+						gasCustom.push(idx);
+					} else if (oilFlag[idx] === 1 || ftStr === 'OIL') {
+						oilXs.push(x);
+						oilYs.push(y);
+						oilCustom.push(idx);
+					} else if (uncFlag[idx] === 1 || ftStr === 'UNCONFIRMED') {
+						uncXs.push(x);
+						uncYs.push(y);
+						uncCustom.push(idx);
+					} else {
+						// Only true reservoir rock with Sw > cutoff is Water Leg
+						const isRes =
+							typeof phitArr[idx] === 'number' &&
+							phitArr[idx] >= phitCutoff &&
+							(typeof vshArr[idx] !== 'number' || vshArr[idx] <= vshCutoff);
+						if (
+							ftStr === 'WATER' ||
+							(isRes && typeof swtArr[idx] === 'number' && swtArr[idx] > swPayCutoff)
+						) {
+							waterXs.push(x);
+							waterYs.push(y);
+							waterCustom.push(idx);
+						} else {
+							// All shales and non-reservoir rock are Non-Pay / Shale
+							otherXs.push(x);
+							otherYs.push(y);
+							otherCustom.push(idx);
+						}
+					}
+				}
+			}
+
+			if (gasXs.length > 0) {
+				traces.push({
+					type: 'scatter',
+					mode: 'markers',
+					name: `Gas Pay (${gasXs.length} pts)`,
+					x: gasXs,
+					y: gasYs,
+					customdata: gasCustom,
+					marker: { size: 6.5, color: '#ef4444', symbol: 'circle', opacity: 0.9 },
+					hovertemplate:
+						'Gas Pay<br>NPHI: %{x:.3f} v/v<br>RHOB: %{y:.3f} g/cc<extra></extra>'
+				});
+			}
+			if (oilXs.length > 0) {
+				traces.push({
+					type: 'scatter',
+					mode: 'markers',
+					name: `Oil Pay (${oilXs.length} pts)`,
+					x: oilXs,
+					y: oilYs,
+					customdata: oilCustom,
+					marker: { size: 6.0, color: '#16a34a', symbol: 'circle', opacity: 0.9 },
+					hovertemplate:
+						'Oil Pay<br>NPHI: %{x:.3f} v/v<br>RHOB: %{y:.3f} g/cc<extra></extra>'
+				});
+			}
+			if (uncXs.length > 0) {
+				traces.push({
+					type: 'scatter',
+					mode: 'markers',
+					name: `Unconfirmed HC (${uncXs.length} pts)`,
+					x: uncXs,
+					y: uncYs,
+					customdata: uncCustom,
+					marker: { size: 6.0, color: '#f59e0b', symbol: 'diamond', opacity: 0.9 },
+					hovertemplate:
+						'Unconfirmed HC<br>NPHI: %{x:.3f} v/v<br>RHOB: %{y:.3f} g/cc<extra></extra>'
+				});
+			}
+			if (waterXs.length > 0) {
+				traces.push({
+					type: 'scatter',
+					mode: 'markers',
+					name: `Water Leg (${waterXs.length} pts)`,
+					x: waterXs,
+					y: waterYs,
+					customdata: waterCustom,
+					marker: { size: 5.5, color: '#2563eb', symbol: 'circle', opacity: 0.8 },
+					hovertemplate:
+						'Water Leg<br>NPHI: %{x:.3f} v/v<br>RHOB: %{y:.3f} g/cc<extra></extra>'
+				});
+			}
+			if (otherXs.length > 0) {
+				traces.push({
+					type: 'scatter',
+					mode: 'markers',
+					name: `Non-Pay / Shale (${otherXs.length} pts)`,
+					x: otherXs,
+					y: otherYs,
+					customdata: otherCustom,
+					marker: { size: 4.5, color: '#94a3b8', opacity: 0.5, symbol: 'circle' },
+					hovertemplate:
+						'Non-Pay<br>NPHI: %{x:.3f} v/v<br>RHOB: %{y:.3f} g/cc<extra></extra>'
+				});
+			}
+
+			// Clean Sandstone Reference Matrix Line (rho_ma = 2.65, rho_fl = 1.0)
+			const refNphi = [-0.05, 0.4];
+			const refRhob = refNphi.map((p) => 2.65 - p * (2.65 - 1.0));
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'Sandstone Matrix Line',
+				x: refNphi,
+				y: refRhob,
+				line: { color: '#64748b', width: 1.5, dash: 'dash' }
+			});
+
+			baseLayout.xaxis.title = { text: 'Neutron Porosity NPHI (v/v)' };
+			baseLayout.xaxis.range = [-0.05, 0.5];
+			baseLayout.yaxis.title = { text: 'Bulk Density RHOB (g/cc)' };
+			baseLayout.yaxis.range = [3.0, 1.8]; // Inverted bulk density standard in petrophysics
 			return { traces, layout: baseLayout };
 		}
 
@@ -3171,18 +4460,9 @@
 			}
 
 			const allActivePts = Array.from(byPlug.values()).flat();
-			const maxJ = Math.max(
-				2.0,
-				...allActivePts.map((p) => p.j).filter(Number.isFinite)
-			);
-			const maxPc = Math.max(
-				15.0,
-				...allActivePts.map((p) => p.pc).filter(Number.isFinite)
-			);
-			const maxH = Math.max(
-				30.0,
-				...allActivePts.map((p) => p.h).filter(Number.isFinite)
-			);
+			const maxJ = Math.max(2.0, ...allActivePts.map((p) => p.j).filter(Number.isFinite));
+			const maxPc = Math.max(15.0, ...allActivePts.map((p) => p.pc).filter(Number.isFinite));
+			const maxH = Math.max(30.0, ...allActivePts.map((p) => p.h).filter(Number.isFinite));
 			const maxBvw = Math.max(
 				0.25,
 				...allActivePts.map((p) => p.bvw).filter(Number.isFinite)
@@ -3200,8 +4480,7 @@
 					: activeModel === 'skelt_harrison'
 						? p.sw
 						: p.bvw;
-			const getPointY = (p: ScalPointItem) =>
-				activeModel === 'leverett_j' ? p.j : p.pc;
+			const getPointY = (p: ScalPointItem) => (activeModel === 'leverett_j' ? p.j : p.pc);
 			const formatPointHover = (p: ScalPointItem, stepIdx: number, totalSteps: number) =>
 				`<b>${p.well} · Sample ${p.sample}</b> (Step ${stepIdx + 1}/${totalSteps}) · RT ${p.rf}<br>` +
 				`Depth: ${p.depth > 0 ? fmtNum(p.depth, 2) + ' m' : '—'} | Zone: ${p.zone}<br>` +
@@ -3224,7 +4503,10 @@
 					const isFocused = focusedPlugId === plugId;
 					const isDimmed = Boolean(focusedPlugId && !isFocused);
 					const col = SAMPLE_PALETTE[pIdx % SAMPLE_PALETTE.length];
-					const sym = SAMPLE_SYMBOLS[Math.floor(pIdx / SAMPLE_PALETTE.length) % SAMPLE_SYMBOLS.length];
+					const sym =
+						SAMPLE_SYMBOLS[
+							Math.floor(pIdx / SAMPLE_PALETTE.length) % SAMPLE_SYMBOLS.length
+						];
 					const showTxt = showSampleLabels || isFocused;
 					const modeStr = connectPlugs
 						? showTxt
@@ -3501,10 +4783,7 @@
 								1.0 -
 								a *
 									Math.exp(
-										-Math.pow(
-											Math.max(b, 1e-4) / Math.max(hVal + d, 1e-4),
-											c
-										)
+										-Math.pow(Math.max(b, 1e-4) / Math.max(hVal + d, 1e-4), c)
 									);
 							if (swVal >= 0 && swVal <= 1.0 && pcVal <= maxPc * 1.25) {
 								xs.push(swVal);
@@ -4742,23 +6021,32 @@
 					const phi = Math.max(1e-4, plug.cpore || 0.15);
 					const perm = Math.max(1e-4, plug.cperm || 10);
 					const rt = plug.rt ?? 1;
-					const fitRt = plug.cpore && plug.cperm
-						? (projectData.classifyRockType(plug.cpore, plug.cperm) ?? rt)
-						: rt;
+					const fitRt =
+						plug.cpore && plug.cperm
+							? (projectData.classifyRockType(plug.cpore, plug.cperm) ?? rt)
+							: rt;
 					const sw = plug.sw_curve ?? [];
 					const swMin = sw.length ? Math.min(...sw) : (plug.sw_at_max_pc ?? 0.12);
-					const swirr = sp.swirrSource === 'poro_perm'
-						? Math.min(0.85, Math.max(0.01, projectData.evalSwirrValue(phi, perm, fitRt)))
-						: Math.min(0.85, Math.max(0.01, swMin * 0.96));
+					const swirr =
+						sp.swirrSource === 'poro_perm'
+							? Math.min(
+									0.85,
+									Math.max(0.01, projectData.evalSwirrValue(phi, perm, fitRt))
+								)
+							: Math.min(0.85, Math.max(0.01, swMin * 0.96));
 					const points = poreThroatDistribution(
 						plug.pc_curve ?? [],
-						sw.map((value) => Number.isFinite(value) ? normalizedScalSaturation(value, swirr) : NaN),
+						sw.map((value) =>
+							Number.isFinite(value) ? normalizedScalSaturation(value, swirr) : NaN
+						),
 						sp.ift,
 						sp.theta
 					);
 					return points.length ? [{ plug, index, rt, points }] : [];
 				});
-				const rockTypes = [...new Set(curves.map((curve) => curve.rt))].sort((a, b) => a - b);
+				const rockTypes = [...new Set(curves.map((curve) => curve.rt))].sort(
+					(a, b) => a - b
+				);
 				const columns = Math.min(3, rockTypes.length);
 				const rows = Math.ceil(rockTypes.length / columns);
 				baseLayout.annotations = [];
@@ -4766,49 +6054,80 @@
 				rockTypes.forEach((rt, index) => {
 					const column = index % columns;
 					const row = Math.floor(index / columns);
-					const xDomain = [column / columns + 0.04 / columns, (column + 1) / columns - 0.04 / columns];
-					const yDomain = [1 - (row + 1) / rows + 0.12 / rows, 1 - row / rows - 0.12 / rows];
+					const xDomain = [
+						column / columns + 0.04 / columns,
+						(column + 1) / columns - 0.04 / columns
+					];
+					const yDomain = [
+						1 - (row + 1) / rows + 0.12 / rows,
+						1 - row / rows - 0.12 / rows
+					];
 					const suffix = index === 0 ? '' : String(index + 1);
 					baseLayout[`xaxis${suffix}`] = {
-						...baseLayout.xaxis, domain: xDomain, anchor: `y${suffix}`,
+						...baseLayout.xaxis,
+						domain: xDomain,
+						anchor: `y${suffix}`,
 						title: { text: 'Log₁₀ radius (µm)' }
 					};
 					baseLayout[`yaxis${suffix}`] = {
-						...baseLayout.yaxis, domain: yDomain, anchor: `x${suffix}`,
+						...baseLayout.yaxis,
+						domain: yDomain,
+						anchor: `x${suffix}`,
 						title: { text: 'dSwn / dLog₁₀R' }
 					};
 					baseLayout.annotations.push({
-						text: `PRT ${rt}`, x: (xDomain[0] + xDomain[1]) / 2,
-						y: yDomain[1] + 0.04 / rows, xref: 'paper', yref: 'paper',
-						showarrow: false, font: { size: 12, color: '#334155' }
+						text: `PRT ${rt}`,
+						x: (xDomain[0] + xDomain[1]) / 2,
+						y: yDomain[1] + 0.04 / rows,
+						xref: 'paper',
+						yref: 'paper',
+						showarrow: false,
+						font: { size: 12, color: '#334155' }
 					});
 				});
 				curves.forEach(({ plug, index, rt, points }) => {
 					const axisIndex = rockTypes.indexOf(rt);
 					const suffix = axisIndex === 0 ? '' : String(axisIndex + 1);
-					const id = projectData.normalizeScalPlugId(plug.plug_id, plug.well, plug.sample);
+					const id = projectData.normalizeScalPlugId(
+						plug.plug_id,
+						plug.well,
+						plug.sample
+					);
 					const focused = focusedPlugId === id;
-					const color = projectData.scalGroupMode === 'sample'
-						? SAMPLE_PALETTE_PLUGS[index % SAMPLE_PALETTE_PLUGS.length]
-						: getRockTypeColor(rt);
+					const color =
+						projectData.scalGroupMode === 'sample'
+							? SAMPLE_PALETTE_PLUGS[index % SAMPLE_PALETTE_PLUGS.length]
+							: getRockTypeColor(rt);
 					traces.push({
-						type: 'scatter', mode: 'lines+markers',
+						type: 'scatter',
+						mode: 'lines+markers',
 						name: `${plug.sample} (${plug.well}) [PRT ${rt}]`,
-						xaxis: `x${suffix}`, yaxis: `y${suffix}`,
+						xaxis: `x${suffix}`,
+						yaxis: `y${suffix}`,
 						x: points.map((point) => point.logRadius),
 						y: points.map((point) => point.distribution),
-						fill: 'tozeroy', fillcolor: color,
-						line: { color, width: focused ? 2.5 : 1.5, dash: plug.included ? 'solid' : 'dot' },
+						fill: 'tozeroy',
+						fillcolor: color,
+						line: {
+							color,
+							width: focused ? 2.5 : 1.5,
+							dash: plug.included ? 'solid' : 'dot'
+						},
 						marker: { color, size: focused ? 6 : 4 },
 						opacity: focusedPlugId && !focused ? 0.15 : plug.included ? 0.7 : 0.3,
-						hovertemplate: `<b>${plug.well} · Sample ${plug.sample}</b> (PRT ${rt})<br>` +
+						hovertemplate:
+							`<b>${plug.well} · Sample ${plug.sample}</b> (PRT ${rt})<br>` +
 							`Log₁₀ radius: %{x:.3f} | dSwn/dLog₁₀R: %{y:.3f}<extra></extra>`
 					});
 				});
 				if (!curves.length) {
 					baseLayout.annotations.push({
 						text: 'No valid pore-throat curves. Check filters, IFT, contact angle, and at least two distinct positive Pc points per sample.',
-						x: 0.5, y: 0.5, xref: 'paper', yref: 'paper', showarrow: false
+						x: 0.5,
+						y: 0.5,
+						xref: 'paper',
+						yref: 'paper',
+						showarrow: false
 					});
 				}
 				return { traces, layout: baseLayout };
@@ -4935,7 +6254,11 @@
 			for (const p of filteredPlugs) {
 				const xv = getPlugX(p);
 				if (Number.isFinite(xv) && xv > 0) allValidX.push(xv);
-				if (p.included && p.extracted_swirr !== null && Number.isFinite(p.extracted_swirr)) {
+				if (
+					p.included &&
+					p.extracted_swirr !== null &&
+					Number.isFinite(p.extracted_swirr)
+				) {
 					const rt = p.rt ?? 1;
 					if (!includedByRt.has(rt)) includedByRt.set(rt, []);
 					includedByRt.get(rt)!.push(p);
@@ -4949,9 +6272,18 @@
 
 			if (projectData.scalGroupMode === 'sample') {
 				filteredPlugs
-					.filter((p) => p.included && p.extracted_swirr !== null && Number.isFinite(p.extracted_swirr))
+					.filter(
+						(p) =>
+							p.included &&
+							p.extracted_swirr !== null &&
+							Number.isFinite(p.extracted_swirr)
+					)
 					.forEach((p, idx) => {
-						const normPid = projectData.normalizeScalPlugId(p.plug_id, p.well, p.sample);
+						const normPid = projectData.normalizeScalPlugId(
+							p.plug_id,
+							p.well,
+							p.sample
+						);
 						const isFocused = focusedPlugId === normPid;
 						const isDimmed = Boolean(focusedPlugId && !isFocused);
 						const col = SAMPLE_PALETTE_PLUGS[idx % SAMPLE_PALETTE_PLUGS.length];
@@ -4986,7 +6318,9 @@
 						});
 					});
 			} else {
-				for (const [rt, grp] of Array.from(includedByRt.entries()).sort((a, b) => a[0] - b[0])) {
+				for (const [rt, grp] of Array.from(includedByRt.entries()).sort(
+					(a, b) => a[0] - b[0]
+				)) {
 					const col = getRockTypeColor(rt);
 					traces.push({
 						type: 'scatter',
@@ -5067,9 +6401,8 @@
 			const nGrid = 60;
 			const logMin = Math.log10(xMin);
 			const logMax = Math.log10(Math.max(xMin * 10, xMax));
-			const xGrid = Array.from(
-				{ length: nGrid },
-				(_, i) => Math.pow(10, logMin + (i / (nGrid - 1)) * (logMax - logMin))
+			const xGrid = Array.from({ length: nGrid }, (_, i) =>
+				Math.pow(10, logMin + (i / (nGrid - 1)) * (logMax - logMin))
 			);
 
 			const evalRuleAtX = (
@@ -5303,19 +6636,19 @@
 			void wellData.curves['GR'];
 			void wellData.curves[workbench.scalParams.gd_driver_col];
 			void workbench.scalParams.gd_driver_col;
-					void workbench.scalParams.gd_plot_driver_col;
-					void workbench.scalParams.gd_mode;
+			void workbench.scalParams.gd_plot_driver_col;
+			void workbench.scalParams.gd_mode;
 			void workbench.scalParams.gd_calibrated;
 			void workbench.scalParams.gd_k;
 			void workbench.scalParams.gd_rho_ma_clean;
 			void workbench.scalParams.gd_driver_clean;
-					void workbench.scalParams.gd_intercept;
-					void workbench.scalParams.gd_coef;
-					void workbench.scalParams.gd_center;
-					void workbench.scalParams.gd_scale;
-					for (const col of workbench.scalParams.gd_driver_cols) {
-						void wellData.curves[col];
-					}
+			void workbench.scalParams.gd_intercept;
+			void workbench.scalParams.gd_coef;
+			void workbench.scalParams.gd_center;
+			void workbench.scalParams.gd_scale;
+			for (const col of workbench.scalParams.gd_driver_cols) {
+				void wellData.curves[col];
+			}
 			void wellData.curves['DEPT'];
 			void wellData.curves['DEPTH'];
 		} else if (mode === 'vsh-qc') {
@@ -5381,6 +6714,43 @@
 		} else if (mode === 'sw-comparison') {
 			void wellData.curves['DEPT'];
 			void wellData.curves['DEPTH'];
+			void wellData.curves['RT'];
+			void wellData.curves['RD'];
+			void wellData.curves['RDEP'];
+			void wellData.curves['LLD'];
+			void wellData.curves['RW'];
+			void wellData.curves['M_STAR'];
+			void wellData.curves['PHIT'];
+			void wellData.curves['CPORE'];
+			void wellData.curves['QV'];
+			void wellData.curves['QVN'];
+			void wellData.curves['QV_CORE'];
+			void wellData.coreSamples;
+		} else if (mode === 'toc-tracks') {
+			void wellData.curves['DEPT'];
+			void wellData.curves['DEPTH'];
+			void wellData.curves['VSHALE'];
+			void wellData.curves['VCLAY'];
+			void wellData.curves['VSILT'];
+			void wellData.curves['VSH_GR'];
+			void wellData.curves['RT'];
+			void wellData.curves['RD'];
+			void wellData.curves['RDEP'];
+			void wellData.curves['LLD'];
+			void wellData.curves['AHT90'];
+			void wellData.curves['DELTA_LOG_R'];
+			void wellData.curves['DTC'];
+			void wellData.curves['DT'];
+			void wellData.curves['RHOB'];
+			void wellData.curves['RHOB_HC'];
+			void wellData.curves['NPHI'];
+			void wellData.curves['NPHI_HC'];
+			void wellData.curves['TOC'];
+			void wellData.curves['TOC_PASSEY'];
+			void wellData.coreSamples;
+			void workbench.tocParams.porosityType;
+			void workbench.tocParams.rBaseline;
+			void workbench.tocParams.poroBaseline;
 			void wellData.curves['VSHALE'];
 			void wellData.curves['VCLAY'];
 			void wellData.curves['VSILT'];
@@ -5390,7 +6760,52 @@
 			void wellData.curves['SWT_INDONESIAN'];
 			void wellData.curves['SWT_DUAL_WATER'];
 			void workbench.saturationParams.method;
+			void workbench.saturationParams.m;
+			void workbench.saturationParams.waterSalinity;
+			void workbench.saturationParams.surfaceTemp;
+			void workbench.saturationParams.tempGradient;
+			void workbench.saturationParams.rwMode;
+			void workbench.saturationParams.rwPickett;
+			void workbench.saturationParams.measSystem;
 			void workbench.lithoParams.model;
+			void workbench.selectedZones;
+			void workbench.depthFilter;
+			void wellData.visibleIndices;
+			void wellData.tops;
+			void wellData.curves['M_CALC'];
+			void wellData.curves['M_CONTINUOUS'];
+			void workbench.saturationParams.applyContinuousM;
+			void workbench.saturationParams.continuousMModel;
+			void workbench.saturationParams.waterLegFitSlope;
+			void workbench.saturationParams.waterLegFitIntercept;
+		} else if (mode === 'water-leg-m') {
+			void wellData.curves['DEPT'];
+			void wellData.curves['DEPTH'];
+			void wellData.curves['RT'];
+			void wellData.curves['RD'];
+			void wellData.curves['RDEP'];
+			void wellData.curves['LLD'];
+			void wellData.curves['PHIT'];
+			void wellData.curves['PHIE'];
+			void wellData.curves['VSHALE'];
+			void wellData.curves['VCLAY'];
+			void wellData.curves['RW'];
+			void workbench.saturationParams.continuousMModel;
+			void workbench.saturationParams.waterLegIntervalMode;
+			void workbench.saturationParams.waterLegSelectedZone;
+			void workbench.saturationParams.waterLegTopDepth;
+			void workbench.saturationParams.waterLegBottomDepth;
+			void workbench.saturationParams.waterLegMethod;
+			void workbench.saturationParams.waterLegVshCutoff;
+			void workbench.saturationParams.fwl;
+			void workbench.saturationParams.rsh;
+			void workbench.saturationParams.surfaceTemp;
+			void workbench.saturationParams.tempGradient;
+			void workbench.saturationParams.waterSalinity;
+			void workbench.saturationParams.rwMode;
+			void workbench.saturationParams.rwPickett;
+			void wellData.tops;
+			void wellData.visibleIndices;
 		} else if (mode === 'bqv') {
 			void wellData.curves['RT'];
 			void wellData.curves['PHIT'];
@@ -5525,11 +6940,14 @@
 			});
 			emptyPlotMessage = untrack(() => getEmptyPlotMessage(mode, traces));
 			layout.autosize = true;
-			const depthPlot = mode === 'curve-depth' || mode === 'sw-comparison' ||
+			const depthPlot =
+				mode === 'curve-depth' ||
+				mode === 'sw-comparison' ||
+				mode === 'toc-tracks' ||
 				(mode === 'core-qc' && workbench.coreQcView !== 'dual') ||
 				(mode === 'vsh-qc' && workbench.vshQcView !== 'gr-fit');
 			if (depthPlot && !layout.uirevision) {
-				layout.uirevision = `${mode}-${workbench.projectId}-${workbench.wellId}-${workbench.coreQcView}-${workbench.vshQcView}`;
+				layout.uirevision = `${mode}-${workbench.projectId}-${workbench.wellId}-${workbench.selectedZones.join(',')}-${workbench.depthFilter?.min ?? ''}_${workbench.depthFilter?.max ?? ''}-${workbench.coreQcView}-${workbench.vshQcView}`;
 			}
 			const visibleLegendTraces = traces.filter(
 				(t: any) => t.showlegend !== false && t.name
@@ -5553,7 +6971,16 @@
 				})
 			).then(() => {
 				if (cancelled || !plotEl) return;
-				for (const axisName of ['xaxis', 'xaxis2', 'yaxis', 'yaxis2']) {
+				for (const axisName of [
+					'xaxis',
+					'xaxis2',
+					'xaxis3',
+					'xaxis4',
+					'xaxis5',
+					'xaxis6',
+					'yaxis',
+					'yaxis2'
+				]) {
 					const axisLayout = layout[axisName];
 					const fullAxis = (plotEl as any)._fullLayout?.[axisName];
 					if (!axisLayout || !fullAxis) continue;
@@ -5647,7 +7074,8 @@
 								(effectiveMode === 'core-qc' || effectiveMode === 'vsh-qc') &&
 								typeof pt?.customdata === 'number'
 							) {
-								const dept = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
+								const dept =
+									wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
 								const d = dept[pt.customdata];
 								if (Number.isFinite(d)) workbench.scrollToDepth(d);
 							}
@@ -5721,7 +7149,15 @@
 		const scal = projectData.shfResult?.scal_data;
 		const sampleMap = new Map<
 			string,
-			{ plugId: string; well: string; sample: string; rt: number; depth: number; zone: string; pts: number }
+			{
+				plugId: string;
+				well: string;
+				sample: string;
+				rt: number;
+				depth: number;
+				zone: string;
+				pts: number;
+			}
 		>();
 		const rts = new Set<number>();
 
@@ -5731,7 +7167,10 @@
 				if (!projectData.isScalItemInActiveFilter(p.well, p.depth, zn)) continue;
 				const rt = p.rt ?? 1;
 				rts.add(rt);
-				if (projectData.scalFilterRockType !== 'all' && rt !== projectData.scalFilterRockType)
+				if (
+					projectData.scalFilterRockType !== 'all' &&
+					rt !== projectData.scalFilterRockType
+				)
 					continue;
 				const pid = projectData.normalizeScalPlugId(p.plug_id, p.well, p.sample);
 				sampleMap.set(pid, {
@@ -5753,7 +7192,10 @@
 				if (!projectData.isScalItemInActiveFilter(wn, d, zn)) continue;
 				const rt = scal.rock_flags?.[i] ?? 1;
 				rts.add(rt);
-				if (projectData.scalFilterRockType !== 'all' && rt !== projectData.scalFilterRockType)
+				if (
+					projectData.scalFilterRockType !== 'all' &&
+					rt !== projectData.scalFilterRockType
+				)
 					continue;
 				const pid = projectData.normalizeScalPlugId(scal.plug_ids?.[i], wn, sname);
 				const prev = sampleMap.get(pid);
@@ -5804,7 +7246,9 @@
 				bind:value={workbench.crossplotTemplateOverride}
 				class="h-5 max-w-[195px] truncate rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-[11px] font-medium text-[var(--text-primary)] focus:outline-none"
 			>
-				<option value="auto">Auto — {autoMode ? plotLabel(autoMode) : 'No recommended plot'}</option>
+				<option value="auto"
+					>Auto — {autoMode ? plotLabel(autoMode) : 'No recommended plot'}</option
+				>
 				{#each plotGroups as group (group.label)}
 					<optgroup label={group.label}>
 						{#each group.plots as plot (plot.id)}
@@ -5824,7 +7268,9 @@
 				>
 					{#each gdPlotDriverOptions as opt (opt)}
 						<option value={opt}
-							>{opt}{workbench.scalParams.gd_driver_cols.includes(opt) ? ' (driver)' : ''}</option
+							>{opt}{workbench.scalParams.gd_driver_cols.includes(opt)
+								? ' (driver)'
+								: ''}</option
 						>
 					{/each}
 				</select>
@@ -5834,7 +7280,9 @@
 		{#if effectiveMode === 'mn-plot'}
 			<div class="flex items-center gap-1">
 				<span class="text-[10px] text-[var(--text-muted)]">Mud:</span>
-				<div class="inline-flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]">
+				<div
+					class="inline-flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]"
+				>
 					{#each [['fresh', 'Freshwater (WBM)', 'Freshwater mud: ρf=1.0 g/cc, DTf=189 µs/ft'], ['salt', 'Saltwater', 'Saltwater mud: DTf=185 µs/ft; ρf tracks the well filtrate density (rhoWater / salinity)']] as [mKey, mLbl, mTip]}
 						<button
 							type="button"
@@ -5891,7 +7339,9 @@
 				{/each}
 				{#if workbench.swirrCrossplotTab === 'scal-fit'}
 					{#if (projectData.shfResult?.model ?? projectData.shfParams.model ?? 'leverett_j') === 'leverett_j'}
-						<div class="inline-flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]">
+						<div
+							class="inline-flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]"
+						>
 							{#each [['swn', 'J vs Swn'], ['sw', 'J vs Sw']] as [sKey, sLbl]}
 								<button
 									type="button"
@@ -5899,7 +7349,8 @@
 									title={sKey === 'swn'
 										? 'Plot & fit Leverett-J vs Normalized Water Saturation (Swn)'
 										: 'Plot & fit Leverett-J vs Water Saturation (Sw)'}
-									class="h-5 px-1.5 text-[10px] font-medium transition-colors first:border-r first:border-[var(--border-hairline)] {(projectData.shfParams.jSatMode ?? 'swn') === sKey
+									class="h-5 px-1.5 text-[10px] font-medium transition-colors first:border-r first:border-[var(--border-hairline)] {(projectData
+										.shfParams.jSatMode ?? 'swn') === sKey
 										? 'bg-blue-600 font-semibold text-white'
 										: 'text-[var(--text-secondary)] hover:bg-slate-100'}"
 								>
@@ -6024,10 +7475,10 @@
 						? 'border-emerald-600 bg-emerald-50 text-emerald-900'
 						: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-primary)] hover:bg-slate-100'}"
 				>
-					Calibrate {gammaLabel(workbench.lithoParams)} ({fmtNum(gammaEndpoints(workbench.lithoParams).clean, 0)}–{fmtNum(
-						gammaEndpoints(workbench.lithoParams).shale,
+					Calibrate {gammaLabel(workbench.lithoParams)} ({fmtNum(
+						gammaEndpoints(workbench.lithoParams).clean,
 						0
-					)})
+					)}–{fmtNum(gammaEndpoints(workbench.lithoParams).shale, 0)})
 				</button>
 			</div>
 		{:else if effectiveMode === 'nphi-rhob'}
@@ -6091,7 +7542,9 @@
 				{/each}
 				{#if shfView === 'scal_fit'}
 					{#if (projectData.shfResult?.model ?? projectData.shfParams.model ?? 'leverett_j') === 'leverett_j'}
-						<div class="inline-flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]">
+						<div
+							class="inline-flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]"
+						>
 							{#each [['swn', 'J vs Swn'], ['sw', 'J vs Sw']] as [sKey, sLbl]}
 								<button
 									type="button"
@@ -6099,7 +7552,8 @@
 									title={sKey === 'swn'
 										? 'Plot & fit Leverett-J vs Normalized Water Saturation (Swn)'
 										: 'Plot & fit Leverett-J vs Water Saturation (Sw)'}
-									class="h-5 px-1.5 text-[10px] font-medium transition-colors first:border-r first:border-[var(--border-hairline)] {(projectData.shfParams.jSatMode ?? 'swn') === sKey
+									class="h-5 px-1.5 text-[10px] font-medium transition-colors first:border-r first:border-[var(--border-hairline)] {(projectData
+										.shfParams.jSatMode ?? 'swn') === sKey
 										? 'bg-blue-600 font-semibold text-white'
 										: 'text-[var(--text-secondary)] hover:bg-slate-100'}"
 								>
@@ -6153,9 +7607,14 @@
 				<span>{bqvPlotSummary.mode === 'manual' ? 'Manual' : 'Autofit'}</span>
 				<span>Slope: <strong>{fmtNum(bqvPlotSummary.fit.slope, 4)}</strong></span>
 				{#if bqvPlotSummary.mode === 'manual'}
-					<span>Intercept: <strong>{fmtNum(bqvPlotSummary.fit.intercept, 4)}</strong></span>
+					<span
+						>Intercept: <strong>{fmtNum(bqvPlotSummary.fit.intercept, 4)}</strong></span
+					>
 				{:else}
-					<span>Fixed 1/(a·Rw): <strong>{fmtNum(bqvPlotSummary.fit.intercept, 4)}</strong></span>
+					<span
+						>Fixed 1/(a·Rw): <strong>{fmtNum(bqvPlotSummary.fit.intercept, 4)}</strong
+						></span
+					>
 				{/if}
 				<span>R²: <strong>{fmtNum(bqvPlotSummary.fit.r2, 3)}</strong></span>
 				{#if bqvPlotSummary.mode === 'auto'}
@@ -6191,27 +7650,29 @@
 				</div>
 
 				{#if workbench.swirrCrossplotTab !== 'pore-throat' || effectiveMode !== 'swirr-fit'}
-				<button
-					type="button"
-					onclick={() => (projectData.scalConnectPlugs = !projectData.scalConnectPlugs)}
-					title="Connect points belonging to the same core sample plug in ascending capillary pressure order"
-					class="h-5 rounded-xs border px-1.5 text-[10px] font-medium transition-colors {projectData.scalConnectPlugs
-						? 'border-blue-600 bg-blue-50 font-semibold text-blue-700'
-						: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
-				>
-					Plug Lines
-				</button>
+					<button
+						type="button"
+						onclick={() =>
+							(projectData.scalConnectPlugs = !projectData.scalConnectPlugs)}
+						title="Connect points belonging to the same core sample plug in ascending capillary pressure order"
+						class="h-5 rounded-xs border px-1.5 text-[10px] font-medium transition-colors {projectData.scalConnectPlugs
+							? 'border-blue-600 bg-blue-50 font-semibold text-blue-700'
+							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+					>
+						Plug Lines
+					</button>
 
-				<button
-					type="button"
-					onclick={() => (projectData.scalShowSampleLabels = !projectData.scalShowSampleLabels)}
-					title="Show sample name labels next to points on the crossplot"
-					class="h-5 rounded-xs border px-1.5 text-[10px] font-medium transition-colors {projectData.scalShowSampleLabels
-						? 'border-blue-600 bg-blue-50 font-semibold text-blue-700'
-						: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
-				>
-					Labels
-				</button>
+					<button
+						type="button"
+						onclick={() =>
+							(projectData.scalShowSampleLabels = !projectData.scalShowSampleLabels)}
+						title="Show sample name labels next to points on the crossplot"
+						class="h-5 rounded-xs border px-1.5 text-[10px] font-medium transition-colors {projectData.scalShowSampleLabels
+							? 'border-blue-600 bg-blue-50 font-semibold text-blue-700'
+							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+					>
+						Labels
+					</button>
 				{/if}
 
 				{#if (effectiveMode === 'swirr-fit' && workbench.swirrCrossplotTab === 'pore-throat') || (((effectiveMode === 'swirr-fit' && workbench.swirrCrossplotTab === 'scal-fit') || (effectiveMode === 'shf' && shfView === 'scal_fit')) && (projectData.shfParams.jSatMode ?? 'swn') === 'swn')}
@@ -6226,7 +7687,8 @@
 									projectData.shfManualFitOverride = false;
 									projectData.setShfSwirrSource(nKey as 'lab_min' | 'poro_perm');
 								}}
-								class="h-5 px-1.5 text-[10px] font-medium transition-colors first:border-r first:border-[var(--border-hairline)] {(projectData.shfParams.swirrSource ?? 'lab_min') === nKey
+								class="h-5 px-1.5 text-[10px] font-medium transition-colors first:border-r first:border-[var(--border-hairline)] {(projectData
+									.shfParams.swirrSource ?? 'lab_min') === nKey
 									? 'bg-indigo-600 font-semibold text-white'
 									: 'text-[var(--text-secondary)] hover:bg-slate-100'}"
 							>
@@ -6263,7 +7725,10 @@
 					<option value="">All Samples ({scalQcSummary.samples.length})</option>
 					{#each scalQcSummary.samples as s (s.plugId)}
 						<option value={s.plugId}>
-							{s.sample} · {s.well} [RT {s.rt}] ({s.pts} pts{s.zone && s.zone !== 'Unknown' ? `, ${s.zone}` : ''})
+							{s.sample} · {s.well} [RT {s.rt}] ({s.pts} pts{s.zone &&
+							s.zone !== 'Unknown'
+								? `, ${s.zone}`
+								: ''})
 						</option>
 					{/each}
 				</select>
@@ -6286,7 +7751,9 @@
 					<strong>{scalQcSummary.totalPts}</strong> pts
 				</span>
 				{#if workbench.selectedZones.length > 0}
-					<span class="rounded-xs bg-emerald-50 px-1 py-0.2 font-semibold text-emerald-800 border border-emerald-200">
+					<span
+						class="py-0.2 rounded-xs border border-emerald-200 bg-emerald-50 px-1 font-semibold text-emerald-800"
+					>
 						Zones: {workbench.selectedZones.length}
 					</span>
 				{/if}
@@ -6295,10 +7762,15 @@
 	{/if}
 
 	{#if effectiveMode === 'swirr-fit' && workbench.swirrCrossplotTab === 'pore-throat'}
-		<div class="shrink-0 border-b border-[var(--border-hairline)] bg-slate-50 px-2 py-1 text-[10px] text-slate-700">
-			Washburn: IFT {fmtNum(projectData.shfParams.ift, 1)} dyn/cm, θ {fmtNum(projectData.shfParams.theta, 1)}°.
-			Uses reservoir Pc and normalized Swn; plugs not included in the Swirr fit remain visible as dotted curves.
-			Set IFT and θ in SCAL J / Pc Curve Fit; use Reset Auto-Fit after changing them to reload converted Pc and reset the Swirr fit.
+		<div
+			class="shrink-0 border-b border-[var(--border-hairline)] bg-slate-50 px-2 py-1 text-[10px] text-slate-700"
+		>
+			Washburn: IFT {fmtNum(projectData.shfParams.ift, 1)} dyn/cm, θ {fmtNum(
+				projectData.shfParams.theta,
+				1
+			)}°. Uses reservoir Pc and normalized Swn; plugs not included in the Swirr fit remain
+			visible as dotted curves. Set IFT and θ in SCAL J / Pc Curve Fit; use Reset Auto-Fit
+			after changing them to reload converted Pc and reset the Swirr fit.
 		</div>
 	{/if}
 
@@ -6432,21 +7904,40 @@
 	{/if}
 
 	{#if spectralNote}
-		<p class="shrink-0 px-2 py-1 text-[10px] leading-snug text-[var(--text-secondary)]">{spectralNote}</p>
+		<p class="shrink-0 px-2 py-1 text-[10px] leading-snug text-[var(--text-secondary)]">
+			{spectralNote}
+		</p>
 	{/if}
-	<div class="relative min-h-0 flex-1 overflow-hidden" style:display={effectiveMode === 'porosity-comparison' || effectiveMode === 'permeability-comparison' ? 'none' : undefined}>
+	<div
+		class="relative min-h-0 flex-1 overflow-hidden"
+		style:display={effectiveMode === 'porosity-comparison' ||
+		effectiveMode === 'permeability-comparison'
+			? 'none'
+			: undefined}
+	>
 		<div bind:this={plotEl} class="absolute inset-0 h-full w-full"></div>
 		{#if (effectiveMode === 'th-k' || effectiveMode === 'pef-k' || effectiveMode === 'pef-th-k') && spectralReferenceError}
-			<div role="status" class="absolute bottom-1 left-2 rounded-xs bg-amber-50 px-2 py-1 text-[10px] text-amber-900">Mineral references unavailable: {spectralReferenceError}</div>
+			<div
+				role="status"
+				class="absolute bottom-1 left-2 rounded-xs bg-amber-50 px-2 py-1 text-[10px] text-amber-900"
+			>
+				Mineral references unavailable: {spectralReferenceError}
+			</div>
 		{/if}
 		{#if effectiveMode !== null && emptyPlotMessage}
-			<div role="status" class="pointer-events-none absolute inset-x-2 top-1 rounded-xs border border-amber-200 bg-amber-50/95 px-2 py-1 text-center text-[10px] text-amber-900">
+			<div
+				role="status"
+				class="pointer-events-none absolute inset-x-2 top-1 rounded-xs border border-amber-200 bg-amber-50/95 px-2 py-1 text-center text-[10px] text-amber-900"
+			>
 				{emptyPlotMessage}
 			</div>
 		{/if}
 		{#if effectiveMode === null}
-			<div class="absolute inset-0 flex items-center justify-center bg-[var(--bg-surface)] p-4 text-center text-xs text-[var(--text-secondary)]">
-				No crossplot is recommended for this step. Choose a plot from another workflow step or standalone module.
+			<div
+				class="absolute inset-0 flex items-center justify-center bg-[var(--bg-surface)] p-4 text-center text-xs text-[var(--text-secondary)]"
+			>
+				No crossplot is recommended for this step. Choose a plot from another workflow step
+				or standalone module.
 			</div>
 		{/if}
 	</div>

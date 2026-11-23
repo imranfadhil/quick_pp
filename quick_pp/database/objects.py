@@ -3,11 +3,11 @@ import math
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import bindparam, select, text
+from sqlalchemy import bindparam, delete, select, text
 from sqlalchemy.orm import Session, selectinload
 
 import quick_pp.las_handler as las
@@ -304,9 +304,7 @@ class Project(object):
             .scalars()
             .all()
         )
-        existing_names_by_uwi = {
-            well.uwi: well.name for well in existing_project_wells
-        }
+        existing_names_by_uwi = {well.uwi: well.name for well in existing_project_wells}
         incoming_names_by_uwi: Dict[str, str] = {}
         for parsed in parsed_files:
             well_name = parsed["well_name"]
@@ -2218,7 +2216,7 @@ class Well(object):
         logger.info(
             f"Adding/updating {len(tops)} formation tops for well '{self.name}' (replace={replace})."
         )
-        dedup_tops: Dict[str, float] = {}
+        dedup_tops: Dict[Tuple[str, float], Tuple[str, float]] = {}
         for top_data in tops or []:
             if not isinstance(top_data, dict) or not all(
                 k in top_data for k in ["name", "depth"]
@@ -2232,7 +2230,7 @@ class Well(object):
                 d_val = float(top_data["depth"])
             except (TypeError, ValueError):
                 continue
-            dedup_tops[t_name] = d_val
+            dedup_tops[(t_name.lower(), round(d_val, 4))] = (t_name, d_val)
 
         if not dedup_tops and not replace:
             return
@@ -2242,13 +2240,18 @@ class Well(object):
                 well_id=self.well_id
             ).delete(synchronize_session="fetch")
         else:
-            self.db_session.query(ORMFormationTop).filter(
-                ORMFormationTop.well_id == self.well_id,
-                ORMFormationTop.name.in_(list(dedup_tops.keys())),
-            ).delete(synchronize_session="fetch")
+            existing_tops = list(
+                self.db_session.scalars(
+                    select(ORMFormationTop).filter_by(well_id=self.well_id)
+                ).all()
+            )
+            for et in existing_tops:
+                key = (str(et.name).strip().lower(), round(float(et.depth), 4))
+                if key in dedup_tops:
+                    self.db_session.delete(et)
         self.db_session.flush()
 
-        for t_name, d_val in dedup_tops.items():
+        for t_name, d_val in dedup_tops.values():
             orm_top = ORMFormationTop(
                 well_id=self.well_id,
                 name=t_name,
@@ -2371,7 +2374,7 @@ class Well(object):
             except (TypeError, ValueError):
                 continue
 
-            parsed_contacts[c_name] = {
+            parsed_contacts[(c_name, round(d_val, 4))] = {
                 "name": c_name,
                 "depth": d_val,
                 "zone": zone,
@@ -2394,9 +2397,13 @@ class Well(object):
             if zones_to_clean:
                 self.delete_fluid_contacts(zones=list(zones_to_clean))
             # Also clean matching names for any unassigned general contacts (zone is None)
-            unassigned_names = [
-                name for name, item in parsed_contacts.items() if not item.get("zone")
-            ]
+            unassigned_names = list(
+                {
+                    item["name"]
+                    for item in parsed_contacts.values()
+                    if not item.get("zone")
+                }
+            )
             if unassigned_names:
                 self.db_session.query(ORMFluidContact).filter(
                     ORMFluidContact.well_id == self.well_id,
@@ -2407,10 +2414,10 @@ class Well(object):
         if not parsed_contacts:
             return
 
-        for c_name, item in parsed_contacts.items():
+        for item in parsed_contacts.values():
             orm_contact = ORMFluidContact(
                 well_id=self.well_id,
-                name=c_name,
+                name=item["name"],
                 depth=item["depth"],
                 zone=item["zone"],
                 contact_type=item["contact_type"],
@@ -2491,7 +2498,7 @@ class Well(object):
                 return None
             return f if np.isfinite(f) else None
 
-        dedup_tests: Dict[float, Dict[str, Any]] = {}
+        dedup_tests: Dict[Tuple[float, float], Dict[str, Any]] = {}
         for test_data in tests or []:
             if not isinstance(test_data, dict) or not all(
                 k in test_data for k in ["depth", "pressure"]
@@ -2500,7 +2507,7 @@ class Well(object):
                 continue
             try:
                 d_val = round(float(test_data["depth"]), 4)
-                p_val = float(test_data["pressure"])
+                p_val = round(float(test_data["pressure"]), 2)
             except (TypeError, ValueError):
                 continue
             if not (np.isfinite(d_val) and np.isfinite(p_val)):
@@ -2520,7 +2527,7 @@ class Well(object):
                 and str(remarks_raw).strip() not in ("", "nan", "None")
                 else None
             )
-            dedup_tests[d_val] = {
+            dedup_tests[(d_val, p_val)] = {
                 "depth": d_val,
                 "pressure": p_val,
                 "pressure_uom": uom or "psi",
@@ -2556,7 +2563,8 @@ class Well(object):
                 ).all()
             )
             for et in existing_tests:
-                if round(float(et.depth), 4) in dedup_tests:
+                key = (round(float(et.depth), 4), round(float(et.pressure), 2))
+                if key in dedup_tests:
                     self.db_session.delete(et)
         self.db_session.flush()
 
@@ -2659,23 +2667,39 @@ class Well(object):
         logger.debug(f"Retrieved {len(df)} pressure tests for well '{self.name}'.")
         return df
 
-    def add_well_surveys(self, surveys: List[Dict[str, Any]]):
+    def add_well_surveys(self, surveys: List[Dict[str, Any]], replace: bool = True):
         """Adds or updates a list of well survey points for the well.
 
         Args:
             surveys (List[Dict[str, Any]]): A list of dictionaries, where each
                                             dictionary represents a survey point and must contain
                                             'md', 'inc', and 'azim'.
+            replace (bool): If True, replaces all existing surveys. If False, only replaces
+                            surveys at matching MD and appends the rest.
         """
         logger.info(
-            f"Replacing all survey points for well '{self.name}' with {len(surveys)} new points."
+            f"{'Replacing all' if replace else 'Merging'} survey points for well '{self.name}' with {len(surveys)} points."
         )
 
-        # Delete all existing surveys for this well to ensure a full replacement
-        self.db_session.query(ORMWellSurvey).filter_by(well_id=self.well_id).delete(
-            synchronize_session="fetch"
-        )
-        self.db_session.flush()
+        if replace:
+            self.db_session.query(ORMWellSurvey).filter_by(well_id=self.well_id).delete(
+                synchronize_session="fetch"
+            )
+            self.db_session.flush()
+        else:
+            target_mds = [
+                round(float(s["md"]), 4)
+                for s in (surveys or [])
+                if isinstance(s, dict) and "md" in s and s.get("md") is not None
+            ]
+            if target_mds:
+                self.db_session.execute(
+                    delete(ORMWellSurvey).where(
+                        ORMWellSurvey.well_id == self.well_id,
+                        ORMWellSurvey.md.in_(target_mds),
+                    )
+                )
+                self.db_session.flush()
 
         dedup_surveys: Dict[float, Dict[str, float]] = {}
         for survey_data in surveys or []:
@@ -2877,36 +2901,18 @@ class Well(object):
                 select(ORMCoreSample).filter_by(well_id=self.well_id)
             ).all()
         )
+        # Match sample by exact (sample_name, depth) within tolerance
         orm_sample = next(
-            (s for s in existing_samples if s.sample_name == sample_name),
+            (
+                s
+                for s in existing_samples
+                if s.sample_name == sample_name
+                and abs(float(s.depth) - depth_val) < 1e-3
+            ),
             None,
         )
-        # If a sample with the same name exists at a completely different depth (> 1.0m away),
-        # disambiguate sample_name so we don't overwrite a different core's plug with the same number
-        if orm_sample and abs(float(orm_sample.depth) - depth_val) > 1.0:
-            sample_name = f"{sample_name}@{depth_val:.2f}m"
-            orm_sample = next(
-                (s for s in existing_samples if s.sample_name == sample_name),
-                None,
-            )
 
         if not orm_sample:
-            orm_sample = next(
-                (
-                    s
-                    for s in existing_samples
-                    if abs(float(s.depth) - depth_val) < 1e-3
-                    and (not sample_name or s.sample_name == sample_name)
-                ),
-                None,
-            )
-
-        if not orm_sample:
-            # Ensure depth_val is unique in 32-bit REAL precision across existing_samples
-            existing_f32_depths = {float(np.float32(s.depth)) for s in existing_samples}
-            while float(np.float32(depth_val)) in existing_f32_depths:
-                depth_val = round(depth_val + 0.002, 4)
-
             orm_sample = ORMCoreSample(
                 well_id=self.well_id,
                 sample_name=sample_name,
@@ -2967,7 +2973,7 @@ class Well(object):
                 )
                 orm_sample.relperm_data.append(orm_relperm)
 
-        # Add capillary pressure data (normalize cycle & deduplicate by (saturation, experiment_type, cycle))
+        # Add capillary pressure data (normalize cycle & deduplicate by (pressure, saturation, experiment_type, cycle))
         if pc_data:
             dedup_pc: Dict[tuple, Dict[str, Any]] = {}
             for pc_point in pc_data:
@@ -2985,7 +2991,9 @@ class Well(object):
                 )
                 raw_cycle = str(pc_point.get("cycle") or "drainage").strip().lower()
                 cycle_val = "imbibition" if raw_cycle.startswith("imb") else "drainage"
-                dedup_pc[(round(sat_val, 6), str(exp_type), cycle_val)] = {
+                dedup_pc[
+                    (round(pres_val, 4), round(sat_val, 6), str(exp_type), cycle_val)
+                ] = {
                     "saturation": sat_val,
                     "pressure": pres_val,
                     "experiment_type": str(exp_type),
@@ -3002,10 +3010,9 @@ class Well(object):
             f"Successfully added/updated data for core sample '{sample_name}'."
         )
 
-    def replace_rca_samples(self, samples: List[Dict[str, Any]]):
-        """Replaces all RCA point measurements across the well's core samples while preserving SCAL data."""
-        dedup_by_name: Dict[str, Dict[str, Any]] = {}
-        used_f32_depths: set[float] = set()
+    def replace_rca_samples(self, samples: List[Dict[str, Any]], append: bool = False):
+        """Replaces or appends RCA point measurements across the well's core samples while preserving SCAL data."""
+        dedup_by_key: Dict[Tuple[str, float], Dict[str, Any]] = {}
 
         for idx, s in enumerate(samples or []):
             if not isinstance(s, dict):
@@ -3021,32 +3028,16 @@ class Well(object):
             if not sname:
                 sname = f"RCA-{idx + 1}"
 
-            # If another plug in a different core interval shares the same plug number (e.g. "1"),
-            # disambiguate by depth so distinct plugs are never overwritten
-            if (
-                sname in dedup_by_name
-                and abs(dedup_by_name[sname]["depth"] - depth_val) >= 1e-2
-            ):
-                sname = f"{sname}@{depth_val:.2f}m"
-                if (
-                    sname in dedup_by_name
-                    and abs(dedup_by_name[sname]["depth"] - depth_val) >= 1e-2
-                ):
-                    sname = f"{sname}_{idx + 1}"
-
-            # Avoid uq_well_id_sample_depth collision in 32-bit REAL precision when multiple plugs snap to the same log depth
-            if sname not in dedup_by_name:
-                while float(np.float32(depth_val)) in used_f32_depths:
-                    depth_val = round(depth_val + 0.002, 4)
-                used_f32_depths.add(float(np.float32(depth_val)))
-            else:
-                depth_val = dedup_by_name[sname]["depth"]
+            key = (sname, depth_val)
 
             meas_list: List[Dict[str, Any]] = list(s.get("measurements") or [])
             poro = s.get("porosity", s.get("cpore"))
             perm = s.get("permeability", s.get("cperm"))
             grain_density = s.get(
                 "grain_density", s.get("cgd", s.get("CGD", s.get("rhog")))
+            )
+            qv_val = s.get(
+                "qv", s.get("QV", s.get("qv_core", s.get("QV_CORE", s.get("cec_qv"))))
             )
             poro_amb = s.get("porosity_amb", s.get("cpore_amb", s.get("cpore_ori")))
             perm_air = s.get("perm_air", s.get("cperm_air", s.get("cperm_ori")))
@@ -3078,6 +3069,17 @@ class Well(object):
                             "property_name": "CGRAIN_DENSITY",
                             "value": float(grain_density),
                             "unit": "g/cc",
+                        }
+                    )
+                except (TypeError, ValueError):
+                    pass
+            if qv_val is not None and str(qv_val).strip() != "":
+                try:
+                    meas_list.append(
+                        {
+                            "property_name": "QV",
+                            "value": float(qv_val),
+                            "unit": "meq/mL",
                         }
                     )
                 except (TypeError, ValueError):
@@ -3159,7 +3161,7 @@ class Well(object):
                     )
                 except (TypeError, ValueError):
                     pass
-            dedup_by_name[sname] = {
+            dedup_by_key[key] = {
                 "sample_name": sname,
                 "depth": depth_val,
                 "measurements": meas_list,
@@ -3167,14 +3169,18 @@ class Well(object):
                 "remark": s.get("remark"),
             }
 
-        parsed_samples = list(dedup_by_name.values())
+        parsed_samples = list(dedup_by_key.values())
 
-        # Clear all existing RCA measurements for this well, and remove any core sample that has no SCAL data
-        for orm_sample in list(self._orm_well.core_samples):
-            orm_sample.measurements.clear()
-            if not orm_sample.capillary_pressure_data and not orm_sample.relperm_data:
-                self.db_session.delete(orm_sample)
-        self.db_session.flush()
+        if not append:
+            # Clear all existing RCA measurements for this well, and remove any core sample that has no SCAL data
+            for orm_sample in list(self._orm_well.core_samples):
+                orm_sample.measurements.clear()
+                if (
+                    not orm_sample.capillary_pressure_data
+                    and not orm_sample.relperm_data
+                ):
+                    self.db_session.delete(orm_sample)
+            self.db_session.flush()
 
         for item in parsed_samples:
             self.add_core_sample_with_measurements(
@@ -3225,7 +3231,9 @@ class Well(object):
             por_val = _extract_prop(row, ("porosity", "cpore", "CPORE", "POR", "por"))
             if por_val is not None and por_val > 1.0:
                 por_val = por_val / 100.0
-            perm_val = _extract_prop(row, ("permeability", "cperm", "CPERM", "PERM", "perm"))
+            perm_val = _extract_prop(
+                row, ("permeability", "cperm", "CPERM", "PERM", "perm")
+            )
 
             entry = grouped.setdefault(
                 sname,
@@ -3267,6 +3275,23 @@ class Well(object):
                         }
                     )
 
+        # Ensure legacy 4-column PostgreSQL constraint missing 'pressure' is dropped
+        try:
+            bind = self.db_session.get_bind()
+            if bind and "postgresql" in bind.dialect.name:
+                self.db_session.execute(
+                    text(
+                        'ALTER TABLE "capillary_pressure" DROP CONSTRAINT IF EXISTS "capillary_pressure_sample_id_saturation_experiment_type_cyc_key"'
+                    )
+                )
+                self.db_session.execute(
+                    text(
+                        'ALTER TABLE "capillary_pressure" DROP CONSTRAINT IF EXISTS "capillary_pressure_sample_id_saturation_experiment_type_cycle_key"'
+                    )
+                )
+        except Exception:
+            pass
+
         if not append:
             for orm_sample in list(self._orm_well.core_samples):
                 orm_sample.capillary_pressure_data.clear()
@@ -3289,7 +3314,27 @@ class Well(object):
                     }
                     for p in orm_existing.capillary_pressure_data
                 ]
-                pc_points = existing_pts + pc_points
+                seen_pc = {
+                    (
+                        round(float(p["pressure"]), 4),
+                        round(float(p["saturation"]), 6),
+                        str(p["experiment_type"]),
+                        str(p["cycle"]),
+                    )
+                    for p in existing_pts
+                }
+                new_unique_pts = [
+                    p
+                    for p in pc_points
+                    if (
+                        round(float(p.get("pressure", p.get("pc", 0))), 4),
+                        round(float(p.get("saturation", p.get("sw", 0))), 6),
+                        str(p.get("experiment_type") or "micp"),
+                        str(p.get("cycle") or "drainage"),
+                    )
+                    not in seen_pc
+                ]
+                pc_points = existing_pts + new_unique_pts
 
             meas_to_pass = None
             has_new_meas = any(
@@ -3373,7 +3418,7 @@ class Well(object):
         for s in samples:
             sn_key = str(s.sample_name or "").strip()
             sd_key = round(float(s.depth), 2)
-            for m in (s.measurements or []):
+            for m in s.measurements or []:
                 pname = str(m.property_name).upper()
                 try:
                     val = float(m.value)
@@ -3394,7 +3439,7 @@ class Well(object):
         for sample in samples:
             poro_val = None
             perm_val = None
-            for m in (sample.measurements or []):
+            for m in sample.measurements or []:
                 pname = str(m.property_name).upper()
                 try:
                     val = float(m.value)
@@ -3585,6 +3630,8 @@ class Well(object):
         core_data = {}
         for sample in samples:
             sample_data = {
+                "sample_id": sample.sample_id,
+                "sample_name": sample.sample_name,
                 "depth": sample.depth,
                 "description": sample.description,
                 "remark": sample.remark,
@@ -3634,7 +3681,16 @@ class Well(object):
             sample_data["relperm"] = relperm
             sample_data["pc"] = pc
 
-            core_data[sample.sample_name] = sample_data
+            sample_key = sample.sample_name
+            if sample_key in core_data:
+                prev_sample = core_data[sample_key]
+                if abs(float(prev_sample["depth"]) - float(sample.depth)) >= 1e-3:
+                    prev_key = (
+                        f"{prev_sample['sample_name']} ({prev_sample['depth']:.1f}m)"
+                    )
+                    core_data[prev_key] = core_data.pop(sample_key)
+                    sample_key = f"{sample.sample_name} ({sample.depth:.1f}m)"
+            core_data[sample_key] = sample_data
 
         logger.debug(
             f"Retrieved core data for {len(core_data)} samples in well '{self.name}'."

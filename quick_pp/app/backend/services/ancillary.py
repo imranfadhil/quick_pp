@@ -26,6 +26,7 @@ from quick_pp.database import objects as db_objects
 # absent GET endpoints aggregate across all wells in the project.
 router = APIRouter(prefix="/database/projects/{project_id}", tags=["Ancillary Data"])
 import_ancillary_router = APIRouter(prefix="/import/ancillary", tags=["Ancillary Data"])
+direct_ancillary_router = APIRouter(tags=["Well Surveys"])
 
 
 # ==============================================================================
@@ -331,6 +332,16 @@ ANCILLARY_TARGET_SCHEMAS: Dict[str, Dict[str, List[str]]] = {
             "grain_dens",
             "rhoma",
             "density_grain",
+        ],
+        "QV": [
+            "qv",
+            "qv_core",
+            "cec_qv",
+            "qv_meq_ml",
+            "qv_meq_cm3",
+            "cec_pv",
+            "core_qv",
+            "q_v",
         ],
         "CSAT_WATER": [
             "sw",
@@ -1710,6 +1721,20 @@ def add_scal_pc_project(
                 detail="Payload must include 'pc_data', 'scal_pc', or 'samples' list",
             )
 
+    if ("sample_name" in payload or "depth" in payload) and rows:
+        enriched_rows = []
+        for r in rows:
+            if isinstance(r, dict):
+                r_copy = dict(r)
+                if "sample_name" in payload and "sample_name" not in r_copy:
+                    r_copy["sample_name"] = payload["sample_name"]
+                if "depth" in payload and "depth" not in r_copy:
+                    r_copy["depth"] = payload["depth"]
+                enriched_rows.append(r_copy)
+            else:
+                enriched_rows.append(r)
+        rows = enriched_rows
+
     append_mode = bool(payload.get("append", False))
 
     try:
@@ -2067,7 +2092,12 @@ def upload_well_surveys_project(
     summary="Calculate TVD from existing survey data and store as well curve (optional well_name)",
     tags=["Well Surveys"],
 )
-def calculate_tvd_project(project_id: int, well_name: Optional[str] = Query(None)):
+@router.post(
+    "/wells/{well_name}/well_surveys/calculate_tvd",
+    summary="Calculate TVD from existing survey data and store as well curve for a well",
+    tags=["Well Surveys"],
+)
+def calculate_tvd_project(project_id: int, well_name: Optional[str] = None):
     try:
         with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
@@ -2124,6 +2154,18 @@ def calculate_tvd_project(project_id: int, well_name: Optional[str] = Query(None
         raise HTTPException(
             status_code=500, detail=f"Failed to calculate TVD: {e}"
         ) from e
+
+
+@direct_ancillary_router.post(
+    "/well_surveys/calculate_tvd",
+    summary="Calculate TVD from existing survey data (compat endpoint with project_id in query)",
+    tags=["Well Surveys"],
+)
+def calculate_tvd_direct(
+    project_id: int = Query(...),
+    well_name: Optional[str] = Query(None),
+):
+    return calculate_tvd_project(project_id=project_id, well_name=well_name)
 
 
 # ==============================================================================
@@ -2427,6 +2469,9 @@ def commit_ancillary_data(
 ):
     effective_project_id = project_id if project_id is not None else request.project_id
     dtype = request.data_type.lower()
+    import_mode = getattr(request, "import_mode", "merge") or "merge"
+    should_replace = (import_mode == "replace")
+    should_append = (import_mode != "replace")
 
     # Build lookup from target_column -> (source_column, source_unit)
     col_map: Dict[str, Tuple[str, Optional[str]]] = {}
@@ -2552,7 +2597,7 @@ def commit_ancillary_data(
                         if t_name and d_val is not None:
                             tops_payload.append({"name": t_name, "depth": d_val})
                     if tops_payload:
-                        well.add_formation_tops(tops_payload, replace=True)
+                        well.add_formation_tops(tops_payload, replace=should_replace)
                         summary_by_well[wn] = len(tops_payload)
 
                 elif dtype == "surveys":
@@ -2569,7 +2614,7 @@ def commit_ancillary_data(
                                 {"md": md_v, "inc": inc_v, "azim": azi_v}
                             )
                     if surveys_payload:
-                        well.add_well_surveys(surveys_payload)
+                        well.add_well_surveys(surveys_payload, replace=should_replace)
                         if request.calculate_tvd:
                             _apply_survey_minimum_curvature_to_well(
                                 well,
@@ -2646,7 +2691,7 @@ def commit_ancillary_data(
                                 }
                             )
                     if tests_payload:
-                        well.add_pressure_tests(tests_payload, replace=True)
+                        well.add_pressure_tests(tests_payload, replace=should_replace)
                         summary_by_well[wn] = len(tests_payload)
 
                 elif dtype == "contacts":
@@ -2671,7 +2716,7 @@ def commit_ancillary_data(
                                 "remarks": str(r.get(rem_col, "")).strip() or None if rem_col in r else None,
                             })
                     if contacts_payload:
-                        well.add_fluid_contacts(contacts_payload, replace=True)
+                        well.add_fluid_contacts(contacts_payload, replace=should_replace)
                         summary_by_well[wn] = len(contacts_payload)
 
                 elif dtype in ("perforations", "perfs"):
@@ -2714,7 +2759,7 @@ def commit_ancillary_data(
                             }
                         )
                     if perfs_payload:
-                        well.add_perforations(perfs_payload, replace=True)
+                        well.add_perforations(perfs_payload, replace=should_replace)
                         summary_by_well[wn] = len(perfs_payload)
 
                 elif dtype == "rca":
@@ -2724,6 +2769,7 @@ def commit_ancillary_data(
                     perm_col, perm_unit = col_map.get("CPERM", (None, None))
                     permv_col, permv_unit = col_map.get("CPERMV", (None, None))
                     gd_col, gd_unit = col_map.get("CGRAIN_DENSITY", (None, None))
+                    qv_col, qv_unit = col_map.get("QV", (None, None))
                     sw_col, sw_unit = col_map.get("CSAT_WATER", (None, None))
                     so_col, so_unit = col_map.get("CSAT_OIL", (None, None))
                     desc_col, _ = col_map.get("DESCRIPTION", (None, None))
@@ -2760,6 +2806,11 @@ def commit_ancillary_data(
                                     r.get(gd_col), gd_unit, "CGRAIN_DENSITY"
                                 )
                                 if gd_col
+                                else None,
+                                "qv": _convert_ancillary_numeric(
+                                    r.get(qv_col), qv_unit, "QV"
+                                )
+                                if qv_col
                                 else None,
                                 "sw": _convert_ancillary_numeric(
                                     r.get(sw_col), sw_unit, "CSAT_WATER"
@@ -2834,6 +2885,14 @@ def commit_ancillary_data(
                                         "unit": "g/cc",
                                     }
                                 )
+                            if pd.notna(s_row.get("qv")):
+                                meas.append(
+                                    {
+                                        "property_name": "QV",
+                                        "value": float(s_row["qv"]),
+                                        "unit": "meq/mL",
+                                    }
+                                )
                             if pd.notna(s_row.get("sw")):
                                 meas.append(
                                     {
@@ -2877,7 +2936,7 @@ def commit_ancillary_data(
                                     "measurements": meas,
                                 }
                             )
-                        well.replace_rca_samples(samples_to_save)
+                        well.replace_rca_samples(samples_to_save, append=should_append)
                         summary_by_well[wn] = len(samples_to_save)
 
                 elif dtype == "scal":
@@ -3001,7 +3060,7 @@ def commit_ancillary_data(
                                 }
                             )
                     if pc_rows:
-                        well.replace_scal_pc_data(pc_rows, append=False)
+                        well.replace_scal_pc_data(pc_rows, append=should_append)
                         summary_by_well[wn] = len(pc_rows)
 
                 invalidate_well_cache(
@@ -3011,6 +3070,7 @@ def commit_ancillary_data(
             return {
                 "status": "success",
                 "data_type": dtype,
+                "import_mode": import_mode,
                 "wells_updated": summary_by_well,
                 "total_committed": sum(summary_by_well.values()),
             }

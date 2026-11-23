@@ -1,10 +1,12 @@
 <script lang="ts">
 	import { onDestroy } from 'svelte';
 	import { authState } from '$lib/state/auth.svelte';
+	import { depthDisplay } from '$lib/state/depthDisplay.svelte';
 	import { projectData } from '$lib/state/projectData.svelte';
 	import { appStatus } from '$lib/state/status.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
+	import { depthFromMeters } from '$lib/utils/depthUnits';
 	import { fmtDepth } from '$lib/utils/formatters';
 
 	const STEP_LABELS: Record<string, string> = {
@@ -54,6 +56,15 @@
 		if (timerHandle) clearInterval(timerHandle);
 	});
 
+	let lastSeenSavedMsg: string | null = null;
+	$effect(() => {
+		const msg = wellData.lastSavedMessage;
+		if (msg && msg !== lastSeenSavedMsg) {
+			lastSeenSavedMsg = msg;
+			appStatus.showToast('success', msg);
+		}
+	});
+
 	let activeModuleLabel = $derived.by(() => {
 		const scopeLabel = workbench.scope === 'single-well' ? 'Single Well' : 'Multi-Well';
 		const stepKey =
@@ -70,6 +81,47 @@
 		if (ms < 1000) return `${ms} ms`;
 		return `${(ms / 1000).toFixed(1)} s`;
 	}
+
+	function formatDisplayDepth(value: number | null | undefined, decimals = 1): string {
+		if (value === null || value === undefined || !Number.isFinite(value)) return '—';
+		return `${depthFromMeters(value, depthDisplay.unit).toFixed(decimals)}${depthDisplay.unit}`;
+	}
+
+	let cursorDepthReadout = $derived.by(() => {
+		if (workbench.cursorDepth === null || !Number.isFinite(workbench.cursorDepth)) {
+			return null;
+		}
+		const md = workbench.cursorDepth;
+		const r = wellData.getReadoutAtDepth(md);
+		let tvdss = r.TVDSS ?? r.TVD ?? null;
+		if (tvdss === null && wellData.survey && wellData.survey.length > 0) {
+			const sorted = wellData.survey
+				.filter((s) => Number.isFinite(s.md) && (Number.isFinite(s.tvdss) || Number.isFinite(s.tvd)))
+				.sort((a, b) => a.md - b.md);
+			if (sorted.length > 0) {
+				if (md <= sorted[0].md) {
+					tvdss = sorted[0].tvdss ?? sorted[0].tvd;
+				} else if (md >= sorted[sorted.length - 1].md) {
+					tvdss = sorted[sorted.length - 1].tvdss ?? sorted[sorted.length - 1].tvd;
+				} else {
+					for (let i = 0; i < sorted.length - 1; i++) {
+						if (md >= sorted[i].md && md <= sorted[i + 1].md) {
+							const span = sorted[i + 1].md - sorted[i].md;
+							const frac = span !== 0 ? (md - sorted[i].md) / span : 0;
+							const z0 = sorted[i].tvdss ?? sorted[i].tvd;
+							const z1 = sorted[i + 1].tvdss ?? sorted[i + 1].tvd;
+							tvdss = z0 + frac * (z1 - z0);
+							break;
+						}
+					}
+				}
+			}
+		}
+		return {
+			md,
+			tvdss: Number.isFinite(tvdss) ? tvdss : null
+		};
+	});
 </script>
 
 <footer
@@ -91,16 +143,19 @@
 
 	<!-- LEFT: Live App Activity & Operation Status -->
 	<div class="flex min-w-0 flex-1 items-center gap-2 pr-3">
-		{#if appStatus.displayLevel === 'busy'}
-			<span
-				class="inline-flex shrink-0 items-center gap-1 rounded-xs border border-blue-200 bg-blue-50 px-1.5 py-0.2 text-[9px] font-bold tracking-wider text-blue-700 uppercase"
+		{#if appStatus.displayLevel === 'busy' || wellData.isCalculating || wellData.isSaving || projectData.isComputingMultiWell || projectData.isSavingMultiWell}
+			<button
+				type="button"
+				onclick={() => (appStatus.logPopoverOpen = !appStatus.logPopoverOpen)}
+				class="inline-flex shrink-0 items-center gap-1 rounded-xs border border-blue-200 bg-blue-50 px-1.5 py-0.2 text-[9px] font-bold tracking-wider text-blue-700 uppercase hover:bg-blue-100 transition-colors cursor-pointer"
+				title="Click to view activity log"
 			>
 				<span
 					class="inline-block h-2 w-2 animate-spin rounded-full border-[1.5px] border-blue-600 border-t-transparent"
 				></span>
 				Working
-			</span>
-			<span class="truncate font-medium text-blue-800">
+			</button>
+			<span class="truncate font-medium text-blue-800" title={appStatus.displayMessage}>
 				{appStatus.displayMessage}
 			</span>
 			{#if appStatus.displayDetail}
@@ -151,13 +206,38 @@
 			<span class="truncate font-medium text-amber-800">
 				{appStatus.displayMessage}
 			</span>
+		{:else if wellData.lastSavedMessage}
+			<button
+				type="button"
+				onclick={() => (appStatus.logPopoverOpen = !appStatus.logPopoverOpen)}
+				class="group inline-flex shrink-0 items-center gap-1.5 text-[var(--text-secondary)] hover:opacity-80 transition-opacity cursor-pointer"
+				title="Click to view activity log"
+			>
+				<span class="inline-block h-2 w-2 rounded-full bg-emerald-500"></span>
+				<span class="truncate font-medium text-emerald-700 dark:text-emerald-400 group-hover:underline">
+					{wellData.lastSavedMessage}
+				</span>
+			</button>
+			{#if appStatus.lastDurationMs}
+				<span
+					class="mono-num shrink-0 rounded-xs bg-[var(--bg-subtle)] px-1 py-0 text-[9.5px] text-[var(--text-muted)]"
+					title="Execution time of last operation"
+				>
+					{formatDuration(appStatus.lastDurationMs)}
+				</span>
+			{/if}
 		{:else}
-			<span class="inline-flex shrink-0 items-center gap-1.5 text-[var(--text-secondary)]">
+			<button
+				type="button"
+				onclick={() => (appStatus.logPopoverOpen = !appStatus.logPopoverOpen)}
+				class="inline-flex shrink-0 items-center gap-1.5 text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors cursor-pointer"
+				title="Click to view activity log"
+			>
 				<span class="inline-block h-2 w-2 rounded-full bg-emerald-500"></span>
 				<span class="truncate font-medium text-[var(--text-primary)]">
 					{appStatus.displayMessage}
 				</span>
-			</span>
+			</button>
 			{#if appStatus.displayDetail}
 				<span class="hidden truncate text-[10px] text-[var(--text-muted)] md:inline">
 					• {appStatus.displayDetail}
@@ -199,11 +279,27 @@
 			</span>
 		{/if}
 
-		{#if workbench.cursorDepth !== null && Number.isFinite(workbench.cursorDepth)}
+		{#if cursorDepthReadout}
 			<span class="text-[var(--border-hairline)]">|</span>
-			<span class="mono-num text-[var(--text-primary)]">
-				Cursor: <strong>{fmtDepth(workbench.cursorDepth)}</strong>
-			</span>
+			<div class="mono-num inline-flex items-center gap-1.5">
+				<span class="text-[10px] font-semibold tracking-wider text-[var(--text-muted)] uppercase">Cursor</span>
+				<span
+					class="inline-flex items-center gap-1 rounded-xs border border-slate-200 bg-slate-100/90 px-1.5 py-0 text-[10px] text-slate-800 dark:border-slate-700 dark:bg-slate-800/80 dark:text-slate-200 shadow-2xs"
+					title="Measured Depth (MD)"
+				>
+					<span class="text-[8.5px] font-bold text-slate-500 uppercase">MD</span>
+					<span class="font-bold">{formatDisplayDepth(cursorDepthReadout.md)}</span>
+				</span>
+				{#if cursorDepthReadout.tvdss !== null}
+					<span
+						class="inline-flex items-center gap-1 rounded-xs border border-sky-200 bg-sky-50/90 px-1.5 py-0 text-[10px] text-sky-900 dark:border-sky-800/70 dark:bg-sky-950/60 dark:text-sky-200 shadow-2xs"
+						title="True Vertical Depth Subsea (TVDSS)"
+					>
+						<span class="text-[8.5px] font-bold text-sky-600 dark:text-sky-400 uppercase">TVDSS</span>
+						<span class="font-bold">{formatDisplayDepth(cursorDepthReadout.tvdss)}</span>
+					</span>
+				{/if}
+			</div>
 		{/if}
 	</div>
 
@@ -329,6 +425,43 @@
 			</div>
 		{/if}
 	</div>
+
+	<!-- Floating Toast Notification for Operation Completion / Alerts -->
+	{#if appStatus.toast}
+		<div
+			class="pointer-events-auto absolute bottom-8 left-3 z-50 flex max-w-sm items-center gap-2 rounded-xs border px-2.5 py-1 text-xs shadow-lg backdrop-blur-md transition-all duration-150 {appStatus.toast.level === 'error'
+				? 'border-red-300 bg-red-50/95 text-red-900'
+				: appStatus.toast.level === 'warning'
+					? 'border-amber-300 bg-amber-50/95 text-amber-900'
+					: appStatus.toast.level === 'info'
+						? 'border-blue-300 bg-blue-50/95 text-blue-900'
+						: 'border-emerald-300 bg-emerald-50/95 text-emerald-900'}"
+		>
+			<span
+				class="inline-block h-2 w-2 shrink-0 rounded-full {appStatus.toast.level === 'error'
+					? 'bg-red-600'
+					: appStatus.toast.level === 'warning'
+						? 'bg-amber-500'
+						: appStatus.toast.level === 'info'
+							? 'bg-blue-600'
+							: 'bg-emerald-500'}"
+			></span>
+			<div class="min-w-0 flex-1">
+				<div class="truncate font-semibold">{appStatus.toast.message}</div>
+				{#if appStatus.toast.detail}
+					<div class="truncate text-[10px] opacity-80">{appStatus.toast.detail}</div>
+				{/if}
+			</div>
+			<button
+				type="button"
+				onclick={() => appStatus.dismissToast()}
+				class="ml-1 text-xs font-bold opacity-60 hover:opacity-100"
+				title="Dismiss"
+			>
+				×
+			</button>
+		</div>
+	{/if}
 </footer>
 
 <style>

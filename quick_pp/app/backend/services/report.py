@@ -52,6 +52,7 @@ from quick_pp.app.backend.services.workspace import (
     _select_nphi_rhob,
 )
 from quick_pp.app.backend.utils.db import get_db
+from quick_pp.config import Config
 from quick_pp.database import objects as db_objects
 from quick_pp.permeability import choo_permeability
 from quick_pp.plotter import report_plots
@@ -180,29 +181,7 @@ def _ensure_evaluated_curves(df: pd.DataFrame, well_name: str) -> pd.DataFrame:
         work["WELL_NAME"] = well_name
 
     # Alias canonical curves if needed
-    if "RT" not in work.columns or not work["RT"].notna().any():
-        for alias in ("RD", "RDEP", "RDEEP", "LLD", "RILD"):
-            if alias in work.columns and work[alias].notna().any():
-                work["RT"] = pd.to_numeric(work[alias], errors="coerce")
-                break
-
-    if "VCLAY" not in work.columns or not work["VCLAY"].notna().any():
-        for alias in ("VSHALE", "VSH", "VSH_GR", "VWCL"):
-            if alias in work.columns and work[alias].notna().any():
-                work["VCLAY"] = pd.to_numeric(work[alias], errors="coerce")
-                break
-
-    if "PERM" not in work.columns or not work["PERM"].notna().any():
-        for alias in ("PERM_TRANS", "KLOGH", "K_LOG"):
-            if alias in work.columns and work[alias].notna().any():
-                work["PERM"] = pd.to_numeric(work[alias], errors="coerce")
-                break
-
-    if "SWT" not in work.columns or not work["SWT"].notna().any():
-        for alias in ("SW", "SWE", "SHF"):
-            if alias in work.columns and work[alias].notna().any():
-                work["SWT"] = pd.to_numeric(work[alias], errors="coerce")
-                break
+    work = Config.canonicalize_dataframe(work)
 
     orig_phit_present = "PHIT" in work.columns and work["PHIT"].notna().any()
     orig_phie_present = "PHIE" in work.columns and work["PHIE"].notna().any()

@@ -4,6 +4,7 @@ including vectorized Active-Set Bounded Least Squares in `Optim.optimize()`,
 """
 
 import numpy as np
+import pytest
 
 from quick_pp.lithology.multi_mineral import (
     CLAY_MINERAL_NAMES,
@@ -32,7 +33,9 @@ def test_vectorized_multimineral_and_optim_active_set_and_nonlinear_conductivity
     gr, nphi, rhob, pef, dtc = Y[:, 0], Y[:, 1], Y[:, 2], Y[:, 3], Y[:, 4]
 
     # 1. Fast vectorized MultiMineral.estimate_lithology() on linear system (legacy multi-fluid mode)
-    res_df = mm.estimate_lithology(gr=gr, nphi=nphi, rhob=rhob, pef=pef, dtc=dtc, two_stage=False)
+    res_df = mm.estimate_lithology(
+        gr=gr, nphi=nphi, rhob=rhob, pef=pef, dtc=dtc, two_stage=False
+    )
     vol_cols = ["VSAND", "VCALC", "VDOLO", "VCLAY", "VOIL", "VGAS", "VWATER"]
     V_est = res_df[vol_cols].to_numpy()
 
@@ -121,7 +124,9 @@ def test_optim_solve_fast_unity_constraint_weighting():
 
     weak_sum_err = np.max(np.abs(np.sum(v_raw_weak, axis=0) - 1.0))
     strong_sum_err = np.max(np.abs(np.sum(v_raw_strong, axis=0) - 1.0))
-    assert strong_sum_err < 1e-3, f"Expected native NNLS sum within 1e-3 of 1.0, got max diff {strong_sum_err}"
+    assert strong_sum_err < 1e-3, (
+        f"Expected native NNLS sum within 1e-3 of 1.0, got max diff {strong_sum_err}"
+    )
     assert strong_sum_err < weak_sum_err
 
     # Normalized output from default solve_fast()
@@ -131,15 +136,15 @@ def test_optim_solve_fast_unity_constraint_weighting():
     np.testing.assert_allclose(np.sum(v_fast, axis=0), np.ones(25), atol=1e-6)
 
 
-
-
 def test_complex_lithology_minerals_and_spectral_gr():
     """Verify newly added minerals (KFELD, GLAUCONITE, ILLITE) are resolved using
     dynamic log ingestion with Spectral Gamma Ray (POTA, THOR, URAN).
     """
     minerals = ["QUARTZ", "KFELD", "GLAUCONITE", "ILLITE"]
     fluids = ["WATER"]
-    fluid_props = {"WATER": {"density": 1.0, "nphi": 1.0, "pef": 0.36, "dtc": 190.0, "u": 0.36}}
+    fluid_props = {
+        "WATER": {"density": 1.0, "nphi": 1.0, "pef": 0.36, "dtc": 190.0, "u": 0.36}
+    }
     mm = MultiMineral(minerals=minerals, fluid_properties=fluid_props)
     mm.fluids = fluids
     mm.bounds = mm.mineral_bounds + tuple({"WATER": (0.0, 1.0)}[f] for f in fluids)
@@ -151,11 +156,13 @@ def test_complex_lithology_minerals_and_spectral_gr():
     # 1. Clean sandstone (90% Quartz, 10% Water)
     # 2. Arkosic sand with high K-Feldspar (60% Quartz, 30% K-Feldspar, 10% Water)
     # 3. Greensand with Glauconite (50% Quartz, 40% Glauconite, 10% Water)
-    v_true = np.array([
-        [0.90, 0.00, 0.00, 0.00, 0.10],
-        [0.60, 0.30, 0.00, 0.00, 0.10],
-        [0.50, 0.00, 0.40, 0.00, 0.10],
-    ])
+    v_true = np.array(
+        [
+            [0.90, 0.00, 0.00, 0.00, 0.10],
+            [0.60, 0.30, 0.00, 0.00, 0.10],
+            [0.50, 0.00, 0.40, 0.00, 0.10],
+        ]
+    )
 
     logs_synth = v_true @ C.T
     gr = logs_synth[:, 0]
@@ -264,7 +271,9 @@ def test_slsqp_rhob_objective_uses_linear_endpoint_responses():
     rhob_response = model._build_response_matrix(["RHOB"])[0]
     measured_rhob = float(volumes @ rhob_response)
 
-    assert model._error_function(volumes, {"RHOB": measured_rhob}) == 0.0
+    assert model._error_function(volumes, {"RHOB": measured_rhob}) == pytest.approx(
+        0.0, abs=1e-12
+    )
 
 
 def test_custom_bounds_and_pef_linearization():
@@ -284,7 +293,9 @@ def test_custom_bounds_and_pef_linearization():
     pef = np.array([5.50, 5.50])
     dtc = np.array([90.0, 90.0])
 
-    res_df = mm.estimate_lithology(gr=gr, nphi=nphi, rhob=rhob, pef=pef, dtc=dtc, linearize_pef=True)
+    res_df = mm.estimate_lithology(
+        gr=gr, nphi=nphi, rhob=rhob, pef=pef, dtc=dtc, linearize_pef=True
+    )
 
     # Verify GLAUCONITE volume does not exceed the custom upper bound of 0.20
     assert np.all(res_df["VGLAUC"] <= 0.20 + 1e-4)
@@ -301,9 +312,9 @@ def test_borehole_washout_weighting():
     # Point 1: Severe washout (cali = 12.5 in, bit size = 8.5 in; density falsely drops to 1.80)
     gr = np.array([5.0, 5.0])
     nphi = np.array([0.02, 0.02])
-    rhob = np.array([2.60, 1.80])   # point 1 has severe washout density artifact
-    pef = np.array([1.9, 0.5])      # point 1 has severe PEF artifact
-    dtc = np.array([55.0, 55.0])    # DTC is unaffected by shallow washout
+    rhob = np.array([2.60, 1.80])  # point 1 has severe washout density artifact
+    pef = np.array([1.9, 0.5])  # point 1 has severe PEF artifact
+    dtc = np.array([55.0, 55.0])  # DTC is unaffected by shallow washout
 
     cali = np.array([8.5, 12.5])
     bs = 8.5
@@ -434,4 +445,3 @@ def test_phit_guide_prior_weights_solution():
     )
 
     assert np.isclose(res_guided["PHIT_CONSTRUCTED"].iloc[0], 0.12, atol=0.01)
-

@@ -444,7 +444,11 @@ class ProjectDataState {
 		ift: 30.0,
 		theta: 30.0,
 		gw: 1.05,
-		ghc: 0.8
+		ghc: 0.8,
+		fluidSystem: 'auto' as 'auto' | 'gas' | 'oil' | 'gas_water' | 'oil_water',
+		useFluidTyping: true,
+		ggas: 0.15,
+		iftGas: 70.0
 	});
 
 	swirrConfig = $state<SwirrModelConfig>({
@@ -604,6 +608,10 @@ class ProjectDataState {
 			}
 		>;
 		fwl_by_zone?: Record<string, number>;
+		owc?: number | null;
+		gwc?: number | null;
+		contact?: number | null;
+		contact_type?: string | null;
 		scal_data?: {
 			pc: number[];
 			sw: number[];
@@ -663,12 +671,18 @@ class ProjectDataState {
 			depths: (number | null)[];
 			tvd: (number | null)[];
 			tvdss?: (number | null)[];
+			gr?: (number | null)[];
+			vcoal?: (number | null)[];
 			zones: string[];
 			phit: (number | null)[];
 			swt: (number | null)[];
 			shf: (number | null)[];
 			bvo: (number | null)[];
+			bvg?: (number | null)[];
+			bvo_pure?: (number | null)[];
 			bvoh: (number | null)[];
+			gas_flag?: number[];
+			oil_flag?: number[];
 			fluid_flag: number[];
 		}>;
 	} | null>(null);
@@ -712,7 +726,11 @@ class ProjectDataState {
 		models_status?: any;
 	} | null>(null);
 
-	wells = $derived<WellSummaryItem[]>(this.summary?.wells ?? []);
+	wells = $derived<WellSummaryItem[]>(
+		[...(this.summary?.wells ?? [])].sort((a, b) =>
+			(a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })
+		)
+	);
 	allZones = $derived<string[]>(this.summary?.all_zones ?? []);
 	allCurves = $derived<string[]>(this.summary?.all_curves ?? []);
 
@@ -1155,6 +1173,10 @@ class ProjectDataState {
 		this.shfParams.theta = 30.0;
 		this.shfParams.gw = 1.05;
 		this.shfParams.ghc = 0.8;
+		this.shfParams.fluidSystem = 'auto';
+		this.shfParams.useFluidTyping = true;
+		this.shfParams.ggas = 0.15;
+		this.shfParams.iftGas = 70.0;
 		this.shfOptParams.solvePerZone = false;
 		this.shfResult = null;
 		this.shfSavedFits = null;
@@ -2783,7 +2805,10 @@ class ProjectDataState {
 	async loadProjects(): Promise<ProjectListItem[]> {
 		try {
 			const { data } = await api.GET('/quick_pp/database/projects');
-			this.projects = Array.isArray(data) ? data : [];
+			const list = Array.isArray(data) ? data : [];
+			this.projects = [...list].sort((a, b) =>
+				(a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })
+			);
 			return this.projects;
 		} catch (e: any) {
 			this.error = e?.message || 'Failed to load projects';
@@ -2823,7 +2848,10 @@ class ProjectDataState {
 				params: { path: { project_id: String(pid) } }
 			});
 			if (!error && data) {
-				this.summary = data;
+				const sortedWells = [...(data.wells || [])].sort((a, b) =>
+					(a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })
+				);
+				this.summary = { ...data, wells: sortedWells };
 			}
 		} catch {
 			// Ignore background summary refresh error
@@ -2858,10 +2886,13 @@ class ProjectDataState {
 			if (error || !data) {
 				throw new Error(String((error as any)?.detail ?? 'Failed to load project summary'));
 			}
-			this.summary = data;
-			this.selectedWellNames = (data.wells || []).map((w) => w.name);
+			const sortedAvailableWells = [...(data.wells || [])].sort((a, b) =>
+				(a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })
+			);
+			this.summary = { ...data, wells: sortedAvailableWells };
+			this.selectedWellNames = sortedAvailableWells.map((w) => w.name);
 
-			const availableWells = data.wells || [];
+			const availableWells = sortedAvailableWells;
 			const hasCore = availableWells.some((w) => this.wellHasCorePhiK(w));
 			const hasLog = availableWells.some((w) => this.wellHasLogPhiK(w));
 			const defaultSrc: PhiKDataSource = hasCore || !hasLog ? 'core' : 'log';

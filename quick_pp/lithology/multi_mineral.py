@@ -1234,6 +1234,10 @@ class MultiMineral:
             if conductivity_model is not None
             else self.conductivity_model
         )
+        # If true resistivity log is provided but no conductivity model was explicitly configured,
+        # default to Waxman-Smits so Stage 2 fluid saturation and HC partitioning execute seamlessly.
+        if active_cond_model is None and np.any(np.isfinite(rt_arr) & (rt_arr > 0)):
+            active_cond_model = "waxman_smits"
         if (
             active_cond_model is not None
             and active_cond_model not in CONDUCTIVITY_MODELS
@@ -1855,6 +1859,20 @@ class MultiMineral:
                 output_data[column_name] = V_all[:, n_minerals + j]
 
             output_data["PHIT_CONSTRUCTED"] = porosity_constructed
+
+            # Bulk Volume Water (BVW) and Total Water Saturation (SWT)
+            bvw = output_data.get("VWATER", np.full(n_samples, np.nan, dtype=float))
+            output_data["BVW"] = bvw
+            with np.errstate(invalid="ignore", divide="ignore"):
+                swt_val = np.where(
+                    valid_rows
+                    & np.isfinite(porosity_constructed)
+                    & (porosity_constructed > 1e-4),
+                    np.clip(bvw / porosity_constructed, 0.0, 1.0),
+                    np.nan,
+                )
+            output_data["SWT"] = swt_val
+
             output_data["AVG_ERROR"] = average_errors
             output_data["CHI2_ERROR"] = chi2_errors
             output_data["OPTIMIZER_SUCCESS"] = success_flags

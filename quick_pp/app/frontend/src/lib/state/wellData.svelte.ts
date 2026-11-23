@@ -51,7 +51,7 @@ export type CurveEditOperation =
 
 export type CurveSpliceOverlapMode = 'blend' | 'splice_depth' | 'keep_first' | 'keep_last' | 'mean';
 
-export type CalculatedCurveGroupKey = 'qaqc' | 'litho_poro' | 'perm' | 'saturation' | 'ressum';
+export type CalculatedCurveGroupKey = 'qaqc' | 'litho_poro' | 'perm' | 'saturation' | 'source_rock' | 'ressum';
 
 export const CALCULATED_CURVE_GROUPS: Record<
 	CalculatedCurveGroupKey,
@@ -70,6 +70,8 @@ export const CALCULATED_CURVE_GROUPS: Record<
 			'NPHI_ENV_CORR',
 			'RHOB_ENV_CORR',
 			'RT_ENV_CORR',
+			'CALI_ENV_CORR',
+			'DT_ENV_CORR',
 			'INVASION_FLAG',
 			'GR_NORM',
 			'NPHI_NORM',
@@ -79,13 +81,22 @@ export const CALCULATED_CURVE_GROUPS: Record<
 			'SHC_INV',
 			'RHOB_DEN_CORR',
 			'DEN_CORR_FLAG',
+			'CALI_FLAG',
+			'DRHO_FLAG',
+			'RUGOSITY_FLAG',
 			'GR_ENH',
 			'NPHI_ENH',
 			'RHOB_ENH',
 			'GR_RECON',
 			'NPHI_RECON',
 			'RHOB_RECON',
-			'DECONV_WEIGHT'
+			'DECONV_WEIGHT',
+			'GR_SYN',
+			'DT_SYN',
+			'RHOB_SYN',
+			'NPHI_SYN',
+			'RT_SYN',
+			'CGR_SYN'
 		]
 	},
 	litho_poro: {
@@ -105,12 +116,44 @@ export const CALCULATED_CURVE_GROUPS: Record<
 			'VHALI',
 			'VPYRI',
 			'VCOAL',
+			'VILLI',
+			'VSMEC',
+			'VCHLO',
+			'VGLAUC',
+			'VMUSC',
+			'VBIOT',
+			'VKFELD',
+			'VALBI',
+			'VSIDE',
+			'VANKE',
+			'VKERO',
+			'VQUARTZ',
+			'VCALCITE',
+			'VDOLOMITE',
+			'VSIDERITE',
+			'VANHYDRITE',
+			'VPYRITE',
+			'VHALITE',
+			'VGYPSUM',
+			'VKFELDSPAR',
+			'VPLAGIOCLASE',
+			'VCHLORITE',
+			'VILLITE',
+			'VSMECTITE',
+			'VKAOLINITE',
+			'VGLAUCONITE',
 			'COAL_FLAG',
 			'VSH_GR',
 			'VSH_DN',
+			'VSH_SP',
+			'VSH_RT',
+			'VCL_GR',
+			'VCL_DN',
 			'PHIT',
 			'PHIE',
 			'PHID',
+			'PHIN',
+			'PHIS',
 			'PHIT_SH',
 			'VSH_LAM',
 			'VSH_DIS',
@@ -121,6 +164,14 @@ export const CALCULATED_CURVE_GROUPS: Record<
 			'PHIE_TS',
 			'RSAND_TS',
 			'RT_MOD',
+			'PHID_RAW_100',
+			'RHO_FL',
+			'RHO_FL_TIER',
+			'RHO_MF',
+			'SXO_EST',
+			'PROJ_NPHI',
+			'PROJ_RHOB',
+			'PHIT_CONSTRUCTED',
 			'PHIT_P10',
 			'PHIT_P50',
 			'PHIT_P90',
@@ -145,6 +196,8 @@ export const CALCULATED_CURVE_GROUPS: Record<
 			'RFN',
 			'PHI_SEC',
 			'VDL',
+			'KTIM',
+			'KSDR',
 			'PERM_P10',
 			'PERM_P50',
 			'PERM_P90'
@@ -156,15 +209,25 @@ export const CALCULATED_CURVE_GROUPS: Record<
 		curves: [
 			'SWT',
 			'SWE',
+			'SWA',
 			'SWT_ARCHIE',
 			'SWT_WAXMAN',
 			'SWT_SIMANDOUX',
 			'SWT_INDONESIAN',
 			'SWT_DUAL_WATER',
+			'SW_ARCHIE',
+			'SW_WAXMAN',
+			'SW_SIMANDOUX',
+			'SW_INDONESIAN',
+			'SW_DUAL_WATER',
 			'BVW',
+			'BVH',
+			'BVHC',
 			'TEMP_GRAD',
 			'RW',
 			'B',
+			'QV',
+			'QV_CORE',
 			'QVN',
 			'M_STAR',
 			'VCL_OVER_PHI',
@@ -176,6 +239,11 @@ export const CALCULATED_CURVE_GROUPS: Record<
 			'SW_P50',
 			'SW_P90'
 		]
+	},
+	source_rock: {
+		label: 'Source Rock & TOC',
+		shortLabel: 'TOC',
+		curves: ['TOC', 'DELTA_LOG_R', 'TOC_PASSEY']
 	},
 	ressum: {
 		label: 'Res. Summary & Blocking',
@@ -199,6 +267,39 @@ export const CALCULATED_CURVE_GROUPS: Record<
 export const ALL_CALCULATED_CURVE_MNEMONICS: string[] = Array.from(
 	new Set(Object.values(CALCULATED_CURVE_GROUPS).flatMap((g) => g.curves))
 );
+
+export const ALL_CALCULATED_CURVE_SET: Set<string> = new Set(ALL_CALCULATED_CURVE_MNEMONICS);
+
+/**
+ * Checks whether a curve mnemonic represents a derived/computed petrophysical curve
+ * based on canonical lists, mineral volumetric patterns, flags, normalizations, and synthetic conventions.
+ */
+export function isCalculatedCurveMnemonic(c: string): boolean {
+	if (!c) return false;
+	const up = c.trim().toUpperCase();
+	if (ALL_CALCULATED_CURVE_SET.has(up)) return true;
+	// Mineral and lithology volumetrics (e.g. VALBI, VANKE, VSAND, VCLAY, VSHALE, etc.)
+	if (
+		/^V(SAND|SILT|CLAY|SHALE|CALC|DOLO|KAOL|FELD|ANHY|GYPS|HALI|PYRI|COAL|ILLI|SMEC|CHLO|GLAUC|MUSC|BIOT|KFELD|ALBI|SIDE|ANKE|KERO|SH_|CL_|POR_|VOL_|QUARTZ|CALCITE|DOLOMITE|SIDERITE|ANHYDRITE|PYRITE|HALITE|GYPSUM|FELDSPAR|PLAGIOCLASE|CHLORITE|ILLITE|SMECTITE|KAOLINITE|GLAUCONITE)/i.test(
+			up
+		)
+	) {
+		return true;
+	}
+	if (up.endsWith('_VOL') || up.endsWith('_VOLUME')) return true;
+	// Flags & anomalies
+	if (/(?:_FLAG|_FLAGS)$/i.test(up) || /^FLAG_/i.test(up)) return true;
+	// Normalizations, corrections, enhancements, predictions, reconstructions, synthetic models
+	if (
+		/(?:_NORM|_ENV_CORR|_DEN_CORR|_HC|_BLK|_SYN|_RECON|_ENH|_IMP|_PRED|_ML|_CONSTRUCTED|_P10|_P50|_P90)$/i.test(
+			up
+		)
+	) {
+		return true;
+	}
+	if (/^PROJ_/i.test(up)) return true;
+	return false;
+}
 
 function computeSummaryStats(arr: number[], deptArr?: number[]): CurveSummaryStats {
 	const valid: number[] = [];
@@ -310,6 +411,53 @@ class WellDataState {
 	survey = $state<Record<string, any>[]>([]);
 	header = $state<Record<string, any>>({});
 	config = $state<Record<string, any>>({});
+	renamedCurves = $state<Record<string, string>>({});
+
+	get datumElevationInfo() {
+		const h = (this.header || {}) as Record<string, any>;
+		const cfg = (this.config || {}) as Record<string, any>;
+		const raw =
+			h.df_elev ??
+			h.kb_elev ??
+			cfg.df_elev ??
+			cfg.kb_elev ??
+			h.dfe_elevation ??
+			h.kb_elevation ??
+			h.raw_well_header?.EDF ??
+			h.raw_well_header?.DF ??
+			h.raw_well_header?.DFE ??
+			h.raw_well_header?.EKB ??
+			h.raw_well_header?.KB ??
+			h.raw_well_header?.RKB ??
+			h.raw_well_header?.APD;
+		const num = raw !== null && raw !== undefined && raw !== '' ? Number(raw) : null;
+		const datumUnit = (h.datum_unit || cfg.datum_unit || 'm') as 'm' | 'ft';
+		if (num !== null && Number.isFinite(num) && num > 0) {
+			const isDf =
+				h.df_elev != null ||
+				cfg.df_elev != null ||
+				h.raw_well_header?.DF != null ||
+				h.raw_well_header?.EDF != null;
+			const type = isDf ? 'DF' : 'KB';
+			const elevMeters = datumUnit === 'ft' ? num * 0.3048 : num;
+			return {
+				hasElevation: true,
+				elevation: num,
+				elevationMeters: elevMeters,
+				unit: datumUnit,
+				type,
+				label: `${num} ${datumUnit} (${type})`
+			};
+		}
+		return {
+			hasElevation: false,
+			elevation: 0,
+			elevationMeters: 0,
+			unit: datumUnit,
+			type: 'DF' as const,
+			label: 'No DF/KB Datum'
+		};
+	}
 
 	// Reservoir summary table & metrics from latest run
 	zonalSummary = $state.raw<Record<string, any>[]>([]);
@@ -354,6 +502,12 @@ class WellDataState {
 	);
 	cpermCurve = $derived(
 		this.curves['CPERM'] ?? this.curves['CORE_PERM'] ?? WellDataState.EMPTY_ARR
+	);
+	tocCurve = $derived(
+		this.curves['TOC'] ?? this.curves['TOC_PASSEY'] ?? WellDataState.EMPTY_ARR
+	);
+	deltaLogRCurve = $derived(
+		this.curves['DELTA_LOG_R'] ?? WellDataState.EMPTY_ARR
 	);
 
 	// Derived filtered indices based on workbench.depthFilter and workbench.selectedZones
@@ -472,14 +626,116 @@ class WellDataState {
 	});
 
 	calculatedCurvesPresent = $derived.by(() => {
-		const calcSet = new Set(ALL_CALCULATED_CURVE_MNEMONICS);
+		const calcSet = ALL_CALCULATED_CURVE_SET;
+		const pendingSet = new Set(
+			Object.values(this.pendingModuleCurves).flatMap((cols) => cols)
+		);
 		return Object.keys(this.curves).filter(
 			(k) =>
-				calcSet.has(k) &&
+				k !== 'DEPT' &&
+				k !== 'DEPTH' &&
+				k !== 'WELL_NAME' &&
+				k !== 'ZONES' &&
+				(calcSet.has(k) || isCalculatedCurveMnemonic(k) || pendingSet.has(k)) &&
 				Array.isArray(this.curves[k]) &&
 				this.curves[k].some((v) => typeof v === 'number' && Number.isFinite(v))
 		);
 	});
+
+	/**
+	 * Determines whether a curve has been edited (renamed, in-place edited, core shifted, etc.)
+	 * and returns provenance information such as the source mnemonic it was renamed from.
+	 */
+	isCurveEdited(c: string): { edited: boolean; reason?: string; source?: string } {
+		if (!c) return { edited: false };
+		const up = c.trim().toUpperCase();
+
+		// 1. In-place edit with _ORI backup (e.g. GR modified while GR_ORI exists)
+		if (!up.endsWith('_ORI') && this.curves[`${up}_ORI`]) {
+			return { edited: true, reason: 'in-place edit', source: `${up}_ORI` };
+		}
+
+		// 2. Tracked runtime renames (e.g. RT renamed from RDEEP)
+		if (this.renamedCurves[up]) {
+			return { edited: true, reason: 'renamed', source: this.renamedCurves[up] };
+		}
+
+		// 3. Saved renames in well config
+		const cfgRenames = (this.config as any)?.renamed_curves;
+		if (cfgRenames && typeof cfgRenames === 'object' && cfgRenames[up]) {
+			return { edited: true, reason: 'renamed', source: cfgRenames[up] };
+		}
+
+		// 4. Imported LAS curve lineage (stored_curve !== source_mnemonic)
+		const lineage = this.header?.curve_lineage;
+		if (Array.isArray(lineage)) {
+			for (const entry of lineage) {
+				const stored = String(entry.stored_curve || '').trim().toUpperCase();
+				const src = String(entry.source_mnemonic || entry.raw_curve || '').trim().toUpperCase();
+				if (stored === up && src && src !== up) {
+					return { edited: true, reason: 'renamed', source: src };
+				}
+			}
+		}
+
+		// 5. Mnemonic aliasing when the raw source curve is also present in the well
+		// (e.g. RT renamed from RDEEP; RDEEP is kept as raw curve in data)
+		if (up === 'RT') {
+			const rawCandidate = ['RDEEP', 'RTRUE', 'RD', 'LLD', 'ILD', 'HRLD', 'AT90'].find(
+				(r) => r !== up && Boolean(this.curves[r])
+			);
+			if (rawCandidate) {
+				return { edited: true, reason: 'renamed', source: rawCandidate };
+			}
+		}
+		if (up === 'GR') {
+			const rawCandidate = ['GRD', 'CGR', 'SGR', 'GAM', 'GMAX'].find(
+				(r) => r !== up && Boolean(this.curves[r])
+			);
+			if (rawCandidate) {
+				return { edited: true, reason: 'renamed', source: rawCandidate };
+			}
+		}
+		if (up === 'RHOB') {
+			const rawCandidate = ['DEN', 'RHOZ', 'RHO8', 'BD', 'RHOB_RAW'].find(
+				(r) => r !== up && Boolean(this.curves[r])
+			);
+			if (rawCandidate) {
+				return { edited: true, reason: 'renamed', source: rawCandidate };
+			}
+		}
+		if (up === 'NPHI') {
+			const rawCandidate = ['CNL', 'TNPH', 'NPHZ', 'NPHI_RAW'].find(
+				(r) => r !== up && Boolean(this.curves[r])
+			);
+			if (rawCandidate) {
+				return { edited: true, reason: 'renamed', source: rawCandidate };
+			}
+		}
+		if (up === 'DT' || up === 'DTC') {
+			const rawCandidate = ['AC', 'DT24', 'DTP', 'DTCO'].find(
+				(r) => r !== up && Boolean(this.curves[r])
+			);
+			if (rawCandidate) {
+				return { edited: true, reason: 'renamed', source: rawCandidate };
+			}
+		}
+
+		// 6. Modified in qaqc-edit module
+		if (this.pendingModuleCurves['qaqc-edit']?.includes(up)) {
+			return { edited: true, reason: 'edited in QAQC' };
+		}
+
+		// 7. Core depth shift applied to core log curves
+		if (
+			this.coreShiftApplied &&
+			(up === 'CPORE' || up === 'CPERM' || up === 'CPOR' || up === 'CKHA' || up === 'CKVA')
+		) {
+			return { edited: true, reason: 'core depth shifted' };
+		}
+
+		return { edited: false };
+	}
 
 	availableZones = $derived.by(() => {
 		const set = new Set<string>();
@@ -1188,6 +1444,17 @@ class WellDataState {
 					continue;
 				}
 				if (col === 'WELL_NAME') continue;
+				if (col === 'FLUID_TYPE') {
+					const strMapped = (arr || []).map((v) =>
+						v !== null && v !== undefined && String(v).trim() !== '' && String(v) !== 'NaN'
+							? String(v)
+							: null
+					);
+					numericCurves[col] = strMapped as any;
+					origCopy[col] = [...strMapped] as any;
+					committedCopy[col] = [...strMapped] as any;
+					continue;
+				}
 				const mapped = (arr || []).map((v) =>
 					typeof v === 'number' && Number.isFinite(v) ? v : Number.NaN
 				);
@@ -1296,9 +1563,11 @@ class WellDataState {
 			if (rawCoreList.length > 0 && baseDeptGrid.length > 0) {
 				const cporeGrid = new Array(baseDeptGrid.length).fill(Number.NaN);
 				const cpermGrid = new Array(baseDeptGrid.length).fill(Number.NaN);
+				const qvGrid = new Array(baseDeptGrid.length).fill(Number.NaN);
 				const bestDistPlug = new Array(baseDeptGrid.length).fill(Number.POSITIVE_INFINITY);
 				let hasCpore = false;
 				let hasCperm = false;
+				let hasQv = false;
 
 				for (const s of rawCoreList) {
 					const sd = Number(s.depth ?? s.DEPTH ?? s.raw_depth);
@@ -1312,7 +1581,9 @@ class WellDataState {
 							: null;
 					const rawK = Number(s.permeability ?? s.CPERM ?? s.perm);
 					const kVal = Number.isFinite(rawK) && rawK > 0 ? rawK : null;
-					if (pVal === null && kVal === null) continue;
+					const rawQv = Number(s.qv ?? s.QV ?? s.qv_core ?? s.QV_CORE);
+					const qvVal = Number.isFinite(rawQv) && rawQv >= 0 ? rawQv : null;
+					if (pVal === null && kVal === null && qvVal === null) continue;
 
 					let lo = 0;
 					let hi = baseDeptGrid.length - 1;
@@ -1332,8 +1603,10 @@ class WellDataState {
 						bestDistPlug[lo] = dist;
 						cporeGrid[lo] = pVal !== null ? pVal : Number.NaN;
 						cpermGrid[lo] = kVal !== null ? kVal : Number.NaN;
+						qvGrid[lo] = qvVal !== null ? qvVal : Number.NaN;
 						if (pVal !== null) hasCpore = true;
 						if (kVal !== null) hasCperm = true;
+						if (qvVal !== null) hasQv = true;
 					}
 				}
 				if (hasCpore) {
@@ -1345,6 +1618,11 @@ class WellDataState {
 					numericCurves['CPERM'] = cpermGrid;
 					origCopy['CPERM'] = [...cpermGrid];
 					committedCopy['CPERM'] = [...cpermGrid];
+				}
+				if (hasQv) {
+					numericCurves['QV_CORE'] = qvGrid;
+					origCopy['QV_CORE'] = [...qvGrid];
+					committedCopy['QV_CORE'] = [...qvGrid];
 				}
 			} else if (baseDeptGrid.length > 1) {
 				// Clean up any legacy merge_asof duplicate core values across consecutive log rows
@@ -1521,12 +1799,31 @@ class WellDataState {
 				uwi: (data.config as any)?.uwi ?? wellName,
 				...(data.config || {})
 			};
+
+			// Initialize renamed curves mapping from config, header, and curve lineage
+			const initRenames: Record<string, string> = {
+				...((data.config as any)?.renamed_curves || {}),
+				...((this.header as any)?.renamed_curves || {})
+			};
+			const lineage = (this.header as any)?.curve_lineage || (data as any).header?.curve_lineage;
+			if (Array.isArray(lineage)) {
+				for (const entry of lineage) {
+					const stored = String(entry.stored_curve || '').trim().toUpperCase();
+					const src = String(entry.source_mnemonic || entry.raw_curve || '').trim().toUpperCase();
+					if (stored && src && stored !== src) {
+						initRenames[stored] = src;
+					}
+				}
+			}
+			this.renamedCurves = initRenames;
 			this.pendingModuleCurves = {};
 			this.pendingParamSnapshots = {};
 			moduleParams.reset();
 			workbench.brushedDepthIndices = new Set();
 			workbench.useBrushedCalculationFilter = false;
 			workbench.tsParams.enabled = false;
+			workbench.saturationParams.manualOverrides = workbench.getWellManualOverrides(wellName);
+			workbench.lithoParams.manualOverrides = workbench.getWellLithoManualOverrides(wellName);
 
 			// Restore persisted SCAL, Core Overburden/Klinkenberg & Pc scaling parameters from well config
 			const cfgAny = (this.config || {}) as Record<string, any>;
@@ -1876,6 +2173,14 @@ class WellDataState {
 		) {
 			for (const [col, vals] of Object.entries(computedData)) {
 				if (col === 'WELL_NAME' || col === 'ZONES') continue;
+				if (col === 'FLUID_TYPE') {
+					updated[col] = vals.map((v) =>
+						v !== null && v !== undefined && String(v).trim() !== '' && String(v) !== 'NaN'
+							? String(v)
+							: null
+					) as any;
+					continue;
+				}
 				updated[col] = vals.map((v) =>
 					typeof v === 'number' && Number.isFinite(v) ? v : Number.NaN
 				);
@@ -1893,7 +2198,7 @@ class WellDataState {
 					continue;
 				const targetArr = updated[col]
 					? [...updated[col]]
-					: new Array(baseDept.length).fill(Number.NaN);
+					: new Array(baseDept.length).fill(col === 'FLUID_TYPE' ? null : Number.NaN);
 				const positionalRows = vals.length === baseDept.length;
 				const rowCount = incomingDept.length || (positionalRows ? vals.length : 0);
 				for (let i = 0; i < rowCount; i++) {
@@ -1910,8 +2215,15 @@ class WellDataState {
 						(!selectedIndices || selectedIndices.has(targetIdx))
 					) {
 						const v = vals[i];
-						targetArr[targetIdx] =
-							typeof v === 'number' && Number.isFinite(v) ? v : Number.NaN;
+						if (col === 'FLUID_TYPE') {
+							targetArr[targetIdx] =
+								v !== null && v !== undefined && String(v).trim() !== '' && String(v) !== 'NaN'
+									? (String(v) as any)
+									: null;
+						} else {
+							targetArr[targetIdx] =
+								typeof v === 'number' && Number.isFinite(v) ? v : Number.NaN;
+						}
 					}
 				}
 				updated[col] = targetArr;
@@ -1957,6 +2269,7 @@ class WellDataState {
 		'qaqc-edit',
 		'qaqc-badhole',
 		'qaqc-env',
+		'source_rock',
 		'litho-poro',
 		'perm',
 		'saturation',
@@ -1968,6 +2281,7 @@ class WellDataState {
 		'qaqc-edit': 'QAQC Edits',
 		'qaqc-badhole': 'Badhole Flags',
 		'qaqc-env': 'Env Corrections',
+		source_rock: 'Source Rock & TOC',
 		'litho-poro': 'Litho & Poro',
 		perm: 'Permeability',
 		saturation: 'Saturation',
@@ -2063,11 +2377,19 @@ class WellDataState {
 		const deptArr = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
 		if (deptArr.length === 0) return false;
 
-		const curvesPayload: Record<string, (number | null)[]> = {};
+		const curvesPayload: Record<string, (number | string | null)[]> = {};
 		for (const col of cols) {
 			const arr = this.curves[col];
 			if (arr && arr.length === deptArr.length) {
-				curvesPayload[col] = arr.map((v) => (Number.isFinite(v) ? v : null));
+				if (col === 'FLUID_TYPE') {
+					curvesPayload[col] = arr.map((v) =>
+						v !== null && v !== undefined && String(v).trim() !== '' && String(v) !== 'NaN'
+							? String(v)
+							: null
+					);
+				} else {
+					curvesPayload[col] = arr.map((v) => (Number.isFinite(v) ? (v as number) : null));
+				}
 			}
 		}
 		if (includeCoreShift) {
@@ -2526,6 +2848,29 @@ class WellDataState {
 			delete nextOrig[src];
 			this.originalCurves = nextOrig;
 		}
+
+		// Record the rename mapping
+		const originalSource = this.renamedCurves[src] || src;
+		this.renamedCurves = { ...this.renamedCurves, [dst]: originalSource };
+		const currentLineage = Array.isArray(this.header?.curve_lineage)
+			? [...this.header.curve_lineage]
+			: [];
+		const nextLineage = currentLineage.filter(
+			(entry: any) => String(entry.stored_curve || '').toUpperCase() !== src
+		);
+		nextLineage.push({
+			filename: 'Curve Editor',
+			source_mnemonic: originalSource,
+			stored_curve: dst,
+			raw_curve: src
+		});
+		this.header = { ...this.header, curve_lineage: nextLineage };
+		const nextConfigRenames = {
+			...((this.config?.renamed_curves as Record<string, string>) || {}),
+			[dst]: originalSource
+		};
+		this.config = { ...this.config, renamed_curves: nextConfigRenames };
+
 		workbench.selectedQaqcCurve = dst;
 
 		if (persist && workbench.projectId && workbench.wellId) {
@@ -3854,21 +4199,25 @@ class WellDataState {
 
 		const newCpore = new Array(dept.length).fill(Number.NaN);
 		const newCperm = new Array(dept.length).fill(Number.NaN);
+		const newQvCore = new Array(dept.length).fill(Number.NaN);
 		const newCporeAmb = new Array(dept.length).fill(Number.NaN);
 		const newCpermAir = new Array(dept.length).fill(Number.NaN);
 		let hasAmb = false;
 		let hasAir = false;
+		let hasQv = false;
 
 		for (const s of this.coreSamples) {
 			const sd = Number(s.depth ?? s.DEPTH);
 			if (!Number.isFinite(sd)) continue;
 			const pRaw = Number(s.porosity ?? s.CPORE ?? s.poro);
 			const kRaw = Number(s.permeability ?? s.CPERM ?? s.perm);
+			const qvRaw = Number(s.qv ?? s.QV ?? s.qv_core ?? s.QV_CORE);
 			const pAmbRaw = Number(s.porosity_amb ?? s.CPORE_AMB ?? s.CPORE_ORI);
 			const kAirRaw = Number(s.perm_air ?? s.CPERM_AIR ?? s.CPERM_ORI);
 			const pVal =
 				Number.isFinite(pRaw) && pRaw > 0 ? (pRaw > 1.0 ? pRaw / 100.0 : pRaw) : null;
 			const kVal = Number.isFinite(kRaw) && kRaw > 0 ? kRaw : null;
+			const qvVal = Number.isFinite(qvRaw) && qvRaw >= 0 ? qvRaw : null;
 			const pAmbVal =
 				Number.isFinite(pAmbRaw) && pAmbRaw > 0
 					? pAmbRaw > 1.0
@@ -3890,6 +4239,10 @@ class WellDataState {
 			if (Math.abs(dept[lo] - sd) <= 0.5) {
 				if (pVal !== null) newCpore[lo] = pVal;
 				if (kVal !== null) newCperm[lo] = kVal;
+				if (qvVal !== null) {
+					newQvCore[lo] = qvVal;
+					hasQv = true;
+				}
 				if (pAmbVal !== null) {
 					newCporeAmb[lo] = pAmbVal;
 					hasAmb = true;
@@ -3945,6 +4298,10 @@ class WellDataState {
 		if (hasAir) {
 			nextCurves['CPERM_AIR'] = newCpermAir;
 			nextCurves['CPERM_ORI'] = [...newCpermAir];
+		}
+		if (hasQv) {
+			nextCurves['QV_CORE'] = newQvCore;
+			nextCurves['QV_CORE_ORI'] = [...newQvCore];
 		}
 		if (this.curves['CORE_PORO']) {
 			nextCurves['CORE_PORO'] = [...newCpore];
@@ -4269,7 +4626,16 @@ class WellDataState {
 			'SHF',
 			'SW_SHF',
 			'PAY',
-			'BADHOLE'
+			'PAY_FLAG',
+			'PAY_FLAGS',
+			'RES_FLAG',
+			'GAS_FLAG',
+			'OIL_FLAG',
+			'UNC_FLAG',
+			'BADHOLE',
+			'TOC',
+			'TOC_PASSEY',
+			'DELTA_LOG_R'
 		]) {
 			const arr = this.curves[k] ?? this.curves[k + '.'];
 			if (arr) {

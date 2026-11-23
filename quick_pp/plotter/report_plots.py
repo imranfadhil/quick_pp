@@ -19,6 +19,7 @@ from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
 
 from quick_pp import logger
+from quick_pp.config import Config
 from quick_pp.utils import line_intersection
 
 matplotlib.use("Agg", force=False)
@@ -273,19 +274,7 @@ def generate_inventory_heatmap(
         "TOPS",
     ]
     canonical_aliases = {
-        "TVD": {"TVD", "DEPT_TVD", "DEPTH_TVD", "TVD_SCS", "TVDSCS"},
-        "TVDSS": {"TVDSS", "DEPT_TVDSS", "DEPTH_TVDSS", "TVD_SS", "Z"},
-        "GR": {"GR", "GAMMA", "GR_ARC", "GR_EDTC"},
-        "RT": {"RT", "RD", "RDEP", "RDEEP", "LLD", "RILD"},
-        "NPHI": {"NPHI", "TNPH", "NPOR", "CNCF"},
-        "RHOB": {"RHOB", "RHOZ", "DEN", "ZDEN"},
-        "VCLAY": {"VCLAY", "VSH", "VSHALE", "VCL", "VSH_GR", "VSHA"},
-        "PHIT": {"PHIT", "PHIE", "POROSITY", "POR"},
-        "PERM": {"PERM", "KLOGH", "PERMEABILITY", "K"},
-        "SWT": {"SWT", "SWE", "SW"},
-        "ROCK_FLAG": {"ROCK_FLAG", "ROCK_FLAG_ML", "ROCK_FLAG_CUTOFF"},
-        "PERM_TRANS": {"PERM_TRANS"},
-        "SHF": {"SHF", "SW_SHF"},
+        k: set(v) for k, v in Config.CANONICAL_CURVE_ALIASES.items()
     }
     well_labels = [str(w.get("name", f"Well-{i + 1}")) for i, w in enumerate(wells)]
     if not well_labels:

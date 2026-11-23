@@ -64,6 +64,7 @@
 						depths: cleanArr(deptArr) as number[] | undefined,
 						phit: cleanArr(phitArr),
 						vclay: cleanArr(vclayArr),
+						vshale: cleanArr(wellData.curves['VSHALE'] ?? []),
 						vsilt: cleanArr(vsiltArr),
 						phit_sand: useTs ? cleanArr(phitSandArr) : undefined,
 						vsh_lam: useTs ? cleanArr(vshLamArr) : undefined,

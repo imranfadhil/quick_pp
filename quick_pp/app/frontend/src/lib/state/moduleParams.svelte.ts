@@ -113,10 +113,25 @@ export const SINGLE_WELL_REGIONAL_DEFAULTS: Record<ParamModuleKey, Record<string
 		e_o: 1.0,
 		t_o: 1.0
 	},
+	source_rock: {
+		resCurve: 'RD',
+		poroCurve: 'DT',
+		porosityType: 'sonic',
+		rBaseline: 2.0,
+		poroBaseline: 80.0,
+		scalingCoeff: null,
+		maturityMode: 'lom',
+		lom: 10.5,
+		ro: 0.8,
+		tocBaseline: 0.8,
+		clampNegative: true
+	},
 	ressum: {
 		vclCutoff: 0.4,
 		phieCutoff: 0.08,
-		swCutoff: 0.6
+		swCutoff: 0.6,
+		applyPermCutoff: false,
+		permMin: 1.0
 	}
 };
 
@@ -124,6 +139,7 @@ export type ParamModuleKey =
 	| 'qaqc-badhole'
 	| 'qaqc-env'
 	| 'qaqc-enhance'
+	| 'source_rock'
 	| 'litho-poro'
 	| 'perm'
 	| 'saturation'
@@ -134,6 +150,7 @@ export const PARAM_MODULE_KEYS: ParamModuleKey[] = [
 	'qaqc-badhole',
 	'qaqc-env',
 	'qaqc-enhance',
+	'source_rock',
 	'litho-poro',
 	'perm',
 	'saturation',
@@ -145,6 +162,7 @@ export const PARAM_MODULE_LABELS: Record<ParamModuleKey, string> = {
 	'qaqc-badhole': 'Badhole',
 	'qaqc-env': 'Env. Corrections',
 	'qaqc-enhance': 'Resolution Enhancement',
+	source_rock: 'Source Rock (TOC)',
 	'litho-poro': 'Litho & Poro',
 	perm: 'Permeability',
 	saturation: 'Saturation',
@@ -279,6 +297,15 @@ const REGISTRY: Record<ParamModuleKey, ParamAccessor> = {
 		get: () => ({ litho: clone(workbench.lithoParams), ts: clone(workbench.tsParams) }),
 		set: (p) => {
 			assignKnown(workbench.lithoParams, p?.litho);
+			const ovs = Array.isArray(p?.litho?.manualOverrides)
+				? clone(p.litho.manualOverrides)
+				: (Array.isArray(p?.manualOverrides)
+					? clone(p.manualOverrides)
+					: (workbench.wellId ? workbench.getWellLithoManualOverrides(workbench.wellId) : []));
+			workbench.lithoParams.manualOverrides = ovs;
+			if (workbench.wellId && (Array.isArray(p?.litho?.manualOverrides) || Array.isArray(p?.manualOverrides))) {
+				workbench.setWellLithoManualOverrides(workbench.wellId, ovs);
+			}
 			if (p?.litho && !p.litho.gammaEndpoints) workbench.lithoParams.gammaEndpoints = {};
 			if (workbench.lithoParams.model === 'vsh_bulk') {
 				workbench.lithoParams.model = 'vsh_gr';
@@ -313,6 +340,13 @@ const REGISTRY: Record<ParamModuleKey, ParamAccessor> = {
 		}),
 		set: (p) => {
 			assignKnown(workbench.saturationParams, p);
+			const ovs = Array.isArray(p?.manualOverrides)
+				? clone(p.manualOverrides)
+				: (workbench.wellId ? workbench.getWellManualOverrides(workbench.wellId) : []);
+			workbench.saturationParams.manualOverrides = ovs;
+			if (workbench.wellId && Array.isArray(p?.manualOverrides)) {
+				workbench.setWellManualOverrides(workbench.wellId, ovs);
+			}
 			if (typeof p?.useTsInSaturation === 'boolean') {
 				workbench.tsParams.useInSaturation = p.useTsInSaturation;
 			}
@@ -321,6 +355,10 @@ const REGISTRY: Record<ParamModuleKey, ParamAccessor> = {
 	scal: {
 		get: () => clone(workbench.scalParams),
 		set: (p) => assignKnown(workbench.scalParams, p)
+	},
+	source_rock: {
+		get: () => clone(workbench.tocParams),
+		set: (p) => assignKnown(workbench.tocParams, p)
 	},
 	ressum: {
 		get: () => clone(workbench.resSumParams),
@@ -468,6 +506,14 @@ class ModuleParamsState {
 				} catch {
 					// Ignore malformed saved entry; keep current values
 				}
+			} else if (module === 'saturation') {
+				workbench.saturationParams.manualOverrides = workbench.wellId
+					? workbench.getWellManualOverrides(workbench.wellId)
+					: [];
+			} else if (module === 'litho-poro') {
+				workbench.lithoParams.manualOverrides = workbench.wellId
+					? workbench.getWellLithoManualOverrides(workbench.wellId)
+					: [];
 			}
 			let displayLabel = entry?.label ?? null;
 			if (entry && matchType === 'bundle') {

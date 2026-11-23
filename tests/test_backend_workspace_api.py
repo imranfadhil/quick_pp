@@ -100,6 +100,7 @@ def client_and_project(monkeypatch):
     monkeypatch.setattr(rt_service, "get_db", lambda: DummyCtx(session))
     from quick_pp.app.backend.utils import auth as auth_mod
     from quick_pp.app.backend.utils import db as utils_db
+
     monkeypatch.setattr(auth_mod, "get_db", lambda: DummyCtx(session))
     monkeypatch.setattr(auth_mod, "bootstrap_default_admin", lambda: None)
     monkeypatch.setattr(utils_db, "get_db", lambda: DummyCtx(session))
@@ -115,15 +116,23 @@ def test_porosity_save_preserves_lithology(client_and_project):
     client, pid = client_and_project
     path = f"/quick_pp/workspace/projects/{pid}/wells/Well-A/lithology"
     payload = {
-        "model": "vsh_gr", "badhole_treatment": "none", "save": True,
-        "gr_clean": 20.0, "gr_clay": 120.0,
+        "model": "vsh_gr",
+        "badhole_treatment": "none",
+        "save": True,
+        "gr_clean": 20.0,
+        "gr_clay": 120.0,
     }
     initial = client.post(path, json=payload)
     assert initial.status_code == 200, initial.text
     expected = initial.json()["data"]["VCLAY"]
-    porosity = client.post(path.replace("lithology", "porosity"), json={
-        "lithology_model": "vsh_gr", "method": "den", "save": True,
-    })
+    porosity = client.post(
+        path.replace("lithology", "porosity"),
+        json={
+            "lithology_model": "vsh_gr",
+            "method": "den",
+            "save": True,
+        },
+    )
     assert porosity.status_code == 200, porosity.text
 
     from sqlalchemy import select
@@ -136,7 +145,11 @@ def test_porosity_save_preserves_lithology(client_and_project):
             select(CurveData.depth, CurveData.value_numeric)
             .join(Curve, CurveData.curve_id == Curve.curve_id)
             .join(WellModel, Curve.well_id == WellModel.well_id)
-            .where(WellModel.project_id == pid, WellModel.name == "Well-A", Curve.mnemonic == "VCLAY")
+            .where(
+                WellModel.project_id == pid,
+                WellModel.name == "Well-A",
+                Curve.mnemonic == "VCLAY",
+            )
             .order_by(CurveData.depth)
         ).all()
     assert [row.value_numeric for row in rows] == pytest.approx(expected)
@@ -144,7 +157,13 @@ def test_porosity_save_preserves_lithology(client_and_project):
 
 @pytest.mark.parametrize(
     "method",
-    ["sonic_wyllie", "sonic_hunt_raymer", "avg_weighted", "avg_arithmetic", "avg_gaymard"],
+    [
+        "sonic_wyllie",
+        "sonic_hunt_raymer",
+        "avg_weighted",
+        "avg_arithmetic",
+        "avg_gaymard",
+    ],
 )
 def test_workspace_porosity_methods_use_lithology_and_fluid(client_and_project, method):
     client, pid = client_and_project
@@ -153,7 +172,12 @@ def test_workspace_porosity_methods_use_lithology_and_fluid(client_and_project, 
     assert lith.status_code == 200, lith.text
     response = client.post(
         f"{base}/porosity",
-        json={"method": method, "lithology_model": "ssc", "fluid_point": [1.0, 1.1], "sonic_fluid_dt": 210},
+        json={
+            "method": method,
+            "lithology_model": "ssc",
+            "fluid_point": [1.0, 1.1],
+            "sonic_fluid_dt": 210,
+        },
     )
     assert response.status_code == 200, response.text
     result = response.json()["data"]
@@ -169,7 +193,9 @@ def test_workspace_porosity_methods_use_lithology_and_fluid(client_and_project, 
             expected = -c - np.sqrt(c * c + dt_ma / 62.0 - 1)
     else:
         phid = result["PHID"][0]
-        assert phid == pytest.approx((result["RHOM"][0] - 2.25) / (result["RHOM"][0] - 1.1))
+        assert phid == pytest.approx(
+            (result["RHOM"][0] - 2.25) / (result["RHOM"][0] - 1.1)
+        )
         expected = {
             "avg_weighted": (2 * phid + 0.12) / 3,
             "avg_arithmetic": (phid + 0.12) / 2,
@@ -242,7 +268,9 @@ def test_grain_density_correlation_disabled_leaves_mineral_model(client_and_proj
     assert disabled.json()["data"]["RHOM"] == baseline.json()["data"]["RHOM"]
 
 
-def test_sonic_missing_samples_stay_null_and_missing_curve_is_rejected(client_and_project, monkeypatch):
+def test_sonic_missing_samples_stay_null_and_missing_curve_is_rejected(
+    client_and_project, monkeypatch
+):
     client, pid = client_and_project
     base = f"/quick_pp/workspace/projects/{pid}/wells/Well-A"
     assert client.post(f"{base}/lithology", json={"model": "ssc"}).status_code == 200
@@ -254,7 +282,9 @@ def test_sonic_missing_samples_stay_null_and_missing_curve_is_rejected(client_an
         return df
 
     monkeypatch.setattr(ws_service, "_get_filtered_well_df", missing_sample)
-    result = client.post(f"{base}/porosity", json={"method": "sonic_wyllie", "lithology_model": "ssc"})
+    result = client.post(
+        f"{base}/porosity", json={"method": "sonic_wyllie", "lithology_model": "ssc"}
+    )
     assert result.status_code == 200, result.text
     assert result.json()["data"]["PHIT"][1] is None
 
@@ -262,12 +292,16 @@ def test_sonic_missing_samples_stay_null_and_missing_curve_is_rejected(client_an
         return original(*args, **kwargs).drop(columns="DTC")
 
     monkeypatch.setattr(ws_service, "_get_filtered_well_df", missing_curve)
-    result = client.post(f"{base}/porosity", json={"method": "sonic_wyllie", "lithology_model": "ssc"})
+    result = client.post(
+        f"{base}/porosity", json={"method": "sonic_wyllie", "lithology_model": "ssc"}
+    )
     assert result.status_code == 400
     assert "requires a DTC or DT curve" in result.json()["detail"]
 
 
-def test_sonic_uses_extended_mineral_and_rejects_invalid_fluid_dt(client_and_project, monkeypatch):
+def test_sonic_uses_extended_mineral_and_rejects_invalid_fluid_dt(
+    client_and_project, monkeypatch
+):
     client, pid = client_and_project
     base = f"/quick_pp/workspace/projects/{pid}/wells/Well-A"
     original = ws_service._get_filtered_well_df
@@ -281,7 +315,11 @@ def test_sonic_uses_extended_mineral_and_rejects_invalid_fluid_dt(client_and_pro
         return df
 
     monkeypatch.setattr(ws_service, "_get_filtered_well_df", illite_lithology)
-    payload = {"method": "sonic_wyllie", "lithology_model": "multi_mineral", "sonic_fluid_dt": 210}
+    payload = {
+        "method": "sonic_wyllie",
+        "lithology_model": "multi_mineral",
+        "sonic_fluid_dt": 210,
+    }
     result = client.post(f"{base}/porosity", json=payload)
     assert result.status_code == 200, result.text
     assert result.json()["data"]["PHIT"][0] == pytest.approx((130 - 110) / (210 - 110))
@@ -290,11 +328,24 @@ def test_sonic_uses_extended_mineral_and_rejects_invalid_fluid_dt(client_and_pro
     assert "No valid sonic porosity results" in result.json()["detail"]
 
 
-def test_sonic_save_clears_previously_saved_porosity_at_missing_samples(client_and_project, monkeypatch):
+def test_sonic_save_clears_previously_saved_porosity_at_missing_samples(
+    client_and_project, monkeypatch
+):
     client, pid = client_and_project
     base = f"/quick_pp/workspace/projects/{pid}/wells/Well-A"
-    assert client.post(f"{base}/lithology", json={"model": "ssc", "save": True}).status_code == 200
-    assert client.post(f"{base}/porosity", json={"method": "den", "lithology_model": "ssc", "save": True}).status_code == 200
+    assert (
+        client.post(
+            f"{base}/lithology", json={"model": "ssc", "save": True}
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            f"{base}/porosity",
+            json={"method": "den", "lithology_model": "ssc", "save": True},
+        ).status_code
+        == 200
+    )
     original = ws_service._get_filtered_well_df
 
     def missing_sample(*args, **kwargs):
@@ -303,7 +354,10 @@ def test_sonic_save_clears_previously_saved_porosity_at_missing_samples(client_a
         return df
 
     monkeypatch.setattr(ws_service, "_get_filtered_well_df", missing_sample)
-    response = client.post(f"{base}/porosity", json={"method": "sonic_wyllie", "lithology_model": "ssc", "save": True})
+    response = client.post(
+        f"{base}/porosity",
+        json={"method": "sonic_wyllie", "lithology_model": "ssc", "save": True},
+    )
     assert response.status_code == 200, response.text
     from sqlalchemy import select
 
@@ -311,18 +365,28 @@ def test_sonic_save_clears_previously_saved_porosity_at_missing_samples(client_a
     from quick_pp.database.models import Well as WellModel
 
     with ws_service.get_db() as session:
-        depths = session.execute(
-            select(CurveData.depth)
-            .join(Curve, CurveData.curve_id == Curve.curve_id)
-            .join(WellModel, Curve.well_id == WellModel.well_id)
-            .where(WellModel.project_id == pid, WellModel.name == "Well-A", Curve.mnemonic == "PHIT")
-        ).scalars().all()
+        depths = (
+            session.execute(
+                select(CurveData.depth)
+                .join(Curve, CurveData.curve_id == Curve.curve_id)
+                .join(WellModel, Curve.well_id == WellModel.well_id)
+                .where(
+                    WellModel.project_id == pid,
+                    WellModel.name == "Well-A",
+                    Curve.mnemonic == "PHIT",
+                )
+            )
+            .scalars()
+            .all()
+        )
     assert 1001.0 not in depths
     assert 1000.0 in depths
 
 
 @pytest.mark.parametrize("method", ["sonic_wyllie", "avg_arithmetic"])
-def test_new_porosity_methods_honor_gr_badhole_treatment(client_and_project, monkeypatch, method):
+def test_new_porosity_methods_honor_gr_badhole_treatment(
+    client_and_project, monkeypatch, method
+):
     client, pid = client_and_project
     base = f"/quick_pp/workspace/projects/{pid}/wells/Well-A"
     original = ws_service._get_filtered_well_df
@@ -336,7 +400,13 @@ def test_new_porosity_methods_honor_gr_badhole_treatment(client_and_project, mon
     monkeypatch.setattr(ws_service, "_get_filtered_well_df", with_badhole)
     response = client.post(
         f"{base}/porosity",
-        json={"method": method, "lithology_model": "vsh_gr", "badhole_treatment": "vsh_gr", "gr_clean": 20, "gr_clay": 120},
+        json={
+            "method": method,
+            "lithology_model": "vsh_gr",
+            "badhole_treatment": "vsh_gr",
+            "gr_clean": 20,
+            "gr_clay": 120,
+        },
     )
     assert response.status_code == 200, response.text
     data = response.json()["data"]
@@ -352,7 +422,11 @@ def test_porosity_comparison_is_isolated_and_matches_active_method(client_and_pr
     client, pid = client_and_project
     base = f"/quick_pp/workspace/projects/{pid}/wells/Well-A"
     assert client.post(f"{base}/lithology", json={"model": "ssc"}).status_code == 200
-    payload = {"method": "avg_weighted", "lithology_model": "ssc", "sonic_fluid_dt": 210}
+    payload = {
+        "method": "avg_weighted",
+        "lithology_model": "ssc",
+        "sonic_fluid_dt": 210,
+    }
     active = client.post(f"{base}/porosity", json=payload)
     assert active.status_code == 200, active.text
     before = ws_service._get_filtered_well_df(pid, "Well-A").copy()
@@ -361,14 +435,29 @@ def test_porosity_comparison_is_isolated_and_matches_active_method(client_and_pr
     assert comparison.status_code == 200, comparison.text
     body = comparison.json()
     assert len(body["curves"]) == 7
-    assert body["curves"]["avg_weighted"] == pytest.approx(active.json()["data"]["PHIT"])
+    assert body["curves"]["avg_weighted"] == pytest.approx(
+        active.json()["data"]["PHIT"]
+    )
     assert body["rhom"] == pytest.approx(active.json()["data"]["RHOM"])
     assert body["rho_fluid"] == pytest.approx(1.0)
     assert "rho_fl_diagnostics" in body
-    pd.testing.assert_frame_equal(before, ws_service._get_filtered_well_df(pid, "Well-A"))
+    pd.testing.assert_frame_equal(
+        before, ws_service._get_filtered_well_df(pid, "Well-A")
+    )
     assert before_config == ws_service._ephemeral_well_configs.get((pid, "Well-A"), {})
-    assert client.post(f"{base}/porosity_comparison", json={**payload, "save": True}).status_code == 400
-    assert client.post(f"{base}/porosity_comparison", json={**payload, "lithology_model": "vsh_bulk"}).status_code == 400
+    assert (
+        client.post(
+            f"{base}/porosity_comparison", json={**payload, "save": True}
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            f"{base}/porosity_comparison",
+            json={**payload, "lithology_model": "vsh_bulk"},
+        ).status_code
+        == 400
+    )
 
 
 def test_porosity_comparison_surfaces_rho_fl_diagnostics(client_and_project):
@@ -399,12 +488,17 @@ def test_porosity_comparison_surfaces_rho_fl_diagnostics(client_and_project):
     assert "RHO_FL" not in ws_service._get_filtered_well_df(pid, "Well-A").columns
 
 
-def test_porosity_comparison_reports_unavailable_sonic_methods(client_and_project, monkeypatch):
+def test_porosity_comparison_reports_unavailable_sonic_methods(
+    client_and_project, monkeypatch
+):
     client, pid = client_and_project
     original = ws_service._get_filtered_well_df
     monkeypatch.setattr(
-        ws_service, "_get_filtered_well_df",
-        lambda *args, **kwargs: original(*args, **kwargs).drop(columns="DTC", errors="ignore"),
+        ws_service,
+        "_get_filtered_well_df",
+        lambda *args, **kwargs: original(*args, **kwargs).drop(
+            columns="DTC", errors="ignore"
+        ),
     )
     response = client.post(
         f"/quick_pp/workspace/projects/{pid}/wells/Well-A/porosity_comparison",
@@ -508,15 +602,27 @@ def test_workspace_porosity_rho_fluid_saves_diagnostic_curves(client_and_project
 
 
 @pytest.mark.parametrize("use_ts", [False, True])
-def test_permeability_comparison_is_isolated_and_matches_active_method(client_and_project, use_ts):
+def test_permeability_comparison_is_isolated_and_matches_active_method(
+    client_and_project, use_ts
+):
     client, pid = client_and_project
     base = f"/quick_pp/workspace/projects/{pid}/wells/Well-A"
     payload = {
-        "method": "choo", "m": 2.2, "A": 800000, "B": 2.5, "C": 1.5,
-        "s": 0.02, "swirr": 0.25, "use_thomas_stieber": use_ts,
+        "method": "choo",
+        "m": 2.2,
+        "A": 800000,
+        "B": 2.5,
+        "C": 1.5,
+        "s": 0.02,
+        "swirr": 0.25,
+        "use_thomas_stieber": use_ts,
         "depths": list(np.linspace(1000, 1009, 10)),
-        "phit": [0.2] * 10, "vclay": [0.1] * 10, "vsilt": [0.05] * 10,
-        "phit_sand": [0.3] * 10, "vsh_lam": [0.2] * 10, "vsh_dis": [0.04] * 10,
+        "phit": [0.2] * 10,
+        "vclay": [0.1] * 10,
+        "vsilt": [0.05] * 10,
+        "phit_sand": [0.3] * 10,
+        "vsh_lam": [0.2] * 10,
+        "vsh_dis": [0.04] * 10,
     }
     active = client.post(f"{base}/permeability", json=payload)
     assert active.status_code == 200, active.text
@@ -529,26 +635,44 @@ def test_permeability_comparison_is_isolated_and_matches_active_method(client_an
     assert body["curves"]["choo"] == pytest.approx(active.json()["data"]["PERM"])
     assert len(body["vshale"]) == len(body["depth"])
     assert all(v is None or 0.0 <= v <= 1.0 for v in body["vshale"])
-    pd.testing.assert_frame_equal(before, ws_service._get_filtered_well_df(pid, "Well-A"))
+    pd.testing.assert_frame_equal(
+        before, ws_service._get_filtered_well_df(pid, "Well-A")
+    )
     assert before_config == ws_service._ephemeral_well_configs.get((pid, "Well-A"), {})
     for method in ("kozeny_carman", "timur", "tixier", "coates"):
-        independent = client.post(f"{base}/permeability", json={**payload, "method": method})
+        independent = client.post(
+            f"{base}/permeability", json={**payload, "method": method}
+        )
         assert independent.status_code == 200, independent.text
-        assert body["curves"][method] == pytest.approx(independent.json()["data"]["PERM"])
-    assert client.post(f"{base}/permeability_comparison", json={**payload, "save": True}).status_code == 400
+        assert body["curves"][method] == pytest.approx(
+            independent.json()["data"]["PERM"]
+        )
+    assert (
+        client.post(
+            f"{base}/permeability_comparison", json={**payload, "save": True}
+        ).status_code
+        == 400
+    )
 
 
-def test_permeability_comparison_reports_per_method_errors(client_and_project, monkeypatch):
+def test_permeability_comparison_reports_per_method_errors(
+    client_and_project, monkeypatch
+):
     client, pid = client_and_project
     original = ws_service._get_filtered_well_df
 
     def no_lithology(*args, **kwargs):
         df = original(*args, **kwargs).copy()
         df["PHIT"] = 0.2
-        return df.drop(columns=["NPHI", "RHOB", "VCLAY", "VSILT", "VSHALE"], errors="ignore")
+        return df.drop(
+            columns=["NPHI", "RHOB", "VCLAY", "VSILT", "VSHALE"], errors="ignore"
+        )
 
     monkeypatch.setattr(ws_service, "_get_filtered_well_df", no_lithology)
-    response = client.post(f"/quick_pp/workspace/projects/{pid}/wells/Well-A/permeability_comparison", json={})
+    response = client.post(
+        f"/quick_pp/workspace/projects/{pid}/wells/Well-A/permeability_comparison",
+        json={},
+    )
     assert response.status_code == 200, response.text
     body = response.json()
     assert set(body["curves"]) == {"kozeny_carman", "timur", "tixier", "coates"}
@@ -663,7 +787,8 @@ def test_batch_preview_is_isolated_and_apply_checks_staleness(
     assert stale.json()["results"][0]["status"] == "error"
     apply_body["fingerprints"]["Well-A"]["Zone-1"] = ready["fingerprint"]
     monkeypatch.setattr(
-        ws_service, "_batch_evaluate_zone",
+        ws_service,
+        "_batch_evaluate_zone",
         lambda *args: pytest.fail("Apply must not calculate again"),
     )
     applied = client.post(f"{endpoint}/apply", json=apply_body)
@@ -735,7 +860,11 @@ def test_batch_apply_multiple_zones_and_uses_new_porosity(
     results = changed
     fingerprints = {"Well-A": {r["zone"]: r["fingerprint"] for r in results}}
     applied = client.post(
-        f"{endpoint}/apply", json={"preview_id": changed_response["preview_id"], "fingerprints": fingerprints}
+        f"{endpoint}/apply",
+        json={
+            "preview_id": changed_response["preview_id"],
+            "fingerprints": fingerprints,
+        },
     )
     assert applied.status_code == 200, applied.text
     assert [r["status"] for r in applied.json()["results"]] == ["saved", "saved"], (
@@ -780,7 +909,15 @@ def test_thomas_stieber_emits_structural_shale_and_exact_partition(client_and_pr
     assert response.status_code == 200, response.text
     body = response.json()
 
-    for curve in ("VSH_LAM", "VSH_DIS", "VSH_STR", "PHIT_SAND", "PHISAND_TS", "PHIT_TS", "PHIE_TS"):
+    for curve in (
+        "VSH_LAM",
+        "VSH_DIS",
+        "VSH_STR",
+        "PHIT_SAND",
+        "PHISAND_TS",
+        "PHIT_TS",
+        "PHIE_TS",
+    ):
         assert curve in body["data"], f"missing {curve} in response"
         assert any(v is not None for v in body["data"][curve]), f"{curve} is all-null"
 
@@ -816,9 +953,13 @@ def test_thomas_stieber_emits_structural_shale_and_exact_partition(client_and_pr
     )
 
     # Disabling structural estimation keeps the legacy two-way partition
-    legacy = client.post(f"{base}/thomas_stieber", json={**payload, "estimate_structural_shale": False})
+    legacy = client.post(
+        f"{base}/thomas_stieber", json={**payload, "estimate_structural_shale": False}
+    )
     assert legacy.status_code == 200, legacy.text
-    legacy_str = np.array([np.nan if v is None else v for v in legacy.json()["data"]["VSH_STR"]])
+    legacy_str = np.array(
+        [np.nan if v is None else v for v in legacy.json()["data"]["VSH_STR"]]
+    )
     assert not np.any(legacy_str[np.isfinite(legacy_str)] > 1e-12)
 
 
@@ -843,19 +984,29 @@ def test_batch_full_profile_is_loaded_on_demand_and_preview_expires(
 ):
     client, pid = client_and_project
     depths = np.arange(301, dtype=float) + 1000
-    merged = pd.DataFrame({
-        "DEPTH": depths, "ZONES": ["Zone-1"] * 300 + ["Zone-2"],
-        "GR": np.full(301, 60.0), "NPHI": np.full(301, 0.2),
-        "RHOB": np.full(301, 2.4), "RT": np.full(301, 10.0),
-        "PHIT": np.full(301, 0.2),
-    })
+    merged = pd.DataFrame(
+        {
+            "DEPTH": depths,
+            "ZONES": ["Zone-1"] * 300 + ["Zone-2"],
+            "GR": np.full(301, 60.0),
+            "NPHI": np.full(301, 0.2),
+            "RHOB": np.full(301, 2.4),
+            "RT": np.full(301, 10.0),
+            "PHIT": np.full(301, 0.2),
+        }
+    )
     merged.loc[100, "PHIT"] = np.nan
-    monkeypatch.setattr(ws_service, "_get_merged_dataframe_sync", lambda *a, **k: merged.copy())
+    monkeypatch.setattr(
+        ws_service, "_get_merged_dataframe_sync", lambda *a, **k: merged.copy()
+    )
     endpoint = f"/quick_pp/workspace/projects/{pid}/batch_evaluation"
     payload = {
-        "well_names": ["Well-A"], "zones": ["Zone-1"],
-        "lithology": {}, "porosity": {"lithology_model": "ssc"},
-        "permeability": {}, "saturation": {},
+        "well_names": ["Well-A"],
+        "zones": ["Zone-1"],
+        "lithology": {},
+        "porosity": {"lithology_model": "ssc"},
+        "permeability": {},
+        "saturation": {},
     }
     response = client.post(f"{endpoint}/preview", json=payload)
     assert response.status_code == 200, response.text
@@ -868,27 +1019,54 @@ def test_batch_full_profile_is_loaded_on_demand_and_preview_expires(
     for points in profile.json()["profiles"].values():
         assert [p["DEPTH"] for p in points] == depths[:300].tolist()
     assert profile.json()["profiles"]["PHIT"][100]["before"] is None
-    assert client.get(profile_url, params={"well_name": "Well-A", "zone": "Zone-2"}).status_code == 404
-    assert client.get(profile_url.replace(f"projects/{pid}", f"projects/{pid + 1}"),
-                      params={"well_name": "Well-A", "zone": "Zone-1"}).status_code == 404
+    assert (
+        client.get(
+            profile_url, params={"well_name": "Well-A", "zone": "Zone-2"}
+        ).status_code
+        == 404
+    )
+    assert (
+        client.get(
+            profile_url.replace(f"projects/{pid}", f"projects/{pid + 1}"),
+            params={"well_name": "Well-A", "zone": "Zone-1"},
+        ).status_code
+        == 404
+    )
     unknown = client.post(
         f"{endpoint}/apply",
-        json={"preview_id": body["preview_id"], "fingerprints": {"Well-A": {"Zone-2": "x"}}},
+        json={
+            "preview_id": body["preview_id"],
+            "fingerprints": {"Well-A": {"Zone-2": "x"}},
+        },
     ).json()["results"][0]
     assert unknown["status"] == "error"
     assert "not in this preview" in unknown["error"]
     ws_service._batch_previews[body["preview_id"]].expires_at = 0
-    assert client.get(profile_url, params={"well_name": "Well-A", "zone": "Zone-1"}).status_code == 404
-    assert client.post(f"{endpoint}/apply", json={"preview_id": body["preview_id"], "fingerprints": {}}).status_code == 404
+    assert (
+        client.get(
+            profile_url, params={"well_name": "Well-A", "zone": "Zone-1"}
+        ).status_code
+        == 404
+    )
+    assert (
+        client.post(
+            f"{endpoint}/apply",
+            json={"preview_id": body["preview_id"], "fingerprints": {}},
+        ).status_code
+        == 404
+    )
 
 
 def test_batch_preview_release_and_storage_limit(client_and_project, monkeypatch):
     client, pid = client_and_project
     endpoint = f"/quick_pp/workspace/projects/{pid}/batch_evaluation"
     payload = {
-        "well_names": ["Well-A"], "zones": ["Zone-1"],
-        "lithology": {}, "porosity": {"lithology_model": "ssc"},
-        "permeability": {}, "saturation": {},
+        "well_names": ["Well-A"],
+        "zones": ["Zone-1"],
+        "lithology": {},
+        "porosity": {"lithology_model": "ssc"},
+        "permeability": {},
+        "saturation": {},
     }
     monkeypatch.setattr(ws_service, "_BATCH_PREVIEW_MAX_COUNT", 1)
     first = client.post(f"{endpoint}/preview", json=payload)
@@ -896,10 +1074,13 @@ def test_batch_preview_release_and_storage_limit(client_and_project, monkeypatch
     preview_id = first.json()["preview_id"]
     assert client.post(f"{endpoint}/preview", json=payload).status_code == 503
     assert client.delete(f"{endpoint}/{preview_id}").status_code == 200
-    assert client.get(
-        f"{endpoint}/{preview_id}/profile",
-        params={"well_name": "Well-A", "zone": "Zone-1"},
-    ).status_code == 404
+    assert (
+        client.get(
+            f"{endpoint}/{preview_id}/profile",
+            params={"well_name": "Well-A", "zone": "Zone-1"},
+        ).status_code
+        == 404
+    )
     assert client.post(f"{endpoint}/preview", json=payload).status_code == 200
 
 
@@ -1044,14 +1225,20 @@ def test_imputation_persists_only_filtered_depths(client_and_project, monkeypatc
     assert merged.loc[merged["DEPTH"].between(1002, 1006), "CPORE_IMP"].notna().all()
 
 
-def test_imputation_replacement_preserves_full_original_backup(client_and_project, monkeypatch):
+def test_imputation_replacement_preserves_full_original_backup(
+    client_and_project, monkeypatch
+):
     client, pid = client_and_project
     monkeypatch.setattr(ws_service, "is_demo_mode", lambda: False)
     endpoint = f"/quick_pp/workspace/projects/{pid}/qaqc/impute"
     original = db_service._get_merged_dataframe_sync(pid, "Well-A")["CPORE"].copy()
     request = {
-        "well_names": ["Well-A"], "curves": ["CPORE"], "method": "linear",
-        "min_depth": 1002, "max_depth": 1006, "replace_original": True,
+        "well_names": ["Well-A"],
+        "curves": ["CPORE"],
+        "method": "linear",
+        "min_depth": 1002,
+        "max_depth": 1006,
+        "replace_original": True,
     }
     response = client.post(endpoint, json=request)
     assert response.status_code == 200, response.text
@@ -1586,6 +1773,118 @@ def test_saturation_model_comparison_curves_and_archie_default(client_and_projec
         assert len(body["data"]["SWT_ARCHIE"]) == 10
 
 
+def test_saturation_manual_overrides_fluid_type_and_swt(client_and_project):
+    """Verify manual interval overrides update FLUID_TYPE, flags, SWT, and coupled volumetrics."""
+    client, pid = client_and_project
+    endpoint = f"/quick_pp/workspace/projects/{pid}/wells/Well-A/saturation"
+    depths = [1000.0, 1001.0, 1002.0, 1003.0, 1004.0]
+    rt = [50.0, 50.0, 50.0, 50.0, 50.0]
+    phit = [0.25, 0.25, 0.25, 0.25, 0.25]
+    vclay = [0.10, 0.10, 0.10, 0.10, 0.10]
+
+    # Baseline request without overrides
+    res_base = client.post(
+        endpoint,
+        json={
+            "depths": depths,
+            "rt": rt,
+            "phit": phit,
+            "vclay": vclay,
+            "method": "archie",
+        },
+    )
+    assert res_base.status_code == 200
+    base_data = res_base.json()["data"]
+    assert "FLUID_TYPE" in base_data
+
+    # Now request with manual overrides:
+    # 1. Force water leg below 1003m
+    # 2. Force Gas at 1000m-1001m with fixed Swt 0.15
+    res_ov = client.post(
+        endpoint,
+        json={
+            "depths": depths,
+            "rt": rt,
+            "phit": phit,
+            "vclay": vclay,
+            "method": "archie",
+            "manual_overrides": [
+                {
+                    "id": "ov-gas",
+                    "top": 1000.0,
+                    "bottom": 1001.0,
+                    "fluid_type": "GAS",
+                    "swt_mode": "fixed_value",
+                    "swt_value": 0.15,
+                },
+                {
+                    "id": "ov-water",
+                    "top": 1003.0,
+                    "bottom": 1004.0,
+                    "fluid_type": "WATER",
+                    "swt_mode": "force_water_leg",
+                },
+            ],
+        },
+    )
+    assert res_ov.status_code == 200
+    ov_data = res_ov.json()["data"]
+
+    # At 1000m and 1001m: GAS, Swt=0.15, GAS_FLAG=1, OIL_FLAG=0, VOIL=0
+    assert ov_data["FLUID_TYPE"][0] == "GAS"
+    assert ov_data["FLUID_TYPE"][1] == "GAS"
+    assert ov_data["GAS_FLAG"][0] == 1
+    assert ov_data["GAS_FLAG"][1] == 1
+    np.testing.assert_allclose(ov_data["SWT"][0], 0.15, atol=1e-3)
+    np.testing.assert_allclose(ov_data["VGAS"][0], 0.25 * (1.0 - 0.15), atol=1e-3)
+    assert ov_data["VOIL"][0] == 0.0
+
+    # At 1003m and 1004m: WATER, Swt=1.0, HC_FLAG=0, GAS_FLAG=0, OIL_FLAG=0, BVHC=0
+    assert ov_data["FLUID_TYPE"][3] == "WATER"
+    assert ov_data["FLUID_TYPE"][4] == "WATER"
+    assert ov_data["HC_FLAG"][3] == 0
+    assert ov_data["GAS_FLAG"][3] == 0
+    assert ov_data["OIL_FLAG"][3] == 0
+    np.testing.assert_allclose(ov_data["SWT"][3], 1.0, atol=1e-3)
+    np.testing.assert_allclose(ov_data["BVHC"][3], 0.0, atol=1e-3)
+    np.testing.assert_allclose(ov_data["BVW"][3], 0.25 * 1.0, atol=1e-3)
+
+
+def test_saturation_with_rdeep_alias_curve(client_and_project, monkeypatch):
+    client, pid = client_and_project
+    endpoint = f"/quick_pp/workspace/projects/{pid}/wells/Well-A/saturation"
+
+    import quick_pp.app.backend.services.workspace as ws
+
+    orig_get = ws._get_filtered_well_df
+
+    def mock_filtered(*args, **kwargs):
+        df = orig_get(*args, **kwargs)
+        # Simulate a well having RDEEP, RMED, and VSHALE, but NO RT or VCLAY
+        if "RT" in df.columns:
+            df["RDEEP"] = df["RT"]
+            df = df.drop(columns=["RT"])
+        if "VCLAY" in df.columns:
+            df["VSHALE"] = df["VCLAY"]
+            df = df.drop(columns=["VCLAY"])
+        return df
+
+    monkeypatch.setattr(ws, "_get_filtered_well_df", mock_filtered)
+
+    fallback = {
+        "depths": np.linspace(1000.0, 1009.0, 10).tolist(),
+        "phit": np.linspace(0.12, 0.25, 10).tolist(),
+        "save": False,
+    }
+
+    res = client.post(endpoint, json=fallback)
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert "SWT" in body["data"]
+    assert "RT" in body["data"]
+    assert any(v is not None for v in body["data"]["RT"])
+
+
 def test_petrophysical_mcp_server_and_agent_assistant(client_and_project):
     client, pid = client_and_project
 
@@ -2040,6 +2339,13 @@ def test_workspace_multi_mineral_phi_max_and_pef_linearization(client_and_projec
     assert len(phit_c) > 0
     assert all(v <= 0.35001 for v in phit_c)
 
+    # Verify Stage 2 fluid saturation and HC partitioning outputs
+    assert "VOIL" in data
+    assert "VGAS" in data
+    assert "VWATER" in data
+    assert "SWT" in data
+    assert "BVW" in data
+
     # Verify quality metrics & summary
     assert "multi_mineral_summary" in body
     mm_sum = body["multi_mineral_summary"]
@@ -2047,6 +2353,58 @@ def test_workspace_multi_mineral_phi_max_and_pef_linearization(client_and_projec
     assert "chi2_mean" in mm_sum
     assert "avg_error_mean" in mm_sum
     assert "success_rate" in mm_sum
+    assert mm_sum.get("rt_curve") == "RT"
+    assert mm_sum.get("sw_mean") is not None
     assert "CHI2_ERROR" in body["stats"]
     assert "AVG_ERROR" in body["stats"]
+    assert "SWT" in body["stats"]
 
+
+def test_workspace_source_rock_endpoint(client_and_project):
+    client, proj_id = client_and_project
+    well_name = "Well-A"
+    base = f"/quick_pp/workspace/projects/{proj_id}/wells/{well_name}"
+
+    payload = {
+        "porosity_type": "sonic",
+        "r_baseline": 2.0,
+        "poro_baseline": 80.0,
+        "maturity_mode": "lom",
+        "lom": 10.5,
+        "toc_baseline": 0.8,
+        "clamp_negative": True,
+        "save": False,
+    }
+    r = client.post(f"{base}/source_rock", json=payload)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["well_name"] == well_name
+    assert body["porosity_type"] == "sonic"
+    assert "DELTA_LOG_R" in body["data"]
+    assert "TOC" in body["data"]
+    assert "stats" in body
+    assert "TOC" in body["stats"]
+
+
+def test_workspace_save_computed_curves_with_fluid_type(client_and_project):
+    """Verify /save_computed endpoint accepts FLUID_TYPE strings without 422 validation errors."""
+    client, proj_id = client_and_project
+    well_name = "Well-A"
+    endpoint = f"/quick_pp/workspace/projects/{proj_id}/wells/{well_name}/save_computed"
+
+    depths = [1000.0, 1001.0, 1002.0]
+    payload = {
+        "module": "saturation",
+        "depths": depths,
+        "curves": {
+            "SWT": [0.25, 0.35, 1.0],
+            "BVW": [0.05, 0.07, 0.20],
+            "FLUID_TYPE": ["GAS", "OIL", "NON_RESERVOIR"],
+        },
+    }
+    r = client.post(endpoint, json=payload)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["saved"] is True
+    assert "FLUID_TYPE" in body["saved_curves"]
+    assert "SWT" in body["saved_curves"]

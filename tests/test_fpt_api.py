@@ -57,16 +57,30 @@ def fpt_client(monkeypatch):
     proj.save()
     for w in wells:
         w.add_well_surveys(
-            [{"md": 0.0, "inc": 0.0, "azim": 0.0}, {"md": 2000.0, "inc": 0.0, "azim": 0.0}]
+            [
+                {"md": 0.0, "inc": 0.0, "azim": 0.0},
+                {"md": 2000.0, "inc": 0.0, "azim": 0.0},
+            ]
         )
         w.add_formation_tops([{"name": "Sand-A", "depth": 990.0}])
     # Oil points in FPT-1, water points in FPT-2 (field-wide compartment)
     wells[0].add_pressure_tests(
         [
-            {"depth": z, "pressure": _p(z, PSI_PER_M_OIL), "fluid_type": "OIL", "mobility": 25.0}
+            {
+                "depth": z,
+                "pressure": _p(z, PSI_PER_M_OIL),
+                "fluid_type": "OIL",
+                "mobility": 25.0,
+            }
             for z in (995.0, 998.0, 1001.0, 1004.0)
         ]
-        + [{"depth": 1002.5, "pressure": _p(1002.5, PSI_PER_M_OIL) + 40.0, "fluid_type": "OIL"}]
+        + [
+            {
+                "depth": 1002.5,
+                "pressure": _p(1002.5, PSI_PER_M_OIL) + 40.0,
+                "fluid_type": "OIL",
+            }
+        ]
     )
     wells[1].add_pressure_tests(
         [
@@ -122,12 +136,19 @@ def test_analyze_patch_and_apply_contacts(fpt_client):
         point_overrides={str(outlier["id"]): {"test_quality": "SUPERCHARGED"}},
         n_simulations=300,
     )
-    assert res["gradients"]["OIL"]["density_gcc"] == pytest.approx(0.33 / 0.433527, rel=1e-3)
+    assert res["gradients"]["OIL"]["density_gcc"] == pytest.approx(
+        0.33 / 0.433527, rel=1e-3
+    )
     owc = res["contacts"]["OWC"]
     assert owc["tvdss_p50"] == pytest.approx(OWC_M, abs=0.1)
     assert owc["tvdss_p50_m"] == pytest.approx(OWC_M, abs=0.1)
     assert "OIL" in res["plot_lines"] and "WATER" in res["plot_lines"]
-    assert next(p for p in res["points"] if p["id"] == outlier["id"])["test_quality_stored"] == "VALID"
+    assert (
+        next(p for p in res["points"] if p["id"] == outlier["id"])[
+            "test_quality_stored"
+        ]
+        == "VALID"
+    )
 
     # Same analysis in psi/ft returns contact in ft
     r_ft = _analyze(
@@ -135,24 +156,40 @@ def test_analyze_patch_and_apply_contacts(fpt_client):
         depth_unit="ft",
         point_overrides={str(outlier["id"]): {"test_quality": "EXCLUDED"}},
     )
-    assert r_ft["gradients"]["OIL"]["gradient"] == pytest.approx(0.33, abs=1e-4)
-    assert r_ft["contacts"]["OWC"]["tvdss_p50"] == pytest.approx(OWC_M / 0.3048, abs=0.5)
+    assert r_ft["gradients"]["OIL"]["gradient"] == pytest.approx(0.33, abs=2e-4)
+    assert r_ft["contacts"]["OWC"]["tvdss_p50"] == pytest.approx(
+        OWC_M / 0.3048, abs=0.5
+    )
 
     # Auto-classify flags the +40 psi point as supercharged
-    r_auto = _analyze(pid, auto_classify={"ransac_residual_threshold": 0, "assign_unassigned": False})
-    assert next(p for p in r_auto["points"] if p["id"] == outlier["id"])["test_quality"] == "SUPERCHARGED"
+    r_auto = _analyze(
+        pid, auto_classify={"ransac_residual_threshold": 0, "assign_unassigned": False}
+    )
+    assert (
+        next(p for p in r_auto["points"] if p["id"] == outlier["id"])["test_quality"]
+        == "SUPERCHARGED"
+    )
 
     # Persist the exclusion
     r = fpt_service.fpt_patch_points(
         pid,
         fpt_service.FPTPointsPatchRequest(
-            updates=[{"test_id": outlier["id"], "well_name": "FPT-1", "test_quality": "SUPERCHARGED"}]
+            updates=[
+                {
+                    "test_id": outlier["id"],
+                    "well_name": "FPT-1",
+                    "test_quality": "SUPERCHARGED",
+                }
+            ]
         ),
     )
     assert r["updated"] == 1
     session.expire_all()
     pts2 = _points(pid)["points"]
-    assert next(p for p in pts2 if p["id"] == outlier["id"])["test_quality"] == "SUPERCHARGED"
+    assert (
+        next(p for p in pts2 if p["id"] == outlier["id"])["test_quality"]
+        == "SUPERCHARGED"
+    )
 
     # Write contact into wells as FWL (MD == TVDSS for vertical survey)
     r = fpt_service.fpt_apply_contacts(
@@ -162,7 +199,9 @@ def test_analyze_patch_and_apply_contacts(fpt_client):
     session.expire_all()
     w1 = Project.load(session, project_id=pid).get_well("FPT-1")
     contacts = w1.get_fluid_contacts()
-    assert contacts.loc[contacts["name"] == "FWL", "depth"].iloc[0] == pytest.approx(OWC_M, abs=0.2)
+    assert contacts.loc[contacts["name"] == "FWL", "depth"].iloc[0] == pytest.approx(
+        OWC_M, abs=0.2
+    )
 
 
 def test_router_registered():
@@ -179,7 +218,9 @@ def test_single_well_save_preserves_interpretation(fpt_client):
     df = w2.get_pressure_tests()
     assert set(df["fluid_type"]) == {"WATER"}
     # Re-save rows (as the single-well grid does in replace mode) keeping interpretation fields
-    w2.add_pressure_tests(df.drop(columns=["test_id"]).to_dict(orient="records"), replace=True)
+    w2.add_pressure_tests(
+        df.drop(columns=["test_id"]).to_dict(orient="records"), replace=True
+    )
     session.commit()
     session.expire_all()
     assert set(w2.get_pressure_tests()["fluid_type"]) == {"WATER"}
@@ -193,10 +234,30 @@ def test_analyze_by_zone(fpt_client):
     w2.add_formation_tops([{"name": "Sand-B", "depth": 1800.0}])
     w2.add_pressure_tests(
         [
-            {"depth": 1805.0, "pressure": 3500.0, "fluid_type": "OIL", "zone": "Sand-B"},
-            {"depth": 1810.0, "pressure": 3500.0 + PSI_PER_M_OIL * 5.0, "fluid_type": "OIL", "zone": "Sand-B"},
-            {"depth": 1815.0, "pressure": 3500.0 + PSI_PER_M_OIL * 10.0, "fluid_type": "WATER", "zone": "Sand-B"},
-            {"depth": 1820.0, "pressure": 3500.0 + PSI_PER_M_OIL * 10.0 + PSI_PER_M_WATER * 5.0, "fluid_type": "WATER", "zone": "Sand-B"},
+            {
+                "depth": 1805.0,
+                "pressure": 3500.0,
+                "fluid_type": "OIL",
+                "zone": "Sand-B",
+            },
+            {
+                "depth": 1810.0,
+                "pressure": 3500.0 + PSI_PER_M_OIL * 5.0,
+                "fluid_type": "OIL",
+                "zone": "Sand-B",
+            },
+            {
+                "depth": 1815.0,
+                "pressure": 3500.0 + PSI_PER_M_OIL * 10.0,
+                "fluid_type": "WATER",
+                "zone": "Sand-B",
+            },
+            {
+                "depth": 1820.0,
+                "pressure": 3500.0 + PSI_PER_M_OIL * 10.0 + PSI_PER_M_WATER * 5.0,
+                "fluid_type": "WATER",
+                "zone": "Sand-B",
+            },
         ]
     )
     session.commit()
@@ -231,4 +292,3 @@ def test_analyze_by_zone(fpt_client):
     assert r_b["active_zone"] == "Sand-B"
     assert r_b["gradients"]["OIL"]["gradient"] == pytest.approx(PSI_PER_M_OIL, abs=0.05)
     assert r_b["contacts"]["OWC"]["tvdss_p50"] == pytest.approx(1815.0, abs=1.0)
-

@@ -20,7 +20,9 @@ def seeded_demo_paths(tmp_path_factory):
 
     from deploy.demo.seed_demo import seed_demo_database
 
-    cache_dir = Path(__file__).resolve().parent.parent / ".pytest_cache" / "demo_seed_v1"
+    cache_dir = (
+        Path(__file__).resolve().parent.parent / ".pytest_cache" / "demo_seed_v1"
+    )
     cache_dir.mkdir(parents=True, exist_ok=True)
     cached_db = cache_dir / "quick_pp_seed.db"
     cached_model = cache_dir / "pretrained_models.joblib"
@@ -95,7 +97,7 @@ def test_zero_cold_start_auth_and_preseeded_projects():
     assert proj_res.status_code == 200
     projects = proj_res.json()
     assert len(projects) >= 1
-    proj_id = projects[0]["project_id"]
+    proj_id = next(p["project_id"] for p in projects if p["name"] == "VOLVE_COSTA_DEMO")
 
     summary_res = client.get(f"/quick_pp/workspace/projects/{proj_id}/summary")
     assert summary_res.status_code == 200
@@ -105,10 +107,22 @@ def test_zero_cold_start_auth_and_preseeded_projects():
     assert "15-9-19-A" in well_names
     assert "HW-3" in well_names
 
-    bundle_res = client.get(f"/quick_pp/workspace/projects/{proj_id}/wells/15-9-19-A/bundle")
+    bundle_res = client.get(
+        f"/quick_pp/workspace/projects/{proj_id}/wells/15-9-19-A/bundle"
+    )
     assert bundle_res.status_code == 200
     bundle = bundle_res.json()
-    for curve in ("GR", "NPHI", "RHOB", "RT", "PHIT", "PHIT_P10", "PHIT_P90", "SW", "PERM"):
+    for curve in (
+        "GR",
+        "NPHI",
+        "RHOB",
+        "RT",
+        "PHIT",
+        "PHIT_P10",
+        "PHIT_P90",
+        "SW",
+        "PERM",
+    ):
         assert curve in bundle["curves"]
     assert len(bundle["tops"]) >= 2
     assert len(bundle["contacts"]) >= 1
@@ -117,7 +131,8 @@ def test_zero_cold_start_auth_and_preseeded_projects():
 def test_deterministic_and_probabilistic_inspector_loop():
     """Verify single-well and multi-well interactive inspector endpoints."""
     client = TestClient(app)
-    proj_id = client.get("/quick_pp/database/projects").json()[0]["project_id"]
+    projects = client.get("/quick_pp/database/projects").json()
+    proj_id = next(p["project_id"] for p in projects if p["name"] == "VOLVE_COSTA_DEMO")
 
     # 1. Lithology with Vshale GR endpoints
     lith_res = client.post(
@@ -206,7 +221,8 @@ def test_deterministic_and_probabilistic_inspector_loop():
 def test_pretrained_ml_inference_and_readonly_training_guardrail(monkeypatch):
     """Verify pre-trained conformal inference works while heavy model training is blocked."""
     client = TestClient(app)
-    proj_id = client.get("/quick_pp/database/projects").json()[0]["project_id"]
+    projects = client.get("/quick_pp/database/projects").json()
+    proj_id = next(p["project_id"] for p in projects if p["name"] == "VOLVE_COSTA_DEMO")
 
     models_res = client.get(f"/quick_pp/workspace/projects/{proj_id}/ml_models")
     assert models_res.status_code == 200
@@ -226,7 +242,17 @@ def test_pretrained_ml_inference_and_readonly_training_guardrail(monkeypatch):
     assert ml_json["pretrained_used"] is True
     assert ml_json["fallback_used"] is False
     ml_data = ml_json["data"]
-    for col in ("PHIT", "PHIT_P10", "PHIT_P90", "SW", "SW_P10", "SW_P90", "PERM", "PERM_P10", "PERM_P90"):
+    for col in (
+        "PHIT",
+        "PHIT_P10",
+        "PHIT_P90",
+        "SW",
+        "SW_P10",
+        "SW_P90",
+        "PERM",
+        "PERM_P10",
+        "PERM_P90",
+    ):
         assert col in ml_data
 
     with pytest.raises(PermissionError):
@@ -241,11 +267,12 @@ def test_ephemeral_session_upload_cap_and_reset():
     oversized_bytes = b"~Version\n" + (b"0" * (5 * 1024 * 1024 + 1024))
     up_res = client.post(
         f"/quick_pp/database/projects/{proj_id}/read_las",
-        files={"files": ("oversized_well.las", io.BytesIO(oversized_bytes), "text/plain")},
+        files={
+            "files": ("oversized_well.las", io.BytesIO(oversized_bytes), "text/plain")
+        },
     )
     assert up_res.status_code == 413
 
     reset_res = client.post(f"/quick_pp/workspace/projects/{proj_id}/demo/reset")
     assert reset_res.status_code == 200
     assert reset_res.json()["status"] == "reset"
-

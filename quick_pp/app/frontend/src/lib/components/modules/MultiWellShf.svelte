@@ -47,6 +47,21 @@
 		return Array.from(found).sort();
 	});
 
+	let contactHeaderLabel = $derived.by(() => {
+		const fs = projectData.shfParams.fluidSystem ?? 'auto';
+		if (fs === 'gas_water' || fs === 'gas') return 'GWC / TTZ';
+		if (fs === 'oil_water' || fs === 'oil') return 'OWC / TTZ';
+		const hasGas = projectData.stickPlotResult?.wells.some(
+			(w) =>
+				w.gas_flag?.some((f) => f === 1) ||
+				(w.bvg && w.bvg.some((v) => v !== null && Number(v) > 0.005)) ||
+				w.contacts?.some(
+					(c) => c.type.toUpperCase() === 'GWC' || c.type.toUpperCase() === 'GOC'
+				)
+		);
+		return hasGas ? 'GWC / TTZ' : 'Contact / TTZ';
+	});
+
 	const MODEL_META: Record<
 		'leverett_j' | 'skelt_harrison' | 'cuddy',
 		{ label: string; badge: string; fitTitle: string; formula: string }
@@ -79,7 +94,9 @@
 			const tvdssArr = (wellData.curves['TVDSS'] ?? wellData.curves['TVD'] ?? []).filter(
 				(v): v is number => typeof v === 'number' && Number.isFinite(v)
 			);
-			const contactFwl = wellData.contacts.find((c) => c.type === 'FWL' || c.type === 'OWC');
+			const contactFwl = wellData.contacts.find(
+				(c) => c.type === 'FWL' || c.type === 'OWC' || c.type === 'GWC'
+			);
 			if (contactFwl) {
 				const deptArr = wellData.deptCurve;
 				const rawTvdss = wellData.curves['TVDSS'] ?? wellData.curves['TVD'];
@@ -177,7 +194,8 @@
 				restoredFits ??
 				(!resetFits &&
 				projectData.shfResult?.model === sp.model &&
-				(sp.model !== 'leverett_j' || (projectData.shfResult?.j_sat_mode ?? 'swn') === jSatMode) &&
+				(sp.model !== 'leverett_j' ||
+					(projectData.shfResult?.j_sat_mode ?? 'swn') === jSatMode) &&
 				projectData.shfResult?.fits &&
 				Object.keys(projectData.shfResult.fits).length > 0
 					? projectData.shfResult.fits
@@ -202,6 +220,10 @@
 					theta: sp.theta,
 					gw: sp.gw,
 					ghc: sp.ghc,
+					fluid_system: sp.fluidSystem ?? 'auto',
+					ggas: sp.ggas ?? 0.15,
+					ift_gas: sp.iftGas ?? 70.0,
+					use_fluid_typing: sp.useFluidTyping ?? true,
 					swirr_source: sp.swirrSource ?? 'lab_min',
 					swirr_config: projectData.swirrConfig,
 					fits: customFits,
@@ -287,6 +309,10 @@
 					theta: sp.theta,
 					gw: sp.gw,
 					ghc: sp.ghc,
+					fluid_system: sp.fluidSystem ?? 'auto',
+					ggas: sp.ggas ?? 0.15,
+					ift_gas: sp.iftGas ?? 70.0,
+					use_fluid_typing: sp.useFluidTyping ?? true,
 					mdt_fwl: so.useMdtPrior ? so.mdtFwl : null,
 					mdt_weight: so.mdtWeight,
 					pore_volume_weighted: so.poreVolumeWeighted,
@@ -326,11 +352,20 @@
 					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
 					save: true,
 					clean_slate: true,
-					replace: false
+					replace: false,
+					fluid_system: projectData.shfParams.fluidSystem ?? 'auto',
+					fwl: projectData.shfParams.fwl,
+					fwl_by_zone:
+						projectData.shfParams.fwlByZone &&
+						Object.keys(projectData.shfParams.fwlByZone).length > 0
+							? projectData.shfParams.fwlByZone
+							: null
 				}
 			);
 			const count = res.saved_count ?? res.contacts_count ?? 0;
-			appStatus.success(`Saved ${count} fluid contacts (ODT, OWC, FWL, etc.) to well ancillary data.`);
+			appStatus.success(
+				`Saved ${count} fluid contacts (ODT, OWC, FWL, etc.) to well ancillary data.`
+			);
 			if (workbench.projectId) {
 				await projectData.selectProject(workbench.projectId);
 			}
@@ -353,9 +388,10 @@
 					<div class="font-bold">TVDSS Required — SHF &amp; Stick Plot Disabled</div>
 					<div class="mt-0.5 text-[10.5px] text-red-800">
 						None of the {projectData.activeWells.length} selected well(s) have a
-						<span class="mono-num font-semibold">TVDSS</span> / <span class="mono-num font-semibold">TVD</span> curve or directional survey
-						(&ge; 2 stations). True Vertical Depth Subsea is never assumed equal to Measured Depth (MD).
-						Import directional surveys or TVDSS/TVD curves to enable SHF &amp; FWL optimization.
+						<span class="mono-num font-semibold">TVDSS</span> /
+						<span class="mono-num font-semibold">TVD</span> curve or directional survey (&ge;
+						2 stations). True Vertical Depth Subsea is never assumed equal to Measured Depth
+						(MD). Import directional surveys or TVDSS/TVD curves to enable SHF &amp; FWL optimization.
 					</div>
 				</div>
 			{:else}
@@ -363,7 +399,8 @@
 					class="m-2 rounded-sm border border-amber-300 bg-amber-50 p-2 text-[10.5px] leading-snug text-amber-900"
 				>
 					<div class="font-semibold">
-						{projectData.wellsWithoutTvd.length} well(s) without TVDSS excluded (TVDSS &ne; MD):
+						{projectData.wellsWithoutTvd.length} well(s) without TVDSS excluded (TVDSS &ne;
+						MD):
 					</div>
 					<div class="mono-num mt-0.5 text-[10px] text-amber-800">
 						{projectData.wellsWithoutTvd.map((w) => w.name).join(', ')}
@@ -374,14 +411,17 @@
 
 		<ParameterSection
 			title="SHF Method & Multi-Well FWL Optimizer"
-			badge={fwlOptResult ? `FWL=${fmtNum(fwlOptResult.fwl, 1)}m` : MODEL_META[projectData.shfParams.model].badge}
+			badge={fwlOptResult
+				? `FWL=${fmtNum(fwlOptResult.fwl, 1)}m`
+				: MODEL_META[projectData.shfParams.model].badge}
 		>
 			<div class="grid grid-cols-3 gap-1">
 				{#each [['leverett_j', 'Leverett-J'], ['skelt_harrison', 'Skelt-Harrison'], ['cuddy', 'Cuddy Bvw']] as [m, lbl]}
 					<button
 						type="button"
 						onclick={() => selectShfModel(m as any)}
-						class="h-6 rounded-sm border text-[10px] font-medium {projectData.shfParams.model === m
+						class="h-6 rounded-sm border text-[10px] font-medium {projectData.shfParams
+							.model === m
 							? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
 							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)]'}"
 					>
@@ -396,7 +436,7 @@
 					bind:value={so.optLoss}
 					class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-0 pr-6 pl-1.5 text-[11px] font-medium"
 				>
-					<option value="bvw">BVO / BVW (Bulk Volume)</option>
+					<option value="bvw">BVHC / BVW (Bulk Volume)</option>
 					<option value="rmse">RMSE (L2, Sw)</option>
 					<option value="huber">Huber Robust (Sw)</option>
 					<option value="mae">MAE (L1, Sw)</option>
@@ -404,12 +444,15 @@
 			</div>
 
 			<div class="mt-1 flex flex-wrap items-center justify-between gap-y-1 text-[11px]">
-				<label class="flex items-center gap-1 cursor-pointer">
+				<label class="flex cursor-pointer items-center gap-1">
 					<input
 						type="checkbox"
 						bind:checked={so.solvePerZone}
 						onchange={() => {
-							if (!so.solvePerZone && Object.keys(projectData.shfParams.fwlByZone).length > 0) {
+							if (
+								!so.solvePerZone &&
+								Object.keys(projectData.shfParams.fwlByZone).length > 0
+							) {
 								void clearZoneFwls();
 							}
 						}}
@@ -417,7 +460,7 @@
 					/>
 					<span class="font-semibold text-[var(--text-primary)]">Per-Zone FWL</span>
 				</label>
-				<label class="flex items-center gap-1 cursor-pointer">
+				<label class="flex cursor-pointer items-center gap-1">
 					<input
 						type="checkbox"
 						bind:checked={so.poreVolumeWeighted}
@@ -425,7 +468,10 @@
 					/>
 					<span>Φ-Weighted</span>
 				</label>
-				<label class="flex items-center gap-1 cursor-pointer" title="Weight residuals by hydrocarbon pore volume (Phi * (1 - Sw)) so oil pay samples drive the FWL depth">
+				<label
+					class="flex cursor-pointer items-center gap-1"
+					title="Weight residuals by hydrocarbon pore volume (Phi * (1 - Sw)) so oil pay samples drive the FWL depth"
+				>
 					<input
 						type="checkbox"
 						bind:checked={so.payWeighted}
@@ -433,7 +479,7 @@
 					/>
 					<span>Pay-Weighted</span>
 				</label>
-				<label class="flex items-center gap-1 cursor-pointer">
+				<label class="flex cursor-pointer items-center gap-1">
 					<input
 						type="checkbox"
 						bind:checked={so.equalWellWeights}
@@ -441,7 +487,7 @@
 					/>
 					<span>Equal Well Wt</span>
 				</label>
-				<label class="flex items-center gap-1 cursor-pointer">
+				<label class="flex cursor-pointer items-center gap-1">
 					<input
 						type="checkbox"
 						bind:checked={so.useMdtPrior}
@@ -480,17 +526,23 @@
 					: 'Optimize Free Water Level (FWL) & fluid contacts in TVDSS using wells with valid TVDSS'}
 				class="mt-1.5 h-7 w-full rounded-sm border border-blue-600 bg-blue-50 px-2 text-xs font-semibold text-blue-800 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
 			>
-				{so.solvePerZone ? 'Optimize Per-Zone FWL & Contacts (TVDSS)' : 'Optimize Field FWL & Contacts (TVDSS)'}
+				{so.solvePerZone
+					? 'Optimize Per-Zone FWL & Contacts (TVDSS)'
+					: 'Optimize Field FWL & Contacts (TVDSS)'}
 			</button>
 
 			{#if fwlOptResult}
-				<div class="mt-1.5 grid grid-cols-2 gap-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10px]">
+				<div
+					class="mt-1.5 grid grid-cols-2 gap-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[10px]"
+				>
 					<div>
 						<span class="text-[var(--text-muted)]">Field Fallback FWL (TVDSS):</span>
-						<div class="mono-num font-bold text-blue-700">{fmtNum(fwlOptResult.fwl, 2)} m TVDSS</div>
+						<div class="mono-num font-bold text-blue-700">
+							{fmtNum(fwlOptResult.fwl, 2)} m TVDSS
+						</div>
 					</div>
 					<div>
-						<span class="text-[var(--text-muted)]">OWC / TTZ (TVDSS):</span>
+						<span class="text-[var(--text-muted)]">{contactHeaderLabel} (TVDSS):</span>
 						<div class="mono-num font-semibold">
 							{fmtNum(fwlOptResult.owc, 1)} / {fmtNum(fwlOptResult.ttz, 1)} m
 						</div>
@@ -504,7 +556,10 @@
 					<div>
 						<span class="text-[var(--text-muted)]">Fit RMSE / R²:</span>
 						<div class="mono-num font-semibold">
-							{fmtNum(fwlOptResult.rmse, 3)} / {fmtNum(fwlOptResult.r2 ?? fwlOptResult.r_squared, 3)}
+							{fmtNum(fwlOptResult.rmse, 3)} / {fmtNum(
+								fwlOptResult.r2 ?? fwlOptResult.r_squared,
+								3
+							)}
 						</div>
 					</div>
 				</div>
@@ -515,19 +570,26 @@
 					fwlOptResult?.zone_metrics && fwlOptResult.zone_metrics.length > 0
 						? fwlOptResult.zone_metrics.filter(
 								(zr: any) =>
-									calculatedZones.length === 0 || calculatedZones.includes(zr.zone)
+									calculatedZones.length === 0 ||
+									calculatedZones.includes(zr.zone)
 							)
 						: calculatedZones.map((zn) => ({
 								zone: zn,
-								fwl: projectData.shfParams.fwlByZone[zn] ?? projectData.shfParams.fwl,
+								fwl:
+									projectData.shfParams.fwlByZone[zn] ??
+									projectData.shfParams.fwl,
 								owc: null,
 								ttz: null,
 								rmse: null
 							}))}
 				{#if zoneRows.length > 0}
 					<div class="mt-2">
-						<div class="mb-1 flex items-center justify-between text-[10px] text-[var(--text-secondary)]">
-							<span class="font-semibold text-[var(--text-primary)]">Per-Zone FWL & Contacts (TVDSS)</span>
+						<div
+							class="mb-1 flex items-center justify-between text-[10px] text-[var(--text-secondary)]"
+						>
+							<span class="font-semibold text-[var(--text-primary)]"
+								>Per-Zone FWL & Contacts (TVDSS)</span
+							>
 							{#if Object.keys(projectData.shfParams.fwlByZone).length > 0}
 								<button
 									type="button"
@@ -544,7 +606,9 @@
 									<tr class="h-5 border-b border-[var(--border-hairline)]">
 										<th class="px-1.5 font-semibold">Zone</th>
 										<th class="px-1 text-right font-semibold">FWL (m TVDSS)</th>
-										<th class="px-1 text-right font-semibold">OWC / TTZ (TVDSS)</th>
+										<th class="px-1 text-right font-semibold"
+											>{contactHeaderLabel} (TVDSS)</th
+										>
 										<th class="px-1.5 text-right font-semibold">RMSE</th>
 									</tr>
 								</thead>
@@ -555,7 +619,10 @@
 											zRow.fwl ??
 											projectData.shfParams.fwl}
 										<tr class="h-6">
-											<td class="px-1.5 font-semibold truncate max-w-[90px]" title={zRow.zone}>
+											<td
+												class="max-w-[90px] truncate px-1.5 font-semibold"
+												title={zRow.zone}
+											>
 												{zRow.zone}
 											</td>
 											<td class="px-1 text-right">
@@ -564,12 +631,20 @@
 													step="1.0"
 													value={activeZfwl}
 													onchange={(e) =>
-														updateZoneFwl(zRow.zone, (e.currentTarget as HTMLInputElement).value)}
+														updateZoneFwl(
+															zRow.zone,
+															(e.currentTarget as HTMLInputElement)
+																.value
+														)}
 													class="mono-num h-5 w-16 rounded-xs border border-[var(--border-hairline)] px-1 text-right text-[10px] font-semibold text-blue-700"
 												/>
 											</td>
-											<td class="mono-num px-1 text-right text-[var(--text-secondary)]">
-												{zRow.owc != null ? `${fmtNum(zRow.owc, 0)} / ${fmtNum(zRow.ttz, 0)}` : '—'}
+											<td
+												class="mono-num px-1 text-right text-[var(--text-secondary)]"
+											>
+												{zRow.owc != null
+													? `${fmtNum(zRow.owc, 0)} / ${fmtNum(zRow.ttz, 0)}`
+													: '—'}
 											</td>
 											<td class="mono-num px-1.5 text-right">
 												{zRow.rmse != null ? fmtNum(zRow.rmse, 3) : '—'}
@@ -601,22 +676,107 @@
 			title="Capillary Pressure & Fluid Parameters"
 			badge={MODEL_META[projectData.shfParams.model].label}
 		>
+			<div class="mb-2">
+				<div class="mb-1 flex items-center justify-between text-[10px]">
+					<span class="font-semibold text-[var(--text-primary)]">Fluid System</span>
+					<span class="mono-num text-[9.5px] text-[var(--text-muted)]">
+						{projectData.shfParams.fluidSystem === 'gas'
+							? 'Gas–Water (GWC)'
+							: projectData.shfParams.fluidSystem === 'oil'
+								? 'Oil–Water (OWC)'
+								: 'Auto (From Logs)'}
+					</span>
+				</div>
+				<div class="grid grid-cols-3 gap-1">
+					{#each [['auto', 'Auto (Logs)'], ['gas', 'Gas–Water'], ['oil', 'Oil–Water']] as [sysKey, sysLabel]}
+						<button
+							type="button"
+							onclick={() => {
+								projectData.shfParams.fluidSystem = sysKey as any;
+								if (sysKey === 'gas') {
+									projectData.shfParams.ift =
+										projectData.shfParams.iftGas ?? 70.0;
+								}
+							}}
+							class="h-6 rounded-sm border px-1 text-[10px] font-medium {projectData
+								.shfParams.fluidSystem === sysKey
+								? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
+								: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-50'}"
+						>
+							{sysLabel}
+						</button>
+					{/each}
+				</div>
+
+				<label class="mt-1.5 flex cursor-pointer items-center gap-1.5 text-[10.5px]">
+					<input
+						type="checkbox"
+						bind:checked={projectData.shfParams.useFluidTyping}
+						class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+					/>
+					<span class="text-[var(--text-secondary)]"
+						>Inherit Single-Well FLUID_TYPE / Gas Flags</span
+					>
+				</label>
+			</div>
+
 			<NumericScrubber
-				label="Free Water Level — FWL (TVDSS)"
+				label={projectData.shfParams.fluidSystem === 'gas'
+					? 'Free Water Level — GWC (TVDSS)'
+					: 'Free Water Level — FWL (TVDSS)'}
 				bind:value={projectData.shfParams.fwl}
 				unit="m TVDSS"
 				min={0}
 				max={10000}
 				step={1.0}
 			/>
-			<NumericScrubber
-				label="Interfacial Tension (IFT)"
-				bind:value={projectData.shfParams.ift}
-				unit="dyn/cm"
-				min={1.0}
-				max={80.0}
-				step={0.5}
-			/>
+
+			{#if projectData.shfParams.fluidSystem === 'gas' || projectData.shfParams.fluidSystem === 'auto'}
+				<NumericScrubber
+					label={projectData.shfParams.fluidSystem === 'auto'
+						? 'Gas IFT (Gas intervals)'
+						: 'Gas IFT (σ_gw)'}
+					bind:value={projectData.shfParams.iftGas}
+					unit="dyn/cm"
+					min={20.0}
+					max={85.0}
+					step={1.0}
+				/>
+				<NumericScrubber
+					label={projectData.shfParams.fluidSystem === 'auto'
+						? 'Gas Gradient (ggas)'
+						: 'Gas Gradient (ghc)'}
+					bind:value={projectData.shfParams.ggas}
+					unit="g/cc"
+					min={0.05}
+					max={0.5}
+					step={0.01}
+				/>
+			{/if}
+
+			{#if projectData.shfParams.fluidSystem === 'oil' || projectData.shfParams.fluidSystem === 'auto'}
+				<NumericScrubber
+					label={projectData.shfParams.fluidSystem === 'auto'
+						? 'Oil IFT (Oil intervals)'
+						: 'Oil IFT (σ_ow)'}
+					bind:value={projectData.shfParams.ift}
+					unit="dyn/cm"
+					min={1.0}
+					max={60.0}
+					step={0.5}
+				/>
+				<NumericScrubber
+					label={projectData.shfParams.fluidSystem === 'auto'
+						? 'Oil Gradient (goil)'
+						: 'Oil Gradient (ghc)'}
+					bind:value={projectData.shfParams.ghc}
+					unit="g/cc"
+					min={0.5}
+					max={0.98}
+					step={0.01}
+				/>
+			{/if}
+
 			<NumericScrubber
 				label="Contact Angle (θ)"
 				bind:value={projectData.shfParams.theta}
@@ -631,14 +791,6 @@
 				unit="g/cc"
 				min={0.9}
 				max={1.3}
-				step={0.01}
-			/>
-			<NumericScrubber
-				label="HC Gradient (ghc)"
-				bind:value={projectData.shfParams.ghc}
-				unit="g/cc"
-				min={0.1}
-				max={0.98}
 				step={0.01}
 			/>
 
@@ -659,9 +811,11 @@
 							<button
 								type="button"
 								onclick={() =>
-									projectData.setShfSwirrSource(srcKey as 'lab_min' | 'poro_perm')}
-								class="h-6 rounded-sm border px-1.5 text-[10px] font-medium {(projectData.shfParams
-									.swirrSource ?? 'lab_min') === srcKey
+									projectData.setShfSwirrSource(
+										srcKey as 'lab_min' | 'poro_perm'
+									)}
+								class="h-6 rounded-sm border px-1.5 text-[10px] font-medium {(projectData
+									.shfParams.swirrSource ?? 'lab_min') === srcKey
 									? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
 									: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-50'}"
 							>
@@ -689,7 +843,9 @@
 					: (projectData.shfSavedFits?.fits ?? {})}
 			{@const fitEntries = Object.entries(activeFits)}
 			<ParameterSection title="Resultant SCAL Fit Parameters" badge={activeFormula}>
-				<div class="mb-1.5 flex items-center justify-between text-[10px] text-[var(--text-secondary)]">
+				<div
+					class="mb-1.5 flex items-center justify-between text-[10px] text-[var(--text-secondary)]"
+				>
 					<span>
 						SCAL points:
 						<strong class="mono-num text-[var(--text-primary)]">
@@ -718,7 +874,9 @@
 							</thead>
 							<tbody class="divide-y divide-[var(--border-hairline)]">
 								{#each fitEntries as [rf, fit]}
-									{@const rtColor = ROCK_COLORS[(Number(rf) - 1) % ROCK_COLORS.length] ?? '#2563eb'}
+									{@const rtColor =
+										ROCK_COLORS[(Number(rf) - 1) % ROCK_COLORS.length] ??
+										'#2563eb'}
 									<tr class="h-6">
 										<td class="px-1.5 font-semibold whitespace-nowrap">
 											<span
@@ -726,23 +884,35 @@
 												style="background:{rtColor}"
 											></span>RT {rf}
 										</td>
-										<td class="mono-num px-1.5 text-right text-[10px] font-medium text-[var(--text-primary)]">
+										<td
+											class="mono-num px-1.5 text-right text-[10px] font-medium text-[var(--text-primary)]"
+										>
 											{fmtNum(fit.a, 4)}
 										</td>
-										<td class="mono-num px-1.5 text-right text-[10px] font-medium text-[var(--text-primary)]">
+										<td
+											class="mono-num px-1.5 text-right text-[10px] font-medium text-[var(--text-primary)]"
+										>
 											{fmtNum(fit.b, 3)}
 										</td>
 										{#if activeModel === 'skelt_harrison'}
-											<td class="mono-num px-1.5 text-right text-[10px] font-medium text-[var(--text-primary)]">
+											<td
+												class="mono-num px-1.5 text-right text-[10px] font-medium text-[var(--text-primary)]"
+											>
 												{fmtNum(fit.c ?? 1.5, 2)}
 											</td>
-											<td class="mono-num px-1.5 text-right text-[10px] font-medium text-[var(--text-primary)]">
+											<td
+												class="mono-num px-1.5 text-right text-[10px] font-medium text-[var(--text-primary)]"
+											>
 												{fmtNum(fit.d ?? 1.5, 2)}
 											</td>
 										{/if}
-										<td class="mono-num px-1.5 text-right text-[10px]">{fmtNum(fit.rmse, 3)}</td>
+										<td class="mono-num px-1.5 text-right text-[10px]"
+											>{fmtNum(fit.rmse, 3)}</td
+										>
 										{#if activeModel !== 'skelt_harrison'}
-											<td class="mono-num px-1.5 text-right text-[10px]">{fmtNum(fit.r2, 3)}</td>
+											<td class="mono-num px-1.5 text-right text-[10px]"
+												>{fmtNum(fit.r2, 3)}</td
+											>
 										{/if}
 									</tr>
 								{/each}
@@ -750,15 +920,21 @@
 						</table>
 					</div>
 				{:else}
-					<div class="rounded-xs border border-dashed border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-2 text-[10px] text-[var(--text-secondary)]">
-						No SCAL curve fits cached yet. Click <strong>Compute SHF</strong> to auto-fit curves directly from project SCAL plugs and compute Saturation Height across all wells.
+					<div
+						class="rounded-xs border border-dashed border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-2 text-[10px] text-[var(--text-secondary)]"
+					>
+						No SCAL curve fits cached yet. Click <strong>Compute SHF</strong> to auto-fit
+						curves directly from project SCAL plugs and compute Saturation Height across all
+						wells.
 					</div>
 				{/if}
 			</ParameterSection>
 		{/if}
 
 		{#if projectData.error}
-			<div class="m-2 rounded-sm border border-red-200 bg-red-50 p-2 text-xs text-[var(--status-error)]">
+			<div
+				class="m-2 rounded-sm border border-red-200 bg-red-50 p-2 text-xs text-[var(--status-error)]"
+			>
 				{projectData.error}
 			</div>
 		{/if}
@@ -769,11 +945,9 @@
 	>
 		<button
 			type="button"
-			disabled={
-				projectData.isComputingMultiWell ||
+			disabled={projectData.isComputingMultiWell ||
 				projectData.isSavingMultiWell ||
-				projectData.wellsWithTvd.length === 0
-			}
+				projectData.wellsWithTvd.length === 0}
 			onclick={() => executeShf(false, true)}
 			title={projectData.wellsWithTvd.length === 0
 				? 'Disabled: No selected wells have TVD or directional survey (TVD is never assumed equal to MD)'
@@ -788,11 +962,9 @@
 		</button>
 		<button
 			type="button"
-			disabled={
-				projectData.isComputingMultiWell ||
+			disabled={projectData.isComputingMultiWell ||
 				projectData.isSavingMultiWell ||
-				!projectData.hasPendingMultiWell('shf')
-			}
+				!projectData.hasPendingMultiWell('shf')}
 			onclick={saveShf}
 			title={projectData.hasPendingMultiWell('shf')
 				? 'Save computed SHF curves (and any pending upstream Rock Type & Swirr curves) across all project wells'

@@ -75,9 +75,13 @@ def test_calc_reservoir_summary_pore_volume_weighting_and_perm_upscaling():
     zones = np.array(["ZONE_A", "ZONE_A"])
 
     cutoffs = {"VSHALE": 0.40, "PHIT": 0.05, "SWT": 0.90}
-    summary = calc_reservoir_summary(depth, vshale, phit, swt, perm, zones, cutoffs=cutoffs)
+    summary = calc_reservoir_summary(
+        depth, vshale, phit, swt, perm, zones, cutoffs=cutoffs
+    )
 
-    pay_row = summary[(summary["zones"] == "ZONE_A") & (summary["flag"] == "pay")].iloc[0]
+    pay_row = summary[(summary["zones"] == "ZONE_A") & (summary["flag"] == "pay")].iloc[
+        0
+    ]
 
     # Verify pore-volume weighted Sw (0.35), NOT arithmetic mean (0.50)
     np.testing.assert_allclose(pay_row["av_swt"], 0.35, atol=1e-3)
@@ -96,7 +100,11 @@ def test_calc_reservoir_summary_pore_volume_weighting_and_perm_upscaling():
     np.testing.assert_allclose(pay_row["av_perm_arith_pay"], 505.0, atol=1e-3)
     np.testing.assert_allclose(pay_row["av_perm_geom_pay"], 100.0, atol=1e-3)
     np.testing.assert_allclose(pay_row["av_perm_harm_pay"], 19.802, atol=1e-3)
-    assert pay_row["av_perm_harm_pay"] <= pay_row["av_perm_geom_pay"] <= pay_row["av_perm_arith_pay"]
+    assert (
+        pay_row["av_perm_harm_pay"]
+        <= pay_row["av_perm_geom_pay"]
+        <= pay_row["av_perm_arith_pay"]
+    )
 
 
 def test_lhs_volumetric_and_log_uncertainty_module():
@@ -288,11 +296,22 @@ def test_log_blocking_and_upscaling_static_geomodeling_handover():
 
     # 2. Verify Cardwell-Parsons special limits (omega = -1, 0, +1)
     k_arr = np.array([1000.0, 10.0])
-    np.testing.assert_allclose(power_law_upscale(k_arr, omega=1.0), arith_upscale(k_arr), rtol=1e-6)
-    np.testing.assert_allclose(power_law_upscale(k_arr, omega=0.0), geom_upscale(k_arr), rtol=1e-6)
-    np.testing.assert_allclose(power_law_upscale(k_arr, omega=-1.0), harm_upscale(k_arr), rtol=1e-6)
+    np.testing.assert_allclose(
+        power_law_upscale(k_arr, omega=1.0), arith_upscale(k_arr), rtol=1e-6
+    )
+    np.testing.assert_allclose(
+        power_law_upscale(k_arr, omega=0.0), geom_upscale(k_arr), rtol=1e-6
+    )
+    np.testing.assert_allclose(
+        power_law_upscale(k_arr, omega=-1.0), harm_upscale(k_arr), rtol=1e-6
+    )
     cp_bounds = cardwell_parsons_bounds(k_arr, omega=0.33)
-    assert cp_bounds["k_harm"] < cp_bounds["k_geom"] < cp_bounds["k_power"] < cp_bounds["k_arith"]
+    assert (
+        cp_bounds["k_harm"]
+        < cp_bounds["k_geom"]
+        < cp_bounds["k_power"]
+        < cp_bounds["k_arith"]
+    )
     assert upscale_permeability(k_arr, method="harmonic") == harm_upscale(k_arr)
 
     # 3. Verify net_only=True filtering (Cell 2 has 1 non-reservoir shale sample at 1001.0 and 1 pay sand at 1001.5)
@@ -331,7 +350,9 @@ def test_log_blocking_and_upscaling_static_geomodeling_handover():
         cutoffs={"VSHALE": 0.4, "PHIT": 0.08, "SWT": 0.85},
         omega=0.5,
     )
-    pay_za = summary[(summary["zones"] == "ZONE_A") & (summary["flag"] == "pay")].iloc[0]
+    pay_za = summary[(summary["zones"] == "ZONE_A") & (summary["flag"] == "pay")].iloc[
+        0
+    ]
     np.testing.assert_allclose(pay_za["av_perm_pw"], 302.5, atol=1e-3)
     np.testing.assert_allclose(pay_za["av_perm_power_pay"], 302.5, atol=1e-3)
     assert "kv_kh_ratio" in summary.columns
@@ -343,8 +364,22 @@ def test_log_blocking_and_upscaling_static_geomodeling_handover():
         omega=0.5,
         return_step_log=True,
         data=[
-            UpscaleData(depth=1000.0, vshale=0.10, phit=0.30, swt=0.20, perm=1000.0, zones="ZONE_A"),
-            UpscaleData(depth=1000.5, vshale=0.20, phit=0.10, swt=0.80, perm=10.0, zones="ZONE_A"),
+            UpscaleData(
+                depth=1000.0,
+                vshale=0.10,
+                phit=0.30,
+                swt=0.20,
+                perm=1000.0,
+                zones="ZONE_A",
+            ),
+            UpscaleData(
+                depth=1000.5,
+                vshale=0.20,
+                phit=0.10,
+                swt=0.80,
+                perm=10.0,
+                zones="ZONE_A",
+            ),
         ],
     )
     api_res = asyncio.run(upscale_cpi_logs_(payload))
@@ -354,3 +389,32 @@ def test_log_blocking_and_upscaling_static_geomodeling_handover():
     np.testing.assert_allclose(api_res["cells"][0]["perm"], 302.5, atol=1e-3)
 
 
+def test_calc_reservoir_summary_fluid_type_filtering():
+    """Verify that intervals marked as WATER are excluded from pay_flag even if Swt < cutoff."""
+    depth = np.array([1000.0, 1001.0, 1002.0, 1003.0])
+    vshale = np.array([0.10, 0.10, 0.10, 0.10])
+    phit = np.array([0.25, 0.25, 0.25, 0.25])
+    swt = np.array([0.30, 0.35, 0.40, 0.40])  # all below Swt cutoff 0.80
+    perm = np.array([100.0, 100.0, 100.0, 100.0])
+    zones = np.array(["ZONE_A", "ZONE_A", "ZONE_A", "ZONE_A"])
+    fluid_type = np.array(["OIL", "GAS", "WATER", "WATER"])
+
+    cutoffs = {"VSHALE": 0.40, "PHIT": 0.05, "SWT": 0.80}
+
+    # With fluid_type: only row 0 (OIL) and row 1 (GAS) should be pay; rows 2 & 3 (WATER) must not be pay
+    summary = calc_reservoir_summary(
+        depth, vshale, phit, swt, perm, zones, cutoffs=cutoffs, fluid_type=fluid_type
+    )
+    pay_row = summary[(summary["zones"] == "ZONE_A") & (summary["flag"] == "pay")].iloc[
+        0
+    ]
+    res_row = summary[
+        (summary["zones"] == "ZONE_A") & (summary["flag"] == "reservoir")
+    ].iloc[0]
+
+    # Reservoir net thickness includes all 4 points (3.0 m)
+    assert res_row["net"] == 3.0
+    # Pay net thickness must exclude the WATER intervals (2.0 m)
+    assert pay_row["net"] == 2.0
+    # Average Sw on pay reflects only the oil & gas intervals
+    assert pay_row["av_swt"] < 0.35

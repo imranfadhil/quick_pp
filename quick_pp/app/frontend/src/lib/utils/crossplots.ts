@@ -10,6 +10,8 @@ export type CrossplotId =
 	| 'porosity-comparison'
 	| 'permeability-comparison'
 	| 'bqv'
+	| 'water-leg-m'
+	| 'fluid-typing'
 	| 'histogram'
 	| 'curve-depth'
 	| 'enhanced-vs-raw'
@@ -22,7 +24,8 @@ export type CrossplotId =
 	| 'th-k'
 	| 'pef-k'
 	| 'pef-th-k'
-	| 'grain-density';
+	| 'grain-density'
+	| 'toc-tracks';
 
 export type CrossplotContext =
 	| { scope: 'single-well'; step: SingleWellStep }
@@ -43,14 +46,23 @@ type CrossplotDefinition = {
 
 export const CROSSPLOTS: readonly CrossplotDefinition[] = [
 	{
+		id: 'toc-tracks',
+		label: 'Source Rock 4-Track Strip (Vsh · Rt · Poro · TOC)',
+		single: {
+			group: 'Standalone · Source Rock (TOC)',
+			steps: ['toc'],
+			autoFor: ['toc']
+		}
+	},
+	{
 		id: 'histogram',
 		label: 'Single-Well Histogram',
-		single: { group: 'Step 1 · Data & QAQC', steps: ['qaqc'], autoFor: ['qaqc'] }
+		single: { group: 'Step 1 · Data & QAQC', steps: ['qaqc', 'toc'], autoFor: ['qaqc'] }
 	},
 	{
 		id: 'curve-depth',
 		label: 'Curve Editor · Log vs Depth',
-		single: { group: 'Step 1 · Data & QAQC', steps: ['qaqc'] }
+		single: { group: 'Step 1 · Data & QAQC', steps: ['qaqc', 'toc'] }
 	},
 	{
 		id: 'enhanced-vs-raw',
@@ -113,7 +125,7 @@ export const CROSSPLOTS: readonly CrossplotDefinition[] = [
 	},
 	{
 		id: 'sw-comparison',
-		label: 'Saturation vs Depth + VSHALE',
+		label: 'Saturation Composite vs Depth (+ Rw, m, Φ, Qv)',
 		single: { group: 'Step 5 · Saturation', steps: ['saturation'], autoFor: ['saturation'] }
 	},
 	{
@@ -124,11 +136,21 @@ export const CROSSPLOTS: readonly CrossplotDefinition[] = [
 	{
 		id: 'pickett',
 		label: 'Pickett Plot (Rt vs Φ)',
-		single: { group: 'Step 5 · Saturation', steps: ['saturation'] }
+		single: { group: 'Step 5 · Saturation', steps: ['saturation', 'toc'] }
 	},
 	{
 		id: 'bqv',
 		label: 'Waxman–Smits BQv',
+		single: { group: 'Step 5 · Saturation', steps: ['saturation'] }
+	},
+	{
+		id: 'water-leg-m',
+		label: 'Water-Leg m vs Porosity',
+		single: { group: 'Step 5 · Saturation', steps: ['saturation'] }
+	},
+	{
+		id: 'fluid-typing',
+		label: 'Fluid Typing (NPHI vs RHOB / ρ_hc)',
 		single: { group: 'Step 5 · Saturation', steps: ['saturation'] }
 	},
 	{

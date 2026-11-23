@@ -200,6 +200,9 @@
 			coal_nphi_min: lp.coalNphiMin,
 			coal_window_size: Math.round(lp.coalWindowSize),
 			coal_trend_factor: lp.coalTrendFactor,
+			coal_buffer_pts: Math.round(lp.coalBufferPts ?? 1),
+			coal_bridge_gap: Math.round(lp.coalBridgeGap ?? 2),
+			coal_adaptive_shoulder: lp.coalAdaptiveShoulder ?? true,
 			badhole_treatment: lp.badholeTreatment,
 			use_hc_corrected: corrected
 		};
@@ -306,7 +309,11 @@
 			parameter_snapshots: {
 				'litho-poro': snapshotModuleParams('litho-poro').params,
 				perm: snapshotModuleParams('perm').params,
-				saturation: snapshotModuleParams('saturation').params
+				saturation: (() => {
+					const p = { ...snapshotModuleParams('saturation').params };
+					delete p.manualOverrides;
+					return p;
+				})()
 			}
 		};
 	}

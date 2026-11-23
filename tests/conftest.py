@@ -14,6 +14,7 @@ _mpl_dir = _cache_dir / "matplotlib"
 _mpl_dir.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault("MPLCONFIGDIR", str(_mpl_dir))
 os.environ.setdefault("MLFLOW_DISABLE_AGENT_HINT", "1")
+os.environ["QPP_DATABASE_URL"] = "sqlite:///./data/quick_pp.db"
 
 
 class _ASGIMockResponse:

@@ -203,7 +203,9 @@ class FormationTop(Base):
 
     well: Mapped["Well"] = relationship("Well", back_populates="formation_tops")
 
-    __table_args__ = (UniqueConstraint("well_id", "name", name="uq_well_id_top_name"),)
+    __table_args__ = (
+        UniqueConstraint("well_id", "name", "depth", name="uq_well_id_top_name_depth"),
+    )
 
     def __repr__(self):
         return f"<FormationTop(top_id={self.top_id}, well_id={self.well_id}, name='{self.name}', depth={self.depth})>"
@@ -229,7 +231,7 @@ class FluidContact(Base):
     well: Mapped["Well"] = relationship("Well", back_populates="fluid_contacts")
 
     __table_args__ = (
-        UniqueConstraint("well_id", "name", name="uq_well_id_contact_name"),
+        UniqueConstraint("well_id", "name", "depth", name="uq_well_id_contact_name_depth"),
     )
 
     def __repr__(self):
@@ -272,7 +274,9 @@ class PressureTest(Base):
     well: Mapped["Well"] = relationship("Well", back_populates="pressure_tests")
 
     __table_args__ = (
-        UniqueConstraint("well_id", "depth", name="uq_well_id_pressure_depth"),
+        UniqueConstraint(
+            "well_id", "depth", "pressure", name="uq_well_id_pressure_depth_pressure"
+        ),
     )
 
     def __repr__(self):
@@ -399,8 +403,9 @@ class CoreSample(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint("well_id", "depth", name="uq_well_id_sample_depth"),
-        UniqueConstraint("well_id", "sample_name", name="uq_well_id_sample_name"),
+        UniqueConstraint(
+            "well_id", "sample_name", "depth", name="uq_well_id_sample_name_depth"
+        ),
     )
 
     def __repr__(self):
@@ -483,7 +488,12 @@ class CapillaryPressure(Base):
 
     __table_args__ = (
         UniqueConstraint(
-            "sample_id", "saturation", "experiment_type", "cycle", name="uq_pc_point"
+            "sample_id",
+            "pressure",
+            "saturation",
+            "experiment_type",
+            "cycle",
+            name="uq_pc_point",
         ),
         CheckConstraint(cycle.in_(["drainage", "imbibition"]), name="pc_cycle_check"),
     )

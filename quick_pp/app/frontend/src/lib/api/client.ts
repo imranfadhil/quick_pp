@@ -192,6 +192,12 @@ export function describeApiEndpoint(method: string, rawUrl: string): EndpointSta
 					done: `Water saturation updated (${wellName})`,
 					detail: wellName
 				};
+			case 'source_rock':
+				return {
+					active: `Computing Source Rock TOC (${wellName})...`,
+					done: `Source Rock TOC updated (${wellName})`,
+					detail: wellName
+				};
 			case 'reservoir_summary':
 				return {
 					active: `Computing reservoir summary & pay flags (${wellName})...`,
@@ -616,6 +622,25 @@ export async function saveAncillaryItems(
 			body: JSON.stringify({ [payloadKey]: items, replace })
 		},
 		`Failed to save ${entityType}`
+	);
+	return res.json();
+}
+
+export async function calculateSurveyTvd(
+	projectId: string | number,
+	wellName?: string
+) {
+	const query = wellName ? `?well_name=${encodeURIComponent(wellName)}` : '';
+	const url = `${API_BASE}/quick_pp/database/projects/${encodeURIComponent(String(projectId))}/well_surveys/calculate_tvd${query}`;
+	const res = await trackedFetch(
+		url,
+		{
+			method: 'POST',
+			credentials: 'include',
+			headers: authHeaders({ 'Content-Type': 'application/json' }),
+			body: JSON.stringify({})
+		},
+		'Failed to calculate TVD'
 	);
 	return res.json();
 }
