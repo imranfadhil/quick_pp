@@ -176,6 +176,19 @@ export interface LithoEndpointParams {
 	fluidDensityFlushExponent: number;
 	fluidDensityShrGas: number;
 	fluidDensityShrOil: number;
+	manualOverrides?: LithoOverride[];
+}
+
+export interface LithoOverride {
+	id: string;
+	top: number;
+	bottom: number;
+	coalMode?: 'keep' | 'flag' | 'clear';
+	badholeMode?: 'keep' | 'flag' | 'clear';
+	target?: 'COAL' | 'BADHOLE' | 'BOTH';
+	action?: 'flag' | 'clear';
+	enabled?: boolean;
+	comment?: string;
 }
 
 export interface ThomasStieberParams {
@@ -909,7 +922,8 @@ class WorkbenchState {
 		fluidDensityRtCurve: 'RT',
 		fluidDensityFlushExponent: 0.2,
 		fluidDensityShrGas: 0.25,
-		fluidDensityShrOil: 0.15
+		fluidDensityShrOil: 0.15,
+		manualOverrides: []
 	});
 
 	tsParams = $state<ThomasStieberParams>({
@@ -1417,6 +1431,20 @@ class WorkbenchState {
 	setWellManualOverrides(wellName: string, overrides: FluidSwtOverride[]) {
 		if (!wellName) return;
 		this.wellManualOverrides[wellName] = JSON.parse(JSON.stringify(overrides ?? []));
+	}
+
+	/** Per-well cache of lithology & porosity manual overrides so they are strictly well-specific and isolated. */
+	wellLithoManualOverrides = $state<Record<string, LithoOverride[]>>({});
+
+	getWellLithoManualOverrides(wellName?: string | null): LithoOverride[] {
+		if (!wellName) return [];
+		const list = this.wellLithoManualOverrides[wellName];
+		return Array.isArray(list) ? JSON.parse(JSON.stringify(list)) : [];
+	}
+
+	setWellLithoManualOverrides(wellName: string, overrides: LithoOverride[]) {
+		if (!wellName) return;
+		this.wellLithoManualOverrides[wellName] = JSON.parse(JSON.stringify(overrides ?? []));
 	}
 }
 

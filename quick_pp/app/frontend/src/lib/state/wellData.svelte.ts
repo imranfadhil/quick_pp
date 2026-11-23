@@ -1823,6 +1823,7 @@ class WellDataState {
 			workbench.useBrushedCalculationFilter = false;
 			workbench.tsParams.enabled = false;
 			workbench.saturationParams.manualOverrides = workbench.getWellManualOverrides(wellName);
+			workbench.lithoParams.manualOverrides = workbench.getWellLithoManualOverrides(wellName);
 
 			// Restore persisted SCAL, Core Overburden/Klinkenberg & Pc scaling parameters from well config
 			const cfgAny = (this.config || {}) as Record<string, any>;

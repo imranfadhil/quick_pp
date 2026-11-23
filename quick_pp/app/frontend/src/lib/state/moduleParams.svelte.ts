@@ -295,6 +295,15 @@ const REGISTRY: Record<ParamModuleKey, ParamAccessor> = {
 		get: () => ({ litho: clone(workbench.lithoParams), ts: clone(workbench.tsParams) }),
 		set: (p) => {
 			assignKnown(workbench.lithoParams, p?.litho);
+			const ovs = Array.isArray(p?.litho?.manualOverrides)
+				? clone(p.litho.manualOverrides)
+				: (Array.isArray(p?.manualOverrides)
+					? clone(p.manualOverrides)
+					: (workbench.wellId ? workbench.getWellLithoManualOverrides(workbench.wellId) : []));
+			workbench.lithoParams.manualOverrides = ovs;
+			if (workbench.wellId && (Array.isArray(p?.litho?.manualOverrides) || Array.isArray(p?.manualOverrides))) {
+				workbench.setWellLithoManualOverrides(workbench.wellId, ovs);
+			}
 			if (p?.litho && !p.litho.gammaEndpoints) workbench.lithoParams.gammaEndpoints = {};
 			if (workbench.lithoParams.model === 'vsh_bulk') {
 				workbench.lithoParams.model = 'vsh_gr';
@@ -498,6 +507,10 @@ class ModuleParamsState {
 			} else if (module === 'saturation') {
 				workbench.saturationParams.manualOverrides = workbench.wellId
 					? workbench.getWellManualOverrides(workbench.wellId)
+					: [];
+			} else if (module === 'litho-poro') {
+				workbench.lithoParams.manualOverrides = workbench.wellId
+					? workbench.getWellLithoManualOverrides(workbench.wellId)
 					: [];
 			}
 			let displayLabel = entry?.label ?? null;

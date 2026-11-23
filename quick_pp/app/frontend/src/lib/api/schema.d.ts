@@ -208,6 +208,15 @@ export interface paths {
 						max_depth?: number | null;
 						zones?: string[] | null;
 						save?: boolean;
+						manual_overrides?: Array<{
+							id?: string;
+							top?: number;
+							bottom?: number;
+							coal_mode?: string;
+							badhole_mode?: string;
+							enabled?: boolean;
+							comment?: string;
+						}>;
 					};
 				};
 			};
@@ -250,6 +259,15 @@ export interface paths {
 						max_depth?: number | null;
 						zones?: string[] | null;
 						save?: boolean;
+						manual_overrides?: Array<{
+							id?: string;
+							top?: number;
+							bottom?: number;
+							coal_mode?: string;
+							badhole_mode?: string;
+							enabled?: boolean;
+							comment?: string;
+						}>;
 					};
 				};
 			};
@@ -291,6 +309,15 @@ export interface paths {
 						max_depth?: number | null;
 						zones?: string[] | null;
 						save?: boolean;
+						manual_overrides?: Array<{
+							id?: string;
+							top?: number;
+							bottom?: number;
+							coal_mode?: string;
+							badhole_mode?: string;
+							enabled?: boolean;
+							comment?: string;
+						}>;
 					};
 				};
 			};
@@ -330,6 +357,15 @@ export interface paths {
 						max_depth?: number | null;
 						zones?: string[] | null;
 						save?: boolean;
+						manual_overrides?: Array<{
+							id?: string;
+							top?: number;
+							bottom?: number;
+							coal_mode?: string;
+							badhole_mode?: string;
+							enabled?: boolean;
+							comment?: string;
+						}>;
 					};
 				};
 			};
@@ -374,6 +410,15 @@ export interface paths {
 						max_depth?: number | null;
 						zones?: string[] | null;
 						save?: boolean;
+						manual_overrides?: Array<{
+							id?: string;
+							top?: number;
+							bottom?: number;
+							coal_mode?: string;
+							badhole_mode?: string;
+							enabled?: boolean;
+							comment?: string;
+						}>;
 					};
 				};
 			};
@@ -410,6 +455,15 @@ export interface paths {
 						max_depth?: number | null;
 						zones?: string[] | null;
 						save?: boolean;
+						manual_overrides?: Array<{
+							id?: string;
+							top?: number;
+							bottom?: number;
+							coal_mode?: string;
+							badhole_mode?: string;
+							enabled?: boolean;
+							comment?: string;
+						}>;
 					};
 				};
 			};

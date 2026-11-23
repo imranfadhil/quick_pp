@@ -270,9 +270,29 @@
 	);
 	let hasActiveOverrides = $derived(activeOverridesCount > 0);
 
+	let activeLithoOverridesCount = $derived(
+		(workbench.lithoParams.manualOverrides ?? []).filter(
+			(o) => o.enabled !== false && Number.isFinite(o.top) && Number.isFinite(o.bottom)
+		).length
+	);
+	let hasActiveLithoOverrides = $derived(activeLithoOverridesCount > 0);
+
 	let currentDepthOverride = $derived.by(() => {
 		if (activeInspectionDepth === null) return null;
 		const overrides = (workbench.saturationParams.manualOverrides ?? []).filter(
+			(o) => o.enabled !== false && Number.isFinite(o.top) && Number.isFinite(o.bottom)
+		);
+		const d = activeInspectionDepth;
+		return (
+			overrides.find(
+				(o) => d >= Math.min(o.top, o.bottom) && d <= Math.max(o.top, o.bottom)
+			) ?? null
+		);
+	});
+
+	let currentDepthLithoOverride = $derived.by(() => {
+		if (activeInspectionDepth === null) return null;
+		const overrides = (workbench.lithoParams.manualOverrides ?? []).filter(
 			(o) => o.enabled !== false && Number.isFinite(o.top) && Number.isFinite(o.bottom)
 		);
 		const d = activeInspectionDepth;
@@ -2786,6 +2806,29 @@
 				y: [t, b],
 				line: { color: '#8B5CF6', width: 4.0, dash: 'solid' },
 				hovertemplate: `<b>Manual Override</b><br>Fluid: ${flLabel}<br>SWT: ${swtLabel}<extra></extra>`
+			});
+		}
+
+		const activeLithoOverrides = (workbench.lithoParams.manualOverrides ?? []).filter(
+			(o) => o.enabled !== false && Number.isFinite(o.top) && Number.isFinite(o.bottom)
+		);
+		for (const ov of activeLithoOverrides) {
+			const t = Math.min(ov.top, ov.bottom);
+			const b = Math.max(ov.top, ov.bottom);
+			const coalLabel = ov.coalMode === 'flag' ? 'Coal' : ov.coalMode === 'clear' ? 'Clear Coal' : 'Auto';
+			const bhLabel = ov.badholeMode === 'flag' ? 'Badhole' : ov.badholeMode === 'clear' ? 'Clear Badhole' : 'Auto';
+			const strokeColor = ov.coalMode === 'flag' ? '#0F172A' : (ov.badholeMode === 'flag' ? '#DC2626' : '#6366F1');
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: `LITHO_OVERRIDE_${ov.id}`,
+				showlegend: false,
+				xaxis: 'x4',
+				yaxis: 'y',
+				x: [0.03, 0.03],
+				y: [t, b],
+				line: { color: strokeColor, width: 4.0, dash: 'solid' },
+				hovertemplate: `<b>Manual Lithology Override</b><br>Coal: ${coalLabel}<br>Badhole: ${bhLabel}<extra></extra>`
 			});
 		}
 
@@ -5396,7 +5439,7 @@
 								>
 							</div>
 						{/if}
-						{#if Number(readout.PAY_FLAGS ?? readout.PAY_FLAG ?? 0) > 0 || currentDepthOverride || Number(readout.BADHOLE ?? 0) >= 0.5}
+						{#if Number(readout.PAY_FLAGS ?? readout.PAY_FLAG ?? 0) > 0 || currentDepthOverride || currentDepthLithoOverride || Number(readout.BADHOLE ?? 0) >= 0.5}
 							<div
 								class="mt-0.5 flex flex-wrap items-center gap-1 border-t border-slate-200/80 pt-0.5"
 							>
@@ -5415,6 +5458,38 @@
 									>
 										OVR: {currentDepthOverride.fluidType}
 									</span>
+								{/if}
+								{#if currentDepthLithoOverride}
+									{#if currentDepthLithoOverride.coalMode === 'flag'}
+										<span
+											class="rounded-2xs inline-flex items-center gap-0.5 bg-slate-900 px-1 py-0 text-[7px] font-bold text-white shadow-2xs"
+											title="Manual Lithology Override: Coal Seam"
+										>
+											OVR: COAL
+										</span>
+									{:else if currentDepthLithoOverride.coalMode === 'clear'}
+										<span
+											class="rounded-2xs inline-flex items-center gap-0.5 bg-slate-500 px-1 py-0 text-[7px] font-bold text-white shadow-2xs"
+											title="Manual Lithology Override: Clear Coal"
+										>
+											OVR: NO_COAL
+										</span>
+									{/if}
+									{#if currentDepthLithoOverride.badholeMode === 'flag'}
+										<span
+											class="rounded-2xs inline-flex items-center gap-0.5 bg-red-700 px-1 py-0 text-[7px] font-bold text-white shadow-2xs"
+											title="Manual Lithology Override: Badhole Interval"
+										>
+											OVR: BADHOLE
+										</span>
+									{:else if currentDepthLithoOverride.badholeMode === 'clear'}
+										<span
+											class="rounded-2xs inline-flex items-center gap-0.5 bg-emerald-600 px-1 py-0 text-[7px] font-bold text-white shadow-2xs"
+											title="Manual Lithology Override: Clear Badhole (Good Hole)"
+										>
+											OVR: GOOD_HOLE
+										</span>
+									{/if}
 								{/if}
 								{#if Number(readout.BADHOLE ?? 0) >= 0.5}
 									<span

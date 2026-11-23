@@ -1394,6 +1394,10 @@ class WorkspaceHCCorrectionRequest(WorkspaceFilterBase, GammaParameters):
         "none",
         description="How to treat BADHOLE intervals: 'none', 'vsh_gr', 'interpolate', or 'ignore'",
     )
+    manual_overrides: Optional[List[Dict[str, Any]]] = Field(
+        None,
+        description="Optional interval manual overrides for coal and badhole flagging: [{'id': str, 'top': float, 'bottom': float, 'coal_mode': Optional[str], 'badhole_mode': Optional[str], 'target': Optional[str], 'action': Optional[str], 'enabled': Optional[bool], 'comment': Optional[str]}]",
+    )
 
 
 class WorkspaceDenCorrectionRequest(WorkspaceFilterBase, GammaParameters):
@@ -1524,6 +1528,10 @@ class WorkspaceLithologyRequest(WorkspaceFilterBase, GammaParameters):
     badhole_treatment: str = Field(
         "none",
         description="How to treat BADHOLE intervals: 'none', 'vsh_gr', 'interpolate', or 'ignore'",
+    )
+    manual_overrides: Optional[List[Dict[str, Any]]] = Field(
+        None,
+        description="Optional interval manual overrides for coal and badhole flagging: [{'id': str, 'top': float, 'bottom': float, 'coal_mode': Optional[str], 'badhole_mode': Optional[str], 'target': Optional[str], 'action': Optional[str], 'enabled': Optional[bool], 'comment': Optional[str]}]",
     )
 
 
@@ -1675,6 +1683,10 @@ class WorkspacePorosityRequest(WorkspaceFilterBase, GammaParameters):
     badhole_treatment: str = Field(
         "none",
         description="How to treat BADHOLE intervals: 'none', 'vsh_gr', 'interpolate', or 'ignore'",
+    )
+    manual_overrides: Optional[List[Dict[str, Any]]] = Field(
+        None,
+        description="Optional interval manual overrides for coal and badhole flagging: [{'id': str, 'top': float, 'bottom': float, 'coal_mode': Optional[str], 'badhole_mode': Optional[str], 'target': Optional[str], 'action': Optional[str], 'enabled': Optional[bool], 'comment': Optional[str]}]",
     )
     fluid_density: Optional[FluidDensityConfig] = Field(
         None,
@@ -4363,9 +4375,13 @@ def workspace_batch_evaluation_apply(
                         if module not in ("litho-poro", "perm", "saturation"):
                             continue
                         clean_params = dict(params)
-                        if module == "saturation":
+                        if module in ("saturation", "litho-poro"):
                             clean_params.pop("manualOverrides", None)
                             clean_params.pop("manual_overrides", None)
+                            if "litho" in clean_params and isinstance(clean_params["litho"], dict):
+                                clean_params["litho"] = dict(clean_params["litho"])
+                                clean_params["litho"].pop("manualOverrides", None)
+                                clean_params["litho"].pop("manual_overrides", None)
                         entries.append(
                             WorkspaceModuleParamsEntry(
                                 module=module,
@@ -4843,39 +4859,79 @@ def workspace_lithology(
                 coal_bridge_gap=req.coal_bridge_gap,
                 coal_adaptive_shoulder=req.coal_adaptive_shoulder,
             )
-            coal_flag_s = pd.Series(np.nan, index=df.index, dtype=float)
-            coal_flag_s.loc[valid_mask] = np.where(coal_mask.loc[valid_mask], 1.0, 0.0)
-            out_df["COAL_FLAG"] = coal_flag_s
-            active_coal = valid_mask & coal_mask
-            if active_coal.any():
-                if "VCOAL" not in out_df.columns:
-                    vcoal_s = pd.Series(np.nan, index=df.index, dtype=float)
-                    vcoal_s.loc[valid_mask] = 0.0
-                    out_df["VCOAL"] = vcoal_s
-                for mcol in ALL_LITHOLOGY_VOL_COLS:
-                    if mcol in out_df.columns:
-                        out_df.loc[active_coal, mcol] = 1.0 if mcol == "VCOAL" else 0.0
-                if "PHIT_CONSTRUCTED" in out_df.columns:
-                    out_df.loc[active_coal, "PHIT_CONSTRUCTED"] = 0.0
-            if "COAL_FLAG" not in save_cols:
-                save_cols.append("COAL_FLAG")
-            if "VCOAL" not in save_cols and "VCOAL" in out_df.columns:
-                save_cols.append("VCOAL")
+        elif "COAL_FLAG" in df.columns:
+            coal_mask = (
+                pd.to_numeric(df["COAL_FLAG"], errors="coerce").fillna(0.0) >= 0.5
+            )
         else:
             coal_mask = pd.Series(False, index=df.index, dtype=bool)
-            coal_flag_s = pd.Series(np.nan, index=df.index, dtype=float)
-            coal_flag_s.loc[valid_mask] = 0.0
-            out_df["COAL_FLAG"] = coal_flag_s
-            if "COAL_FLAG" not in save_cols:
-                save_cols.append("COAL_FLAG")
 
         # Badhole interval treatment for lithology volumes
         bh_mode = (req.badhole_treatment or "none").strip().lower()
         badhole_mask = _resolve_badhole_mask(
             df, auto_detect_if_missing=(bh_mode != "none")
         )
+
+        # Apply manual interactive overrides if provided
+        if req.manual_overrides:
+            depth_series = df["DEPTH"]
+            for ov in req.manual_overrides:
+                if not isinstance(ov, dict) or ov.get("enabled") is False:
+                    continue
+                top_d = ov.get("top")
+                bot_d = ov.get("bottom")
+                if top_d is None or bot_d is None:
+                    continue
+                try:
+                    t_val = min(float(top_d), float(bot_d))
+                    b_val = max(float(top_d), float(bot_d))
+                except (ValueError, TypeError):
+                    continue
+                mask = (depth_series >= t_val) & (depth_series <= b_val)
+                if not mask.any():
+                    continue
+
+                c_mode = str(ov.get("coalMode") or ov.get("coal_mode") or "").lower().strip()
+                bh_mode_ov = str(ov.get("badholeMode") or ov.get("badhole_mode") or "").lower().strip()
+                target = str(ov.get("target") or ov.get("flag_type") or "").upper().strip()
+                action = str(ov.get("action") or "").lower().strip()
+                if target in ("COAL", "BOTH"):
+                    c_mode = action or "flag"
+                if target in ("BADHOLE", "BOTH"):
+                    bh_mode_ov = action or "flag"
+
+                if c_mode in ("flag", "force_coal", "coal", "1", "true"):
+                    coal_mask.loc[mask] = True
+                elif c_mode in ("clear", "clear_coal", "not_coal", "0", "false"):
+                    coal_mask.loc[mask] = False
+
+                if bh_mode_ov in ("flag", "force_badhole", "badhole", "1", "true"):
+                    badhole_mask.loc[mask] = True
+                elif bh_mode_ov in ("clear", "clear_badhole", "good_hole", "0", "false"):
+                    badhole_mask.loc[mask] = False
+
+        coal_flag_s = pd.Series(np.nan, index=df.index, dtype=float)
+        coal_flag_s.loc[valid_mask] = np.where(coal_mask.loc[valid_mask], 1.0, 0.0)
+        out_df["COAL_FLAG"] = coal_flag_s
+        if "COAL_FLAG" not in save_cols:
+            save_cols.append("COAL_FLAG")
+
+        active_coal = valid_mask & coal_mask
+        if active_coal.any():
+            if "VCOAL" not in out_df.columns:
+                vcoal_s = pd.Series(np.nan, index=df.index, dtype=float)
+                vcoal_s.loc[valid_mask] = 0.0
+                out_df["VCOAL"] = vcoal_s
+            for mcol in ALL_LITHOLOGY_VOL_COLS:
+                if mcol in out_df.columns:
+                    out_df.loc[active_coal, mcol] = 1.0 if mcol == "VCOAL" else 0.0
+            if "PHIT_CONSTRUCTED" in out_df.columns:
+                out_df.loc[active_coal, "PHIT_CONSTRUCTED"] = 0.0
+            if "VCOAL" not in save_cols and "VCOAL" in out_df.columns:
+                save_cols.append("VCOAL")
+
         active_badhole = badhole_mask & (~coal_mask)
-        if bh_mode != "none" or badhole_mask.any() or "BADHOLE" in df.columns:
+        if bh_mode != "none" or badhole_mask.any() or "BADHOLE" in df.columns or (req.manual_overrides and len(req.manual_overrides) > 0):
             out_df["BADHOLE"] = np.where(badhole_mask, 1.0, 0.0)
             if "BADHOLE" not in save_cols:
                 save_cols.append("BADHOLE")
@@ -5819,16 +5875,55 @@ def workspace_porosity(
         else:
             coal_mask = pd.Series(False, index=df.index, dtype=bool)
 
+        bh_mode = (req.badhole_treatment or "none").strip().lower()
+        badhole_mask = _resolve_badhole_mask(
+            df, auto_detect_if_missing=(bh_mode != "none")
+        )
+
+        # Apply manual interactive overrides if provided
+        if req.manual_overrides:
+            depth_series = df["DEPTH"]
+            for ov in req.manual_overrides:
+                if not isinstance(ov, dict) or ov.get("enabled") is False:
+                    continue
+                top_d = ov.get("top")
+                bot_d = ov.get("bottom")
+                if top_d is None or bot_d is None:
+                    continue
+                try:
+                    t_val = min(float(top_d), float(bot_d))
+                    b_val = max(float(top_d), float(bot_d))
+                except (ValueError, TypeError):
+                    continue
+                mask = (depth_series >= t_val) & (depth_series <= b_val)
+                if not mask.any():
+                    continue
+
+                c_mode = str(ov.get("coalMode") or ov.get("coal_mode") or "").lower().strip()
+                bh_mode_ov = str(ov.get("badholeMode") or ov.get("badhole_mode") or "").lower().strip()
+                target = str(ov.get("target") or ov.get("flag_type") or "").upper().strip()
+                action = str(ov.get("action") or "").lower().strip()
+                if target in ("COAL", "BOTH"):
+                    c_mode = action or "flag"
+                if target in ("BADHOLE", "BOTH"):
+                    bh_mode_ov = action or "flag"
+
+                if c_mode in ("flag", "force_coal", "coal", "1", "true"):
+                    coal_mask.loc[mask] = True
+                elif c_mode in ("clear", "clear_coal", "not_coal", "0", "false"):
+                    coal_mask.loc[mask] = False
+
+                if bh_mode_ov in ("flag", "force_badhole", "badhole", "1", "true"):
+                    badhole_mask.loc[mask] = True
+                elif bh_mode_ov in ("clear", "clear_badhole", "good_hole", "0", "false"):
+                    badhole_mask.loc[mask] = False
+
         active_coal = valid_mask & coal_mask
         if active_coal.any():
             phit_s.loc[active_coal] = 0.0
             phie_s.loc[active_coal] = 0.0
             phid_s.loc[active_coal] = 0.0
 
-        bh_mode = (req.badhole_treatment or "none").strip().lower()
-        badhole_mask = _resolve_badhole_mask(
-            df, auto_detect_if_missing=(bh_mode != "none")
-        )
         active_badhole = badhole_mask & (~coal_mask)
 
         if bh_mode != "none" and active_badhole.any():
