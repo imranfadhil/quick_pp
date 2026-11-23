@@ -237,7 +237,31 @@
 	let showTopLabels = $state(true);
 	let showInspectionLine = $state(false);
 	let isInspectionLocked = $state(false);
+	let lockedDepth = $state<number | null>(null);
 	let isPointerOverPlot = $state(false);
+
+	function toggleInspectionLock() {
+		if (!showInspectionLine) return;
+		isInspectionLocked = !isInspectionLocked;
+		if (isInspectionLocked) {
+			lockedDepth = workbench.cursorDepth;
+		} else {
+			lockedDepth = null;
+		}
+	}
+
+	function unlockInspection() {
+		isInspectionLocked = false;
+		lockedDepth = null;
+	}
+
+	$effect(() => {
+		if (isInspectionLocked && lockedDepth !== null) {
+			if (workbench.cursorDepth !== lockedDepth) {
+				workbench.cursorDepth = lockedDepth;
+			}
+		}
+	});
 
 	const DTC_ALIASES = ['DTC', 'DT', 'DTCO', 'AC', 'DT4P'] as const;
 
@@ -3237,12 +3261,14 @@
 						plotReady = true;
 						let hoverRaf = 0;
 						(plotContainer as any).on('plotly_hover', (ev: any) => {
+							if (isInspectionLocked) return;
 							const pt = ev?.points?.[0];
 							if (pt && typeof pt.y === 'number' && Number.isFinite(pt.y)) {
 								const nextY =
 									effectiveDepthIndex === 'TVDSS' ? tvdssToMd(pt.y) : pt.y;
 								cancelAnimationFrame(hoverRaf);
 								hoverRaf = requestAnimationFrame(() => {
+									if (isInspectionLocked) return;
 									workbench.cursorDepth = nextY;
 								});
 							}
@@ -3605,14 +3631,18 @@
 		}
 	}
 
-	let readout = $derived(wellData.getReadoutAtDepth(workbench.cursorDepth));
+	let activeInspectionDepth = $derived(
+		isInspectionLocked && lockedDepth !== null ? lockedDepth : workbench.cursorDepth
+	);
+
+	let readout = $derived(wellData.getReadoutAtDepth(activeInspectionDepth));
 
 	let inspectionPct = $derived(
-		showInspectionLine && workbench.cursorDepth !== null
+		showInspectionLine && activeInspectionDepth !== null
 			? depthToPercent(
 					effectiveDepthIndex === 'TVDSS'
-						? mdToTvdss(workbench.cursorDepth)
-						: workbench.cursorDepth
+						? mdToTvdss(activeInspectionDepth)
+						: activeInspectionDepth
 				)
 			: null
 	);
@@ -3638,6 +3668,7 @@
 
 		cancelAnimationFrame(pointerMoveRaf);
 		pointerMoveRaf = requestAnimationFrame(() => {
+			if (isInspectionLocked) return;
 			workbench.cursorDepth =
 				effectiveDepthIndex === 'TVDSS' ? tvdssToMd(nextDepth) : nextDepth;
 		});
@@ -3650,11 +3681,11 @@
 			if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
 			if (e.key === 'i' || e.key === 'I' || e.key === 'c' || e.key === 'C') {
 				showInspectionLine = !showInspectionLine;
-				if (!showInspectionLine) isInspectionLocked = false;
+				if (!showInspectionLine) unlockInspection();
 			} else if (e.code === 'Space' || e.key === ' ') {
 				if (showInspectionLine) {
 					e.preventDefault();
-					isInspectionLocked = !isInspectionLocked;
+					toggleInspectionLock();
 				}
 			}
 		};
@@ -3902,7 +3933,7 @@
 				title="Toggle horizontal cursor inspection line across all tracks (Shortcut: 'I' or 'C')"
 				onclick={() => {
 					showInspectionLine = !showInspectionLine;
-					if (!showInspectionLine) isInspectionLocked = false;
+					if (!showInspectionLine) unlockInspection();
 				}}
 				class="flex h-5 items-center gap-1 rounded-sm border px-1.5 text-[10px] font-semibold transition-colors {showInspectionLine
 					? 'border-indigo-600 bg-indigo-50 text-indigo-700 dark:border-indigo-500 dark:bg-indigo-950/60 dark:text-indigo-300'
@@ -3924,7 +3955,7 @@
 				<button
 					type="button"
 					title="Lock / freeze inspection line at current depth (Shortcut: Space)"
-					onclick={() => (isInspectionLocked = !isInspectionLocked)}
+					onclick={toggleInspectionLock}
 					class="flex h-5 items-center gap-1 rounded-sm border px-1.5 text-[10px] font-semibold transition-colors {isInspectionLocked
 						? 'border-amber-500 bg-amber-50 text-amber-800 shadow-2xs dark:border-amber-600 dark:bg-amber-950/60 dark:text-amber-200'
 						: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
@@ -4768,13 +4799,13 @@
 						>
 							<span
 								>🔒 Locked at {formatLogDepth(
-									readout.DEPT ?? workbench.cursorDepth
+									readout.DEPT ?? activeInspectionDepth
 								)}</span
 							>
 							<button
 								type="button"
-								onclick={() => (isInspectionLocked = false)}
-								class="ml-0.5 text-[9px] font-bold text-amber-700 hover:text-amber-950"
+								onclick={unlockInspection}
+								class="ml-0.5 text-[9px] font-bold text-amber-700 hover:text-amber-950 cursor-pointer"
 								title="Unlock crosshair (Space)"
 							>
 								×
@@ -4802,7 +4833,7 @@
 						>
 							<span>T1 · LITH</span>
 							<span class="mono-num text-[7.5px] text-slate-600"
-								>{formatLogDepth(readout.DEPT ?? workbench.cursorDepth)}</span
+								>{formatLogDepth(readout.DEPT ?? activeInspectionDepth)}</span
 							>
 						</div>
 						<div class="flex items-center justify-between">
