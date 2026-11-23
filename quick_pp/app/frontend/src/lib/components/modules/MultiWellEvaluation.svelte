@@ -309,7 +309,11 @@
 			parameter_snapshots: {
 				'litho-poro': snapshotModuleParams('litho-poro').params,
 				perm: snapshotModuleParams('perm').params,
-				saturation: snapshotModuleParams('saturation').params
+				saturation: (() => {
+					const p = { ...snapshotModuleParams('saturation').params };
+					delete p.manualOverrides;
+					return p;
+				})()
 			}
 		};
 	}

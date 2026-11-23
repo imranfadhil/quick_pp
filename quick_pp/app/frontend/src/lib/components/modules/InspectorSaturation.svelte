@@ -508,12 +508,20 @@
 			comment: partial?.comment ?? ''
 		};
 		sp.manualOverrides = [...list, newOv];
+		syncOverridesToWell(sp.manualOverrides);
 		executeSaturation(false);
+	}
+
+	function syncOverridesToWell(overrides: FluidSwtOverride[]) {
+		if (workbench.wellId) {
+			workbench.setWellManualOverrides(workbench.wellId, overrides);
+		}
 	}
 
 	function removeManualOverride(id: string) {
 		const sp = workbench.saturationParams;
 		sp.manualOverrides = (sp.manualOverrides ?? []).filter((o) => o.id !== id);
+		syncOverridesToWell(sp.manualOverrides);
 		executeSaturation(false);
 	}
 
@@ -522,6 +530,7 @@
 		sp.manualOverrides = (sp.manualOverrides ?? []).map((o) =>
 			o.id === id ? { ...o, enabled: o.enabled === false } : o
 		);
+		syncOverridesToWell(sp.manualOverrides);
 		executeSaturation(false);
 	}
 
@@ -530,6 +539,7 @@
 		sp.manualOverrides = (sp.manualOverrides ?? []).map((o) =>
 			o.id === id ? { ...o, ...updates } : o
 		);
+		syncOverridesToWell(sp.manualOverrides);
 		executeSaturation(false);
 	}
 
@@ -548,17 +558,20 @@
 		const sp = workbench.saturationParams;
 		if (!sp.manualOverrides || sp.manualOverrides.length <= 1) return;
 		sp.manualOverrides = [...sp.manualOverrides].sort((a, b) => (a.top ?? 0) - (b.top ?? 0));
+		syncOverridesToWell(sp.manualOverrides);
 	}
 
 	function toggleAllOverrides(enabled: boolean) {
 		const sp = workbench.saturationParams;
 		if (!sp.manualOverrides) return;
 		sp.manualOverrides = sp.manualOverrides.map((o) => ({ ...o, enabled }));
+		syncOverridesToWell(sp.manualOverrides);
 		executeSaturation(false);
 	}
 
 	function clearAllOverrides() {
 		workbench.saturationParams.manualOverrides = [];
+		syncOverridesToWell([]);
 		executeSaturation(false);
 	}
 

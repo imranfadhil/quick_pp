@@ -3964,14 +3964,15 @@ def _batch_evaluate_zone(
     try:
 
         def scoped(model: _FilterRequest) -> _FilterRequest:
-            return model.model_copy(
-                update={
-                    "save": False,
-                    "zones": [zone],
-                    "min_depth": None,
-                    "max_depth": None,
-                }
-            )
+            updates: Dict[str, Any] = {
+                "save": False,
+                "zones": [zone],
+                "min_depth": None,
+                "max_depth": None,
+            }
+            if hasattr(model, "manual_overrides"):
+                updates["manual_overrides"] = None
+            return model.model_copy(update=updates)
 
         if req.hc_correction is not None:
             stage = "hydrocarbon correction"
@@ -4357,17 +4358,23 @@ def workspace_batch_evaluation_apply(
                     ):
                         raise ValueError("Input data changed; preview again")
                     selection = {"zones": [zone], "min_depth": None, "max_depth": None}
-                    entries = [
-                        WorkspaceModuleParamsEntry(
-                            module=module,
-                            key=f"zone:{zone}",
-                            selection=selection,
-                            label=f"Zone {zone}",
-                            params=params,
+                    entries = []
+                    for module, params in preview.request.parameter_snapshots.items():
+                        if module not in ("litho-poro", "perm", "saturation"):
+                            continue
+                        clean_params = dict(params)
+                        if module == "saturation":
+                            clean_params.pop("manualOverrides", None)
+                            clean_params.pop("manual_overrides", None)
+                        entries.append(
+                            WorkspaceModuleParamsEntry(
+                                module=module,
+                                key=f"zone:{zone}",
+                                selection=selection,
+                                label=f"Zone {zone}",
+                                params=clean_params,
+                            )
                         )
-                        for module, params in preview.request.parameter_snapshots.items()
-                        if module in ("litho-poro", "perm", "saturation")
-                    ]
                     _save_batch_evaluation(
                         project_id, well_name, item.computed, entries
                     )

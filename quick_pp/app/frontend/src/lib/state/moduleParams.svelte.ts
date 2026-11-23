@@ -329,6 +329,13 @@ const REGISTRY: Record<ParamModuleKey, ParamAccessor> = {
 		}),
 		set: (p) => {
 			assignKnown(workbench.saturationParams, p);
+			const ovs = Array.isArray(p?.manualOverrides)
+				? clone(p.manualOverrides)
+				: (workbench.wellId ? workbench.getWellManualOverrides(workbench.wellId) : []);
+			workbench.saturationParams.manualOverrides = ovs;
+			if (workbench.wellId && Array.isArray(p?.manualOverrides)) {
+				workbench.setWellManualOverrides(workbench.wellId, ovs);
+			}
 			if (typeof p?.useTsInSaturation === 'boolean') {
 				workbench.tsParams.useInSaturation = p.useTsInSaturation;
 			}
@@ -488,6 +495,10 @@ class ModuleParamsState {
 				} catch {
 					// Ignore malformed saved entry; keep current values
 				}
+			} else if (module === 'saturation') {
+				workbench.saturationParams.manualOverrides = workbench.wellId
+					? workbench.getWellManualOverrides(workbench.wellId)
+					: [];
 			}
 			let displayLabel = entry?.label ?? null;
 			if (entry && matchType === 'bundle') {

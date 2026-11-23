@@ -62,3 +62,69 @@ test('mergeComputedCurves and saveModuleComputed preserve FLUID_TYPE text curves
 		await server.close();
 	}
 });
+
+test('manual overrides in saturation are isolated per well and do not leak across wells', async () => {
+	const server = await createServer({ server: { middlewareMode: true }, appType: 'custom' });
+	try {
+		const { wellData } = await server.ssrLoadModule('/src/lib/state/wellData.svelte.ts');
+		const { workbench } = await server.ssrLoadModule('/src/lib/state/workbench.svelte.ts');
+		const { moduleParams } = await server.ssrLoadModule('/src/lib/state/moduleParams.svelte.ts');
+
+		workbench.projectId = 'test-proj';
+		workbench.wellId = '44-22-3';
+
+		const overrideA = [
+			{
+				id: 'ov-1',
+				top: 3608.4,
+				bottom: 3666.1,
+				fluidType: 'NON_RESERVOIR',
+				swtMode: 'force_water_leg',
+				enabled: true
+			}
+		];
+
+		// 1. Set overrides on Well 44-22-3
+		workbench.saturationParams.manualOverrides = overrideA;
+		workbench.setWellManualOverrides('44-22-3', overrideA);
+		assert.equal(workbench.saturationParams.manualOverrides.length, 1);
+		assert.equal(workbench.saturationParams.manualOverrides[0].top, 3608.4);
+
+		// 2. Simulate switching to Well 44-22-1 (which has no manual overrides)
+		workbench.wellId = '44-22-1';
+		workbench.saturationParams.manualOverrides = workbench.getWellManualOverrides('44-22-1');
+		assert.deepEqual(workbench.saturationParams.manualOverrides, []);
+
+		// 3. Applying selection config on 44-22-1 with no saved overrides leaves it empty
+		moduleParams.applyForCurrentSelection({});
+		assert.deepEqual(workbench.saturationParams.manualOverrides, []);
+
+		// 4. Set different overrides on Well 44-22-1
+		const overrideB = [
+			{
+				id: 'ov-2',
+				top: 2500.0,
+				bottom: 2550.0,
+				fluidType: 'GAS',
+				swtMode: 'keep',
+				enabled: true
+			}
+		];
+		workbench.saturationParams.manualOverrides = overrideB;
+		workbench.setWellManualOverrides('44-22-1', overrideB);
+
+		// 5. Switch back to Well 44-22-3
+		workbench.wellId = '44-22-3';
+		workbench.saturationParams.manualOverrides = workbench.getWellManualOverrides('44-22-3');
+		assert.equal(workbench.saturationParams.manualOverrides.length, 1);
+		assert.equal(workbench.saturationParams.manualOverrides[0].top, 3608.4);
+
+		// 6. Switch back to Well 44-22-1
+		workbench.wellId = '44-22-1';
+		workbench.saturationParams.manualOverrides = workbench.getWellManualOverrides('44-22-1');
+		assert.equal(workbench.saturationParams.manualOverrides.length, 1);
+		assert.equal(workbench.saturationParams.manualOverrides[0].top, 2500.0);
+	} finally {
+		await server.close();
+	}
+});

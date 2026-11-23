@@ -1822,6 +1822,7 @@ class WellDataState {
 			workbench.brushedDepthIndices = new Set();
 			workbench.useBrushedCalculationFilter = false;
 			workbench.tsParams.enabled = false;
+			workbench.saturationParams.manualOverrides = workbench.getWellManualOverrides(wellName);
 
 			// Restore persisted SCAL, Core Overburden/Klinkenberg & Pc scaling parameters from well config
 			const cfgAny = (this.config || {}) as Record<string, any>;

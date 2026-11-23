@@ -1404,6 +1404,20 @@ class WorkbenchState {
 			seq: this.sectionBulkAction.seq + 1
 		};
 	}
+
+	/** Per-well cache of saturation manual overrides so they are strictly well-specific and isolated. */
+	wellManualOverrides = $state<Record<string, FluidSwtOverride[]>>({});
+
+	getWellManualOverrides(wellName?: string | null): FluidSwtOverride[] {
+		if (!wellName) return [];
+		const list = this.wellManualOverrides[wellName];
+		return Array.isArray(list) ? JSON.parse(JSON.stringify(list)) : [];
+	}
+
+	setWellManualOverrides(wellName: string, overrides: FluidSwtOverride[]) {
+		if (!wellName) return;
+		this.wellManualOverrides[wellName] = JSON.parse(JSON.stringify(overrides ?? []));
+	}
 }
 
 export const workbench = new WorkbenchState();
