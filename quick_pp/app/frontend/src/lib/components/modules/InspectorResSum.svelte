@@ -63,7 +63,8 @@
 					cut_offs: {
 						VSHALE: rp.vshMax,
 						PHIT: rp.phitMin,
-						SWT: rp.swtMax
+						SWT: rp.swtMax,
+						...(rp.applyPermCutoff && rp.permMin != null ? { PERM: rp.permMin } : {})
 					},
 					include_upscaling: rp.includeUpscaling,
 					cell_size: rp.cellSize,
@@ -252,6 +253,30 @@
 				step={0.02}
 				onrun={() => executeResSum(false)}
 			/>
+			<div class="mt-2 pt-2 border-t border-[var(--border-hairline)]">
+				<label class="flex items-center justify-between text-xs cursor-pointer py-0.5">
+					<span class="font-medium text-[var(--text-secondary)]">Apply Min Perm Cutoff</span>
+					<input
+						type="checkbox"
+						bind:checked={rp.applyPermCutoff}
+						onchange={() => executeResSum(false)}
+						class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+					/>
+				</label>
+				{#if rp.applyPermCutoff}
+					<div class="mt-1">
+						<NumericScrubber
+							label="Min Perm (k,min)"
+							bind:value={rp.permMin}
+							unit="mD"
+							min={0.01}
+							max={500.0}
+							step={0.1}
+							onrun={() => executeResSum(false)}
+						/>
+					</div>
+				{/if}
+			</div>
 		</ParameterSection>
 
 		<ParameterSection

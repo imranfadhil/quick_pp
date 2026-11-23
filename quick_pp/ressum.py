@@ -223,6 +223,7 @@ def calc_reservoir_summary(
         df["swt"],
         cutoffs,
         fluid_type=df["fluid_type"] if "fluid_type" in df.columns else None,
+        perm=df["perm"] if "perm" in df.columns else None,
     )
     df["all_flag"] = 1
 
@@ -377,35 +378,52 @@ def calc_reservoir_summary(
     return ressum_df[cols]
 
 
-def flag_interval(vshale, phit, swt, cutoffs: dict, fluid_type=None):
+def flag_interval(vshale, phit, swt, cutoffs: dict, fluid_type=None, perm=None):
     """Flag interval based on cutoffs.
 
     Args:
         vshale (np.ndarray or float): Vshale values.
         phit (np.ndarray or float): Total porosity values.
         swt (np.ndarray or float): Water saturation values.
-        cutoffs (dict): A dictionary with 'VSHALE', 'PHIT', and 'SWT' cutoffs.
+        cutoffs (dict): A dictionary with 'VSHALE', 'PHIT', and 'SWT' cutoffs,
+                        and an optional 'PERM' cutoff (k_min).
         fluid_type (np.ndarray or pd.Series, optional): Categorical fluid types (e.g. 'GAS', 'OIL', 'WATER').
+        perm (np.ndarray or float, optional): Permeability values for minimum permeability cutoff.
 
     Returns:
         tuple[np.ndarray, np.ndarray, np.ndarray]: A tuple containing the rock, reservoir, and pay flags.
     """
-    if len(cutoffs) != 3:
+    c_map = {str(k).upper(): v for k, v in cutoffs.items()}
+    vsh_cut = c_map.get("VSHALE", c_map.get("VSH", c_map.get("VCLAY")))
+    phi_cut = c_map.get("PHIT", c_map.get("PHI", c_map.get("PHIE")))
+    sw_cut = c_map.get("SWT", c_map.get("SW"))
+    perm_cut = c_map.get("PERM", c_map.get("K", c_map.get("PERM_MIN")))
+
+    if vsh_cut is None or phi_cut is None or sw_cut is None:
         logger.error(
-            f"Invalid cutoffs format: expected 3 key-value pairs, got {len(cutoffs)}"
+            f"Invalid cutoffs format: missing required keys in {cutoffs}"
         )
         raise AssertionError(
-            "cutoffs must be 3 key-value pairs: {VSHALE: x, PHIT: y, SWT: z}."
+            "cutoffs must contain at least: {VSHALE: x, PHIT: y, SWT: z}."
         )
 
     logger.debug(
-        f"Flagging intervals with cutoffs: VSHALE={cutoffs.get('VSHALE')}, "
-        f"PHIT={cutoffs.get('PHIT')}, SWT={cutoffs.get('SWT')}"
+        f"Flagging intervals with cutoffs: VSHALE={vsh_cut}, "
+        f"PHIT={phi_cut}, SWT={sw_cut}"
+        + (f", PERM={perm_cut}" if perm_cut is not None else "")
     )
 
-    rock_flag = np.where(vshale < cutoffs["VSHALE"], 1, 0)
-    reservoir_flag = np.where(rock_flag == 1, np.where(phit > cutoffs["PHIT"], 1, 0), 0)
-    pay_flag = np.where(reservoir_flag == 1, np.where(swt < cutoffs["SWT"], 1, 0), 0)
+    rock_flag = np.where(vshale < float(vsh_cut), 1, 0)
+    reservoir_flag = np.where(
+        rock_flag == 1, np.where(phit > float(phi_cut), 1, 0), 0
+    )
+
+    if perm_cut is not None and perm is not None:
+        perm_val = np.asarray(perm, dtype=float)
+        valid_perm = np.where(np.isfinite(perm_val), perm_val >= float(perm_cut), False)
+        reservoir_flag = np.where(valid_perm, reservoir_flag, 0)
+
+    pay_flag = np.where(reservoir_flag == 1, np.where(swt < float(sw_cut), 1, 0), 0)
     if fluid_type is not None:
         ft_arr = np.asarray(fluid_type, dtype=object)
         ft_series = pd.Series(ft_arr).astype(str).str.upper().str.strip()

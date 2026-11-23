@@ -493,6 +493,7 @@ def upscale_logs(
             work[phi_c].to_numpy(dtype=float),
             work[sw_c].to_numpy(dtype=float),
             cutoffs,
+            perm=work[perm_c].to_numpy(dtype=float) if perm_c else None,
         )
         work["_rock_flag"] = r_flag
         work["_res_flag"] = res_flag

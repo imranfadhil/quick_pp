@@ -414,6 +414,8 @@ export interface ResSumParams {
 	vshMax: number;
 	phitMin: number;
 	swtMax: number;
+	applyPermCutoff: boolean;
+	permMin: number;
 	includeUpscaling: boolean;
 	byZone: boolean;
 	cellSize: number;
@@ -1131,6 +1133,8 @@ class WorkbenchState {
 		vshMax: 0.4,
 		phitMin: 0.05,
 		swtMax: 0.75,
+		applyPermCutoff: false,
+		permMin: 1.0,
 		includeUpscaling: true,
 		byZone: false,
 		cellSize: 2.0,

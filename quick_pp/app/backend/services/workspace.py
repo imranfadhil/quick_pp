@@ -99,7 +99,7 @@ from quick_pp.qaqc import (
     neu_den_xplot_hc_correction_angle,
     stratigraphic_normalization,
 )
-from quick_pp.ressum import calc_reservoir_summary
+from quick_pp.ressum import calc_reservoir_summary, flag_interval
 from quick_pp.rock_type import (
     apply_lucia_rfn_override,
     calc_fzi,
@@ -2102,6 +2102,7 @@ class WorkspaceReservoirSummaryRequest(WorkspaceFilterBase):
     omega: float = Field(0.33)
     include_uncertainty: bool = Field(False)
     n_samples: int = Field(100)
+    save: bool = Field(False, description="Persist cutoffs into well config")
 
 
 class WorkspaceMultiWellVolumetricsRequest(WorkspaceFilterBase):
@@ -7731,21 +7732,14 @@ def workspace_reservoir_summary(
             fluid_type=fluid_type_s,
         )
         ressum_df = ressum_df.dropna(how="all").reset_index(drop=True)
-        res_flag = (
-            (vclay < float(req.cut_offs.get("VSHALE", 0.4)))
-            & (phit > float(req.cut_offs.get("PHIT", 0.05)))
-        ).astype(int)
-        is_hc = (
-            ~fluid_type_s.astype(str)
-            .str.upper()
-            .str.strip()
-            .isin(["WATER", "NON_RESERVOIR", "DRY", "WET", "NONE", "NAN"])
-            if fluid_type_s is not None
-            else pd.Series(True, index=df.index)
+        _, res_flag, pay_flag = flag_interval(
+            vshale=vclay,
+            phit=phit,
+            swt=swt,
+            cutoffs=req.cut_offs,
+            fluid_type=fluid_type_s,
+            perm=perm,
         )
-        pay_flag = (
-            (res_flag == 1) & (swt < float(req.cut_offs.get("SWT", 0.8))) & is_hc
-        ).astype(int)
         flags_df = pd.DataFrame(
             {
                 "DEPTH": depth,
@@ -7754,6 +7748,24 @@ def workspace_reservoir_summary(
                 "PAY_FLAGS": pay_flag,
             }
         )
+
+        if req.save:
+            eph_cfg = _ephemeral_well_configs.setdefault((project_id, str(well_name)), {})
+            eph_cfg["ressum_cutoffs"] = dict(req.cut_offs)
+            if not is_demo_mode():
+                try:
+                    with get_db() as session:
+                        well_orm = session.scalar(
+                            select(db_models.Well).filter_by(project_id=project_id, name=str(well_name))
+                        )
+                        if well_orm:
+                            cfg_data = dict(well_orm.config_data or {})
+                            cfg_data["ressum_cutoffs"] = dict(req.cut_offs)
+                            well_orm.config_data = cfg_data
+                            flag_modified(well_orm, "config_data")
+                            session.commit()
+                except Exception as exc:
+                    logger.warning(f"Could not persist ressum_cutoffs to DB: {exc}")
 
         response: Dict[str, Any] = {
             "well_name": well_name,

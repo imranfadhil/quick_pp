@@ -129,7 +129,9 @@ export const SINGLE_WELL_REGIONAL_DEFAULTS: Record<ParamModuleKey, Record<string
 	ressum: {
 		vclCutoff: 0.4,
 		phieCutoff: 0.08,
-		swCutoff: 0.6
+		swCutoff: 0.6,
+		applyPermCutoff: false,
+		permMin: 1.0
 	}
 };
 
