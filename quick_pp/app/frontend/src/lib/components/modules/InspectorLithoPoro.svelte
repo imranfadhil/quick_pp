@@ -412,6 +412,8 @@
 			save: persist && !selectionMode
 		};
 
+		const activeOverrides = (lp.manualOverrides ?? []).filter((o) => o.enabled !== false);
+
 		const coalArgs = {
 			enable_coal_flagging: lp.enableCoalFlagging,
 			coal_rhob_max: lp.coalRhobMax,
@@ -421,7 +423,8 @@
 			coal_buffer_pts: Math.round(lp.coalBufferPts ?? 1),
 			coal_bridge_gap: Math.round(lp.coalBridgeGap ?? 2),
 			coal_adaptive_shoulder: lp.coalAdaptiveShoulder ?? true,
-			badhole_treatment: lp.badholeTreatment
+			badhole_treatment: lp.badholeTreatment,
+			manual_overrides: activeOverrides
 		};
 		const gammaArgs = gammaParameters(lp);
 
@@ -543,9 +546,6 @@
 						phi_max: lp.model === 'multi_mineral' ? lp.phiMax : undefined,
 						linearize_pef: lp.model === 'multi_mineral' ? lp.linearizePef : undefined,
 						porosity_method: lp.porosityMethod,
-						manual_overrides: lp.manualOverrides?.filter((o) => o.enabled !== false).length
-							? lp.manualOverrides.filter((o) => o.enabled !== false)
-							: undefined,
 						...gammaArgs,
 						...coalArgs,
 						...filterArgs
@@ -598,9 +598,6 @@
 						gr_clean: lp.grClean,
 						gr_clay: lp.grClay,
 						grain_density_correlation: grainDensityCorrelationBody(),
-						manual_overrides: lp.manualOverrides?.filter((o) => o.enabled !== false).length
-							? lp.manualOverrides.filter((o) => o.enabled !== false)
-							: undefined,
 						...gammaArgs,
 						...coalArgs,
 						...filterArgs

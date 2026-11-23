@@ -181,6 +181,90 @@ class TestLithoPorosityOverrides(unittest.TestCase):
         # Flagged badhole with 'ignore' mode should have NaN for PHIT
         self.assertTrue(df_res.loc[bh_mask, "PHIT"].isna().all())
 
+    def test_reversibility_when_overrides_removed_or_toggled_off(self):
+        """Test that removing or disabling manual overrides completely restores baseline flags, volumes, and porosity."""
+        # 1. First run with active coal and badhole overrides
+        req_active = WorkspaceLithologyRequest(
+            model="ssc",
+            wet_clay_point=(0.45, 1.80),
+            enable_coal_flagging=False,
+            badhole_treatment="vsh_gr",
+            manual_overrides=[
+                {
+                    "id": "ov-coal",
+                    "top": 2002.0,
+                    "bottom": 2004.0,
+                    "coalMode": "flag",
+                    "badholeMode": "keep",
+                    "enabled": True,
+                },
+                {
+                    "id": "ov-bh",
+                    "top": 2005.0,
+                    "bottom": 2007.0,
+                    "coalMode": "keep",
+                    "badholeMode": "flag",
+                    "enabled": True,
+                },
+            ],
+            save=False,
+        )
+        res_active = workspace_lithology(self.project_id, self.well_name, req_active)
+        df_act = pd.DataFrame(res_active["data"])
+        coal_mask = (df_act["DEPTH"] >= 2002.0) & (df_act["DEPTH"] <= 2004.0)
+        bh_mask = (df_act["DEPTH"] >= 2005.0) & (df_act["DEPTH"] <= 2007.0)
+
+        self.assertTrue((df_act.loc[coal_mask, "COAL_FLAG"] == 1.0).all())
+        self.assertTrue((df_act.loc[coal_mask, "VCOAL"] == 1.0).all())
+        self.assertTrue((df_act.loc[bh_mask, "BADHOLE"] == 1.0).all())
+
+        # Update simulated well data with the previous output (simulating saved/cached curves)
+        sim_df = self.isolated.data.copy()
+        sim_df["BADHOLE"] = df_act["BADHOLE"]
+        sim_df["COAL_FLAG"] = df_act["COAL_FLAG"]
+        sim_df["VCOAL"] = df_act["VCOAL"]
+        self.isolated.data = sim_df
+
+        # 2. Subsequent run with overrides toggled off / deleted (empty list)
+        req_reverted = WorkspaceLithologyRequest(
+            model="ssc",
+            wet_clay_point=(0.45, 1.80),
+            enable_coal_flagging=False,
+            badhole_treatment="vsh_gr",
+            manual_overrides=[],  # Deleted / cleared overrides
+            save=False,
+        )
+        res_reverted = workspace_lithology(self.project_id, self.well_name, req_reverted)
+        df_rev = pd.DataFrame(res_reverted["data"])
+
+        # Both intervals must be fully reverted!
+        self.assertTrue((df_rev.loc[coal_mask, "COAL_FLAG"] == 0.0).all(), "COAL_FLAG should revert to 0.0")
+        self.assertTrue((df_rev.loc[coal_mask, "VCOAL"] == 0.0).all(), "VCOAL should revert to 0.0")
+        self.assertTrue((df_rev.loc[bh_mask, "BADHOLE"] == 0.0).all(), "BADHOLE should revert to 0.0")
+        total_minerals = (
+            df_rev.loc[coal_mask, "VSAND"] + df_rev.loc[coal_mask, "VSILT"] + df_rev.loc[coal_mask, "VCLAY"]
+        )
+        self.assertTrue((total_minerals > 0.9).all(), "Clean minerals should restore in former coal interval")
+
+        # 3. Verify porosity also reverts cleanly
+        poro_req_reverted = WorkspacePorosityRequest(
+            method="den",
+            lithology_model="ssc",
+            badhole_treatment="ignore",
+            enable_coal_flagging=False,
+            manual_overrides=[],  # Deleted / cleared overrides
+            save=False,
+        )
+        res_poro_rev = workspace_porosity(self.project_id, self.well_name, poro_req_reverted)
+        df_poro_rev = pd.DataFrame(res_poro_rev["data"])
+
+        # Porosity in former coal interval should be finite and positive
+        self.assertTrue((df_poro_rev.loc[coal_mask, "PHIT"] > 0.05).all(), "PHIT should restore to normal porosity")
+        # Porosity in former badhole interval should not be NaN
+        self.assertTrue(
+            df_poro_rev.loc[bh_mask, "PHIT"].notna().all(), "PHIT should restore in reverted badhole interval"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1048,10 +1048,34 @@ def _apply_grain_density_correlation(
     )
 
 
-def _resolve_badhole_mask(
-    df: pd.DataFrame, auto_detect_if_missing: bool = False
-) -> pd.Series:
-    """Resolve boolean mask for badhole intervals from BADHOLE/BAD_HOLE/BAD_HOLE_FLAG or on-the-fly detection."""
+def _resolve_baseline_badhole_mask(df: pd.DataFrame, auto_detect_if_missing: bool = False) -> pd.Series:
+    """Resolve pristine baseline boolean mask for badhole intervals prior to interactive manual overrides."""
+    for col in ("BADHOLE_BASE", "BADHOLE_QAQC", "BADHOLE_RAW"):
+        if col in df.columns:
+            s = pd.to_numeric(df[col], errors="coerce")
+            if s.notna().any():
+                return (s.fillna(0.0) >= 0.5).astype(bool)
+
+    # If no explicit BADHOLE_BASE exists, but CALI is available, prefer physical badhole detection
+    # from caliper / DRHO to establish the physical baseline, avoiding contamination from previous manual overrides.
+    cali_cands = [c for c in ("CALI", "CAL", "C13", "C24") if c in df.columns]
+    if cali_cands:
+        try:
+            bh_df = badhole_flagging(
+                df,
+                thold=2.0,
+                use_cali=True,
+                auto_bitsize=True,
+                use_drho=True,
+                drho_threshold=0.15,
+            )
+            if "BADHOLE" in bh_df.columns:
+                return (pd.to_numeric(bh_df["BADHOLE"], errors="coerce").reindex(df.index).fillna(0.0) >= 0.5).astype(
+                    bool
+                )
+        except Exception:
+            pass
+
     for col in ("BADHOLE", "BAD_HOLE", "BAD_HOLE_FLAG"):
         if col in df.columns:
             s = pd.to_numeric(df[col], errors="coerce")
@@ -1076,6 +1100,43 @@ def _resolve_badhole_mask(
                 ).astype(bool)
         except Exception:
             pass
+    return pd.Series(False, index=df.index, dtype=bool)
+
+
+def _resolve_badhole_mask(df: pd.DataFrame, auto_detect_if_missing: bool = False) -> pd.Series:
+    """Resolve boolean mask for badhole intervals from BADHOLE or on-the-fly detection."""
+    return _resolve_baseline_badhole_mask(df, auto_detect_if_missing=auto_detect_if_missing)
+
+
+def _resolve_baseline_coal_mask(
+    df: pd.DataFrame,
+    enable_coal_flagging: bool = False,
+    coal_rhob_max: float = 2.0,
+    coal_nphi_min: float = 0.30,
+    coal_window_size: int = 41,
+    coal_trend_factor: float = 0.05,
+    coal_buffer_pts: int = 1,
+    coal_bridge_gap: int = 2,
+    coal_adaptive_shoulder: bool = True,
+) -> pd.Series:
+    """Resolve pristine baseline boolean mask for coal intervals prior to interactive manual overrides."""
+    if enable_coal_flagging:
+        return _compute_coal_mask(
+            df,
+            enable_coal_flagging=True,
+            coal_rhob_max=coal_rhob_max,
+            coal_nphi_min=coal_nphi_min,
+            coal_window_size=coal_window_size,
+            coal_trend_factor=coal_trend_factor,
+            coal_buffer_pts=coal_buffer_pts,
+            coal_bridge_gap=coal_bridge_gap,
+            coal_adaptive_shoulder=coal_adaptive_shoulder,
+        )
+    for col in ("COAL_FLAG_BASE", "COAL_FLAG_RAW"):
+        if col in df.columns:
+            s = pd.to_numeric(df[col], errors="coerce")
+            if s.notna().any():
+                return (s.fillna(0.0) >= 0.5).astype(bool)
     return pd.Series(False, index=df.index, dtype=bool)
 
 
@@ -3303,6 +3364,32 @@ def workspace_hc_correction(
             badhole_mask = _resolve_badhole_mask(df, auto_detect_if_missing=True) & (
                 ~coal_mask
             )
+            if req.manual_overrides:
+                depth_series = df["DEPTH"]
+                for ov in req.manual_overrides:
+                    if not isinstance(ov, dict) or ov.get("enabled") is False:
+                        continue
+                    top_d = ov.get("top")
+                    bot_d = ov.get("bottom")
+                    if top_d is None or bot_d is None:
+                        continue
+                    try:
+                        t_val = min(float(top_d), float(bot_d))
+                        b_val = max(float(top_d), float(bot_d))
+                    except (ValueError, TypeError):
+                        continue
+                    mask = (depth_series >= t_val) & (depth_series <= b_val)
+                    if not mask.any():
+                        continue
+                    bh_mode_ov = str(ov.get("badholeMode") or ov.get("badhole_mode") or "").lower().strip()
+                    target = str(ov.get("target") or ov.get("flag_type") or "").upper().strip()
+                    action = str(ov.get("action") or "").lower().strip()
+                    if target in ("BADHOLE", "BOTH"):
+                        bh_mode_ov = action or "flag"
+                    if bh_mode_ov in ("flag", "force_badhole", "badhole", "1", "true"):
+                        badhole_mask.loc[mask] = True
+                    elif bh_mode_ov in ("clear", "clear_badhole", "good_hole", "0", "false"):
+                        badhole_mask.loc[mask] = False
             if badhole_mask.any():
                 nphi_hc_full.loc[badhole_mask] = nphi.loc[badhole_mask]
                 rhob_hc_full.loc[badhole_mask] = rhob.loc[badhole_mask]
@@ -3725,16 +3812,17 @@ def workspace_badhole_flagging(
             rhob_trend_factor=float(req.rhob_trend_factor),
             cali_spike_threshold=float(req.cali_spike_threshold),
         )
-        out_cols = ["DEPTH", "BADHOLE"]
+        out_cols = ["DEPTH", "BADHOLE", "BADHOLE_BASE"]
         if "BS" in bh_df.columns and bh_df["BS"].notna().any():
             out_cols.append("BS")
         if "DCALI" in bh_df.columns and bh_df["DCALI"].notna().any():
             out_cols.append("DCALI")
 
-        out_df = bh_df[out_cols].copy()
+        out_df = bh_df[[c for c in out_cols if c in bh_df.columns or c in ("DEPTH", "BADHOLE")]].copy()
         out_df["BADHOLE"] = pd.to_numeric(out_df["BADHOLE"], errors="coerce").fillna(
             0.0
         )
+        out_df["BADHOLE_BASE"] = out_df["BADHOLE"].copy()
 
         saved_rows = 0
         if req.save:
@@ -4847,30 +4935,24 @@ def workspace_lithology(
         else:
             raise ValueError(f"Unsupported lithology model: {req.model}")
 
-        if req.enable_coal_flagging:
-            coal_mask = _compute_coal_mask(
-                df,
-                enable_coal_flagging=True,
-                coal_rhob_max=req.coal_rhob_max,
-                coal_nphi_min=req.coal_nphi_min,
-                coal_window_size=req.coal_window_size,
-                coal_trend_factor=req.coal_trend_factor,
-                coal_buffer_pts=req.coal_buffer_pts,
-                coal_bridge_gap=req.coal_bridge_gap,
-                coal_adaptive_shoulder=req.coal_adaptive_shoulder,
-            )
-        elif "COAL_FLAG" in df.columns:
-            coal_mask = (
-                pd.to_numeric(df["COAL_FLAG"], errors="coerce").fillna(0.0) >= 0.5
-            )
-        else:
-            coal_mask = pd.Series(False, index=df.index, dtype=bool)
+        enable_coal = bool(req.enable_coal_flagging)
+        baseline_coal = _resolve_baseline_coal_mask(
+            df,
+            enable_coal_flagging=enable_coal,
+            coal_rhob_max=req.coal_rhob_max,
+            coal_nphi_min=req.coal_nphi_min,
+            coal_window_size=req.coal_window_size,
+            coal_trend_factor=req.coal_trend_factor,
+            coal_buffer_pts=req.coal_buffer_pts,
+            coal_bridge_gap=req.coal_bridge_gap,
+            coal_adaptive_shoulder=req.coal_adaptive_shoulder,
+        )
+        coal_mask = baseline_coal.copy()
 
         # Badhole interval treatment for lithology volumes
         bh_mode = (req.badhole_treatment or "none").strip().lower()
-        badhole_mask = _resolve_badhole_mask(
-            df, auto_detect_if_missing=(bh_mode != "none")
-        )
+        baseline_badhole = _resolve_baseline_badhole_mask(df, auto_detect_if_missing=(bh_mode != "none"))
+        badhole_mask = baseline_badhole.copy()
 
         # Apply manual interactive overrides if provided
         if req.manual_overrides:
@@ -4916,6 +4998,12 @@ def workspace_lithology(
         if "COAL_FLAG" not in save_cols:
             save_cols.append("COAL_FLAG")
 
+        # Preserve COAL_FLAG_BASE
+        out_df["COAL_FLAG_BASE"] = pd.Series(np.nan, index=df.index, dtype=float)
+        out_df["COAL_FLAG_BASE"].loc[valid_mask] = np.where(baseline_coal.loc[valid_mask], 1.0, 0.0)
+        if "COAL_FLAG_BASE" not in save_cols:
+            save_cols.append("COAL_FLAG_BASE")
+
         active_coal = valid_mask & coal_mask
         if active_coal.any():
             if "VCOAL" not in out_df.columns:
@@ -4929,12 +5017,21 @@ def workspace_lithology(
                 out_df.loc[active_coal, "PHIT_CONSTRUCTED"] = 0.0
             if "VCOAL" not in save_cols and "VCOAL" in out_df.columns:
                 save_cols.append("VCOAL")
+        elif "VCOAL" in out_df.columns:
+            # When active_coal is not flagged or cleared, ensure VCOAL is zeroed
+            if model in ("ssc", "sand_shale", "vsh_nd", "vsh_gr"):
+                out_df["VCOAL"] = pd.Series(0.0, index=df.index, dtype=float)
+                out_df.loc[~valid_mask, "VCOAL"] = np.nan
 
         active_badhole = badhole_mask & (~coal_mask)
-        if bh_mode != "none" or badhole_mask.any() or "BADHOLE" in df.columns or (req.manual_overrides and len(req.manual_overrides) > 0):
-            out_df["BADHOLE"] = np.where(badhole_mask, 1.0, 0.0)
-            if "BADHOLE" not in save_cols:
-                save_cols.append("BADHOLE")
+        out_df["BADHOLE"] = np.where(badhole_mask, 1.0, 0.0)
+        if "BADHOLE" not in save_cols:
+            save_cols.append("BADHOLE")
+
+        # Always preserve pristine BADHOLE_BASE
+        out_df["BADHOLE_BASE"] = np.where(baseline_badhole, 1.0, 0.0)
+        if "BADHOLE_BASE" not in save_cols:
+            save_cols.append("BADHOLE_BASE")
 
         if bh_mode != "none" and active_badhole.any():
             if bh_mode in ("vsh_gr", "gr"):
@@ -5856,29 +5953,23 @@ def workspace_porosity(
         phit_sh_s.loc[valid_mask] = np.clip(phit_sh_v, 0.0, 1.0)
         rhom_s.loc[valid_mask] = rho_ma
 
-        if req.enable_coal_flagging:
-            coal_mask = _compute_coal_mask(
-                df,
-                enable_coal_flagging=True,
-                coal_rhob_max=req.coal_rhob_max,
-                coal_nphi_min=req.coal_nphi_min,
-                coal_window_size=req.coal_window_size,
-                coal_trend_factor=req.coal_trend_factor,
-                coal_buffer_pts=req.coal_buffer_pts,
-                coal_bridge_gap=req.coal_bridge_gap,
-                coal_adaptive_shoulder=req.coal_adaptive_shoulder,
-            )
-        elif "COAL_FLAG" in df.columns:
-            coal_mask = (
-                pd.to_numeric(df["COAL_FLAG"], errors="coerce").fillna(0.0) >= 0.5
-            )
-        else:
-            coal_mask = pd.Series(False, index=df.index, dtype=bool)
+        enable_coal = bool(req.enable_coal_flagging)
+        baseline_coal = _resolve_baseline_coal_mask(
+            df,
+            enable_coal_flagging=enable_coal,
+            coal_rhob_max=req.coal_rhob_max,
+            coal_nphi_min=req.coal_nphi_min,
+            coal_window_size=req.coal_window_size,
+            coal_trend_factor=req.coal_trend_factor,
+            coal_buffer_pts=req.coal_buffer_pts,
+            coal_bridge_gap=req.coal_bridge_gap,
+            coal_adaptive_shoulder=req.coal_adaptive_shoulder,
+        )
+        coal_mask = baseline_coal.copy()
 
         bh_mode = (req.badhole_treatment or "none").strip().lower()
-        badhole_mask = _resolve_badhole_mask(
-            df, auto_detect_if_missing=(bh_mode != "none")
-        )
+        baseline_badhole = _resolve_baseline_badhole_mask(df, auto_detect_if_missing=(bh_mode != "none"))
+        badhole_mask = baseline_badhole.copy()
 
         # Apply manual interactive overrides if provided
         if req.manual_overrides:
@@ -12748,9 +12839,11 @@ def workspace_multi_well_badhole_flagging(
                 cali_spike_threshold=req.cali_spike_threshold,
             )
             summary = dict(bh_df.attrs.get("badhole_summary", {}))
-            out_cols = [c for c in ("BADHOLE", "BS", "DCALI") if c in bh_df.columns]
+            out_cols = [c for c in ("BADHOLE", "BADHOLE_BASE", "BS", "DCALI") if c in bh_df.columns]
             if out_cols and "DEPTH" in bh_df.columns:
                 sub_df = bh_df[["DEPTH"] + out_cols].copy()
+                if "BADHOLE" in sub_df.columns and "BADHOLE_BASE" not in sub_df.columns:
+                    sub_df["BADHOLE_BASE"] = sub_df["BADHOLE"].copy()
                 if req.save:
                     _save_curves_to_well(project_id, wn, sub_df)
                     saved_wells += 1
