@@ -263,6 +263,26 @@
 		}
 	});
 
+	let activeOverridesCount = $derived(
+		(workbench.saturationParams.manualOverrides ?? []).filter(
+			(o) => o.enabled !== false && Number.isFinite(o.top) && Number.isFinite(o.bottom)
+		).length
+	);
+	let hasActiveOverrides = $derived(activeOverridesCount > 0);
+
+	let currentDepthOverride = $derived.by(() => {
+		if (activeInspectionDepth === null) return null;
+		const overrides = (workbench.saturationParams.manualOverrides ?? []).filter(
+			(o) => o.enabled !== false && Number.isFinite(o.top) && Number.isFinite(o.bottom)
+		);
+		const d = activeInspectionDepth;
+		return (
+			overrides.find(
+				(o) => d >= Math.min(o.top, o.bottom) && d <= Math.max(o.top, o.bottom)
+			) ?? null
+		);
+	});
+
 	const DTC_ALIASES = ['DTC', 'DT', 'DTCO', 'AC', 'DT4P'] as const;
 
 	let hasDtc = $derived.by(() => {
@@ -4529,71 +4549,97 @@
 				{/if}
 			</div>
 
-			<!-- Track 7: SW (1.0 <- 0.0 v/v) & SHF / SWIRR / PAY -->
+			<!-- Track 7: SW (1.0 <- 0.0 v/v), Fluid Types & Pay / Override Flags -->
 			<div
 				style="left: 85.4%; width: 14.6%;"
 				class="absolute inset-y-0 flex flex-col justify-between overflow-hidden border-x border-slate-200/70 px-1 py-0.5"
 			>
-				{#if wellData.curves['SHF'] || wellData.curves['SW_SHF']}
-					<div class="flex flex-col">
-						<div
-							class="mono-num flex items-center justify-between text-[8px] leading-none font-semibold whitespace-nowrap text-[#DC2626]"
-						>
-							<span>1.0</span>
-							<span class="font-sans text-[8px] font-bold">
-								◄ {wellData.curves['SW_SHF'] && !wellData.curves['SHF']
-									? 'SW_SHF'
-									: 'SHF'}
-							</span>
-							<span>0.0</span>
-						</div>
-						<div
-							class="mt-[1px] h-0 w-full border-t-[1.5px] border-dashed border-[#DC2626]"
-						></div>
-					</div>
-				{:else if !wellData.curves['SWIRR']}
-					<div></div>
-				{/if}
-				{#if wellData.curves['SWIRR']}
-					<div class="flex flex-col">
-						<div
-							class="mono-num flex items-center justify-between text-[8px] leading-none font-semibold whitespace-nowrap text-[#D97706]"
-						>
-							<span>1.0</span>
-							<span class="font-sans text-[8px] font-bold">◄ SWIRR</span>
-							<span>0.0</span>
-						</div>
-						<div
-							class="mt-[1px] h-0 w-full border-t-[1.5px] border-dotted border-[#D97706]"
-						></div>
-					</div>
-				{/if}
+				<!-- Top row: Saturation Scale & Curves (SW, SWIRR, SHF) -->
 				<div class="flex flex-col">
 					<div
-						class="mono-num flex items-center justify-between font-semibold whitespace-nowrap"
-						style="color: {PETRO_COLORS.water}"
+						class="mono-num flex items-center justify-between text-[8px] leading-none font-semibold whitespace-nowrap text-slate-700"
 					>
 						<span>1.0</span>
-						<span class="inline-flex items-center gap-1 font-sans text-[9px] font-bold">
-							<span>◄ SW / PAY</span>
-							<span
-								class="inline-flex items-center gap-0.5"
-								title="Fluid Pay Shades: Gas (Red), Oil (Green), Unconfirmed (Amber)"
-							>
-								<span class="inline-block h-1.5 w-1.5 rounded-full bg-red-500"
-								></span>
-								<span class="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500"
-								></span>
-								<span class="inline-block h-1.5 w-1.5 rounded-full bg-amber-500"
-								></span>
-							</span>
+						<span class="inline-flex items-center gap-1 font-sans text-[8px] font-bold">
+							<span style="color: {PETRO_COLORS.water}">◄ SW</span>
+							{#if wellData.curves['SWIRR']}
+								<span class="text-[#D97706] font-semibold" title="Irreducible Water Saturation (dotted orange)">· SWIRR</span>
+							{/if}
+							{#if wellData.curves['SHF'] || wellData.curves['SW_SHF']}
+								<span class="text-[#DC2626] font-semibold" title="Saturation Height Model (dashed red)">· SHF</span>
+							{/if}
 						</span>
 						<span>0.0</span>
 					</div>
-					<div
-						class="h-0.5 w-full rounded-full"
-						style="background: {PETRO_COLORS.water}"
-					></div>
+					<div class="mt-0.5 flex w-full items-center gap-0.5">
+						<div class="h-[1.5px] flex-1" style="background: {PETRO_COLORS.water}" title="SW (solid blue)"></div>
+						{#if wellData.curves['SWIRR']}
+							<div class="h-0 flex-1 border-t-[1.5px] border-dotted border-[#D97706]" title="SWIRR (dotted orange)"></div>
+						{/if}
+						{#if wellData.curves['SHF'] || wellData.curves['SW_SHF']}
+							<div class="h-0 flex-1 border-t-[1.5px] border-dashed border-[#DC2626]" title="SHF (dashed red)"></div>
+						{/if}
+					</div>
+				</div>
+
+				<!-- Middle row: Fluid Phase Shading Legend chips (Gas, Oil, Water, Unconfirmed) emulating Lithology chips -->
+				<div class="flex flex-wrap items-center justify-center gap-0.5">
+					<span
+						class="rounded-2xs inline-flex items-center gap-0.5 border border-slate-200/80 bg-white/95 px-1 py-0 text-[7px] leading-tight font-semibold text-slate-700 shadow-2xs"
+						title="Gas Pay Phase: Red shade between Sw and 1.0"
+					>
+						<span
+							class="rounded-2xs inline-block h-1.5 w-1.5 border border-red-600 bg-red-500"
+						></span>
+						<span>Gas</span>
+					</span>
+					<span
+						class="rounded-2xs inline-flex items-center gap-0.5 border border-slate-200/80 bg-white/95 px-1 py-0 text-[7px] leading-tight font-semibold text-slate-700 shadow-2xs"
+						title="Oil Pay Phase: Green shade between Sw and 1.0"
+					>
+						<span
+							class="rounded-2xs inline-block h-1.5 w-1.5 border border-emerald-600 bg-emerald-500"
+						></span>
+						<span>Oil</span>
+					</span>
+					<span
+						class="rounded-2xs inline-flex items-center gap-0.5 border border-slate-200/80 bg-white/95 px-1 py-0 text-[7px] leading-tight font-semibold text-slate-700 shadow-2xs"
+						title="Water Saturation: Light blue shade between 0.0 and Sw"
+					>
+						<span
+							class="rounded-2xs inline-block h-1.5 w-1.5 border border-blue-500 bg-blue-300"
+						></span>
+						<span>Water</span>
+					</span>
+					<span
+						class="rounded-2xs inline-flex items-center gap-0.5 border border-slate-200/80 bg-white/95 px-1 py-0 text-[7px] leading-tight font-semibold text-slate-700 shadow-2xs"
+						title="Unconfirmed Hydrocarbon: Amber shade between Sw and 1.0"
+					>
+						<span
+							class="rounded-2xs inline-block h-1.5 w-1.5 border border-amber-600 bg-amber-500"
+						></span>
+						<span>Unconf</span>
+					</span>
+				</div>
+
+				<!-- Bottom row: Track Edge Flags (Pay Flag strip & Manual Override strip) -->
+				<div class="flex items-center justify-between border-t border-slate-200/70 pt-0.5">
+					<span
+						class="rounded-2xs inline-flex items-center gap-1 border border-emerald-300/80 bg-emerald-50/90 px-1 py-0 text-[7px] leading-tight font-bold text-emerald-800 shadow-2xs"
+						title="Net Pay Flag: Green vertical strip on track edge"
+					>
+						<span class="inline-block h-2 w-1 rounded-xs bg-[#15803D]"></span>
+						<span>Pay Flag</span>
+					</span>
+					<span
+						class="rounded-2xs inline-flex items-center gap-1 border {hasActiveOverrides
+							? 'border-purple-300 bg-purple-50 text-purple-900 font-bold'
+							: 'border-slate-200 bg-slate-50/80 text-slate-500 font-medium opacity-75'} px-1 py-0 text-[7px] leading-tight shadow-2xs"
+						title="Manual Saturation Overrides: Purple vertical bar indicator ({activeOverridesCount} active)"
+					>
+						<span class="inline-block h-2 w-1 rounded-xs bg-[#8B5CF6]"></span>
+						<span>Override{hasActiveOverrides ? ` (${activeOverridesCount})` : ''}</span>
+					</span>
 				</div>
 			</div>
 		</div>
@@ -5305,7 +5351,27 @@
 							class="flex items-center justify-between border-b border-slate-300 pb-0.5 font-bold text-slate-700"
 						>
 							<span>T7 · SAT</span>
-							<span class="text-[7.5px] text-slate-600">FLUIDS</span>
+							{#if readout.GAS_FLAG !== null && readout.GAS_FLAG !== undefined && readout.GAS_FLAG > 0}
+								<span
+									class="rounded-2xs border border-red-300 bg-red-100 px-1 py-0 text-[7px] font-bold text-red-700"
+									>GAS</span
+								>
+							{:else if readout.OIL_FLAG !== null && readout.OIL_FLAG !== undefined && readout.OIL_FLAG > 0}
+								<span
+									class="rounded-2xs border border-emerald-300 bg-emerald-100 px-1 py-0 text-[7px] font-bold text-emerald-700"
+									>OIL</span
+								>
+							{:else if readout.UNC_FLAG !== null && readout.UNC_FLAG !== undefined && readout.UNC_FLAG > 0}
+								<span
+									class="rounded-2xs border border-amber-300 bg-amber-100 px-1 py-0 text-[7px] font-bold text-amber-700"
+									>UNCONF</span
+								>
+							{:else}
+								<span
+									class="rounded-2xs border border-blue-200 bg-blue-50 px-1 py-0 text-[7px] font-semibold text-blue-700"
+									>WATER</span
+								>
+							{/if}
 						</div>
 						<div class="flex items-center justify-between">
 							<span class="font-bold" style="color: {PETRO_COLORS.water}">SW</span>
@@ -5330,11 +5396,33 @@
 								>
 							</div>
 						{/if}
-						{#if readout.BADHOLE !== null && readout.BADHOLE !== undefined && readout.BADHOLE >= 0.5}
+						{#if Number(readout.PAY_FLAGS ?? readout.PAY_FLAG ?? 0) > 0 || currentDepthOverride || Number(readout.BADHOLE ?? 0) >= 0.5}
 							<div
-								class="rounded-2xs mt-0.5 bg-red-800/90 text-center text-[7px] font-bold text-white"
+								class="mt-0.5 flex flex-wrap items-center gap-1 border-t border-slate-200/80 pt-0.5"
 							>
-								BADHOLE
+								{#if Number(readout.PAY_FLAGS ?? readout.PAY_FLAG ?? 0) > 0}
+									<span
+										class="rounded-2xs inline-flex items-center gap-0.5 bg-[#15803D] px-1 py-0 text-[7px] font-bold text-white shadow-2xs"
+										title="Net Pay Interval"
+									>
+										PAY
+									</span>
+								{/if}
+								{#if currentDepthOverride}
+									<span
+										class="rounded-2xs inline-flex items-center gap-0.5 bg-[#8B5CF6] px-1 py-0 text-[7px] font-bold text-white shadow-2xs"
+										title="Manual Saturation Override: {currentDepthOverride.fluidType} ({currentDepthOverride.swtMode})"
+									>
+										OVR: {currentDepthOverride.fluidType}
+									</span>
+								{/if}
+								{#if Number(readout.BADHOLE ?? 0) >= 0.5}
+									<span
+										class="rounded-2xs bg-red-800/90 px-1 py-0 text-[7px] font-bold text-white"
+									>
+										BADHOLE
+									</span>
+								{/if}
 							</div>
 						{/if}
 					</div>
