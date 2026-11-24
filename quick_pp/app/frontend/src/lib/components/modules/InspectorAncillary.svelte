@@ -31,6 +31,7 @@
 	let newScalSw = $state<number | null>(0.35);
 	let newScalCpore = $state<number | null>(null);
 	let newScalCperm = $state<number | null>(null);
+	let newScalExpType = $state<string>('porous_plate');
 	// Formation pressure test quick-entry drafts (optional fields may be left blank)
 	let newPressMob = $state<number | null>(null);
 	let newPressPerm = $state<number | null>(null);
@@ -46,13 +47,19 @@
 			previousDepthUnit = unit;
 			if (oldUnit === unit) return;
 			if (newDepth !== null && Number.isFinite(newDepth)) {
-				newDepth = Number(depthFromMeters(depthToMeters(newDepth, oldUnit), unit).toFixed(2));
+				newDepth = Number(
+					depthFromMeters(depthToMeters(newDepth, oldUnit), unit).toFixed(2)
+				);
 			}
 			if (newPerfTop !== null && Number.isFinite(newPerfTop)) {
-				newPerfTop = Number(depthFromMeters(depthToMeters(newPerfTop, oldUnit), unit).toFixed(2));
+				newPerfTop = Number(
+					depthFromMeters(depthToMeters(newPerfTop, oldUnit), unit).toFixed(2)
+				);
 			}
 			if (newPerfBottom !== null && Number.isFinite(newPerfBottom)) {
-				newPerfBottom = Number(depthFromMeters(depthToMeters(newPerfBottom, oldUnit), unit).toFixed(2));
+				newPerfBottom = Number(
+					depthFromMeters(depthToMeters(newPerfBottom, oldUnit), unit).toFixed(2)
+				);
 			}
 		});
 	});
@@ -108,6 +115,7 @@
 	const SCAL_PC_COLS: GridColumn[] = [
 		{ key: 'sample_name', label: 'Sample', editable: true },
 		{ key: 'depth', label: 'Depth', unit: 'm', numeric: true, decimals: 2, editable: true },
+		{ key: 'experiment_type', label: 'Method', editable: true, width: '100px' },
 		{
 			key: 'porosity',
 			label: 'CPORE',
@@ -409,7 +417,9 @@
 					porosity: effPor,
 					permeability: effPerm,
 					rock_type: rt,
-					experiment_type: 'micp',
+					experiment_type: (newScalExpType || lastScal?.experiment_type || 'porous_plate')
+						.trim()
+						.toLowerCase(),
 					cycle: 'drainage'
 				}
 			];
@@ -578,7 +588,11 @@
 						porosity: por,
 						permeability: perm,
 						rock_type: projectData.classifyRockType(por, perm),
-						experiment_type: r.experiment_type || 'micp',
+						experiment_type: String(
+							r.experiment_type || r.type || r.method || 'porous_plate'
+						)
+							.trim()
+							.toLowerCase(),
 						cycle: r.cycle || 'drainage'
 					};
 				})
@@ -678,10 +692,11 @@
 					wellData.coreSamples
 				);
 			} else if (activeTab === 'scal') {
-				// Propagate shared depth, porosity, and permeability for same sample_name if user edited one row
+				// Propagate shared depth, porosity, permeability, and experiment_type for same sample_name if user edited one row
 				const depthBySample = new Map<string, number>();
 				const cporeBySample = new Map<string, number | null>();
 				const cpermBySample = new Map<string, number | null>();
+				const expBySample = new Map<string, string>();
 				for (const r of wellData.scalPc) {
 					const sname = String(r.sample_name || '').trim();
 					if (sname) {
@@ -702,6 +717,9 @@
 							Number.isFinite(Number(r.permeability))
 						) {
 							cpermBySample.set(sname, Number(r.permeability));
+						}
+						if (r.experiment_type) {
+							expBySample.set(sname, String(r.experiment_type).trim().toLowerCase());
 						}
 					}
 				}
@@ -728,7 +746,11 @@
 						porosity: por,
 						permeability: perm,
 						rock_type: projectData.classifyRockType(por, perm),
-						experiment_type: r.experiment_type || 'micp',
+						experiment_type: String(
+							expBySample.get(sname) || r.experiment_type || 'porous_plate'
+						)
+							.trim()
+							.toLowerCase(),
 						cycle: r.cycle || 'drainage'
 					};
 				});
@@ -741,6 +763,7 @@
 					'pc_data',
 					normalizedScal
 				);
+				void projectData.ensureSwirrDataLoaded(true);
 			} else if (activeTab === 'pressure') {
 				// Normalize (blank optional cells -> null) & drop rows missing depth/pressure
 				wellData.pressureTests = wellData.pressureTests
@@ -800,7 +823,10 @@
 
 	async function handleScalCellChange(rowIndex: number, key: string, _newValue: any) {
 		const row = wellData.scalPc[rowIndex];
-		if (row && ['porosity', 'permeability', 'depth', 'sample_name'].includes(key)) {
+		if (
+			row &&
+			['porosity', 'permeability', 'depth', 'sample_name', 'experiment_type'].includes(key)
+		) {
 			const sname = String(row.sample_name || '').trim();
 			if (sname) {
 				const por =
@@ -817,12 +843,16 @@
 						? Number(row.permeability)
 						: null;
 				const depth = Number.isFinite(Number(row.depth)) ? Number(row.depth) : null;
+				const expType = row.experiment_type
+					? String(row.experiment_type).trim().toLowerCase()
+					: null;
 
 				for (const r of wellData.scalPc) {
 					if (String(r.sample_name || '').trim() === sname) {
 						if (key === 'porosity') r.porosity = normPor;
 						if (key === 'permeability') r.permeability = perm;
 						if (key === 'depth' && depth !== null) r.depth = depth;
+						if (key === 'experiment_type' && expType) r.experiment_type = expType;
 						r.rock_type = projectData.classifyRockType(r.porosity, r.permeability);
 					}
 				}
@@ -965,6 +995,16 @@
 				title="Sample Depth ({depthDisplay.unit})"
 				class="mono-num h-6 w-24 shrink-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1.5 text-right text-xs"
 			/>
+			<select
+				bind:value={newScalExpType}
+				title="Experiment Type (Method)"
+				class="h-6 w-24 shrink-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-xs text-[var(--text-primary)]"
+			>
+				<option value="porous_plate">Porous Plate</option>
+				<option value="micp">MICP</option>
+				<option value="centrifuge">Centrifuge</option>
+				<option value="oil_brine">Water-Oil</option>
+			</select>
 			<input
 				type="number"
 				step="any"

@@ -155,8 +155,21 @@ ANCILLARY_TARGET_SCHEMAS: Dict[str, Dict[str, List[str]]] = {
             "temp_degf",
         ],
         "TEST_TYPE": ["test_type", "tool", "type", "rpt", "mdt", "rdt", "sft"],
-        "TVDSS": ["tvdss", "tvd_ss", "depth_tvdss", "tvdss_m", "tvdss_ft", "subsea_depth"],
-        "FLUID_TYPE": ["fluid_type", "fluid", "phase", "fluid_phase", "interpreted_fluid"],
+        "TVDSS": [
+            "tvdss",
+            "tvd_ss",
+            "depth_tvdss",
+            "tvdss_m",
+            "tvdss_ft",
+            "subsea_depth",
+        ],
+        "FLUID_TYPE": [
+            "fluid_type",
+            "fluid",
+            "phase",
+            "fluid_phase",
+            "interpreted_fluid",
+        ],
         "TEST_QUALITY": [
             "test_quality",
             "quality",
@@ -1372,9 +1385,13 @@ def delete_fluid_contacts_project(
                 wells = [proj.get_well(wn) for wn in proj.get_well_names()]
 
             for well in wells:
-                query = session.query(db_objects.ORMFluidContact).filter_by(well_id=well.well_id)
+                query = session.query(db_objects.ORMFluidContact).filter_by(
+                    well_id=well.well_id
+                )
                 if zone:
-                    query = query.filter(db_objects.ORMFluidContact.zone == str(zone).strip())
+                    query = query.filter(
+                        db_objects.ORMFluidContact.zone == str(zone).strip()
+                    )
 
                 if auto_only:
                     auto_conditions = [
@@ -1383,13 +1400,19 @@ def delete_fluid_contacts_project(
                         db_objects.ORMFluidContact.source.ilike("%Optimizer%"),
                         db_objects.ORMFluidContact.source.ilike("%FPT%"),
                         db_objects.ORMFluidContact.source.ilike("%Auto%"),
-                        db_objects.ORMFluidContact.name.in_(["GUT", "GDT", "OUT", "ODT", "WUT"]),
+                        db_objects.ORMFluidContact.name.in_(
+                            ["GUT", "GDT", "OUT", "ODT", "WUT"]
+                        ),
                         db_objects.ORMFluidContact.remarks.ilike("%Proved Gas%"),
                         db_objects.ORMFluidContact.remarks.ilike("%Proved Oil%"),
                         db_objects.ORMFluidContact.remarks.ilike("%Proved Water%"),
                         db_objects.ORMFluidContact.remarks.ilike("%bracketed%"),
-                        db_objects.ORMFluidContact.remarks.ilike("%Optimized Free Water Level%"),
-                        db_objects.ORMFluidContact.remarks.ilike("%Formation Pressure Test%"),
+                        db_objects.ORMFluidContact.remarks.ilike(
+                            "%Optimized Free Water Level%"
+                        ),
+                        db_objects.ORMFluidContact.remarks.ilike(
+                            "%Formation Pressure Test%"
+                        ),
                     ]
                     query = query.filter(or_(*auto_conditions))
 
@@ -2230,7 +2253,11 @@ def add_perforations_project(
             status_code=400,
             detail="Payload must be a dict with key 'perforations' (or 'perfs').",
         )
-    perfs = payload.get("perforations") if "perforations" in payload else payload.get("perfs")
+    perfs = (
+        payload.get("perforations")
+        if "perforations" in payload
+        else payload.get("perfs")
+    )
     perfs = perfs or []
     replace_mode = bool(payload.get("replace", False))
     target_well = well_name or payload.get("well_name")
@@ -2382,7 +2409,15 @@ def _convert_ancillary_numeric(
     u = (source_unit or "").strip().lower()
     t = target_col.upper()
 
-    if t in ("MD", "TVD", "DEPTH", "DEPTH_TOP", "DEPTH_BASE", "TOP", "BOTTOM") and u in ("ft", "feet"):
+    if t in (
+        "MD",
+        "TVD",
+        "DEPTH",
+        "DEPTH_TOP",
+        "DEPTH_BASE",
+        "TOP",
+        "BOTTOM",
+    ) and u in ("ft", "feet"):
         return num * 0.3048
     if t in ("CPORE", "SW", "CSAT_WATER", "CSAT_OIL"):
         if u in ("%", "pct", "percent") or (not u and num > 1.0 and num <= 100.0):
@@ -2470,8 +2505,8 @@ def commit_ancillary_data(
     effective_project_id = project_id if project_id is not None else request.project_id
     dtype = request.data_type.lower()
     import_mode = getattr(request, "import_mode", "merge") or "merge"
-    should_replace = (import_mode == "replace")
-    should_append = (import_mode != "replace")
+    should_replace = import_mode == "replace"
+    should_append = import_mode != "replace"
 
     # Build lookup from target_column -> (source_column, source_unit)
     col_map: Dict[str, Tuple[str, Optional[str]]] = {}
@@ -2637,7 +2672,9 @@ def commit_ancillary_data(
                     qual_col, _ = col_map.get("TEST_QUALITY", (None, None))
                     zone_col, _ = col_map.get("ZONE", (None, None))
 
-                    def _opt_str(row: Dict[str, Any], col: Optional[str]) -> Optional[str]:
+                    def _opt_str(
+                        row: Dict[str, Any], col: Optional[str]
+                    ) -> Optional[str]:
                         if not col:
                             return None
                         v = row.get(col)
@@ -2706,17 +2743,30 @@ def commit_ancillary_data(
                         c_type = str(r.get(c_col, "")).strip().upper()
                         d_v = _convert_ancillary_numeric(r.get(d_col), d_unit, "DEPTH")
                         if c_type and d_v is not None:
-                            contacts_payload.append({
-                                "name": str(r.get("name") or c_type).strip(),
-                                "contact_type": c_type,
-                                "depth": d_v,
-                                "zone": str(r.get(z_col, "")).strip() or None if z_col in r else None,
-                                "fault_block": str(r.get(fb_col, "")).strip() or None if fb_col in r else None,
-                                "source": str(r.get(src_col, "")).strip() or None if src_col in r else None,
-                                "remarks": str(r.get(rem_col, "")).strip() or None if rem_col in r else None,
-                            })
+                            contacts_payload.append(
+                                {
+                                    "name": str(r.get("name") or c_type).strip(),
+                                    "contact_type": c_type,
+                                    "depth": d_v,
+                                    "zone": str(r.get(z_col, "")).strip() or None
+                                    if z_col in r
+                                    else None,
+                                    "fault_block": str(r.get(fb_col, "")).strip()
+                                    or None
+                                    if fb_col in r
+                                    else None,
+                                    "source": str(r.get(src_col, "")).strip() or None
+                                    if src_col in r
+                                    else None,
+                                    "remarks": str(r.get(rem_col, "")).strip() or None
+                                    if rem_col in r
+                                    else None,
+                                }
+                            )
                     if contacts_payload:
-                        well.add_fluid_contacts(contacts_payload, replace=should_replace)
+                        well.add_fluid_contacts(
+                            contacts_payload, replace=should_replace
+                        )
                         summary_by_well[wn] = len(contacts_payload)
 
                 elif dtype in ("perforations", "perfs"):
@@ -2726,8 +2776,12 @@ def commit_ancillary_data(
                     desc_col, _ = col_map.get("DESCRIPTION", ("description", None))
                     perfs_payload = []
                     for idx, r in enumerate(w_rows):
-                        top_v = _convert_ancillary_numeric(r.get(top_col), top_unit, "TOP")
-                        bot_v = _convert_ancillary_numeric(r.get(bot_col), bot_unit, "BOTTOM")
+                        top_v = _convert_ancillary_numeric(
+                            r.get(top_col), top_unit, "TOP"
+                        )
+                        bot_v = _convert_ancillary_numeric(
+                            r.get(bot_col), bot_unit, "BOTTOM"
+                        )
                         if top_v is None and bot_v is None:
                             continue
                         if top_v is None:
@@ -3016,20 +3070,24 @@ def commit_ancillary_data(
                         if not s_name or s_name.lower() in ("nan", "none"):
                             s_name = f"SCAL-{idx + 1}"
                         por_v = (
-                            _convert_ancillary_numeric(r.get(por_col), por_unit, "CPORE")
+                            _convert_ancillary_numeric(
+                                r.get(por_col), por_unit, "CPORE"
+                            )
                             if por_col
                             else None
                         )
                         perm_v = (
-                            _convert_ancillary_numeric(r.get(perm_col), perm_unit, "CPERM")
+                            _convert_ancillary_numeric(
+                                r.get(perm_col), perm_unit, "CPERM"
+                            )
                             if perm_col
                             else None
                         )
                         exp_val = (
-                            str(r.get(exp_col, "micp")).strip()
+                            str(r.get(exp_col, "porous_plate")).strip()
                             if exp_col and r.get(exp_col) is not None
-                            else "micp"
-                        ) or "micp"
+                            else "porous_plate"
+                        ) or "porous_plate"
                         cyc_val = (
                             str(r.get(cyc_col, "drainage")).strip()
                             if cyc_col and r.get(cyc_col) is not None

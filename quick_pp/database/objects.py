@@ -671,6 +671,40 @@ class Project(object):
         logger.debug(f"Retrieving well names: {well_names}")
         return well_names
 
+    def _find_orm_well(self, well_name: str) -> Optional[ORMWell]:
+        """Find ORMWell by exact name, with fallback to canonical delimiter-insensitive matching."""
+        if not well_name:
+            return None
+        orm_well = self.db_session.scalar(
+            select(ORMWell).filter_by(project_id=self.project_id, name=well_name)
+        )
+        if orm_well:
+            return orm_well
+        import re
+
+        target_tok = re.sub(
+            r"(?<![0-9])0+([1-9])", r"\1", str(well_name).strip().lower()
+        )
+        target_tok = re.sub(r"[^a-z0-9]", "", target_tok)
+        if not target_tok:
+            return None
+        for w in getattr(self._orm_project, "wells", []) or []:
+            w_tok = re.sub(
+                r"(?<![0-9])0+([1-9])", r"\1", str(w.name or "").strip().lower()
+            )
+            w_tok = re.sub(r"[^a-z0-9]", "", w_tok)
+            if w_tok and w_tok == target_tok:
+                return w
+            uwi_tok = re.sub(
+                r"(?<![0-9])0+([1-9])",
+                r"\1",
+                str(getattr(w, "uwi", "") or "").strip().lower(),
+            )
+            uwi_tok = re.sub(r"[^a-z0-9]", "", uwi_tok)
+            if uwi_tok and uwi_tok == target_tok:
+                return w
+        return None
+
     def get_well_data(self, well_name: str) -> pd.DataFrame:
         """Retrieves all data for a specific well in the project.
 
@@ -684,9 +718,7 @@ class Project(object):
             ValueError: If the well is not found in the project.
         """
         logger.debug(f"Retrieving data for well: {well_name} in project '{self.name}'")
-        orm_well = self.db_session.scalar(
-            select(ORMWell).filter_by(project_id=self.project_id, name=well_name)
-        )
+        orm_well = self._find_orm_well(well_name)
         if orm_well:
             well_obj = Well(self.db_session, well_id=orm_well.well_id)
             return well_obj.get_data()
@@ -707,9 +739,7 @@ class Project(object):
         logger.debug(
             f"Retrieving data (optimized) for well: {well_name} in project '{self.name}'"
         )
-        orm_well = self.db_session.scalar(
-            select(ORMWell).filter_by(project_id=self.project_id, name=well_name)
-        )
+        orm_well = self._find_orm_well(well_name)
         if orm_well:
             well_obj = Well(self.db_session, well_id=orm_well.well_id)
             return well_obj.get_data_optimized()
@@ -731,9 +761,7 @@ class Project(object):
         logger.debug(
             f"Retrieving ancillary data for well: {well_name} in project '{self.name}'"
         )
-        orm_well = self.db_session.scalar(
-            select(ORMWell).filter_by(project_id=self.project_id, name=well_name)
-        )
+        orm_well = self._find_orm_well(well_name)
         if orm_well:
             well_obj = Well(self.db_session, well_id=orm_well.well_id)
             return well_obj.get_ancillary_data()
@@ -752,9 +780,7 @@ class Project(object):
             ValueError: If the well is not found in the project.
         """
         logger.debug(f"Loading well object: {well_name} in project '{self.name}'")
-        orm_well = self.db_session.scalar(
-            select(ORMWell).filter_by(project_id=self.project_id, name=well_name)
-        )
+        orm_well = self._find_orm_well(well_name)
         if orm_well:
             return Well(self.db_session, well_id=orm_well.well_id)
         raise ValueError(f"Well '{well_name}' not found in project '{self.name}'.")
@@ -3270,7 +3296,7 @@ class Well(object):
                             "saturation": sw_val,
                             "experiment_type": row.get("experiment_type")
                             or row.get("type")
-                            or "micp",
+                            or "porous_plate",
                             "cycle": row.get("cycle") or "drainage",
                         }
                     )
@@ -3466,7 +3492,7 @@ class Well(object):
                         "permeability": perm_val,
                         "pc": float(p.pressure),
                         "sw": float(p.saturation),
-                        "experiment_type": p.experiment_type or "micp",
+                        "experiment_type": p.experiment_type or "porous_plate",
                         "cycle": p.cycle or "drainage",
                     }
                 )
@@ -3669,6 +3695,7 @@ class Well(object):
                             "saturation": p.saturation,
                             "pressure": p.pressure,
                             "type": p.experiment_type,
+                            "experiment_type": p.experiment_type,
                             "cycle": p.cycle,
                         }
                         for p in sample.capillary_pressure_data

@@ -24,6 +24,7 @@ from sqlalchemy import select
 from sqlalchemy.orm.attributes import flag_modified
 
 from quick_pp.app.backend.schemas.fluid_density import FluidDensityConfig
+from quick_pp.app.backend.services.ancillary import _canonical_well_token
 from quick_pp.app.backend.services.database import (
     _ephemeral_well_headers,
     _ephemeral_wells,
@@ -1048,7 +1049,9 @@ def _apply_grain_density_correlation(
     )
 
 
-def _resolve_baseline_badhole_mask(df: pd.DataFrame, auto_detect_if_missing: bool = False) -> pd.Series:
+def _resolve_baseline_badhole_mask(
+    df: pd.DataFrame, auto_detect_if_missing: bool = False
+) -> pd.Series:
     """Resolve pristine baseline boolean mask for badhole intervals prior to interactive manual overrides."""
     for col in ("BADHOLE_BASE", "BADHOLE_QAQC", "BADHOLE_RAW"):
         if col in df.columns:
@@ -1070,9 +1073,12 @@ def _resolve_baseline_badhole_mask(df: pd.DataFrame, auto_detect_if_missing: boo
                 drho_threshold=0.15,
             )
             if "BADHOLE" in bh_df.columns:
-                return (pd.to_numeric(bh_df["BADHOLE"], errors="coerce").reindex(df.index).fillna(0.0) >= 0.5).astype(
-                    bool
-                )
+                return (
+                    pd.to_numeric(bh_df["BADHOLE"], errors="coerce")
+                    .reindex(df.index)
+                    .fillna(0.0)
+                    >= 0.5
+                ).astype(bool)
         except Exception:
             pass
 
@@ -1103,9 +1109,13 @@ def _resolve_baseline_badhole_mask(df: pd.DataFrame, auto_detect_if_missing: boo
     return pd.Series(False, index=df.index, dtype=bool)
 
 
-def _resolve_badhole_mask(df: pd.DataFrame, auto_detect_if_missing: bool = False) -> pd.Series:
+def _resolve_badhole_mask(
+    df: pd.DataFrame, auto_detect_if_missing: bool = False
+) -> pd.Series:
     """Resolve boolean mask for badhole intervals from BADHOLE or on-the-fly detection."""
-    return _resolve_baseline_badhole_mask(df, auto_detect_if_missing=auto_detect_if_missing)
+    return _resolve_baseline_badhole_mask(
+        df, auto_detect_if_missing=auto_detect_if_missing
+    )
 
 
 def _resolve_baseline_coal_mask(
@@ -3382,14 +3392,28 @@ def workspace_hc_correction(
                     mask = (depth_series >= t_val) & (depth_series <= b_val)
                     if not mask.any():
                         continue
-                    bh_mode_ov = str(ov.get("badholeMode") or ov.get("badhole_mode") or "").lower().strip()
-                    target = str(ov.get("target") or ov.get("flag_type") or "").upper().strip()
+                    bh_mode_ov = (
+                        str(ov.get("badholeMode") or ov.get("badhole_mode") or "")
+                        .lower()
+                        .strip()
+                    )
+                    target = (
+                        str(ov.get("target") or ov.get("flag_type") or "")
+                        .upper()
+                        .strip()
+                    )
                     action = str(ov.get("action") or "").lower().strip()
                     if target in ("BADHOLE", "BOTH"):
                         bh_mode_ov = action or "flag"
                     if bh_mode_ov in ("flag", "force_badhole", "badhole", "1", "true"):
                         badhole_mask.loc[mask] = True
-                    elif bh_mode_ov in ("clear", "clear_badhole", "good_hole", "0", "false"):
+                    elif bh_mode_ov in (
+                        "clear",
+                        "clear_badhole",
+                        "good_hole",
+                        "0",
+                        "false",
+                    ):
                         badhole_mask.loc[mask] = False
             if badhole_mask.any():
                 nphi_hc_full.loc[badhole_mask] = nphi.loc[badhole_mask]
@@ -3819,7 +3843,9 @@ def workspace_badhole_flagging(
         if "DCALI" in bh_df.columns and bh_df["DCALI"].notna().any():
             out_cols.append("DCALI")
 
-        out_df = bh_df[[c for c in out_cols if c in bh_df.columns or c in ("DEPTH", "BADHOLE")]].copy()
+        out_df = bh_df[
+            [c for c in out_cols if c in bh_df.columns or c in ("DEPTH", "BADHOLE")]
+        ].copy()
         out_df["BADHOLE"] = pd.to_numeric(out_df["BADHOLE"], errors="coerce").fillna(
             0.0
         )
@@ -4467,7 +4493,9 @@ def workspace_batch_evaluation_apply(
                         if module in ("saturation", "litho-poro"):
                             clean_params.pop("manualOverrides", None)
                             clean_params.pop("manual_overrides", None)
-                            if "litho" in clean_params and isinstance(clean_params["litho"], dict):
+                            if "litho" in clean_params and isinstance(
+                                clean_params["litho"], dict
+                            ):
                                 clean_params["litho"] = dict(clean_params["litho"])
                                 clean_params["litho"].pop("manualOverrides", None)
                                 clean_params["litho"].pop("manual_overrides", None)
@@ -4952,7 +4980,9 @@ def workspace_lithology(
 
         # Badhole interval treatment for lithology volumes
         bh_mode = (req.badhole_treatment or "none").strip().lower()
-        baseline_badhole = _resolve_baseline_badhole_mask(df, auto_detect_if_missing=(bh_mode != "none"))
+        baseline_badhole = _resolve_baseline_badhole_mask(
+            df, auto_detect_if_missing=(bh_mode != "none")
+        )
         badhole_mask = baseline_badhole.copy()
 
         # Apply manual interactive overrides if provided
@@ -4974,9 +5004,17 @@ def workspace_lithology(
                 if not mask.any():
                     continue
 
-                c_mode = str(ov.get("coalMode") or ov.get("coal_mode") or "").lower().strip()
-                bh_mode_ov = str(ov.get("badholeMode") or ov.get("badhole_mode") or "").lower().strip()
-                target = str(ov.get("target") or ov.get("flag_type") or "").upper().strip()
+                c_mode = (
+                    str(ov.get("coalMode") or ov.get("coal_mode") or "").lower().strip()
+                )
+                bh_mode_ov = (
+                    str(ov.get("badholeMode") or ov.get("badhole_mode") or "")
+                    .lower()
+                    .strip()
+                )
+                target = (
+                    str(ov.get("target") or ov.get("flag_type") or "").upper().strip()
+                )
                 action = str(ov.get("action") or "").lower().strip()
                 if target in ("COAL", "BOTH"):
                     c_mode = action or "flag"
@@ -4990,7 +5028,13 @@ def workspace_lithology(
 
                 if bh_mode_ov in ("flag", "force_badhole", "badhole", "1", "true"):
                     badhole_mask.loc[mask] = True
-                elif bh_mode_ov in ("clear", "clear_badhole", "good_hole", "0", "false"):
+                elif bh_mode_ov in (
+                    "clear",
+                    "clear_badhole",
+                    "good_hole",
+                    "0",
+                    "false",
+                ):
                     badhole_mask.loc[mask] = False
 
         coal_flag_s = pd.Series(np.nan, index=df.index, dtype=float)
@@ -5001,7 +5045,9 @@ def workspace_lithology(
 
         # Preserve COAL_FLAG_BASE
         out_df["COAL_FLAG_BASE"] = pd.Series(np.nan, index=df.index, dtype=float)
-        out_df["COAL_FLAG_BASE"].loc[valid_mask] = np.where(baseline_coal.loc[valid_mask], 1.0, 0.0)
+        out_df["COAL_FLAG_BASE"].loc[valid_mask] = np.where(
+            baseline_coal.loc[valid_mask], 1.0, 0.0
+        )
         if "COAL_FLAG_BASE" not in save_cols:
             save_cols.append("COAL_FLAG_BASE")
 
@@ -5969,7 +6015,9 @@ def workspace_porosity(
         coal_mask = baseline_coal.copy()
 
         bh_mode = (req.badhole_treatment or "none").strip().lower()
-        baseline_badhole = _resolve_baseline_badhole_mask(df, auto_detect_if_missing=(bh_mode != "none"))
+        baseline_badhole = _resolve_baseline_badhole_mask(
+            df, auto_detect_if_missing=(bh_mode != "none")
+        )
         badhole_mask = baseline_badhole.copy()
 
         # Apply manual interactive overrides if provided
@@ -5991,9 +6039,17 @@ def workspace_porosity(
                 if not mask.any():
                     continue
 
-                c_mode = str(ov.get("coalMode") or ov.get("coal_mode") or "").lower().strip()
-                bh_mode_ov = str(ov.get("badholeMode") or ov.get("badhole_mode") or "").lower().strip()
-                target = str(ov.get("target") or ov.get("flag_type") or "").upper().strip()
+                c_mode = (
+                    str(ov.get("coalMode") or ov.get("coal_mode") or "").lower().strip()
+                )
+                bh_mode_ov = (
+                    str(ov.get("badholeMode") or ov.get("badhole_mode") or "")
+                    .lower()
+                    .strip()
+                )
+                target = (
+                    str(ov.get("target") or ov.get("flag_type") or "").upper().strip()
+                )
                 action = str(ov.get("action") or "").lower().strip()
                 if target in ("COAL", "BOTH"):
                     c_mode = action or "flag"
@@ -6007,7 +6063,13 @@ def workspace_porosity(
 
                 if bh_mode_ov in ("flag", "force_badhole", "badhole", "1", "true"):
                     badhole_mask.loc[mask] = True
-                elif bh_mode_ov in ("clear", "clear_badhole", "good_hole", "0", "false"):
+                elif bh_mode_ov in (
+                    "clear",
+                    "clear_badhole",
+                    "good_hole",
+                    "0",
+                    "false",
+                ):
                     badhole_mask.loc[mask] = False
 
         active_coal = valid_mask & coal_mask
@@ -7750,13 +7812,17 @@ def workspace_reservoir_summary(
         )
 
         if req.save:
-            eph_cfg = _ephemeral_well_configs.setdefault((project_id, str(well_name)), {})
+            eph_cfg = _ephemeral_well_configs.setdefault(
+                (project_id, str(well_name)), {}
+            )
             eph_cfg["ressum_cutoffs"] = dict(req.cut_offs)
             if not is_demo_mode():
                 try:
                     with get_db() as session:
                         well_orm = session.scalar(
-                            select(db_models.Well).filter_by(project_id=project_id, name=str(well_name))
+                            select(db_models.Well).filter_by(
+                                project_id=project_id, name=str(well_name)
+                            )
                         )
                         if well_orm:
                             cfg_data = dict(well_orm.config_data or {})
@@ -9662,8 +9728,20 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
         core_rows: List[Dict[str, Any]] = []
         with get_db() as session:
             proj = db_objects.Project.load(session, project_id=project_id)
+            allowed_wn_tokens = (
+                {
+                    _canonical_well_token(w)
+                    for w in req.well_names
+                    if _canonical_well_token(w)
+                }
+                if req.well_names
+                else None
+            )
             for wn in proj.get_well_names():
-                if req.well_names and wn not in req.well_names:
+                if (
+                    allowed_wn_tokens
+                    and _canonical_well_token(wn) not in allowed_wn_tokens
+                ):
                     continue
                 try:
                     anc = proj.get_well_ancillary_data(wn)
@@ -9938,7 +10016,9 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                             ind_val_plug, req.cutoffs, higher_is_better=hib_plug
                         ).item()
                     )
-                    if (not np.isfinite(rf_val) or rf_val < 1) and near_rock_flag is not None:
+                    if (
+                        not np.isfinite(rf_val) or rf_val < 1
+                    ) and near_rock_flag is not None:
                         rf_val = near_rock_flag
                     pc_col = next(
                         (
@@ -9980,11 +10060,57 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                     if np.nanmax(sw_vals) > 1.5:
                         sw_vals = sw_vals / 100.0
                     sw_vals = np.clip(sw_vals, 0.01, 1.0)
-                    # Convert lab mercury-air MICP to reservoir oil-brine Pc if unscaled
-                    if np.nanmax(pc_vals) > 200.0:
-                        res_num = max(
-                            req.ift * abs(math.cos(math.radians(req.theta))), 1.0
+                    # Determine experiment type
+                    exp_type = "porous_plate"
+                    col_map = {str(c).strip().upper(): c for c in pc_df.columns}
+                    for tc in ("TYPE", "EXPERIMENT_TYPE", "METHOD", "TEST_TYPE"):
+                        if tc in col_map:
+                            vals = pc_df[col_map[tc]].dropna().astype(str).tolist()
+                            if vals and vals[0].strip():
+                                exp_type = vals[0].strip().lower()
+                                break
+                    if exp_type in ("porous_plate", "unknown", "", "none"):
+                        s_meth = (
+                            sample.get("experiment_type")
+                            or sample.get("type")
+                            or sample.get("method")
                         )
+                        if s_meth and str(s_meth).strip():
+                            exp_type = str(s_meth).strip().lower()
+
+                    # Convert lab capillary pressure to reservoir conditions for Leverett J / height fitting
+                    res_num = max(req.ift * abs(math.cos(math.radians(req.theta))), 1.0)
+                    if any(m in exp_type for m in ("micp", "mercury", "hg")) or (
+                        exp_type in ("unknown", "", "none")
+                        and np.nanmax(pc_vals) > 1000.0
+                    ):
+                        lab_den = 485.0 * abs(math.cos(math.radians(140.0)))
+                        pc_vals = pc_vals * (res_num / lab_den)
+                    elif any(
+                        m in exp_type
+                        for m in (
+                            "porous_plate",
+                            "centrifuge",
+                            "air_brine",
+                            "brine_air",
+                            "air_water",
+                        )
+                    ):
+                        lab_den = 72.0 * abs(math.cos(math.radians(0.0)))
+                        pc_vals = pc_vals * (res_num / lab_den)
+                    elif any(
+                        m in exp_type
+                        for m in (
+                            "oil_brine",
+                            "brine_oil",
+                            "water_oil",
+                            "oil_water",
+                            "res",
+                            "reservoir",
+                        )
+                    ):
+                        pass
+                    elif np.nanmax(pc_vals) > 1000.0:
                         lab_den = 485.0 * abs(math.cos(math.radians(140.0)))
                         pc_vals = pc_vals * (res_num / lab_den)
                     swirr_src_mode = (
@@ -10238,7 +10364,12 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                             "count": 0,
                         }
                     else:
-                        fits[r_key] = {**fallback_fit, "rmse": 0.0, "r2": 0.0, "count": 0}
+                        fits[r_key] = {
+                            **fallback_fit,
+                            "rmse": 0.0,
+                            "r2": 0.0,
+                            "count": 0,
+                        }
 
         # Recompute fit diagnostics (rmse, r2, count) against SCAL points for all entries in fits
         if not scal_df_fit.empty and fits:
@@ -12884,7 +13015,11 @@ def workspace_multi_well_badhole_flagging(
                 cali_spike_threshold=req.cali_spike_threshold,
             )
             summary = dict(bh_df.attrs.get("badhole_summary", {}))
-            out_cols = [c for c in ("BADHOLE", "BADHOLE_BASE", "BS", "DCALI") if c in bh_df.columns]
+            out_cols = [
+                c
+                for c in ("BADHOLE", "BADHOLE_BASE", "BS", "DCALI")
+                if c in bh_df.columns
+            ]
             if out_cols and "DEPTH" in bh_df.columns:
                 sub_df = bh_df[["DEPTH"] + out_cols].copy()
                 if "BADHOLE" in sub_df.columns and "BADHOLE_BASE" not in sub_df.columns:
@@ -15731,6 +15866,8 @@ class WorkspaceSwirrFitRequest(BaseModel):
     max_depth: Optional[float] = Field(None)
     extraction_mode: Optional[str] = Field(None)
     extractionMode: Optional[str] = Field(None)
+    pc_domain: Optional[str] = Field("lab")
+    pcDomain: Optional[str] = Field(None)
     reference_pc_psi: Optional[float] = Field(None)
     referencePcPsi: Optional[float] = Field(None)
     equation_type: Optional[str] = Field(None)
@@ -15817,6 +15954,7 @@ def _extract_project_scal_plugs_for_swirr(
     zones: Optional[List[str]] = None,
     min_depth: Optional[float] = None,
     max_depth: Optional[float] = None,
+    pc_domain: str = "lab",
 ) -> List[Dict[str, Any]]:
     """Extract plug-level SCAL drainage curves and matched CPORE/CPERM/ROCK_FLAG across project wells."""
     cutoffs_list = sorted(float(c) for c in (cutoffs or [0.5, 1.2, 2.5, 5.0]))
@@ -15851,8 +15989,13 @@ def _extract_project_scal_plugs_for_swirr(
     plug_records: List[Dict[str, Any]] = []
     with get_db() as session:
         proj = db_objects.Project.load(session, project_id=project_id)
+        allowed_wn_tokens = (
+            {_canonical_well_token(w) for w in well_names if _canonical_well_token(w)}
+            if well_names
+            else None
+        )
         for wn in proj.get_well_names():
-            if well_names and wn not in well_names:
+            if allowed_wn_tokens and _canonical_well_token(wn) not in allowed_wn_tokens:
                 continue
             try:
                 anc = proj.get_well_ancillary_data(wn)
@@ -16091,7 +16234,9 @@ def _extract_project_scal_plugs_for_swirr(
                         ind_val_plug, cutoffs_list, higher_is_better=hib_plug
                     ).item()
                 )
-                if (not np.isfinite(rf_val) or rf_val < 1) and near_rock_flag is not None:
+                if (
+                    not np.isfinite(rf_val) or rf_val < 1
+                ) and near_rock_flag is not None:
                     rf_val = near_rock_flag
 
                 pc_col = next(
@@ -16134,10 +16279,67 @@ def _extract_project_scal_plugs_for_swirr(
                 if np.nanmax(sw_vals) > 1.5:
                     sw_vals = sw_vals / 100.0
                 sw_vals = np.clip(sw_vals, 0.01, 1.0)
-                if np.nanmax(pc_vals) > 200.0:
+                # Detect experiment type from core sample pc table
+                exp_type = "porous_plate"
+                col_map = {str(c).strip().upper(): c for c in pc_df.columns}
+                for tc in ("TYPE", "EXPERIMENT_TYPE", "METHOD", "TEST_TYPE"):
+                    if tc in col_map:
+                        vals = pc_df[col_map[tc]].dropna().astype(str).tolist()
+                        if vals and vals[0].strip():
+                            exp_type = vals[0].strip().lower()
+                            break
+                if exp_type in ("porous_plate", "unknown", "", "none"):
+                    s_meth = (
+                        sample.get("experiment_type")
+                        or sample.get("type")
+                        or sample.get("method")
+                    )
+                    if s_meth and str(s_meth).strip():
+                        exp_type = str(s_meth).strip().lower()
+
+                # Apply Lab-to-Reservoir conversion ONLY if requested (pc_domain == 'reservoir')
+                pc_dom = str(pc_domain or "lab").strip().lower()
+                if pc_dom == "reservoir":
                     res_num = max(ift * abs(math.cos(math.radians(theta))), 1.0)
-                    lab_den = 485.0 * abs(math.cos(math.radians(140.0)))
-                    pc_vals = pc_vals * (res_num / lab_den)
+                    if any(m in exp_type for m in ("micp", "mercury", "hg")) or (
+                        exp_type in ("unknown", "", "none")
+                        and np.nanmax(pc_vals) > 1000.0
+                    ):
+                        # Mercury-Air lab system: sigma=485 mN/m, theta=140 deg
+                        lab_den = 485.0 * abs(math.cos(math.radians(140.0)))
+                        pc_vals = pc_vals * (res_num / lab_den)
+                    elif any(
+                        m in exp_type
+                        for m in (
+                            "porous_plate",
+                            "centrifuge",
+                            "air_brine",
+                            "brine_air",
+                            "air_water",
+                        )
+                    ):
+                        # Air-Brine lab system: sigma=72 mN/m, theta=0 deg
+                        lab_den = 72.0 * abs(math.cos(math.radians(0.0)))
+                        pc_vals = pc_vals * (res_num / lab_den)
+                    elif any(
+                        m in exp_type
+                        for m in (
+                            "oil_brine",
+                            "brine_oil",
+                            "water_oil",
+                            "oil_water",
+                            "res",
+                            "reservoir",
+                        )
+                    ):
+                        # Already reservoir oil-brine system
+                        pass
+                    else:
+                        if np.nanmax(pc_vals) > 1000.0:
+                            lab_den = 485.0 * abs(math.cos(math.radians(140.0)))
+                        else:
+                            lab_den = 72.0 * abs(math.cos(math.radians(0.0)))
+                        pc_vals = pc_vals * (res_num / lab_den)
 
                 order = np.argsort(pc_vals)
                 pc_sorted = [round(float(x), 4) for x in pc_vals[order]]
@@ -16153,6 +16355,8 @@ def _extract_project_scal_plugs_for_swirr(
                         "rt": int(rf_val),
                         "cpore": round(float(cpore), 4),
                         "cperm": round(float(cperm), 4),
+                        "experiment_type": exp_type,
+                        "pc_domain": pc_dom,
                         "pc_curve": pc_sorted,
                         "sw_curve": sw_sorted,
                     }
@@ -16249,6 +16453,9 @@ def workspace_swirr_fit(
             if req.reference_pc_psi is not None
             else (req.referencePcPsi if req.referencePcPsi is not None else 50.0)
         )
+        pc_domain = str(req.pc_domain or req.pcDomain or "lab").strip().lower()
+        if pc_domain not in ("lab", "reservoir"):
+            pc_domain = "lab"
         equation_type = (
             str(req.equation_type or req.equationType or "rqi_power").strip().lower()
         )
@@ -16299,6 +16506,7 @@ def workspace_swirr_fit(
             zones=req.zones,
             min_depth=req.min_depth,
             max_depth=req.max_depth,
+            pc_domain=pc_domain,
         )
 
         plug_rows: List[Dict[str, Any]] = []
@@ -16450,6 +16658,7 @@ def workspace_swirr_fit(
 
         cfg_eval = {
             "extractionMode": extraction_mode,
+            "pcDomain": pc_domain,
             "referencePcPsi": ref_pc,
             "equationType": equation_type,
             "fitScope": fit_scope,

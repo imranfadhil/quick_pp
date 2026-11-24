@@ -47,11 +47,7 @@
 	} from '$lib/state/workbench.svelte';
 	import { projectData } from '$lib/state/projectData.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
-	import {
-		currentSelection,
-		moduleParams,
-		selectionKey
-	} from '$lib/state/moduleParams.svelte';
+	import { currentSelection, moduleParams, selectionKey } from '$lib/state/moduleParams.svelte';
 	import { projectParams, zoneSelectionKey } from '$lib/state/projectParams.svelte';
 	import { isCrossplotAvailable } from '$lib/utils/crossplots';
 	import { gammaLabel } from '$lib/utils/lithology';
@@ -118,7 +114,9 @@
 			(workbench.scope === 'multi-well' && workbench.multiWellStep === 'report')
 	);
 	let isFptMode = $derived(workbench.scope === 'multi-well' && workbench.multiWellStep === 'fpt');
-	let isVolumetricsMode = $derived(workbench.scope === 'multi-well' && workbench.multiWellStep === 'volumetrics');
+	let isVolumetricsMode = $derived(
+		workbench.scope === 'multi-well' && workbench.multiWellStep === 'volumetrics'
+	);
 
 	/** FPT grid: clicking a row selects the point on the Pressure vs TVDSS plots. SCAL grids: clicking a row spotlights that sample plug. */
 	function handleRightGridRowClick(row: Record<string, any>) {
@@ -221,9 +219,21 @@
 						{ key: 'WELL', label: 'Well' },
 						{ key: 'MD', label: 'MD', unit: 'm', numeric: true, decimals: 1 },
 						{ key: 'TVDSS', label: 'TVDSS', unit: du, numeric: true, decimals: 1 },
-						{ key: 'PRESSURE', label: 'Pressure', unit: pu, numeric: true, decimals: 2 },
+						{
+							key: 'PRESSURE',
+							label: 'Pressure',
+							unit: pu,
+							numeric: true,
+							decimals: 2
+						},
 						{ key: 'EXCESS', label: 'Excess', unit: pu, numeric: true, decimals: 2 },
-						{ key: 'MOBILITY', label: 'Mobility', unit: 'mD/cP', numeric: true, decimals: 2 },
+						{
+							key: 'MOBILITY',
+							label: 'Mobility',
+							unit: 'mD/cP',
+							numeric: true,
+							decimals: 2
+						},
 						{ key: 'FLUID', label: 'Fluid' },
 						{ key: 'QC', label: 'QC' },
 						{ key: 'FIT', label: 'In Fit' },
@@ -258,8 +268,20 @@
 						title: `Formation Curve Coverage — ${selZone} (${projectData.wells.length} Wells)`,
 						columns: [
 							{ key: 'WELL', label: 'Well' },
-							{ key: 'TOP_DEPTH', label: 'Top', unit: 'm', numeric: true, decimals: 1 },
-							{ key: 'BASE_DEPTH', label: 'Base', unit: 'm', numeric: true, decimals: 1 },
+							{
+								key: 'TOP_DEPTH',
+								label: 'Top',
+								unit: 'm',
+								numeric: true,
+								decimals: 1
+							},
+							{
+								key: 'BASE_DEPTH',
+								label: 'Base',
+								unit: 'm',
+								numeric: true,
+								decimals: 1
+							},
 							{ key: 'COMPUTED_STATUS', label: 'Eval Status' },
 							{ key: 'COMPUTED_CURVES', label: 'Computed Curves Present' },
 							{ key: 'MISSING_CURVES', label: 'Missing Computed' },
@@ -314,7 +336,13 @@
 						{ key: 'WELL', label: 'Well' },
 						{ key: 'TVD', label: 'TVD' },
 						{ key: 'MIN_DEPTH', label: 'Top', unit: 'm', numeric: true, decimals: 1 },
-						{ key: 'MAX_DEPTH', label: 'Bottom', unit: 'm', numeric: true, decimals: 1 },
+						{
+							key: 'MAX_DEPTH',
+							label: 'Bottom',
+							unit: 'm',
+							numeric: true,
+							decimals: 1
+						},
 						{ key: 'ROWS', label: 'Rows', numeric: true, decimals: 0 },
 						{ key: 'CURVES', label: 'Curves', numeric: true, decimals: 0 },
 						{ key: 'RCA_PLUGS', label: 'RCA Plugs', numeric: true, decimals: 0 },
@@ -356,7 +384,10 @@
 							CONTACTS:
 								(w.fluid_contacts ?? []).length > 0
 									? (w.fluid_contacts ?? [])
-											.map((c) => `${c.type}${c.depth !== null ? ` @ ${c.depth}m` : ''}`)
+											.map(
+												(c) =>
+													`${c.type}${c.depth !== null ? ` @ ${c.depth}m` : ''}`
+											)
 											.join(', ')
 									: (w.fluid_contact_count ?? 0) > 0
 										? String(w.fluid_contact_count)
@@ -463,7 +494,8 @@
 						};
 					})
 					.filter((r) => {
-						if (!projectData.isScalItemInActiveFilter(r.Well, r.DEPTH, r.ZONE)) return false;
+						if (!projectData.isScalItemInActiveFilter(r.Well, r.DEPTH, r.ZONE))
+							return false;
 						if (rtFilter !== 'all' && r.ROCK_FLAG !== rtFilter) return false;
 						if (focusedPid && r._scalPlugId !== focusedPid) return false;
 						return true;
@@ -480,7 +512,13 @@
 						{ key: 'ROCK_FLAG', label: 'RT', numeric: true, decimals: 0 },
 						{ key: 'PC', label: 'Pc', unit: 'psi', numeric: true, decimals: 2 },
 						{ key: 'SW', label: 'Sw', unit: 'v/v', numeric: true, decimals: 3 },
-						{ key: 'SWIRR_CALC', label: 'Swirr', unit: 'v/v', numeric: true, decimals: 3 },
+						{
+							key: 'SWIRR_CALC',
+							label: 'Swirr',
+							unit: 'v/v',
+							numeric: true,
+							decimals: 3
+						},
 						{ key: 'SWN', label: 'Swn', unit: 'v/v', numeric: true, decimals: 3 },
 						{ key: 'J', label: 'J', numeric: true, decimals: 3 },
 						{ key: 'H', label: 'Height', unit: 'm', numeric: true, decimals: 1 },
@@ -519,11 +557,36 @@
 						{ key: 'CPERM', label: 'CPERM', unit: 'mD', numeric: true, decimals: 2 },
 						{ key: 'RQI', label: 'RQI', unit: 'μm', numeric: true, decimals: 3 },
 						{ key: 'FZI', label: 'FZI', unit: 'μm', numeric: true, decimals: 2 },
-						{ key: 'MAX_PC', label: 'Max Pc [psi]', unit: 'psi', numeric: true, decimals: 1 },
-						{ key: 'SW_AT_MAX_PC', label: 'Sw @ Max Pc', unit: 'v/v', numeric: true, decimals: 3 },
-						{ key: 'EXTRACTED_SWIRR', label: 'Swirr (Lab)', unit: 'v/v', numeric: true, decimals: 3 },
-						{ key: 'MODELED_SWIRR', label: 'Modeled Swirr', unit: 'v/v', numeric: true, decimals: 3 },
-						{ key: 'RESIDUAL', label: 'Residual', unit: 'v/v', numeric: true, decimals: 3 },
+						{ key: 'MAX_PC', label: 'Max Pc', unit: 'psi', numeric: true, decimals: 1 },
+						{ key: 'EXP_TYPE', label: 'Method' },
+						{
+							key: 'SW_AT_MAX_PC',
+							label: 'Sw @ Max Pc',
+							unit: 'v/v',
+							numeric: true,
+							decimals: 3
+						},
+						{
+							key: 'EXTRACTED_SWIRR',
+							label: 'Swirr (Lab)',
+							unit: 'v/v',
+							numeric: true,
+							decimals: 3
+						},
+						{
+							key: 'MODELED_SWIRR',
+							label: 'Modeled Swirr',
+							unit: 'v/v',
+							numeric: true,
+							decimals: 3
+						},
+						{
+							key: 'RESIDUAL',
+							label: 'Residual',
+							unit: 'v/v',
+							numeric: true,
+							decimals: 3
+						},
 						{ key: 'STATUS', label: 'Status' }
 					],
 					rows: plugs.map((p) => {
@@ -550,6 +613,7 @@
 										)
 									: null),
 							MAX_PC: p.max_pc,
+							EXP_TYPE: (p.experiment_type || 'porous_plate').toUpperCase(),
 							SW_AT_MAX_PC: p.sw_at_max_pc,
 							EXTRACTED_SWIRR: p.extracted_swirr,
 							MODELED_SWIRR: p.modeled_swirr,
@@ -578,7 +642,7 @@
 					compRows.map((r: any) => [Number(r.drt), r])
 				);
 				return {
-					title: `Rock Type Classifier Per-DRT Validation & Propagation Metrics (Acc=${((Number(clf.metrics?.accuracy ?? 0)) * 100).toFixed(1)}%, F1=${Number(clf.metrics?.f1_weighted ?? 0).toFixed(3)}, κ=${Number(clf.metrics?.cohen_kappa ?? 0).toFixed(3)})`,
+					title: `Rock Type Classifier Per-DRT Validation & Propagation Metrics (Acc=${(Number(clf.metrics?.accuracy ?? 0) * 100).toFixed(1)}%, F1=${Number(clf.metrics?.f1_weighted ?? 0).toFixed(3)}, κ=${Number(clf.metrics?.cohen_kappa ?? 0).toFixed(3)})`,
 					columns: [
 						{ key: 'DRT', label: 'Group' },
 						{ key: 'PRECISION', label: 'Precision', numeric: true, decimals: 3 },
@@ -676,23 +740,77 @@
 					columns: [
 						{ key: 'zone', label: 'Formation' },
 						{ key: 'well_count', label: 'Wells', numeric: true, decimals: 0 },
-						{ key: 'mean_net_pay', label: 'Net Pay', unit: 'm', numeric: true, decimals: 1 },
+						{
+							key: 'mean_net_pay',
+							label: 'Net Pay',
+							unit: 'm',
+							numeric: true,
+							decimals: 1
+						},
 						{ key: 'ntg_pay', label: 'NTG', unit: 'v/v', numeric: true, decimals: 2 },
 						{ key: 'mean_phie', label: 'Φe', unit: 'v/v', numeric: true, decimals: 3 },
 						{ key: 'mean_sw', label: 'Sw', unit: 'v/v', numeric: true, decimals: 3 },
 						{ key: 'mean_hcpt', label: 'HCPT', unit: 'm', numeric: true, decimals: 2 },
 						...(isOil
 							? [
-									{ key: 'p90_vol', label: '1P (P90)', unit: 'MMbbl', numeric: true, decimals: 2 },
-									{ key: 'p50_vol', label: '2P (P50)', unit: 'MMbbl', numeric: true, decimals: 2 },
-									{ key: 'p10_vol', label: '3P (P10)', unit: 'MMbbl', numeric: true, decimals: 2 },
-									{ key: 'rec_vol', label: 'Rec Oil', unit: 'MMbbl', numeric: true, decimals: 2 }
+									{
+										key: 'p90_vol',
+										label: '1P (P90)',
+										unit: 'MMbbl',
+										numeric: true,
+										decimals: 2
+									},
+									{
+										key: 'p50_vol',
+										label: '2P (P50)',
+										unit: 'MMbbl',
+										numeric: true,
+										decimals: 2
+									},
+									{
+										key: 'p10_vol',
+										label: '3P (P10)',
+										unit: 'MMbbl',
+										numeric: true,
+										decimals: 2
+									},
+									{
+										key: 'rec_vol',
+										label: 'Rec Oil',
+										unit: 'MMbbl',
+										numeric: true,
+										decimals: 2
+									}
 								]
 							: [
-									{ key: 'p90_vol', label: '1P (P90)', unit: 'Bcf', numeric: true, decimals: 2 },
-									{ key: 'p50_vol', label: '2P (P50)', unit: 'Bcf', numeric: true, decimals: 2 },
-									{ key: 'p10_vol', label: '3P (P10)', unit: 'Bcf', numeric: true, decimals: 2 },
-									{ key: 'rec_vol', label: 'Rec Gas', unit: 'Bcf', numeric: true, decimals: 2 }
+									{
+										key: 'p90_vol',
+										label: '1P (P90)',
+										unit: 'Bcf',
+										numeric: true,
+										decimals: 2
+									},
+									{
+										key: 'p50_vol',
+										label: '2P (P50)',
+										unit: 'Bcf',
+										numeric: true,
+										decimals: 2
+									},
+									{
+										key: 'p10_vol',
+										label: '3P (P10)',
+										unit: 'Bcf',
+										numeric: true,
+										decimals: 2
+									},
+									{
+										key: 'rec_vol',
+										label: 'Rec Gas',
+										unit: 'Bcf',
+										numeric: true,
+										decimals: 2
+									}
 								])
 					],
 					rows: vr.zonal_summary.map((z) => ({
@@ -722,11 +840,29 @@
 						{ key: 'DEPTH', label: 'Depth', unit: 'm', numeric: true, decimals: 2 },
 						{ key: 'ZONE', label: 'Zone' },
 						{ key: 'REGIME_LABEL', label: 'Regime' },
-						{ key: 'GR', label: gammaLabel(workbench.lithoParams), unit: 'gAPI', numeric: true, decimals: 1 },
+						{
+							key: 'GR',
+							label: gammaLabel(workbench.lithoParams),
+							unit: 'gAPI',
+							numeric: true,
+							decimals: 1
+						},
 						{ key: 'VSH_DN', label: 'VSH_DN', unit: 'v/v', numeric: true, decimals: 3 },
 						{ key: 'VSH_GR', label: 'VSH_GR', unit: 'v/v', numeric: true, decimals: 3 },
-						{ key: 'ERR_VSH', label: `ΔVsh (${gammaLabel(workbench.lithoParams)}−DN)`, unit: 'v/v', numeric: true, decimals: 3 },
-						{ key: 'ABS_ERR_VSH', label: '|ΔVsh|', unit: 'v/v', numeric: true, decimals: 3 },
+						{
+							key: 'ERR_VSH',
+							label: `ΔVsh (${gammaLabel(workbench.lithoParams)}−DN)`,
+							unit: 'v/v',
+							numeric: true,
+							decimals: 3
+						},
+						{
+							key: 'ABS_ERR_VSH',
+							label: '|ΔVsh|',
+							unit: 'v/v',
+							numeric: true,
+							decimals: 3
+						},
 						{ key: 'NPHI', label: 'NPHI', unit: 'v/v', numeric: true, decimals: 3 },
 						{ key: 'RHOB', label: 'RHOB', unit: 'g/cc', numeric: true, decimals: 3 }
 					],
@@ -752,13 +888,37 @@
 						{ key: 'ZONE', label: 'Zone' },
 						{ key: 'CPORE', label: 'CPORE', unit: 'v/v', numeric: true, decimals: 3 },
 						{ key: 'PHIT', label: 'PHIT', unit: 'v/v', numeric: true, decimals: 3 },
-						{ key: 'ERR_PHIT', label: 'ΔPHIT', unit: 'v/v', numeric: true, decimals: 4 },
-						{ key: 'REL_ERR_PHIT', label: 'Φ Err', unit: '%', numeric: true, decimals: 1 },
+						{
+							key: 'ERR_PHIT',
+							label: 'ΔPHIT',
+							unit: 'v/v',
+							numeric: true,
+							decimals: 4
+						},
+						{
+							key: 'REL_ERR_PHIT',
+							label: 'Φ Err',
+							unit: '%',
+							numeric: true,
+							decimals: 1
+						},
 						{ key: 'CPERM', label: 'CPERM', unit: 'mD', numeric: true, decimals: 2 },
 						{ key: 'PERM', label: 'PERM', unit: 'mD', numeric: true, decimals: 2 },
 						{ key: 'ERR_PERM', label: 'ΔPERM', unit: 'mD', numeric: true, decimals: 2 },
-						{ key: 'LOG10_ERR_PERM', label: 'Δlog₁₀K', unit: 'dec', numeric: true, decimals: 3 },
-						{ key: 'FACTOR_PERM', label: 'K Ratio', unit: '×', numeric: true, decimals: 2 }
+						{
+							key: 'LOG10_ERR_PERM',
+							label: 'Δlog₁₀K',
+							unit: 'dec',
+							numeric: true,
+							decimals: 3
+						},
+						{
+							key: 'FACTOR_PERM',
+							label: 'K Ratio',
+							unit: '×',
+							numeric: true,
+							decimals: 2
+						}
 					],
 					rows: cc.rows
 				};
@@ -844,7 +1004,13 @@
 						{ key: 'depth', label: 'Top', unit: 'm', numeric: true, decimals: 1 },
 						{ key: 'Gross', label: 'Gross', unit: 'm', numeric: true, decimals: 1 },
 						{ key: 'PHIT', label: 'PHIT', unit: 'v/v', numeric: true, decimals: 3 },
-						{ key: 'PHIE_QC', label: 'PHIE (QC)', unit: 'v/v', numeric: true, decimals: 3 },
+						{
+							key: 'PHIE_QC',
+							label: 'PHIE (QC)',
+							unit: 'v/v',
+							numeric: true,
+							decimals: 3
+						},
 						{ key: 'VCLAY', label: 'VCLAY', unit: 'v/v', numeric: true, decimals: 3 },
 						{ key: 'SW', label: 'SW', unit: 'v/v', numeric: true, decimals: 3 }
 					],
@@ -882,261 +1048,298 @@
 
 <div class="flex h-full w-full flex-col overflow-hidden">
 	{#if workbench.projectId && workbench.batchEvaluationAffectedProjects.includes(workbench.projectId)}
-		<div role="status" class="flex items-center justify-between gap-2 border-b border-amber-200 bg-amber-50 px-3 py-1 text-xs text-amber-900">
-			<span>Batch evaluation changed curves. Reservoir summaries and dependent field interpretations may be stale; reload the active well and recompute them.</span>
-			<button type="button" class="shrink-0 underline" onclick={() => (workbench.batchEvaluationAffectedProjects = workbench.batchEvaluationAffectedProjects.filter((id) => id !== workbench.projectId))}>Dismiss</button>
+		<div
+			role="status"
+			class="flex items-center justify-between gap-2 border-b border-amber-200 bg-amber-50 px-3 py-1 text-xs text-amber-900"
+		>
+			<span
+				>Batch evaluation changed curves. Reservoir summaries and dependent field
+				interpretations may be stale; reload the active well and recompute them.</span
+			>
+			<button
+				type="button"
+				class="shrink-0 underline"
+				onclick={() =>
+					(workbench.batchEvaluationAffectedProjects =
+						workbench.batchEvaluationAffectedProjects.filter(
+							(id) => id !== workbench.projectId
+						))}>Dismiss</button
+			>
 		</div>
 	{/if}
 	{#if workbench.scope === 'multi-well' && workbench.multiWellStep === 'batch-evaluation'}
 		<MultiWellEvaluation />
 	{:else}
-	<PaneGroup direction="horizontal" autoSaveId="quick-pp-3pane-layout" class="min-h-0 w-full flex-1">
-		<!-- LEFT PANE (25% default width): Parameter Inspector -->
-		<Pane defaultSize={25} minSize={18} maxSize={42} class="h-full overflow-hidden">
-			<div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
-				{#if workbench.scope === 'multi-well' || workbench.singleWellStep !== 'ancillary'}
-					<div
-						class="flex h-7 shrink-0 items-center justify-between border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2.5 text-[10px] select-none"
-					>
-						<span class="font-bold tracking-wider text-[var(--text-muted)] uppercase">
-							Sections
-						</span>
-						<div class="flex items-center gap-1">
-							<button
-								type="button"
-								onclick={() => workbench.expandAllSections()}
-								title="Expand all parameter sections"
-								class="h-5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 font-medium text-[var(--text-secondary)] transition-colors hover:bg-slate-100 hover:text-[var(--text-primary)]"
+		<PaneGroup
+			direction="horizontal"
+			autoSaveId="quick-pp-3pane-layout"
+			class="min-h-0 w-full flex-1"
+		>
+			<!-- LEFT PANE (25% default width): Parameter Inspector -->
+			<Pane defaultSize={25} minSize={18} maxSize={42} class="h-full overflow-hidden">
+				<div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
+					{#if workbench.scope === 'multi-well' || workbench.singleWellStep !== 'ancillary'}
+						<div
+							class="flex h-7 shrink-0 items-center justify-between border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2.5 text-[10px] select-none"
+						>
+							<span
+								class="font-bold tracking-wider text-[var(--text-muted)] uppercase"
 							>
-								Show All
-							</button>
-							<button
-								type="button"
-								onclick={() => workbench.collapseAllSections()}
-								title="Collapse all parameter sections"
-								class="h-5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 font-medium text-[var(--text-secondary)] transition-colors hover:bg-slate-100 hover:text-[var(--text-primary)]"
-							>
-								Collapse All
-							</button>
-							<button
-								type="button"
-								onclick={() => workbench.toggleFocusMode()}
-								title="Show One: only keep the selected section open and automatically close others"
-								class="h-5 rounded-xs border px-1.5 font-medium transition-colors {workbench.sectionFocusMode
-									? 'border-[var(--accent-primary)] bg-blue-600 font-semibold text-white'
-									: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100 hover:text-[var(--text-primary)]'}"
-							>
-								Show One
-							</button>
+								Sections
+							</span>
+							<div class="flex items-center gap-1">
+								<button
+									type="button"
+									onclick={() => workbench.expandAllSections()}
+									title="Expand all parameter sections"
+									class="h-5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 font-medium text-[var(--text-secondary)] transition-colors hover:bg-slate-100 hover:text-[var(--text-primary)]"
+								>
+									Show All
+								</button>
+								<button
+									type="button"
+									onclick={() => workbench.collapseAllSections()}
+									title="Collapse all parameter sections"
+									class="h-5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 font-medium text-[var(--text-secondary)] transition-colors hover:bg-slate-100 hover:text-[var(--text-primary)]"
+								>
+									Collapse All
+								</button>
+								<button
+									type="button"
+									onclick={() => workbench.toggleFocusMode()}
+									title="Show One: only keep the selected section open and automatically close others"
+									class="h-5 rounded-xs border px-1.5 font-medium transition-colors {workbench.sectionFocusMode
+										? 'border-[var(--accent-primary)] bg-blue-600 font-semibold text-white'
+										: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100 hover:text-[var(--text-primary)]'}"
+								>
+									Show One
+								</button>
+							</div>
 						</div>
-					</div>
-				{/if}
-				<div class="min-h-0 flex-1 overflow-hidden">
-					{#if workbench.scope === 'single-well'}
-						{#if workbench.singleWellStep === 'qaqc'}
-							<InspectorQaqc />
-						{:else if workbench.singleWellStep === 'ancillary'}
-							<InspectorAncillary />
-						{:else if workbench.singleWellStep === 'litho-poro'}
-							<InspectorLithoPoro />
-						{:else if workbench.singleWellStep === 'perm'}
-							<InspectorPerm />
-						{:else if workbench.singleWellStep === 'saturation'}
-							<InspectorSaturation />
-						{:else if workbench.singleWellStep === 'scal'}
-							<InspectorScal />
-						{:else if workbench.singleWellStep === 'toc'}
-							<InspectorToc />
-						{:else if workbench.singleWellStep === 'report'}
+					{/if}
+					<div class="min-h-0 flex-1 overflow-hidden">
+						{#if workbench.scope === 'single-well'}
+							{#if workbench.singleWellStep === 'qaqc'}
+								<InspectorQaqc />
+							{:else if workbench.singleWellStep === 'ancillary'}
+								<InspectorAncillary />
+							{:else if workbench.singleWellStep === 'litho-poro'}
+								<InspectorLithoPoro />
+							{:else if workbench.singleWellStep === 'perm'}
+								<InspectorPerm />
+							{:else if workbench.singleWellStep === 'saturation'}
+								<InspectorSaturation />
+							{:else if workbench.singleWellStep === 'scal'}
+								<InspectorScal />
+							{:else if workbench.singleWellStep === 'toc'}
+								<InspectorToc />
+							{:else if workbench.singleWellStep === 'report'}
+								<InspectorReport />
+							{:else}
+								<InspectorResSum />
+							{/if}
+						{:else if workbench.multiWellStep === 'inventory'}
+							<MultiWellInventory />
+						{:else if workbench.multiWellStep === 'qaqc'}
+							<MultiWellQaqc />
+						{:else if workbench.multiWellStep === 'rock-typing'}
+							<MultiWellRockTyping />
+						{:else if workbench.multiWellStep === 'perm-transform'}
+							<MultiWellPermTransform />
+						{:else if workbench.multiWellStep === 'swirr-corr'}
+							<MultiWellSwirr />
+						{:else if workbench.multiWellStep === 'rt-classifier'}
+							<MultiWellRtClassifierTrainer />
+						{:else if workbench.multiWellStep === 'ml-training'}
+							<MultiWellMlTrainer />
+						{:else if workbench.multiWellStep === 'fpt'}
+							<MultiWellFpt />
+						{:else if workbench.multiWellStep === 'volumetrics'}
+							<MultiWellVolumetrics />
+						{:else if workbench.multiWellStep === 'report'}
 							<InspectorReport />
 						{:else}
-							<InspectorResSum />
+							<MultiWellShf />
 						{/if}
-					{:else if workbench.multiWellStep === 'inventory'}
-						<MultiWellInventory />
-					{:else if workbench.multiWellStep === 'qaqc'}
-						<MultiWellQaqc />
-					{:else if workbench.multiWellStep === 'rock-typing'}
-						<MultiWellRockTyping />
-					{:else if workbench.multiWellStep === 'perm-transform'}
-						<MultiWellPermTransform />
-					{:else if workbench.multiWellStep === 'swirr-corr'}
-						<MultiWellSwirr />
-					{:else if workbench.multiWellStep === 'rt-classifier'}
-						<MultiWellRtClassifierTrainer />
-					{:else if workbench.multiWellStep === 'ml-training'}
-						<MultiWellMlTrainer />
-					{:else if workbench.multiWellStep === 'fpt'}
-						<MultiWellFpt />
-					{:else if workbench.multiWellStep === 'volumetrics'}
-						<MultiWellVolumetrics />
-					{:else if workbench.multiWellStep === 'report'}
-						<InspectorReport />
-					{:else}
-						<MultiWellShf />
-					{/if}
+					</div>
 				</div>
-			</div>
-		</Pane>
-
-		<PaneResizer
-			class="w-[3px] cursor-col-resize bg-[var(--border-hairline)] transition-colors hover:bg-[var(--accent-primary)] active:bg-[var(--accent-primary)]"
-		/>
-
-		{#if isReportMode}
-			<!-- REPORT WORKBENCH (75% default width): Live A4 Preview & Markdown Editor -->
-			<Pane defaultSize={75} minSize={45} class="h-full overflow-hidden">
-				<ReportPreviewCanvas />
-			</Pane>
-		{:else}
-			<!-- CENTER PANE (45% default width): Synchronized Well Log Canvas or Multi-Well Stick Plot -->
-			<Pane defaultSize={45} minSize={28} class="h-full overflow-hidden">
-				{#if isFptMode}
-					<FptPlotCanvas initialMode="pressure" />
-				{:else if isVolumetricsMode}
-					<VolumetricsCanvas />
-				{:else if workbench.scope === 'multi-well' && workbench.centerPaneMultiWellView === 'stick-plot'}
-					<StickPlotCanvas />
-				{:else}
-					<LogTrackCanvas />
-				{/if}
 			</Pane>
 
 			<PaneResizer
 				class="w-[3px] cursor-col-resize bg-[var(--border-hairline)] transition-colors hover:bg-[var(--accent-primary)] active:bg-[var(--accent-primary)]"
 			/>
 
-			<!-- RIGHT PANE (30% default width): Crossplot & Zonal Data Grid -->
-			<Pane defaultSize={30} minSize={20} class="h-full overflow-hidden">
-				{#if isVolumetricsMode}
-					<VolumetricsRightPanel />
-				{:else if workbench.rightPaneTab === 'missing'}
-					<MissingDataMatrix />
-				{:else if workbench.rightPaneTab === 'crossplot'}
+			{#if isReportMode}
+				<!-- REPORT WORKBENCH (75% default width): Live A4 Preview & Markdown Editor -->
+				<Pane defaultSize={75} minSize={45} class="h-full overflow-hidden">
+					<ReportPreviewCanvas />
+				</Pane>
+			{:else}
+				<!-- CENTER PANE (45% default width): Synchronized Well Log Canvas or Multi-Well Stick Plot -->
+				<Pane defaultSize={45} minSize={28} class="h-full overflow-hidden">
 					{#if isFptMode}
-						<FptPlotCanvas initialMode="excess" />
+						<FptPlotCanvas initialMode="pressure" />
+					{:else if isVolumetricsMode}
+						<VolumetricsCanvas />
+					{:else if workbench.scope === 'multi-well' && workbench.centerPaneMultiWellView === 'stick-plot'}
+						<StickPlotCanvas />
 					{:else}
-						<CrossplotCanvas />
+						<LogTrackCanvas />
 					{/if}
-				{:else if workbench.rightPaneTab === 'grid'}
-					<div class="flex h-full flex-col bg-[var(--bg-surface)]">
-						<div
-							class="flex h-7 shrink-0 items-center justify-between border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 text-[11px]"
-						>
-							<div class="flex items-center gap-1">
-								<button
-									type="button"
-									onclick={() => (workbench.rightGridSubTab = 'data')}
-									class="flex h-5.5 items-center gap-1 rounded-xs px-2 font-medium transition-colors {workbench.rightGridSubTab === 'data'
-										? 'bg-[var(--bg-surface)] font-semibold text-[var(--text-primary)] shadow-2xs'
-										: 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
-								>
-									<span>📊</span>
-									<span class="truncate max-w-[200px]">{rightGridConfig.title}</span>
-									<span class="mono-num ml-0.5 text-[9.5px] text-[var(--text-muted)]">
-										({rightGridConfig.rows.length})
-									</span>
-								</button>
-								<button
-									type="button"
-									onclick={() => (workbench.rightGridSubTab = 'params')}
-									class="flex h-5.5 items-center gap-1 rounded-xs px-2 font-medium transition-colors {workbench.rightGridSubTab === 'params'
-										? 'bg-[var(--bg-surface)] font-semibold text-[var(--text-primary)] shadow-2xs'
-										: 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
-								>
-									<span>⚙</span>
-									<span>Parameters & Fits</span>
-									{#if totalSavedParamsCount > 0}
-										<span class="ml-1 rounded-2xs bg-emerald-500/15 px-1 py-0.2 text-[9px] font-semibold text-emerald-700">
-											{totalSavedParamsCount}
+				</Pane>
+
+				<PaneResizer
+					class="w-[3px] cursor-col-resize bg-[var(--border-hairline)] transition-colors hover:bg-[var(--accent-primary)] active:bg-[var(--accent-primary)]"
+				/>
+
+				<!-- RIGHT PANE (30% default width): Crossplot & Zonal Data Grid -->
+				<Pane defaultSize={30} minSize={20} class="h-full overflow-hidden">
+					{#if isVolumetricsMode}
+						<VolumetricsRightPanel />
+					{:else if workbench.rightPaneTab === 'missing'}
+						<MissingDataMatrix />
+					{:else if workbench.rightPaneTab === 'crossplot'}
+						{#if isFptMode}
+							<FptPlotCanvas initialMode="excess" />
+						{:else}
+							<CrossplotCanvas />
+						{/if}
+					{:else if workbench.rightPaneTab === 'grid'}
+						<div class="flex h-full flex-col bg-[var(--bg-surface)]">
+							<div
+								class="flex h-7 shrink-0 items-center justify-between border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 text-[11px]"
+							>
+								<div class="flex items-center gap-1">
+									<button
+										type="button"
+										onclick={() => (workbench.rightGridSubTab = 'data')}
+										class="flex h-5.5 items-center gap-1 rounded-xs px-2 font-medium transition-colors {workbench.rightGridSubTab ===
+										'data'
+											? 'bg-[var(--bg-surface)] font-semibold text-[var(--text-primary)] shadow-2xs'
+											: 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+									>
+										<span>📊</span>
+										<span class="max-w-[200px] truncate"
+											>{rightGridConfig.title}</span
+										>
+										<span
+											class="mono-num ml-0.5 text-[9.5px] text-[var(--text-muted)]"
+										>
+											({rightGridConfig.rows.length})
 										</span>
-									{/if}
-								</button>
+									</button>
+									<button
+										type="button"
+										onclick={() => (workbench.rightGridSubTab = 'params')}
+										class="flex h-5.5 items-center gap-1 rounded-xs px-2 font-medium transition-colors {workbench.rightGridSubTab ===
+										'params'
+											? 'bg-[var(--bg-surface)] font-semibold text-[var(--text-primary)] shadow-2xs'
+											: 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+									>
+										<span>⚙</span>
+										<span>Parameters & Fits</span>
+										{#if totalSavedParamsCount > 0}
+											<span
+												class="rounded-2xs py-0.2 ml-1 bg-emerald-500/15 px-1 text-[9px] font-semibold text-emerald-700"
+											>
+												{totalSavedParamsCount}
+											</span>
+										{/if}
+									</button>
+								</div>
+							</div>
+							<div class="min-h-0 flex-1">
+								{#if workbench.rightGridSubTab === 'data'}
+									<CompactDataGrid
+										columns={rightGridConfig.columns}
+										rows={rightGridConfig.rows}
+										onrowclick={handleRightGridRowClick}
+									/>
+								{:else}
+									<ParametersManagementPanel />
+								{/if}
 							</div>
 						</div>
-						<div class="min-h-0 flex-1">
-							{#if workbench.rightGridSubTab === 'data'}
-								<CompactDataGrid
-									columns={rightGridConfig.columns}
-									rows={rightGridConfig.rows}
-									onrowclick={handleRightGridRowClick}
-								/>
-							{:else}
-								<ParametersManagementPanel />
-							{/if}
-						</div>
-					</div>
-				{:else}
-					<PaneGroup
-						direction="vertical"
-						autoSaveId="quick-pp-right-split"
-						class="h-full w-full"
-					>
-						<Pane defaultSize={58} minSize={25} class="w-full overflow-hidden">
-							{#if isFptMode}
-								<FptPlotCanvas initialMode="excess" />
-							{:else}
-								<CrossplotCanvas />
-							{/if}
-						</Pane>
+					{:else}
+						<PaneGroup
+							direction="vertical"
+							autoSaveId="quick-pp-right-split"
+							class="h-full w-full"
+						>
+							<Pane defaultSize={58} minSize={25} class="w-full overflow-hidden">
+								{#if isFptMode}
+									<FptPlotCanvas initialMode="excess" />
+								{:else}
+									<CrossplotCanvas />
+								{/if}
+							</Pane>
 
-						<PaneResizer
-							class="h-[3px] cursor-row-resize bg-[var(--border-hairline)] transition-colors hover:bg-[var(--accent-primary)] active:bg-[var(--accent-primary)]"
-						/>
+							<PaneResizer
+								class="h-[3px] cursor-row-resize bg-[var(--border-hairline)] transition-colors hover:bg-[var(--accent-primary)] active:bg-[var(--accent-primary)]"
+							/>
 
-						<Pane defaultSize={42} minSize={20} class="w-full overflow-hidden">
-							<div class="flex h-full flex-col bg-[var(--bg-surface)]">
-								<div
-									class="flex h-7 shrink-0 items-center justify-between border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 text-[11px]"
-								>
-									<div class="flex items-center gap-1">
-										<button
-											type="button"
-											onclick={() => (workbench.rightGridSubTab = 'data')}
-											class="flex h-5.5 items-center gap-1 rounded-xs px-2 font-medium transition-colors {workbench.rightGridSubTab === 'data'
-												? 'bg-[var(--bg-surface)] font-semibold text-[var(--text-primary)] shadow-2xs'
-												: 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
-										>
-											<span>📊</span>
-											<span class="truncate max-w-[200px]">{rightGridConfig.title}</span>
-											<span class="mono-num ml-0.5 text-[9.5px] text-[var(--text-muted)]">
-												({rightGridConfig.rows.length})
-											</span>
-										</button>
-										<button
-											type="button"
-											onclick={() => (workbench.rightGridSubTab = 'params')}
-											class="flex h-5.5 items-center gap-1 rounded-xs px-2 font-medium transition-colors {workbench.rightGridSubTab === 'params'
-												? 'bg-[var(--bg-surface)] font-semibold text-[var(--text-primary)] shadow-2xs'
-												: 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
-										>
-											<span>⚙</span>
-											<span>Parameters & Fits</span>
-											{#if totalSavedParamsCount > 0}
-												<span class="ml-1 rounded-2xs bg-emerald-500/15 px-1 py-0.2 text-[9px] font-semibold text-emerald-700">
-													{totalSavedParamsCount}
+							<Pane defaultSize={42} minSize={20} class="w-full overflow-hidden">
+								<div class="flex h-full flex-col bg-[var(--bg-surface)]">
+									<div
+										class="flex h-7 shrink-0 items-center justify-between border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 text-[11px]"
+									>
+										<div class="flex items-center gap-1">
+											<button
+												type="button"
+												onclick={() => (workbench.rightGridSubTab = 'data')}
+												class="flex h-5.5 items-center gap-1 rounded-xs px-2 font-medium transition-colors {workbench.rightGridSubTab ===
+												'data'
+													? 'bg-[var(--bg-surface)] font-semibold text-[var(--text-primary)] shadow-2xs'
+													: 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+											>
+												<span>📊</span>
+												<span class="max-w-[200px] truncate"
+													>{rightGridConfig.title}</span
+												>
+												<span
+													class="mono-num ml-0.5 text-[9.5px] text-[var(--text-muted)]"
+												>
+													({rightGridConfig.rows.length})
 												</span>
-											{/if}
-										</button>
+											</button>
+											<button
+												type="button"
+												onclick={() =>
+													(workbench.rightGridSubTab = 'params')}
+												class="flex h-5.5 items-center gap-1 rounded-xs px-2 font-medium transition-colors {workbench.rightGridSubTab ===
+												'params'
+													? 'bg-[var(--bg-surface)] font-semibold text-[var(--text-primary)] shadow-2xs'
+													: 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'}"
+											>
+												<span>⚙</span>
+												<span>Parameters & Fits</span>
+												{#if totalSavedParamsCount > 0}
+													<span
+														class="rounded-2xs py-0.2 ml-1 bg-emerald-500/15 px-1 text-[9px] font-semibold text-emerald-700"
+													>
+														{totalSavedParamsCount}
+													</span>
+												{/if}
+											</button>
+										</div>
+									</div>
+									<div class="min-h-0 flex-1">
+										{#if workbench.rightGridSubTab === 'data'}
+											<CompactDataGrid
+												columns={rightGridConfig.columns}
+												rows={rightGridConfig.rows}
+												onrowclick={handleRightGridRowClick}
+											/>
+										{:else}
+											<ParametersManagementPanel />
+										{/if}
 									</div>
 								</div>
-								<div class="min-h-0 flex-1">
-									{#if workbench.rightGridSubTab === 'data'}
-										<CompactDataGrid
-											columns={rightGridConfig.columns}
-											rows={rightGridConfig.rows}
-											onrowclick={handleRightGridRowClick}
-										/>
-									{:else}
-										<ParametersManagementPanel />
-									{/if}
-								</div>
-							</div>
-						</Pane>
-					</PaneGroup>
-				{/if}
-			</Pane>
-		{/if}
-	</PaneGroup>
+							</Pane>
+						</PaneGroup>
+					{/if}
+				</Pane>
+			{/if}
+		</PaneGroup>
 	{/if}
 </div>

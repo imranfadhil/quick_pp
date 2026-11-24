@@ -6211,7 +6211,7 @@
 							(p) =>
 								`<b>${p.well} · Sample ${p.sample}</b> (RT ${p.rt})<br>` +
 								`Depth: ${p.depth > 0 ? fmtNum(p.depth, 2) + ' m' : '—'} | Zone: ${projectData.resolveScalSampleZone(p.well, p.depth, p.zone)}<br>` +
-								`Extracted Swirr: ${fmtNum(p.extracted_swirr, 3)} v/v | Max Pc: ${fmtNum(p.max_pc, 1)} psi<br>` +
+								`Extracted Swirr: ${fmtNum(p.extracted_swirr, 3)} v/v | Max Pc: ${fmtNum(p.max_pc, 1)} psi (${(p.experiment_type || 'porous_plate').toUpperCase()})<br>` +
 								`<i>Click to ${p.included ? 'exclude' : 're-include'} plug</i>`
 						),
 						hovertemplate: '%{text}<extra></extra>'
@@ -6234,7 +6234,7 @@
 				baseLayout.xaxis.title = { text: 'Water Saturation Sw (v/v)' };
 				baseLayout.xaxis.range = [0, 1.02];
 				baseLayout.yaxis.title = {
-					text: `Capillary Pressure Pc (psi) — Ref Pc = ${cfg.referencePcPsi} psi`
+					text: `Capillary Pressure Pc (${(cfg.pcDomain ?? 'lab') === 'reservoir' ? 'Res' : 'Lab'}, psi) — Ref Pc = ${cfg.referencePcPsi} psi`
 				};
 				baseLayout.yaxis.type = swirrLogY ? 'log' : 'linear';
 				return { traces, layout: baseLayout };

@@ -22,11 +22,8 @@
 	let relpermPendingSave = $state(false);
 
 	onMount(() => {
-		if (!projectData.swirrResult) {
-			void projectData.ensureSwirrDataLoaded();
-		} else {
-			projectData.recomputeSwirrClientSide(!projectData.swirrManualRuleOverride);
-		}
+		// Ensure fresh multi-well SCAL plugs are loaded across all project wells
+		void projectData.ensureSwirrDataLoaded(true);
 	});
 	// Manual override flags live in shared project state so they are saved/restored with project params
 
@@ -268,6 +265,7 @@
 					min_depth: workbench.depthFilter?.min ?? null,
 					max_depth: workbench.depthFilter?.max ?? null,
 					extraction_mode: cfg.extractionMode,
+					pc_domain: cfg.pcDomain ?? 'lab',
 					reference_pc_psi: cfg.referencePcPsi,
 					equation_type: cfg.equationType,
 					fit_scope: cfg.fitScope,
@@ -311,6 +309,7 @@
 					min_depth: workbench.depthFilter?.min ?? null,
 					max_depth: workbench.depthFilter?.max ?? null,
 					extraction_mode: cfg.extractionMode,
+					pc_domain: cfg.pcDomain ?? 'lab',
 					reference_pc_psi: cfg.referencePcPsi,
 					equation_type: cfg.equationType,
 					fit_scope: cfg.fitScope,
@@ -361,6 +360,13 @@
 		if (!workbench.projectId || !projectData.hasPendingMultiWell('swirr-corr')) return;
 		await projectData.saveMultiWellComputed('swirr-corr');
 		await projectData.persistProjectParams([], ['swirr-corr', 'shf']);
+	}
+
+	function setPcDomain(domain: 'lab' | 'reservoir') {
+		if ((projectData.swirrConfig.pcDomain ?? 'lab') === domain) return;
+		projectData.swirrConfig.pcDomain = domain;
+		projectData.swirrManualRuleOverride = false;
+		void projectData.ensureSwirrDataLoaded(true);
 	}
 
 	function setExtractionMode(mode: SwirrExtractionMode) {
@@ -569,6 +575,28 @@
 					<span
 						class="mb-1 block text-[10px] font-semibold tracking-wider text-[var(--text-muted)] uppercase"
 					>
+						Capillary Pressure Domain
+					</span>
+					<div class="grid grid-cols-2 gap-1">
+						{#each [['lab', 'Lab Pc (Measured)'], ['reservoir', 'Reservoir Pc (Converted)']] as [dKey, dLbl]}
+							<button
+								type="button"
+								onclick={() => setPcDomain(dKey as 'lab' | 'reservoir')}
+								class="h-6 rounded-sm border text-[10px] font-medium transition-colors {(projectData
+									.swirrConfig.pcDomain ?? 'lab') === dKey
+									? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
+									: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-50'}"
+							>
+								{dLbl}
+							</button>
+						{/each}
+					</div>
+				</div>
+
+				<div class="mb-2">
+					<span
+						class="mb-1 block text-[10px] font-semibold tracking-wider text-[var(--text-muted)] uppercase"
+					>
 						Extraction Method
 					</span>
 					<div class="grid grid-cols-2 gap-1">
@@ -591,7 +619,7 @@
 					label="Reference / Cutoff Pc"
 					unit="psi"
 					min={5}
-					max={500}
+					max={5000}
 					step={5}
 					decimals={1}
 					bind:value={projectData.swirrConfig.referencePcPsi}
@@ -665,14 +693,16 @@
 					</div>
 					<div class="mt-0.5 text-[9.5px] text-blue-800">
 						{#if projectData.activeDrtCutoffs.length > 0}
-							{@const sortedCutoffs = [...projectData.activeDrtCutoffs].sort((a, b) => a - b)}
+							{@const sortedCutoffs = [...projectData.activeDrtCutoffs].sort(
+								(a, b) => a - b
+							)}
 							Cutoffs: [{sortedCutoffs.join(', ')}]
 							{#if projectData.drtMethod === 'lucia'}
-								· RT 1: &lt;{sortedCutoffs[0]} |
-								RT {sortedCutoffs.length + 1} (Non-Res): ≥{sortedCutoffs[sortedCutoffs.length - 1]}
+								· RT 1: &lt;{sortedCutoffs[0]} | RT {sortedCutoffs.length + 1} (Non-Res):
+								≥{sortedCutoffs[sortedCutoffs.length - 1]}
 							{:else}
-								· RT 1: ≥{sortedCutoffs[sortedCutoffs.length - 1]} |
-								RT {sortedCutoffs.length + 1} (Non-Res): &lt;{sortedCutoffs[0]}
+								· RT 1: ≥{sortedCutoffs[sortedCutoffs.length - 1]} | RT {sortedCutoffs.length +
+									1} (Non-Res): &lt;{sortedCutoffs[0]}
 							{/if}
 						{:else}
 							Cutoffs: []
@@ -787,7 +817,8 @@
 									{@const rtColor = isGlobal
 										? '#0F172A'
 										: getRockTypeColor(Number(scopeKey))}
-									{@const isNoSample = !isGlobal && (!rule.count || rule.count === 0)}
+									{@const isNoSample =
+										!isGlobal && (!rule.count || rule.count === 0)}
 									{@const isNonRes =
 										!isGlobal &&
 										Number(scopeKey) > projectData.activeDrtCutoffs.length}
@@ -799,7 +830,7 @@
 											></span>{isGlobal ? 'Global' : `RT ${scopeKey}`}
 											{#if isNoSample}
 												<span
-													class="ml-1 rounded-xs bg-amber-100 px-1 py-0.2 text-[8.5px] font-medium text-amber-800"
+													class="py-0.2 ml-1 rounded-xs bg-amber-100 px-1 text-[8.5px] font-medium text-amber-800"
 													title="No SCAL samples in this RT. You can manually adjust parameters or copy from another RT."
 													>n=0</span
 												>
@@ -1427,7 +1458,8 @@
 										{/if}
 										<th
 											class="px-1 text-center font-semibold"
-											title="Copy fit parameters from another Rock Type">Copy</th
+											title="Copy fit parameters from another Rock Type"
+											>Copy</th
 										>
 									</tr>
 								</thead>
@@ -1445,7 +1477,7 @@
 												></span>RT {rf}
 												{#if isNoSample}
 													<span
-														class="ml-1 rounded-xs bg-amber-100 px-1 py-0.2 text-[8.5px] font-medium text-amber-800"
+														class="py-0.2 ml-1 rounded-xs bg-amber-100 px-1 text-[8.5px] font-medium text-amber-800"
 														title="No SCAL samples in this RT. You can manually adjust parameters or copy from another RT."
 														>n=0</span
 													>
@@ -1547,7 +1579,9 @@
 													<option value="">Copy...</option>
 													{#each Object.keys(projectData.shfResult.fits) as otherRf (otherRf)}
 														{#if otherRf !== rf}
-															<option value={otherRf}>From RT {otherRf}</option>
+															<option value={otherRf}
+																>From RT {otherRf}</option
+															>
 														{/if}
 													{/each}
 												</select>

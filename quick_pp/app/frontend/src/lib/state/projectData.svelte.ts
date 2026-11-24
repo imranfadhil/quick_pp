@@ -128,6 +128,7 @@ export interface ProjectListItem {
 
 export type MultiWellSaveModule = 'rock-typing' | 'perm-transform' | 'swirr-corr' | 'shf';
 export type SwirrExtractionMode = 'cutoff_pc' | 'interp_pc';
+export type SwirrPcDomain = 'lab' | 'reservoir';
 export type SwirrEquationType = 'rqi_power' | 'semilog_k' | 'timur';
 export type SwirrFitScope = 'global' | 'per_rt';
 
@@ -143,6 +144,7 @@ export interface SwirrCorrelationRule {
 
 export interface SwirrModelConfig {
 	extractionMode: SwirrExtractionMode;
+	pcDomain?: SwirrPcDomain;
 	referencePcPsi: number;
 	equationType: SwirrEquationType;
 	fitScope: SwirrFitScope;
@@ -166,6 +168,8 @@ export interface SwirrPlugRow {
 	rqi: number;
 	fzi?: number;
 	max_pc: number;
+	experiment_type?: string;
+	pc_domain?: string;
 	sw_at_max_pc: number;
 	extracted_swirr: number;
 	modeled_swirr: number;
@@ -457,6 +461,7 @@ class ProjectDataState {
 
 	swirrConfig = $state<SwirrModelConfig>({
 		extractionMode: 'cutoff_pc',
+		pcDomain: 'lab',
 		referencePcPsi: 50.0,
 		equationType: 'rqi_power',
 		fitScope: 'global',
@@ -1812,13 +1817,26 @@ class ProjectDataState {
 	): boolean {
 		const wn = String(wellName || '').trim();
 		if (wn) {
+			const wnTok = wn
+				.toLowerCase()
+				.replace(/(?<![0-9])0+([1-9])/g, '$1')
+				.replace(/[^a-z0-9]/g, '');
 			if (workbench.scope === 'single-well' && workbench.wellId) {
-				if (wn !== workbench.wellId) return false;
-			} else if (
-				this.selectedWellNames.length > 0 &&
-				!this.selectedWellNames.includes(wn)
-			) {
-				return false;
+				const activeTok = workbench.wellId
+					.toLowerCase()
+					.replace(/(?<![0-9])0+([1-9])/g, '$1')
+					.replace(/[^a-z0-9]/g, '');
+				if (wnTok !== activeTok) return false;
+			} else if (this.selectedWellNames.length > 0) {
+				const hasMatch = this.selectedWellNames.some((sel) => {
+					if (sel === wn) return true;
+					const selTok = sel
+						.toLowerCase()
+						.replace(/(?<![0-9])0+([1-9])/g, '$1')
+						.replace(/[^a-z0-9]/g, '');
+					return selTok === wnTok;
+				});
+				if (!hasMatch) return false;
 			}
 		}
 		const d = typeof depth === 'number' && Number.isFinite(depth) ? depth : null;
@@ -2106,10 +2124,14 @@ class ProjectDataState {
 				`/quick_pp/workspace/projects/${encodeURIComponent(pid)}/swirr/fit`,
 				{
 					well_names: this.selectedWellNames.length > 0 ? this.selectedWellNames : null,
-					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
-					min_depth: workbench.depthFilter?.min ?? null,
-					max_depth: workbench.depthFilter?.max ?? null,
+					zones:
+						workbench.scope === 'multi-well' && workbench.selectedZones.length > 0
+							? workbench.selectedZones
+							: null,
+					min_depth: workbench.scope === 'multi-well' ? (workbench.depthFilter?.min ?? null) : null,
+					max_depth: workbench.scope === 'multi-well' ? (workbench.depthFilter?.max ?? null) : null,
 					extraction_mode: cfg.extractionMode,
+					pc_domain: cfg.pcDomain ?? 'lab',
 					reference_pc_psi: cfg.referencePcPsi,
 					equation_type: cfg.equationType,
 					fit_scope: cfg.fitScope,
