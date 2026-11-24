@@ -1,4 +1,5 @@
 import type { LithoEndpointParams } from '../state/workbench.svelte';
+import { salinityFromRmf } from './fluidUnits';
 
 type GammaParams = Pick<LithoEndpointParams,
 	'model' | 'gammaSource' | 'gammaCurve' | 'thoriumCurve' | 'potassiumCurve' |
@@ -171,3 +172,46 @@ export function fluidDensityParameters(lp: LithoEndpointParams) {
 		surf_pres: lp.fluidSurfPres
 	};
 }
+
+/**
+ * Synchronizes well header mud properties to the active lithology fluid density parameters.
+ */
+export function syncHeaderToLithoParams(hdr: Record<string, any>, lp: LithoEndpointParams): void {
+	if (!hdr || typeof hdr !== 'object') return;
+	// Mud Type
+	if (hdr.mud_type === 'OBM' || hdr.mud_type === 'SBM') {
+		lp.fluidDensityMudType = 'OBM';
+	} else if (hdr.mud_type === 'WBM') {
+		lp.fluidDensityMudType = 'WBM';
+	}
+
+	// Mud Filtrate Salinity
+	if (
+		typeof hdr.mud_filtrate_salinity === 'number' &&
+		Number.isFinite(hdr.mud_filtrate_salinity) &&
+		hdr.mud_filtrate_salinity >= 0
+	) {
+		lp.fluidDensitySalinityPpm = hdr.mud_filtrate_salinity;
+	} else if (typeof hdr.rmf === 'number' && Number.isFinite(hdr.rmf) && hdr.rmf > 0) {
+		const derived = salinityFromRmf(hdr.rmf, hdr.rmf_temp ?? hdr.surface_temp ?? 20);
+		if (derived != null) {
+			lp.fluidDensitySalinityPpm = derived;
+		}
+	}
+
+	// Rmf & Temp
+	if (typeof hdr.rmf === 'number' && Number.isFinite(hdr.rmf) && hdr.rmf > 0) {
+		lp.fluidDensityRmf = hdr.rmf;
+	}
+	const rmfTemp = hdr.rmf_temp ?? hdr.surface_temp;
+	if (typeof rmfTemp === 'number' && Number.isFinite(rmfTemp) && rmfTemp > 0) {
+		lp.fluidDensityRmfTempC = rmfTemp;
+	}
+
+	// OBM Base Oil Density
+	const obmDensity = hdr.obm_base_density ?? hdr.mud_filtrate_density;
+	if (typeof obmDensity === 'number' && Number.isFinite(obmDensity) && obmDensity > 0) {
+		lp.fluidDensityObmBase = obmDensity;
+	}
+}
+

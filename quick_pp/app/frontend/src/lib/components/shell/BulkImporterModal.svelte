@@ -763,6 +763,16 @@
 																	class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1.5 font-mono"
 																/>
 															</label>
+															<label class="flex flex-col gap-0.5">
+																<span class="text-[10px] font-semibold text-[var(--text-secondary)]">Rmf Temp (°C)</span>
+																<input
+																	type="number"
+																	step="0.5"
+																	bind:value={fileItem.metadata.rmf_temp}
+																	placeholder="e.g. 20"
+																	class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1.5 font-mono"
+																/>
+															</label>
 														</div>
 
 														{#if (fileItem.metadata.raw_well_header && Object.keys(fileItem.metadata.raw_well_header).length > 0) || (fileItem.metadata.raw_parameters && Object.keys(fileItem.metadata.raw_parameters).length > 0)}

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { api, getJson, postJson } from '$lib/api/client';
 	import { authState } from '$lib/state/auth.svelte';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
@@ -6,11 +7,18 @@
 	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
 	import VshCalibrationPanel from '$lib/components/workbench/VshCalibrationPanel.svelte';
 	import GammaSource from '$lib/components/workbench/GammaSource.svelte';
+	import { moduleParams } from '$lib/state/moduleParams.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench, computeSiltIntersection, type LithoOverride } from '$lib/state/workbench.svelte';
 	import { fmtNum } from '$lib/utils/formatters';
 	import { calculateMethodComparison } from '$lib/utils/methodComparison';
-	import { gammaParameters, fluidDensityParameters, gammaEndpoints, gammaLabel } from '$lib/utils/lithology';
+	import {
+		gammaParameters,
+		fluidDensityParameters,
+		gammaEndpoints,
+		gammaLabel,
+		syncHeaderToLithoParams
+	} from '$lib/utils/lithology';
 	import {
 		gorMetricToScfStb,
 		gorScfStbToMetric,
@@ -18,7 +26,8 @@
 		pressureGradientPsiFtToMpaKm,
 		pressureMpaToPsi,
 		pressurePsiToMpa,
-		saturationTemperatureToMetric
+		saturationTemperatureToMetric,
+		salinityFromRmf
 	} from '$lib/utils/fluidUnits';
 	import {
 		ALL_LITHOLOGY_CURVES,
@@ -381,6 +390,40 @@
 		}
 		return zeroedUpdates;
 	}
+
+	let lastLithoHeaderSyncGen = -1;
+	$effect(() => {
+		const gen = wellData.wellLoadGeneration;
+		const hdr = wellData.header || {};
+		if (gen !== lastLithoHeaderSyncGen && Object.keys(hdr).length > 0) {
+			lastLithoHeaderSyncGen = gen;
+			if (!untrack(() => moduleParams.status['litho-poro']?.matched)) {
+				syncHeaderToLithoParams(hdr, workbench.lithoParams);
+			}
+		}
+	});
+
+	const derivedFiltrateSalinity = $derived.by(() => {
+		const r = Number(workbench.lithoParams.fluidDensityRmf);
+		if (!Number.isFinite(r) || r <= 0) return null;
+		const t = Number(workbench.lithoParams.fluidDensityRmfTempC);
+		return salinityFromRmf(r, Number.isFinite(t) ? t : 20);
+	});
+
+	const filtrateMismatchWarning = $derived.by(() => {
+		if (workbench.lithoParams.fluidDensityMudType !== 'WBM') return null;
+		const r = Number(workbench.lithoParams.fluidDensityRmf);
+		const t = Number(workbench.lithoParams.fluidDensityRmfTempC);
+		const s = Number(workbench.lithoParams.fluidDensitySalinityPpm);
+		if (Number.isFinite(r) && r > 0 && Number.isFinite(s) && s > 0 && derivedFiltrateSalinity != null) {
+			const ratio = s / derivedFiltrateSalinity;
+			if (ratio > 1.4 || ratio < 0.6) {
+				const tempStr = Number.isFinite(t) ? `${t}°C` : '20°C';
+				return `Mud Salinity (${s.toLocaleString()} ppm) differs significantly from Rmf-derived NaCl equivalent (~${derivedFiltrateSalinity.toLocaleString()} ppm @ ${tempStr}).`;
+			}
+		}
+		return null;
+	});
 
 	let lithoPoroRunId = 0;
 	async function executeLithoPoro(persist: boolean = false) {
@@ -1020,17 +1063,35 @@
 						{/each}
 					</div>
 
-					{#if wellData.header?.mud_type || wellData.header?.mud_filtrate_density != null}
-						<p class="mt-1 text-[10px] text-[var(--text-secondary)]">
-							Well metadata:
-							{#if wellData.header?.mud_type}<span class="font-semibold">{wellData.header.mud_type}</span>{/if}
-							{#if wellData.header?.mud_filtrate_density != null}
-								• ρ<sub>mf</sub> {fmtNum(wellData.header.mud_filtrate_density, 3)} g/cc
-							{/if}
-							{#if wellData.header?.mud_filtrate_salinity != null}
-								• {fmtNum(wellData.header.mud_filtrate_salinity, 0)} ppm
-							{/if}
-						</p>
+					{#if wellData.header?.mud_type || wellData.header?.mud_filtrate_density != null || wellData.header?.rmf != null || wellData.header?.mud_filtrate_salinity != null}
+						<div
+							class="mt-1.5 flex items-center justify-between rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1 text-[10px] text-[var(--text-secondary)]"
+						>
+							<div class="truncate">
+								<span class="font-semibold text-[var(--text-primary)]">Header:</span>
+								{#if wellData.header?.mud_type}<span class="font-medium"> {wellData.header.mud_type}</span>{/if}
+								{#if wellData.header?.rmf != null}
+									• R<sub>mf</sub> {wellData.header.rmf} Ωm{wellData.header.rmf_temp != null ? ` @ ${wellData.header.rmf_temp}°C` : ''}
+								{/if}
+								{#if wellData.header?.mud_filtrate_salinity != null}
+									• {fmtNum(wellData.header.mud_filtrate_salinity, 0)} ppm
+								{/if}
+								{#if wellData.header?.mud_filtrate_density != null}
+									• ρ<sub>mf</sub> {fmtNum(wellData.header.mud_filtrate_density, 3)} g/cc
+								{/if}
+							</div>
+							<button
+								type="button"
+								onclick={() => {
+									syncHeaderToLithoParams(wellData.header || {}, workbench.lithoParams);
+									executeLithoPoro(false);
+								}}
+								class="ml-1.5 shrink-0 cursor-pointer text-[9.5px] font-semibold text-blue-600 hover:text-blue-800 hover:underline"
+								title="Reset fluid density parameters to well header metadata"
+							>
+								↺ Sync from Header
+							</button>
+						</div>
 					{/if}
 
 					{#if workbench.lithoParams.fluidDensityMudType === 'WBM'}
@@ -1062,6 +1123,31 @@
 							step={1}
 							onrun={() => executeLithoPoro(false)}
 						/>
+						{#if derivedFiltrateSalinity != null && derivedFiltrateSalinity !== workbench.lithoParams.fluidDensitySalinityPpm}
+							<div
+								class="flex items-center justify-between px-0.5 text-[9.5px] text-[var(--text-muted)]"
+							>
+								<span>Rmf implies ~{derivedFiltrateSalinity.toLocaleString()} ppm</span>
+								<button
+									type="button"
+									onclick={() => {
+										workbench.lithoParams.fluidDensitySalinityPpm = derivedFiltrateSalinity;
+										executeLithoPoro(false);
+									}}
+									class="cursor-pointer font-semibold text-blue-600 hover:text-blue-800 hover:underline"
+									title="Update Mud Salinity to match Rmf @ Temp"
+								>
+									⚡ Set Salinity to {derivedFiltrateSalinity.toLocaleString()} ppm
+								</button>
+							</div>
+						{/if}
+						{#if filtrateMismatchWarning}
+							<div
+								class="rounded-xs border border-amber-300 bg-amber-50 px-2 py-0.5 text-[9.5px] text-amber-900"
+							>
+								<span>⚠️ {filtrateMismatchWarning}</span>
+							</div>
+						{/if}
 					{:else}
 						<NumericScrubber
 							label="Base Oil Density"

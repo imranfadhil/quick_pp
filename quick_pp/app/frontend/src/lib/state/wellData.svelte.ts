@@ -2,7 +2,7 @@ import { api, postJson, saveAncillaryItems } from '$lib/api/client';
 import type { CoreComparisonMetrics, CurveSummaryStats } from '$lib/api/schema';
 import { appStatus } from './status.svelte';
 import { workbench } from './workbench.svelte';
-import { calibrateGamma, gammaEndpoints, gammaKey, gammaLabel, selectedGamma, setGammaEndpoints } from '$lib/utils/lithology';
+import { calibrateGamma, gammaEndpoints, gammaKey, gammaLabel, selectedGamma, setGammaEndpoints, syncHeaderToLithoParams } from '$lib/utils/lithology';
 import {
 	selectSpliceInterval,
 	validateSpliceInterval,
@@ -3538,6 +3538,7 @@ class WellDataState {
 			...this.config,
 			...updates
 		};
+		syncHeaderToLithoParams(updates, workbench.lithoParams);
 		if (persist && pid && wid) {
 			const res = await postJson<any>(
 				`/quick_pp/workspace/projects/${encodeURIComponent(pid)}/wells/${encodeURIComponent(wid)}/config`,

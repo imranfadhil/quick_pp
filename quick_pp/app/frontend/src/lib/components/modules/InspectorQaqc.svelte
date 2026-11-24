@@ -27,6 +27,7 @@
 	import { depthDisplay } from '$lib/state/depthDisplay.svelte';
 	import { depthFromMeters, depthToMeters } from '$lib/utils/depthUnits';
 	import { selectSpliceInterval, type SpliceInterval } from '$lib/utils/spliceIntervals';
+	import { salinityFromRmf } from '$lib/utils/fluidUnits';
 
 	const REQUIRED_STANDARD = ['GR', 'RT', 'NPHI', 'RHOB', 'CALI', 'DTC', 'PEF'];
 	const EVALUATED_CURVES = ALL_CALCULATED_CURVE_MNEMONICS;
@@ -796,6 +797,45 @@
 	let savingWellHeader = $state(false);
 	let headerDraft = $state<Record<string, any>>({});
 
+	const derivedFiltrateSalinity = $derived.by(() => {
+		const r = Number(headerDraft.rmf);
+		if (!Number.isFinite(r) || r <= 0) return null;
+		const t = Number(headerDraft.rmf_temp);
+		return salinityFromRmf(r, Number.isFinite(t) ? t : 20);
+	});
+
+	const filtrateQcWarning = $derived.by(() => {
+		const r = Number(headerDraft.rmf);
+		const t = Number(headerDraft.rmf_temp);
+		const s = Number(headerDraft.mud_filtrate_salinity);
+
+		if (Number.isFinite(r)) {
+			if (r <= 0) return 'Rmf must be greater than 0.';
+			if (r > 15) return `Rmf (${r} Ωm) is unusually high for mud filtrate (typically 0.02 – 5 Ωm).`;
+		}
+		if (Number.isFinite(t)) {
+			if (t < 0 || t > 70) return `Rmf measurement temperature (${t}°C) is outside typical surface pit range (10 – 40°C).`;
+		}
+		if (Number.isFinite(s) && s > 350000) {
+			return `Mud filtrate salinity (${s.toLocaleString()} ppm) exceeds NaCl saturation limit (~350,000 ppm).`;
+		}
+		if (Number.isFinite(r) && r > 0 && Number.isFinite(s) && s > 0 && derivedFiltrateSalinity != null) {
+			const ratio = s / derivedFiltrateSalinity;
+			if (ratio > 1.4 || ratio < 0.6) {
+				const tempStr = Number.isFinite(t) ? `${t}°C` : '20°C';
+				return `Input salinity (${s.toLocaleString()} ppm) differs from Rmf-derived NaCl equivalent (~${derivedFiltrateSalinity.toLocaleString()} ppm @ ${tempStr}). Verify if mud contains non-NaCl salts or check units.`;
+			}
+		}
+		return null;
+	});
+
+	function handleRmfInput() {
+		const derived = derivedFiltrateSalinity;
+		if (derived != null && (headerDraft.mud_filtrate_salinity == null || headerDraft.mud_filtrate_salinity === '')) {
+			headerDraft.mud_filtrate_salinity = derived;
+		}
+	}
+
 	let lastSyncedWellGen = -1;
 	$effect(() => {
 		const gen = wellData.wellLoadGeneration;
@@ -855,6 +895,7 @@
 			bht_unit: h.bht_unit || 'degC',
 			bit_size: h.bit_size ?? null,
 			rmf: h.rmf ?? null,
+			rmf_temp: h.rmf_temp ?? h.surface_temp ?? null,
 			mud_density: h.mud_density ?? null,
 			mud_filtrate_salinity: h.mud_filtrate_salinity ?? null,
 			mud_filtrate_density: h.mud_filtrate_density ?? null,
@@ -1164,7 +1205,7 @@
 					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1">
 						<div class="text-[9.5px] text-[var(--text-muted)]">BHT / Bit Size / Rmf</div>
 						<div class="mono-num truncate font-semibold text-[var(--text-primary)]">
-							{hdr.bht != null ? `${hdr.bht}°` : '—'} • {hdr.bit_size != null ? `${hdr.bit_size}"` : '—'} • {hdr.rmf != null ? `${hdr.rmf} Ωm` : '—'}
+							{hdr.bht != null ? `${hdr.bht}°` : '—'} • {hdr.bit_size != null ? `${hdr.bit_size}"` : '—'} • {hdr.rmf != null ? `${hdr.rmf} Ωm${hdr.rmf_temp != null ? ` @ ${hdr.rmf_temp}°C` : ''}` : '—'}
 						</div>
 					</div>
 					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1">
@@ -1336,7 +1377,44 @@
 							/>
 						</label>
 						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">Mud Filtrate Salinity (ppm)</span>
+							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">Rmf (ohm.m)</span>
+							<input
+								type="number"
+								step="0.001"
+								min="0.001"
+								bind:value={headerDraft.rmf}
+								oninput={handleRmfInput}
+								placeholder="e.g. 0.5"
+								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+							/>
+						</label>
+						<label class="flex flex-col gap-0.5">
+							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">Rmf Meas Temp (°C)</span>
+							<input
+								type="number"
+								step="0.5"
+								bind:value={headerDraft.rmf_temp}
+								oninput={handleRmfInput}
+								placeholder="e.g. 20"
+								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+							/>
+						</label>
+						<label class="flex flex-col gap-0.5">
+							<div class="flex items-center justify-between">
+								<span class="text-[9.5px] font-medium text-[var(--text-muted)]">Mud Filtrate Salinity (ppm)</span>
+								{#if derivedFiltrateSalinity != null}
+									<button
+										type="button"
+										onclick={() => {
+											headerDraft.mud_filtrate_salinity = derivedFiltrateSalinity;
+										}}
+										class="cursor-pointer text-[9px] font-semibold text-blue-600 hover:text-blue-800 hover:underline"
+										title="Set salinity to Bateman-Konen equivalent from Rmf"
+									>
+										⚡ Calc from Rmf ({derivedFiltrateSalinity.toLocaleString()} ppm)
+									</button>
+								{/if}
+							</div>
 							<input
 								type="number"
 								min="0"
@@ -1379,6 +1457,27 @@
 								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
 							/>
 						</label>
+						{#if filtrateQcWarning}
+							<div
+								class="col-span-2 flex items-start justify-between gap-1.5 rounded-xs border border-amber-300 bg-amber-50 px-2 py-1 text-[10px] text-amber-900"
+							>
+								<div class="flex items-start gap-1">
+									<span class="font-bold">⚠️ QC:</span>
+									<span>{filtrateQcWarning}</span>
+								</div>
+								{#if derivedFiltrateSalinity != null && Number(headerDraft.mud_filtrate_salinity) !== derivedFiltrateSalinity}
+									<button
+										type="button"
+										onclick={() => {
+											headerDraft.mud_filtrate_salinity = derivedFiltrateSalinity;
+										}}
+										class="shrink-0 cursor-pointer font-semibold text-blue-700 underline hover:text-blue-900"
+									>
+										Use {derivedFiltrateSalinity.toLocaleString()} ppm
+									</button>
+								{/if}
+							</div>
+						{/if}
 					</div>
 					<div class="flex justify-end gap-1.5 pt-1">
 						<button
