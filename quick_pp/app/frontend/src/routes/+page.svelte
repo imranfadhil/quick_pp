@@ -92,7 +92,7 @@
 		untrack(() => projectData.applyProjectParamsForCurrentSelection());
 	});
 
-	// Keep SCAL Swirr & Leverett-J / Pc curve fits synchronized with active Well, Zone, and Depth filters
+	// Keep SCAL Swirr & Leverett-J / Pc curve fits synchronized with active Well, Zone, and Depth filters, DRT method, and cutoffs
 	let lastScalFilterKey = '';
 	$effect(() => {
 		const wellsKey = Array.from(projectData.selectedWellNames).sort().join(',');
@@ -101,9 +101,10 @@
 			? `${workbench.depthFilter.min}:${workbench.depthFilter.max}`
 			: 'all';
 		const scopeKey = `${workbench.scope}:${workbench.wellId ?? ''}`;
+		const drtKey = `${projectData.drtMethod}:${projectData.activeDrtCutoffs.join(',')}`;
 		const hasSwirr = Boolean(projectData.swirrResult?.plugs?.length);
 		if (!hasSwirr) return;
-		const nextKey = `${scopeKey}|${wellsKey}|${zonesKey}|${depthKey}`;
+		const nextKey = `${scopeKey}|${wellsKey}|${zonesKey}|${depthKey}|${drtKey}`;
 		if (nextKey === lastScalFilterKey) return;
 		lastScalFilterKey = nextKey;
 		untrack(() => {

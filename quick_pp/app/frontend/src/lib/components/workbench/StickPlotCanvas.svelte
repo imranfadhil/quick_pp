@@ -1202,7 +1202,7 @@
 				x: bvoArr,
 				y: tvdArr,
 				customdata: customDataArr,
-				text: customDataArr.map((cd) => (cd.isGas ? 'BVG (Gas)' : 'BVO (Oil)')),
+				text: customDataArr.map((cd) => (cd ? (cd.isGas ? 'BVG (Gas)' : 'BVO (Oil)') : '')),
 				line: { color: '#047857', width: 1.5 },
 				hovertemplate:
 					`<b>${w.well_name}</b><br>` +
@@ -1238,7 +1238,7 @@
 					x: bvohArr,
 					y: tvdArr,
 					customdata: customDataArr,
-					text: customDataArr.map((cd) => (cd.isGas ? 'BVG (SHF)' : 'BVO (SHF)')),
+					text: customDataArr.map((cd) => (cd ? (cd.isGas ? 'BVG (SHF)' : 'BVO (SHF)') : '')),
 					line: { color: '#B91C1C', width: 1.6, dash: '4px,2px' },
 					hovertemplate:
 						`<b>${w.well_name}</b><br>` +

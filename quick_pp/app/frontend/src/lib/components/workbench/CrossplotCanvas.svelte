@@ -6242,7 +6242,9 @@
 
 			if (tab === 'scal-drt') {
 				const activeDrt = projectData.drtMethod;
-				const cutoffs = projectData.activeDrtCutoffs || [0.5, 1.2, 2.5, 5.0];
+				const rawCutoffs = projectData.activeDrtCutoffs || [0.5, 1.2, 2.5, 5.0];
+				const cutoffs = [...rawCutoffs].map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+				const nCut = cutoffs.length;
 				const phiGrid = Array.from({ length: 100 }, (_, i) => 0.01 + i * 0.0039);
 
 				// 1. Background field points from rockTypingResult if available
@@ -6279,8 +6281,8 @@
 						const kCurve = phiGrid.map((phi) =>
 							Math.pow(10, (Math.log10(r35) - 0.732 + 0.864 * Math.log10(phi * 100)) / 0.588)
 						);
-						const rtAbove = i + 1;
-						const rtBelow = i + 2;
+						const rtAbove = nCut - i;
+						const rtBelow = nCut - i + 1;
 						traces.push({
 							type: 'scatter',
 							mode: 'lines',
@@ -6320,8 +6322,8 @@
 						const kCurve = phiGrid.map(
 							(phi) => 1014.2 * Math.pow(fzi, 2) * (Math.pow(phi, 3) / Math.pow(1 - phi, 2))
 						);
-						const rtAbove = i + 1;
-						const rtBelow = i + 2;
+						const rtAbove = nCut - i;
+						const rtBelow = nCut - i + 1;
 						traces.push({
 							type: 'scatter',
 							mode: 'lines',
@@ -7956,7 +7958,7 @@
 			class="shrink-0 border-b border-[var(--border-hairline)] bg-slate-50 px-2 py-1 text-[10px] text-slate-700"
 		>
 			<span class="font-semibold text-slate-900">DRT Method:</span> {projectData.drtMethod.toUpperCase()} |
-			<span class="font-semibold text-slate-900">Cutoffs:</span> [{projectData.activeDrtCutoffs.join(', ')}] —
+			<span class="font-semibold text-slate-900">Cutoffs:</span> [{[...projectData.activeDrtCutoffs].sort((a, b) => a - b).join(', ')}] —
 			Iso-lines partition poro-perm space into Rock Types (RT 1 to RT {projectData.activeDrtCutoffs.length + 1}).
 			SCAL plugs are plotted as prominent points colored by RT; points below cutoff line C1 are grouped into RT {projectData.activeDrtCutoffs.length + 1} (Non-Reservoir).
 		</div>

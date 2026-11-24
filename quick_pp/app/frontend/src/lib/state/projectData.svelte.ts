@@ -309,6 +309,9 @@ class ProjectDataState {
 		} else {
 			this.fziCutoffs = vals;
 		}
+		if (this.swirrResult?.plugs?.length) {
+			this.recomputeSwirrClientSide(!this.swirrManualRuleOverride);
+		}
 	}
 
 	multiWellQaqcResult = $state.raw<{
@@ -1717,7 +1720,8 @@ class ProjectDataState {
 			indVal = phiz > 1e-6 ? rqi / phiz : 0;
 			higherIsBetter = true;
 		}
-		const cutoffs = this.activeDrtCutoffs || [0.5, 1.2, 2.5, 5.0];
+		const rawCutoffs = this.activeDrtCutoffs || [0.5, 1.2, 2.5, 5.0];
+		const cutoffs = [...rawCutoffs].map(Number).filter(Number.isFinite).sort((a, b) => a - b);
 		const nCut = cutoffs.length;
 		if (nCut === 0) return 1;
 		let rt = 1;
@@ -2093,6 +2097,7 @@ class ProjectDataState {
 		const pid = workbench.projectId;
 		if (!pid) return false;
 		if (!force && this.swirrResult && Array.isArray(this.swirrResult.plugs) && this.swirrResult.plugs.length > 0) {
+			this.recomputeSwirrClientSide(!this.swirrManualRuleOverride);
 			return true;
 		}
 		try {

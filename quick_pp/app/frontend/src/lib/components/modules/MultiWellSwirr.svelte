@@ -24,6 +24,8 @@
 	onMount(() => {
 		if (!projectData.swirrResult) {
 			void projectData.ensureSwirrDataLoaded();
+		} else {
+			projectData.recomputeSwirrClientSide(!projectData.swirrManualRuleOverride);
 		}
 	});
 	// Manual override flags live in shared project state so they are saved/restored with project params
@@ -282,7 +284,7 @@
 			);
 			projectData.swirrConfig.rules = res.rules || {};
 			projectData.swirrResult = res;
-			projectData.recomputeScalFitsFromPlugs(!projectData.shfManualFitOverride);
+			projectData.recomputeSwirrClientSide(autoFit);
 			void projectData.persistProjectParams([], ['swirr-corr']);
 		} catch (e: any) {
 			projectData.error = e?.message || 'Swirr correlation fit failed';
@@ -325,7 +327,7 @@
 			);
 			projectData.swirrConfig.rules = fitRes.rules || {};
 			projectData.swirrResult = fitRes;
-			projectData.recomputeScalFitsFromPlugs(!projectData.shfManualFitOverride);
+			projectData.recomputeSwirrClientSide(!projectData.swirrManualRuleOverride);
 
 			const applyRes = await postJson<SwirrApplyResult>(
 				`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/swirr/apply`,
@@ -642,10 +644,18 @@
 						</button>
 					</div>
 					<div class="mt-0.5 text-[9.5px] text-blue-800">
-						Cutoffs: [{projectData.activeDrtCutoffs.join(', ')}]
 						{#if projectData.activeDrtCutoffs.length > 0}
-							· RT 1: ≥{projectData.activeDrtCutoffs[projectData.activeDrtCutoffs.length - 1]} |
-							RT {projectData.activeDrtCutoffs.length + 1} (Non-Res): &lt;{projectData.activeDrtCutoffs[0]}
+							{@const sortedCutoffs = [...projectData.activeDrtCutoffs].sort((a, b) => a - b)}
+							Cutoffs: [{sortedCutoffs.join(', ')}]
+							{#if projectData.drtMethod === 'lucia'}
+								· RT 1: &lt;{sortedCutoffs[0]} |
+								RT {sortedCutoffs.length + 1} (Non-Res): ≥{sortedCutoffs[sortedCutoffs.length - 1]}
+							{:else}
+								· RT 1: ≥{sortedCutoffs[sortedCutoffs.length - 1]} |
+								RT {sortedCutoffs.length + 1} (Non-Res): &lt;{sortedCutoffs[0]}
+							{/if}
+						{:else}
+							Cutoffs: []
 						{/if}
 					</div>
 				</div>

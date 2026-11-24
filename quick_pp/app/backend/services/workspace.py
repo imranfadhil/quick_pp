@@ -9727,8 +9727,6 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                         if not raw_d_r.empty and pd.notna(raw_d_r["value"].iloc[0]):
                             s_raw_depth = float(raw_d_r["value"].iloc[0])
 
-                    has_sample_core_props = cperm is not None and cpore is not None
-
                     # Fallback 1: check companion RCA core sample in this well by sister sample name (e.g. 1A -> 1)
                     # or nearest depth (matching against both shifted depth and RAW_DEPTH / CORE_DEPTH_RAW within 0.50m)
                     if cpore is None or cperm is None:
@@ -9822,8 +9820,6 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                             cpore = best_poro_cand[1]
                         if cperm is None and best_perm_cand is not None:
                             cperm = best_perm_cand[1]
-                        if cpore is not None and cperm is not None:
-                            has_sample_core_props = True
 
                     # Fallback 2: lookup well's merged CPORE/CPERM (within ±0.50m) or log PHIT & PERM_TRANS/PERM at nearest depth
                     near_rock_flag: Optional[int] = None
@@ -9942,7 +9938,7 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                             ind_val_plug, req.cutoffs, higher_is_better=hib_plug
                         ).item()
                     )
-                    if not has_sample_core_props and near_rock_flag is not None:
+                    if (not np.isfinite(rf_val) or rf_val < 1) and near_rock_flag is not None:
                         rf_val = near_rock_flag
                     pc_col = next(
                         (
@@ -12026,6 +12022,10 @@ def workspace_stick_plot(
                 for item, (t_md, b_md) in zip(perf_items, perf_md_pairs, strict=False):
                     t_tvd = next(ancillary_tvd)
                     b_tvd = next(ancillary_tvd)
+                    t_tvd = float(t_tvd) if np.isfinite(t_tvd) else t_md
+                    b_tvd = float(b_tvd) if np.isfinite(b_tvd) else b_md
+                    if b_tvd < t_tvd:
+                        t_tvd, b_tvd = b_tvd, t_tvd
                     t_tvd = float(t_tvd) if np.isfinite(t_tvd) else t_md
                     b_tvd = float(b_tvd) if np.isfinite(b_tvd) else b_md
                     if b_tvd < t_tvd:
@@ -15870,8 +15870,6 @@ def _extract_project_scal_plugs_for_swirr(
                     if not raw_d_r.empty and pd.notna(raw_d_r["value"].iloc[0]):
                         s_raw_depth = float(raw_d_r["value"].iloc[0])
 
-                has_sample_core_props = cperm is not None and cpore is not None
-
                 if cpore is None or cperm is None:
                     import re as _re
 
@@ -15954,8 +15952,6 @@ def _extract_project_scal_plugs_for_swirr(
                         cpore = best_poro_cand[1]
                     if cperm is None and best_perm_cand is not None:
                         cperm = best_perm_cand[1]
-                    if cpore is not None and cperm is not None:
-                        has_sample_core_props = True
 
                 near_rock_flag: Optional[int] = None
                 if s_depth > 0 or allowed_zones_set is not None:
@@ -16062,7 +16058,7 @@ def _extract_project_scal_plugs_for_swirr(
                         ind_val_plug, cutoffs_list, higher_is_better=hib_plug
                     ).item()
                 )
-                if not has_sample_core_props and near_rock_flag is not None:
+                if (not np.isfinite(rf_val) or rf_val < 1) and near_rock_flag is not None:
                     rf_val = near_rock_flag
 
                 pc_col = next(
@@ -16257,6 +16253,9 @@ def workspace_swirr_fit(
                 else:
                     excluded_set.add(x_s)
 
+        cutoffs_list = sorted(
+            float(c) for c in (req.cutoffs or [0.5, 1.2, 2.5, 5.0]) if c is not None
+        )
         raw_plugs = _extract_project_scal_plugs_for_swirr(
             project_id,
             well_names=req.well_names,

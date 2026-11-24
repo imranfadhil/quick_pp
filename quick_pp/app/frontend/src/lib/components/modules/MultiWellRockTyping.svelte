@@ -459,6 +459,9 @@
 					: undefined
 			};
 			projectData.markMultiWellComputed('rock-typing');
+			if (projectData.swirrResult?.plugs?.length) {
+				projectData.recomputeSwirrClientSide(!projectData.swirrManualRuleOverride);
+			}
 			// Auto-persist cutoffs and parameters for active zone selection
 			void projectData.persistProjectParams([], ['rock-typing']);
 
@@ -588,6 +591,9 @@
 				rock_type_counts: counts
 			};
 			projectData.markMultiWellComputed('rock-typing');
+			if (projectData.swirrResult?.plugs?.length) {
+				projectData.recomputeSwirrClientSide(!projectData.swirrManualRuleOverride);
+			}
 
 			if ((trainClassifier || savedModelKey) && !applyPropagation) {
 				setPlotView('classifier');
