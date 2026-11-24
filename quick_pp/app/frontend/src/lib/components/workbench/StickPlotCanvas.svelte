@@ -129,11 +129,40 @@
 		}
 		if (
 			workbench.stickPlotZoneFilter !== 'ALL' &&
+			workbench.stickPlotZoneFilter !== 'SELECTED' &&
 			availableTops.includes(workbench.stickPlotZoneFilter)
 		) {
 			return workbench.stickPlotZoneFilter;
 		}
+		if (workbench.selectedZones.length > 0) {
+			const found = workbench.selectedZones.find((z) => availableTops.includes(z));
+			if (found) return found;
+		}
 		return availableTops[0] ?? '';
+	});
+
+	let activeZoneSet = $derived.by(() => {
+		const filter = workbench.stickPlotZoneFilter;
+		if (filter === 'SELECTED') {
+			return workbench.selectedZones.length > 0 ? new Set(workbench.selectedZones) : null;
+		}
+		if (filter !== 'ALL') {
+			return new Set([filter]);
+		}
+		if (workbench.selectedZones.length > 0) {
+			return new Set(workbench.selectedZones);
+		}
+		return null;
+	});
+
+	let activeZoneLabel = $derived.by(() => {
+		if (workbench.stickPlotZoneFilter === 'SELECTED' && workbench.selectedZones.length > 0) {
+			return workbench.selectedZones.join(', ');
+		}
+		if (workbench.stickPlotZoneFilter === 'ALL' && workbench.selectedZones.length > 0) {
+			return workbench.selectedZones.join(', ');
+		}
+		return workbench.stickPlotZoneFilter;
 	});
 
 	function findNearestDepthValue(
@@ -208,33 +237,80 @@
 		return map;
 	});
 
-	function getWellZoneBounds(
+	function getWellMultiZoneBounds(
 		w: NonNullable<typeof projectData.stickPlotResult>['wells'][number],
-		zoneName: string
+		zoneSet: Set<string> | string | null
 	): { startMd: number; endMd: number; startTvd: number; endTvd: number } | null {
-		if (!zoneName || zoneName === 'ALL' || !w.tops || w.tops.length === 0) return null;
-		const sortedTops = [...w.tops]
-			.filter((t) => Number.isFinite(t.depth) && Number.isFinite(t.tvd))
-			.sort((a, b) => a.depth - b.depth);
-		const matchTop = sortedTops.find((t) => t.name === zoneName);
-		if (!matchTop) return null;
-		const nextTop = sortedTops.find((t) => t.depth > matchTop.depth + 0.5);
+		if (!zoneSet) return null;
+		const set =
+			typeof zoneSet === 'string'
+				? zoneSet === 'ALL' || zoneSet === 'SELECTED'
+					? null
+					: new Set([zoneSet])
+				: zoneSet;
+		if (!set || set.size === 0) return null;
+
+		let minStartMd = Infinity;
+		let minStartTvd = Infinity;
+		let maxEndMd = -Infinity;
+		let maxEndTvd = -Infinity;
+		let foundAny = false;
+
+		if (w.tops && w.tops.length > 0) {
+			const sortedTops = [...w.tops]
+				.filter((t) => Number.isFinite(t.depth) && Number.isFinite(t.tvd))
+				.sort((a, b) => a.depth - b.depth);
+
+			for (let i = 0; i < sortedTops.length; i++) {
+				const top = sortedTops[i];
+				if (set.has(top.name)) {
+					foundAny = true;
+					if (top.depth < minStartMd) minStartMd = top.depth;
+					if (top.tvd < minStartTvd) minStartTvd = top.tvd;
+
+					const nextTop = sortedTops.find(
+						(t, idx) => idx > i && !set.has(t.name) && t.depth > top.depth + 0.5
+					);
+					const endMd = nextTop ? nextTop.depth : (w.max_tvd ?? top.depth + 200);
+					const endTvd = nextTop ? nextTop.tvd : (w.max_tvd ?? top.tvd + 200);
+
+					if (endMd > maxEndMd) maxEndMd = endMd;
+					if (endTvd > maxEndTvd) maxEndTvd = endTvd;
+				}
+			}
+		}
+
+		if (!foundAny && w.tvd && w.zones) {
+			for (let i = 0; i < w.tvd.length; i++) {
+				const t = w.tvd[i];
+				const md = w.depths?.[i] ?? t;
+				const zn = w.zones[i];
+				if (t === null || !Number.isFinite(t) || !zn || !set.has(zn)) continue;
+				foundAny = true;
+				if (md !== null && md < minStartMd) minStartMd = md;
+				if (t < minStartTvd) minStartTvd = t;
+				if (md !== null && md > maxEndMd) maxEndMd = md;
+				if (t > maxEndTvd) maxEndTvd = t;
+			}
+		}
+
+		if (!foundAny) return null;
 		return {
-			startMd: matchTop.depth,
-			endMd: nextTop ? nextTop.depth : Infinity,
-			startTvd: matchTop.tvd,
-			endTvd: nextTop ? nextTop.tvd : Infinity
+			startMd: minStartMd,
+			endMd: maxEndMd,
+			startTvd: minStartTvd,
+			endTvd: maxEndTvd
 		};
 	}
 
 	// Per-well zone-specific Top TVD and cumulative HCPV for sorting and header display
 	let wellZoneMetrics = $derived.by(() => {
 		const rawWells = projectData.stickPlotResult?.wells ?? [];
-		const activeZone = workbench.stickPlotZoneFilter;
+		const activeSet = activeZoneSet;
 		const result = new Map<string, { topTvd: number; hcpv: number; hasZone: boolean }>();
 
 		for (const w of rawWells) {
-			if (activeZone === 'ALL') {
+			if (!activeSet || activeSet.size === 0) {
 				result.set(w.well_name, {
 					topTvd: w.top_reservoir_tvd,
 					hcpv: w.cum_hcpv,
@@ -242,7 +318,7 @@
 				});
 				continue;
 			}
-			const zb = getWellZoneBounds(w, activeZone);
+			const zb = getWellMultiZoneBounds(w, activeSet);
 			let minZoneTvd = zb ? zb.startTvd : Infinity;
 			let hcpv = 0;
 			let prevTvd: number | null = null;
@@ -254,8 +330,8 @@
 				const zn = w.zones[i] ?? 'ALL';
 				if (tvd === null || tvd === undefined || !Number.isFinite(tvd)) continue;
 				const inZone =
-					zn === activeZone ||
-					(zb !== null && md !== null && md >= zb.startMd - 0.15 && md < zb.endMd);
+					activeSet.has(zn) ||
+					(zb !== null && md !== null && md >= zb.startMd - 0.15 && md <= zb.endMd);
 				if (!inZone) continue;
 				matchedAny = true;
 				if (tvd < minZoneTvd) minZoneTvd = tvd;
@@ -525,11 +601,15 @@
 	function resolveEffectiveFwl(zoneFilter: string, wellZones: string[]): number | null {
 		const sp = projectData.shfParams;
 		const fwlByZone = sp.fwlByZone ?? projectData.shfResult?.fwl_by_zone ?? {};
-		if (zoneFilter !== 'ALL' && fwlByZone[zoneFilter] !== undefined) {
+		if (
+			zoneFilter !== 'ALL' &&
+			zoneFilter !== 'SELECTED' &&
+			fwlByZone[zoneFilter] !== undefined
+		) {
 			return Number(fwlByZone[zoneFilter]);
 		}
 		for (const z of wellZones) {
-			if (z && fwlByZone[z] !== undefined) {
+			if (z && z !== 'ALL' && z !== 'SELECTED' && fwlByZone[z] !== undefined) {
 				return Number(fwlByZone[z]);
 			}
 		}
@@ -626,25 +706,45 @@
 	}
 
 	let lastZoneFilter = $state<string>(workbench.stickPlotZoneFilter);
+	let lastSelectedZones = $state<string>(workbench.selectedZones.join(','));
 	let lastDatumMode = $state<string>(workbench.stickPlotDatumMode);
 	let lastFlattenTop = $state<string>(workbench.stickPlotFlattenTop);
 	let lastShowLogs = $state<boolean>(workbench.stickPlotShowLogs);
+
 	$effect(() => {
 		const zf = workbench.stickPlotZoneFilter;
+		const sz = workbench.selectedZones.join(',');
 		const dm = workbench.stickPlotDatumMode;
 		const ft = workbench.stickPlotFlattenTop;
 		const sl = workbench.stickPlotShowLogs;
 		if (
 			zf !== lastZoneFilter ||
+			sz !== lastSelectedZones ||
 			dm !== lastDatumMode ||
 			ft !== lastFlattenTop ||
 			sl !== lastShowLogs
 		) {
 			lastZoneFilter = zf;
+			lastSelectedZones = sz;
 			lastDatumMode = dm;
 			lastFlattenTop = ft;
 			lastShowLogs = sl;
 			yRange = null;
+		}
+	});
+
+	let prevSelectedZonesKey = $state(workbench.selectedZones.join(','));
+	$effect(() => {
+		const currentKey = workbench.selectedZones.join(',');
+		if (currentKey !== prevSelectedZonesKey) {
+			prevSelectedZonesKey = currentKey;
+			if (workbench.selectedZones.length > 1) {
+				workbench.stickPlotZoneFilter = 'SELECTED';
+			} else if (workbench.selectedZones.length === 1) {
+				workbench.stickPlotZoneFilter = workbench.selectedZones[0];
+			} else {
+				workbench.stickPlotZoneFilter = 'ALL';
+			}
 		}
 	});
 
@@ -948,6 +1048,7 @@
 		const annotations: any[] = [];
 
 		const activeZone = workbench.stickPlotZoneFilter;
+		const activeSet = activeZoneSet;
 		const globalSelectedZones =
 			workbench.selectedZones.length > 0 ? new Set(workbench.selectedZones) : null;
 		const minD = workbench.depthFilter?.min ?? -Infinity;
@@ -981,7 +1082,7 @@
 			const hasPerfStrip = workbench.stickPlotShowPerfs && (w.perforations?.length ?? 0) > 0;
 			const rightLabelX = hasPerfStrip ? xMax * 0.8 : xMax * 0.98;
 			const wShfMap = liveShfLookup.get(w.well_name);
-			const zb = getWellZoneBounds(w, activeZone);
+			const zb = getWellMultiZoneBounds(w, activeSet);
 
 			if (zb !== null && Number.isFinite(zb.startTvd)) {
 				const startEff = isFlattened ? zb.startTvd - datumDepth : zb.startTvd;
@@ -1058,10 +1159,10 @@
 				}
 				prevValidTvd = effTvd;
 
-				const matchesActiveZone =
-					activeZone === 'ALL' ||
-					zn === activeZone ||
-					(zb !== null && md !== null && md >= zb.startMd - 0.15 && md < zb.endMd);
+				const inActiveZones = !activeSet || activeSet.has(zn);
+				const inZoneBounds =
+					zb !== null && md !== null && md >= zb.startMd - 0.15 && md <= zb.endMd;
+				const matchesActiveZone = inActiveZones || inZoneBounds;
 				const zoneMatches =
 					matchesActiveZone && (!globalSelectedZones || globalSelectedZones.has(zn));
 
@@ -1152,7 +1253,7 @@
 					tvd,
 					effTvd,
 					md,
-					zone: activeZone !== 'ALL' && matchesActiveZone ? activeZone : zn,
+					zone: zn,
 					bvo,
 					bvoh,
 					phit,
@@ -1611,7 +1712,7 @@
 				}
 				for (const grp of groupedTops) {
 					const isHighlighted =
-						(activeZone !== 'ALL' && grp.names.includes(activeZone)) ||
+						(activeSet !== null && grp.names.some((name) => activeSet.has(name))) ||
 						(isFlattened && grp.names.includes(targetTop));
 					const labelText =
 						grp.names.length <= 2
@@ -2058,6 +2159,9 @@
 					bind:value={workbench.stickPlotZoneFilter}
 					class="h-5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-0 pr-5 pl-1.5 text-[10.5px] font-medium text-[var(--text-primary)]"
 				>
+					{#if workbench.selectedZones.length > 1}
+						<option value="SELECTED">Selected ({workbench.selectedZones.length} Zones)</option>
+					{/if}
 					{#each availableZones as zn (zn)}
 						<option value={zn}>{zn}</option>
 					{/each}
@@ -2303,12 +2407,12 @@
 							<div
 								class="mono-num flex items-center justify-between text-[7.5px] whitespace-nowrap text-[var(--text-muted)]"
 							>
-								<span title="Top TVDSS ({workbench.stickPlotZoneFilter})"
+								<span title="Top TVDSS ({activeZoneLabel})"
 									>Top:{dispTopTvd.toFixed(0)}m</span
 								>
 								<span
 									class="font-semibold text-emerald-700"
-									title="Cumulative Hydrocarbon Pore Volume Column ({workbench.stickPlotZoneFilter})"
+									title="Cumulative Hydrocarbon Pore Volume Column ({activeZoneLabel})"
 								>
 									HCPV:{dispHcpv.toFixed(2)}m
 								</span>
@@ -2452,7 +2556,7 @@
 
 					<!-- Toggleable Horizontal Inspection Crosshair & Active Well Inspection Card -->
 					{#if showInspectionLine && inspectionPct !== null}
-						{@const isAbove = inspectionPct > 22}
+						{@const isAbove = inspectionPct > 30}
 						<div
 							style="top: 8px; bottom: 26px; left: {plotAreaLeft}px; right: {plotAreaRight}px;"
 							class="pointer-events-none absolute z-20 overflow-visible"
@@ -2488,18 +2592,18 @@
 								</div>
 							</div>
 
-							<!-- Floating Inspection Cards for All Wells Across Crosshair -->
+							<!-- Floating Inspection Cards for All Wells Across Crosshair (offset above/below to keep horizontal line and logs visible) -->
 							<div
-								style="{isAbove
-									? `bottom: ${100 - inspectionPct}%; margin-bottom: 24px;`
-									: `top: ${inspectionPct}%; margin-top: 24px;`}"
+								style="top: {inspectionPct}%;"
 								class="pointer-events-none absolute right-0 left-0 z-30"
 							>
 								{#each allWellReadouts as item (item.well.well_name)}
 									{@const r = item.readout}
 									<div
-										style="left: {item.leftPct}%; width: {item.widthPct}%;"
-										class="absolute top-0 px-1"
+										style="left: {item.leftPct}%; width: {item.widthPct}%; {isAbove
+											? 'bottom: 22px;'
+											: 'top: 22px;'}"
+										class="absolute px-1"
 									>
 										{#if r}
 											<div
