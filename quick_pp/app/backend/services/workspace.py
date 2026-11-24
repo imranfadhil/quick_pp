@@ -16280,6 +16280,8 @@ def workspace_swirr_fit(
             cperm = float(p["cperm"])
             rqi_ratio = math.sqrt(cperm / max(0.001, cpore))
             rqi_um = 0.0314 * rqi_ratio
+            phiz = cpore / max(1e-4, 1.0 - cpore)
+            fzi_um = rqi_um / max(1e-6, phiz)
             pid = str(p["plug_id"])
             is_excl = pid in excluded_set or pid.replace("::", ":", 1) in excluded_set
             is_incl = bool(valid_pc and not is_excl)
@@ -16289,6 +16291,7 @@ def workspace_swirr_fit(
                     **p,
                     "rqi_ratio": round(rqi_ratio, 4),
                     "rqi": round(rqi_um, 4),
+                    "fzi": round(fzi_um, 3),
                     "max_pc": round(max_pc, 2),
                     "sw_at_max_pc": round(sw_at_max, 4),
                     "extracted_swirr": round(ext_swirr, 4),
@@ -16388,17 +16391,29 @@ def workspace_swirr_fit(
         global_rule = _fit_subset(incl_plugs, "global")
         rules_out["global"] = global_rule
 
-        all_rts = sorted({int(p["rt"]) for p in plug_rows if p.get("rt") is not None})
+        # Ensure all rock types defined by cutoffs are included even if zero plugs fall into them
+        cutoff_rts = set(range(1, len(cutoffs_list) + 2))
+        plug_rts = {int(p["rt"]) for p in plug_rows if p.get("rt") is not None}
+        all_rts = sorted(cutoff_rts | plug_rts)
         for rt_val in all_rts:
             rt_key = str(rt_val)
             rt_subset = [p for p in incl_plugs if int(p["rt"]) == rt_val]
             if len(rt_subset) >= 1:
+                rules_out[rt_key] = _fit_subset(rt_subset, rt_key)
+            elif (
+                isinstance(req.rules, dict)
+                and rt_key in req.rules
+                and isinstance(req.rules[rt_key], dict)
+            ):
                 rules_out[rt_key] = _fit_subset(rt_subset, rt_key)
             else:
                 rules_out[rt_key] = {
                     **global_rule,
                     "scope": rt_key,
                     "count": 0,
+                    "r2": None,
+                    "rmse": None,
+                    "is_fallback": True,
                 }
 
         cfg_eval = {

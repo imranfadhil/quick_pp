@@ -6240,6 +6240,182 @@
 				return { traces, layout: baseLayout };
 			}
 
+			if (tab === 'scal-drt') {
+				const activeDrt = projectData.drtMethod;
+				const cutoffs = projectData.activeDrtCutoffs || [0.5, 1.2, 2.5, 5.0];
+				const phiGrid = Array.from({ length: 100 }, (_, i) => 0.01 + i * 0.0039);
+
+				// 1. Background field points from rockTypingResult if available
+				const rtRes = projectData.rockTypingResult;
+				if (rtRes?.phit && rtRes?.perm && rtRes.phit.length > 0) {
+					const bgX: number[] = [];
+					const bgY: number[] = [];
+					for (let i = 0; i < rtRes.phit.length; i++) {
+						const pVal = rtRes.phit[i];
+						const kVal = rtRes.perm[i];
+						if (Number.isFinite(pVal) && Number.isFinite(kVal) && pVal > 0 && pVal < 0.5 && kVal > 0) {
+							bgX.push(pVal);
+							bgY.push(kVal);
+						}
+					}
+					if (bgX.length > 0) {
+						traces.push({
+							type: 'scattergl',
+							mode: 'markers',
+							name: `Field Core / Log Background (n=${bgX.length})`,
+							x: bgX,
+							y: bgY,
+							marker: { size: 3.5, color: '#CBD5E1', opacity: 0.35 },
+							hoverinfo: 'skip'
+						});
+					}
+				}
+
+				// 2. DRT Iso-lines (Cutoff lines)
+				if (activeDrt === 'winland') {
+					for (let i = 0; i < cutoffs.length; i++) {
+						const r35 = cutoffs[i];
+						if (!Number.isFinite(r35) || r35 <= 0) continue;
+						const kCurve = phiGrid.map((phi) =>
+							Math.pow(10, (Math.log10(r35) - 0.732 + 0.864 * Math.log10(phi * 100)) / 0.588)
+						);
+						const rtAbove = i + 1;
+						const rtBelow = i + 2;
+						traces.push({
+							type: 'scatter',
+							mode: 'lines',
+							name: `R35 = ${r35} μm (RT ${rtAbove} / RT ${rtBelow})`,
+							x: phiGrid,
+							y: kCurve,
+							line: { color: '#64748B', width: 1.5, dash: 'dash' },
+							hovertemplate: `R35 Cutoff: ${r35} μm<extra></extra>`
+						});
+					}
+				} else if (activeDrt === 'lucia') {
+					const luciaPhiGrid = phiGrid.filter((p) => p >= 0.035);
+					for (let i = 0; i < cutoffs.length; i++) {
+						const rfn = cutoffs[i];
+						if (!Number.isFinite(rfn) || rfn <= 0) continue;
+						const logRfn = Math.log10(rfn);
+						const kCurve = luciaPhiGrid.map((phi) =>
+							Math.pow(10, 9.7892 - 12.0838 * logRfn + (8.6711 - 8.2965 * logRfn) * Math.log10(phi))
+						);
+						const rtAbove = i + 1;
+						const rtBelow = i + 2;
+						traces.push({
+							type: 'scatter',
+							mode: 'lines',
+							name: `RFN = ${rfn} (RT ${rtAbove} / RT ${rtBelow})`,
+							x: luciaPhiGrid,
+							y: kCurve,
+							line: { color: '#64748B', width: 1.5, dash: 'dash' },
+							hovertemplate: `RFN Cutoff: ${rfn}<extra></extra>`
+						});
+					}
+				} else {
+					// FZI: k = 1014.2 * FZI^2 * phi^3 / (1 - phi)^2
+					for (let i = 0; i < cutoffs.length; i++) {
+						const fzi = cutoffs[i];
+						if (!Number.isFinite(fzi) || fzi <= 0) continue;
+						const kCurve = phiGrid.map(
+							(phi) => 1014.2 * Math.pow(fzi, 2) * (Math.pow(phi, 3) / Math.pow(1 - phi, 2))
+						);
+						const rtAbove = i + 1;
+						const rtBelow = i + 2;
+						traces.push({
+							type: 'scatter',
+							mode: 'lines',
+							name: `FZI = ${fzi} μm (RT ${rtAbove} / RT ${rtBelow})`,
+							x: phiGrid,
+							y: kCurve,
+							line: { color: '#64748B', width: 1.5, dash: 'dash' },
+							hovertemplate: `FZI Cutoff: ${fzi} μm<extra></extra>`
+						});
+					}
+				}
+
+				// 3. SCAL Plugs by Rock Type
+				const numCutoffs = cutoffs.length;
+				const cutoffRts = Array.from({ length: Math.max(3, numCutoffs + 1) }, (_, i) => i + 1);
+				const plugRts = filteredPlugs.map((p) => p.rt).filter((r) => r != null && Number.isFinite(r));
+				const allRtKeys = Array.from(new Set([...cutoffRts, ...plugRts])).sort((a, b) => a - b);
+
+				for (const rt of allRtKeys) {
+					const grp = filteredPlugs.filter((p) => (p.rt ?? 1) === rt);
+					const col = getRockTypeColor(rt);
+					const isNonRes = rt >= (numCutoffs + 1);
+					const labelSuffix = isNonRes ? ' (Non-Res)' : '';
+
+					if (grp.length === 0) {
+						traces.push({
+							type: 'scatter',
+							mode: 'markers',
+							name: `RT ${rt}${labelSuffix} (n=0)`,
+							x: [],
+							y: [],
+							marker: { size: 8, color: col, symbol: 'circle' }
+						});
+						continue;
+					}
+
+					traces.push({
+						type: 'scatter',
+						mode: projectData.scalShowSampleLabels ? 'markers+text' : 'markers',
+						name: `RT ${rt}${labelSuffix} Plugs (n=${grp.length})`,
+						x: grp.map((p) => p.cpore),
+						y: grp.map((p) => p.cperm),
+						customdata: grp.map((p) =>
+							projectData.normalizeScalPlugId(p.plug_id, p.well, p.sample)
+						),
+						text: grp.map((p) => p.sample),
+						textposition: 'top center',
+						textfont: { family: 'JetBrains Mono', size: 9, color: col },
+						marker: {
+							size: grp.map((p) => {
+								const normPid = projectData.normalizeScalPlugId(p.plug_id, p.well, p.sample);
+								return focusedPlugId === normPid ? 11.5 : 8.5;
+							}),
+							color: col,
+							symbol: grp.map((p) => (p.included ? 'circle' : 'x')),
+							opacity: grp.map((p) => {
+								const normPid = projectData.normalizeScalPlugId(p.plug_id, p.well, p.sample);
+								if (focusedPlugId) return focusedPlugId === normPid ? 1.0 : 0.25;
+								return p.included ? 0.95 : 0.45;
+							}),
+							line: {
+								color: '#0F172A',
+								width: grp.map((p) => {
+									const normPid = projectData.normalizeScalPlugId(p.plug_id, p.well, p.sample);
+									return focusedPlugId === normPid ? 2.0 : 0.8;
+								})
+							}
+						},
+						hovertext: grp.map((p) => {
+							const pZone = projectData.resolveScalSampleZone(p.well, p.depth, p.zone);
+							const fziVal = p.fzi ?? (0.0314 * Math.sqrt(p.cperm / p.cpore)) / (p.cpore / (1 - p.cpore));
+							return (
+								`<b>${p.well} · Sample ${p.sample}</b> (RT ${p.rt}${isNonRes ? ' - Non-Reservoir' : ''})<br>` +
+								`Depth: ${p.depth > 0 ? fmtNum(p.depth, 1) + ' m' : '—'} | Zone: ${pZone}<br>` +
+								`CPORE: ${fmtNum(p.cpore, 3)} v/v | CPERM: ${fmtNum(p.cperm, 2)} mD<br>` +
+								`FZI: ${fmtNum(fziVal, 2)} μm | RQI: ${fmtNum(p.rqi, 3)} μm<br>` +
+								`Lab Swirr: ${p.extracted_swirr != null ? fmtNum(p.extracted_swirr, 3) : '—'}<br>` +
+								`Status: <b>${p.included ? 'Included in Swirr fit' : 'Excluded'}</b><br>` +
+								`<i>Click point to toggle include/exclude</i>`
+							);
+						}),
+						hovertemplate: '%{hovertext}<extra></extra>'
+					});
+				}
+
+				baseLayout.dragmode = 'zoom';
+				baseLayout.xaxis.title = { text: 'Core Porosity CPORE (v/v)' };
+				baseLayout.xaxis.range = [0, 0.42];
+				baseLayout.yaxis.title = { text: 'Core Permeability CPERM (mD)' };
+				baseLayout.yaxis.type = 'log';
+				baseLayout.yaxis.range = [-2.2, 4.5];
+				return { traces, layout: baseLayout };
+			}
+
 			// Tab 1: Swirr vs sqrt(k/phi) (or CPERM for semilog_k)
 			const isSemilogK = cfg.equationType === 'semilog_k';
 			const getPlugX = (p: { cpore: number; cperm: number }) =>
@@ -7317,7 +7493,7 @@
 
 		{#if effectiveMode === 'swirr-fit'}
 			<div class="flex items-center gap-1">
-				{#each [['swirr-corr', 'Swirr vs. √(k/φ)'], ['pc-qc', 'Pc vs. Sw (Plug QC)'], ['scal-fit', 'J / Pc Curve Fit'], ['pore-throat', 'Pore Throat by PRT'], ['relperm', 'Rel-Perm & fw']] as [tKey, tLbl]}
+				{#each [['swirr-corr', 'Swirr vs. √(k/φ)'], ['pc-qc', 'Pc vs. Sw (Plug QC)'], ['scal-fit', 'J / Pc Curve Fit'], ['pore-throat', 'Pore Throat by PRT'], ['scal-drt', 'Poro-Perm (FZI / RT)'], ['relperm', 'Rel-Perm & fw']] as [tKey, tLbl]}
 					<button
 						type="button"
 						onclick={() => {
@@ -7326,6 +7502,7 @@
 								| 'pc-qc'
 								| 'scal-fit'
 								| 'pore-throat'
+								| 'scal-drt'
 								| 'relperm';
 							workbench.scalSubMode = tKey === 'relperm' ? 'relperm' : 'static';
 						}}
@@ -7771,6 +7948,17 @@
 			)}°. Uses reservoir Pc and normalized Swn; plugs not included in the Swirr fit remain
 			visible as dotted curves. Set IFT and θ in SCAL J / Pc Curve Fit; use Reset Auto-Fit
 			after changing them to reload converted Pc and reset the Swirr fit.
+		</div>
+	{/if}
+
+	{#if effectiveMode === 'swirr-fit' && workbench.swirrCrossplotTab === 'scal-drt'}
+		<div
+			class="shrink-0 border-b border-[var(--border-hairline)] bg-slate-50 px-2 py-1 text-[10px] text-slate-700"
+		>
+			<span class="font-semibold text-slate-900">DRT Method:</span> {projectData.drtMethod.toUpperCase()} |
+			<span class="font-semibold text-slate-900">Cutoffs:</span> [{projectData.activeDrtCutoffs.join(', ')}] —
+			Iso-lines partition poro-perm space into Rock Types (RT 1 to RT {projectData.activeDrtCutoffs.length + 1}).
+			SCAL plugs are plotted as prominent points colored by RT; points below cutoff line C1 are grouped into RT {projectData.activeDrtCutoffs.length + 1} (Non-Reservoir).
 		</div>
 	{/if}
 

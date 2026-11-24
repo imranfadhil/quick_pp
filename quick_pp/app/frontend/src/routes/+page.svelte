@@ -517,6 +517,7 @@
 						{ key: 'CPORE', label: 'CPORE', unit: 'v/v', numeric: true, decimals: 3 },
 						{ key: 'CPERM', label: 'CPERM', unit: 'mD', numeric: true, decimals: 2 },
 						{ key: 'RQI', label: 'RQI', unit: 'μm', numeric: true, decimals: 3 },
+						{ key: 'FZI', label: 'FZI', unit: 'μm', numeric: true, decimals: 2 },
 						{ key: 'MAX_PC', label: 'Max Pc [psi]', unit: 'psi', numeric: true, decimals: 1 },
 						{ key: 'SW_AT_MAX_PC', label: 'Sw @ Max Pc', unit: 'v/v', numeric: true, decimals: 3 },
 						{ key: 'EXTRACTED_SWIRR', label: 'Swirr (Lab)', unit: 'v/v', numeric: true, decimals: 3 },
@@ -537,6 +538,16 @@
 							CPORE: p.cpore,
 							CPERM: p.cperm,
 							RQI: p.rqi,
+							FZI:
+								p.fzi ??
+								(p.cpore && p.cperm
+									? Number(
+											(
+												(0.0314 * Math.sqrt(p.cperm / p.cpore)) /
+												(p.cpore / (1 - p.cpore))
+											).toFixed(2)
+										)
+									: null),
 							MAX_PC: p.max_pc,
 							SW_AT_MAX_PC: p.sw_at_max_pc,
 							EXTRACTED_SWIRR: p.extracted_swirr,

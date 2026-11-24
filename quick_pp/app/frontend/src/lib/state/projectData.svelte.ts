@@ -164,6 +164,7 @@ export interface SwirrPlugRow {
 	cperm: number;
 	rqi_ratio: number;
 	rqi: number;
+	fzi?: number;
 	max_pc: number;
 	sw_at_max_pc: number;
 	extracted_swirr: number;
@@ -1888,11 +1889,17 @@ class ProjectDataState {
 				p.cpore && p.cperm
 					? (this.classifyRockType(p.cpore, p.cperm) ?? p.rt ?? 1)
 					: (p.rt ?? 1);
+			const phiCl = Math.max(1e-4, p.cpore || 0.15);
+			const kCl = Math.max(1e-4, p.cperm || 10.0);
+			const rqiCl = 0.0314 * Math.sqrt(kCl / phiCl);
+			const phizCl = phiCl / Math.max(1e-4, 1.0 - phiCl);
+			const fziCl = phizCl > 1e-6 ? rqiCl / phizCl : 0;
 			return {
 				...p,
 				plug_id: normPid,
 				zone: resolvedZone,
 				rt: dynRt,
+				fzi: Number(fziCl.toFixed(3)),
 				max_pc: Number(maxPc.toFixed(2)),
 				sw_at_max_pc: Number(minSw.toFixed(4)),
 				extracted_swirr: Number(extSwirr.toFixed(4)),
@@ -2032,14 +2039,30 @@ class ProjectDataState {
 		const globalRule = fitSubset(inclPlugs, 'global');
 		nextRules['global'] = globalRule;
 
-		const rts = Array.from(new Set(updatedPlugs.map((p) => p.rt))).sort((a, b) => a - b);
-		for (const rt of rts) {
+		const numCutoffs = (this.activeDrtCutoffs || []).length;
+		const cutoffRts = Array.from({ length: Math.max(3, numCutoffs + 1) }, (_, i) => i + 1);
+		const plugRts = updatedPlugs
+			.map((p) => p.rt)
+			.filter((r) => r != null && Number.isFinite(r));
+		const allRts = Array.from(new Set([...cutoffRts, ...plugRts])).sort((a, b) => a - b);
+		for (const rt of allRts) {
 			const rtKey = String(rt);
 			const sub = inclPlugs.filter((p) => p.rt === rt);
-			nextRules[rtKey] =
-				sub.length >= 1
-					? fitSubset(sub, rtKey)
-					: { ...globalRule, scope: rtKey, count: 0 };
+			if (sub.length >= 1) {
+				nextRules[rtKey] = fitSubset(sub, rtKey);
+			} else if (
+				cfg.rules?.[rtKey] &&
+				(cfg.rules[rtKey].a != null || cfg.rules[rtKey].b != null)
+			) {
+				// User manually specified or copied parameters for this RT without samples
+				nextRules[rtKey] = {
+					...cfg.rules[rtKey],
+					scope: rtKey,
+					count: 0
+				};
+			} else {
+				nextRules[rtKey] = { ...globalRule, scope: rtKey, count: 0, r2: 0, rmse: 0 };
+			}
 		}
 
 		this.swirrConfig.rules = nextRules;
@@ -2304,14 +2327,34 @@ class ProjectDataState {
 			Object.keys(existing.fits).length > 0;
 
 		const nextFits = keepExistingFits
-			? existing!.fits
+			? { ...existing!.fits }
 			: activeModel === 'leverett_j'
-				? jSatMode === 'sw'
-					? fitsSw
-					: fitsSwn
+				? { ...(jSatMode === 'sw' ? fitsSw : fitsSwn) }
 				: activeModel === 'skelt_harrison'
-					? fitsSkelt
-					: fitsCuddy;
+					? { ...fitsSkelt }
+					: { ...fitsCuddy };
+
+		// Ensure every rock type in allRts has an entry in nextFits
+		const numCutoffs = (this.activeDrtCutoffs || []).length;
+		const cutoffRts = Array.from({ length: Math.max(3, numCutoffs + 1) }, (_, i) => i + 1);
+		const plugRts = (sr.plugs || [])
+			.map((p) => p.rt)
+			.filter((r) => r != null && Number.isFinite(r));
+		const allRts = Array.from(new Set([...cutoffRts, ...plugRts])).sort((a, b) => a - b);
+		for (const rt of allRts) {
+			const rtKey = String(rt);
+			if (!nextFits[rtKey]) {
+				const fallbackFit =
+					existing?.fits?.[rtKey] ||
+					nextFits[String(rt - 1)] ||
+					nextFits[String(rt + 1)] ||
+					Object.values(nextFits)[0] || { a: 0.1, b: 1.5, count: 0, r2: 0, rmse: 0 };
+				nextFits[rtKey] = {
+					...fallbackFit,
+					count: 0
+				};
+			}
+		}
 
 		this.shfResult = {
 			model: activeModel,

@@ -396,6 +396,47 @@
 		projectData.recomputeSwirrClientSide(false);
 	}
 
+	function copyRuleParams(targetScope: string, sourceScope: string) {
+		const rules = projectData.swirrConfig.rules || {};
+		const src = rules[sourceScope];
+		if (!src) return;
+		projectData.swirrManualRuleOverride = true;
+		const curTarget = rules[targetScope] || { scope: targetScope, a: 0.28, b: 0.35, count: 0 };
+		projectData.swirrConfig.rules = {
+			...rules,
+			[targetScope]: {
+				...curTarget,
+				a: src.a,
+				b: src.b,
+				c: src.c ?? null,
+				scope: targetScope,
+				count: curTarget.count ?? 0
+			}
+		};
+		workbench.swirrCrossplotTab = 'swirr-corr';
+		projectData.recomputeSwirrClientSide(false);
+	}
+
+	function copyShfFitParams(targetRf: string, sourceRf: string) {
+		const fits = projectData.shfResult?.fits || {};
+		const src = fits[sourceRf];
+		if (!src || !projectData.shfResult) return;
+		projectData.shfManualFitOverride = true;
+		const curTarget = fits[targetRf] || { a: 0.1, b: 1.5, count: 0 };
+		projectData.shfResult.fits = {
+			...fits,
+			[targetRf]: {
+				...curTarget,
+				a: src.a,
+				b: src.b,
+				c: src.c,
+				d: src.d,
+				count: curTarget.count ?? 0
+			}
+		};
+		workbench.swirrCrossplotTab = 'scal-fit';
+	}
+
 	function selectShfModel(m: 'leverett_j' | 'skelt_harrison' | 'cuddy') {
 		projectData.shfParams.model = m;
 		projectData.shfManualFitOverride = false;
@@ -586,6 +627,29 @@
 						: 'a·φ^b / k^c'}
 				defaultOpen={false}
 			>
+				<div
+					class="mb-2 rounded-xs border border-blue-200 bg-blue-50/70 p-1.5 text-[10px] text-blue-950"
+				>
+					<div class="flex items-center justify-between font-semibold">
+						<span>DRT Method: {projectData.drtMethod.toUpperCase()}</span>
+						<button
+							type="button"
+							onclick={() => (workbench.swirrCrossplotTab = 'scal-drt')}
+							class="text-[9.5px] font-bold text-blue-700 underline hover:text-blue-900"
+							title="View SCAL plugs on Porosity vs. Permeability crossplot with DRT cutoff lines"
+						>
+							Poro-Perm Crossplot →
+						</button>
+					</div>
+					<div class="mt-0.5 text-[9.5px] text-blue-800">
+						Cutoffs: [{projectData.activeDrtCutoffs.join(', ')}]
+						{#if projectData.activeDrtCutoffs.length > 0}
+							· RT 1: ≥{projectData.activeDrtCutoffs[projectData.activeDrtCutoffs.length - 1]} |
+							RT {projectData.activeDrtCutoffs.length + 1} (Non-Res): &lt;{projectData.activeDrtCutoffs[0]}
+						{/if}
+					</div>
+				</div>
+
 				<div class="mb-2">
 					<label
 						for="swirr-eq-select"
@@ -679,8 +743,12 @@
 									{#if projectData.swirrConfig.equationType === 'timur'}
 										<th class="px-1 text-right font-semibold">c</th>
 									{/if}
-									<th class="px-1.5 text-right font-semibold">RMSE</th>
-									<th class="px-1.5 text-right font-semibold">R²</th>
+									<th class="px-1 text-right font-semibold">RMSE</th>
+									<th class="px-1 text-right font-semibold">R²</th>
+									<th
+										class="px-1 text-center font-semibold"
+										title="Copy parameters from another RT or Global">Copy</th
+									>
 								</tr>
 							</thead>
 							<tbody class="divide-y divide-[var(--border-hairline)]">
@@ -689,12 +757,30 @@
 									{@const rtColor = isGlobal
 										? '#0F172A'
 										: getRockTypeColor(Number(scopeKey))}
-									<tr class="h-6">
+									{@const isNoSample = !isGlobal && (!rule.count || rule.count === 0)}
+									{@const isNonRes =
+										!isGlobal &&
+										Number(scopeKey) > projectData.activeDrtCutoffs.length}
+									<tr class="h-6 {isNoSample ? 'bg-amber-50/30' : ''}">
 										<td class="px-1.5 font-semibold whitespace-nowrap">
 											<span
 												class="mr-1 inline-block h-2 w-2 rounded-full"
 												style="background:{rtColor}"
 											></span>{isGlobal ? 'Global' : `RT ${scopeKey}`}
+											{#if isNoSample}
+												<span
+													class="ml-1 rounded-xs bg-amber-100 px-1 py-0.2 text-[8.5px] font-medium text-amber-800"
+													title="No SCAL samples in this RT. You can manually adjust parameters or copy from another RT."
+													>n=0</span
+												>
+											{/if}
+											{#if isNonRes}
+												<span
+													class="ml-0.5 text-[8px] font-medium text-slate-400"
+													title="Sub-cutoff Non-Reservoir Rock Type"
+													>Non-Res</span
+												>
+											{/if}
 										</td>
 										<td class="px-1 text-right">
 											<input
@@ -740,12 +826,41 @@
 												/>
 											</td>
 										{/if}
-										<td class="mono-num px-1.5 text-right text-[10px]"
-											>{fmtNum(rule.rmse, 3)}</td
-										>
-										<td class="mono-num px-1.5 text-right text-[10px]"
-											>{fmtNum(rule.r2, 3)}</td
-										>
+										<td class="mono-num px-1 text-right text-[10px]">
+											{rule.rmse != null && rule.count && rule.count > 0
+												? fmtNum(rule.rmse, 3)
+												: '—'}
+										</td>
+										<td class="mono-num px-1 text-right text-[10px]">
+											{rule.r2 != null && rule.count && rule.count > 0
+												? fmtNum(rule.r2, 3)
+												: '—'}
+										</td>
+										<td class="px-1 text-center">
+											<select
+												class="h-4.5 rounded-xs border border-dashed border-slate-300 bg-white px-0.5 text-[9px] text-slate-700 hover:border-blue-400 focus:outline-none"
+												title="Copy fitted parameters from another Rock Type or Global"
+												onchange={(e) => {
+													const src = e.currentTarget.value;
+													if (src) copyRuleParams(scopeKey, src);
+													e.currentTarget.value = '';
+												}}
+											>
+												<option value="">Copy...</option>
+												{#if !isGlobal}
+													<option value="global">From Global</option>
+												{/if}
+												{#each displayedRules as [otherKey] (otherKey)}
+													{#if otherKey !== scopeKey}
+														<option value={otherKey}
+															>From {otherKey === 'global'
+																? 'Global'
+																: `RT ${otherKey}`}</option
+														>
+													{/if}
+												{/each}
+											</select>
+										</td>
 									</tr>
 								{/each}
 							</tbody>
@@ -1276,21 +1391,42 @@
 											<th class="px-1 text-right font-semibold">c</th>
 											<th class="px-1 text-right font-semibold">d</th>
 										{/if}
-										<th class="px-1.5 text-right font-semibold">RMSE</th>
+										<th class="px-1 text-right font-semibold">RMSE</th>
 										{#if activeShfModel !== 'skelt_harrison'}
-											<th class="px-1.5 text-right font-semibold">R²</th>
+											<th class="px-1 text-right font-semibold">R²</th>
 										{/if}
+										<th
+											class="px-1 text-center font-semibold"
+											title="Copy fit parameters from another Rock Type">Copy</th
+										>
 									</tr>
 								</thead>
 								<tbody class="divide-y divide-[var(--border-hairline)]">
-									{#each Object.entries(projectData.shfResult.fits) as [rf, fit]}
+									{#each Object.entries(projectData.shfResult.fits).sort(([a], [b]) => Number(a) - Number(b)) as [rf, fit]}
 										{@const rtColor = getRockTypeColor(Number(rf))}
-										<tr class="h-6">
+										{@const isNoSample = !fit.count || fit.count === 0}
+										{@const isNonRes =
+											Number(rf) > projectData.activeDrtCutoffs.length}
+										<tr class="h-6 {isNoSample ? 'bg-amber-50/30' : ''}">
 											<td class="px-1.5 font-semibold whitespace-nowrap">
 												<span
 													class="mr-1 inline-block h-2 w-2 rounded-full"
 													style="background:{rtColor}"
 												></span>RT {rf}
+												{#if isNoSample}
+													<span
+														class="ml-1 rounded-xs bg-amber-100 px-1 py-0.2 text-[8.5px] font-medium text-amber-800"
+														title="No SCAL samples in this RT. You can manually adjust parameters or copy from another RT."
+														>n=0</span
+													>
+												{/if}
+												{#if isNonRes}
+													<span
+														class="ml-0.5 text-[8px] font-medium text-slate-400"
+														title="Sub-cutoff Non-Reservoir Rock Type"
+														>Non-Res</span
+													>
+												{/if}
 											</td>
 											<td class="px-1 text-right">
 												<input
@@ -1356,14 +1492,36 @@
 													/>
 												</td>
 											{/if}
-											<td class="mono-num px-1.5 text-right text-[10px]"
-												>{fmtNum(fit.rmse, 3)}</td
-											>
+											<td class="mono-num px-1 text-right text-[10px]">
+												{fit.rmse != null && fit.count && fit.count > 0
+													? fmtNum(fit.rmse, 3)
+													: '—'}
+											</td>
 											{#if activeShfModel !== 'skelt_harrison'}
-												<td class="mono-num px-1.5 text-right text-[10px]"
-													>{fmtNum(fit.r2, 3)}</td
-												>
+												<td class="mono-num px-1 text-right text-[10px]">
+													{fit.r2 != null && fit.count && fit.count > 0
+														? fmtNum(fit.r2, 3)
+														: '—'}
+												</td>
 											{/if}
+											<td class="px-1 text-center">
+												<select
+													class="h-4.5 rounded-xs border border-dashed border-slate-300 bg-white px-0.5 text-[9px] text-slate-700 hover:border-blue-400 focus:outline-none"
+													title="Copy J/Pc fit parameters from another Rock Type"
+													onchange={(e) => {
+														const src = e.currentTarget.value;
+														if (src) copyShfFitParams(rf, src);
+														e.currentTarget.value = '';
+													}}
+												>
+													<option value="">Copy...</option>
+													{#each Object.keys(projectData.shfResult.fits) as otherRf (otherRf)}
+														{#if otherRf !== rf}
+															<option value={otherRf}>From RT {otherRf}</option>
+														{/if}
+													{/each}
+												</select>
+											</td>
 										</tr>
 									{/each}
 								</tbody>
