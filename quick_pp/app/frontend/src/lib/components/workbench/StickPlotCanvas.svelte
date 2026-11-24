@@ -756,7 +756,27 @@
 		cancelAnimationFrame(pointerMoveRaf);
 	});
 
-	function getWellReadoutAtTvd(wellName: string | null, targetTvd: number | null) {
+	interface WellStickReadout {
+		well: string;
+		tvd: number | null;
+		md: number | null;
+		zone: string | null;
+		bvo: number | null;
+		bvoh: number | null;
+		phit: number | null;
+		swt: number | null;
+		shf: number | null;
+		hafwl: number | null;
+		gr: number | null;
+		vcoal: number | null;
+		isGas: boolean;
+		statusText?: string;
+	}
+
+	function getWellReadoutAtTvd(
+		wellName: string | null,
+		targetTvd: number | null
+	): WellStickReadout | null {
 		if (!wellName || targetTvd === null || !Number.isFinite(targetTvd)) return null;
 		const w = orderedWells.find((item) => item.well_name === wellName);
 		if (!w || !w.tvd || w.tvd.length === 0) return null;
@@ -782,14 +802,54 @@
 			}
 		}
 
-		if (bestIdx === -1 || bestDiff > 30) return null;
+		// Find geological zone from tops even if outside logged curve interval
+		let zoneFromTops: string | null = null;
+		if (w.tops && w.tops.length > 0) {
+			const sortedTops = [...w.tops]
+				.filter((t) => Number.isFinite(t.tvd))
+				.sort((a, b) => a.tvd - b.tvd);
+			for (const t of sortedTops) {
+				if (t.tvd <= searchTvd) {
+					zoneFromTops = t.name;
+				}
+			}
+		}
+
+		const minLogTvd =
+			w.min_tvd ?? (w.tvd.find((t) => t !== null && Number.isFinite(t)) ?? null);
+		const maxLogTvd = w.max_tvd ?? null;
+		const isAboveLog = minLogTvd !== null && searchTvd < minLogTvd - 2;
+		const isBelowLog = maxLogTvd !== null && searchTvd > maxLogTvd + 2;
+
+		if (bestIdx === -1 || bestDiff > 25 || isAboveLog || isBelowLog) {
+			return {
+				well: w.well_name,
+				tvd: targetTvd,
+				md: null,
+				zone: zoneFromTops,
+				bvo: null,
+				bvoh: null,
+				phit: null,
+				swt: null,
+				shf: null,
+				hafwl: null,
+				gr: null,
+				vcoal: null,
+				isGas: false,
+				statusText: isAboveLog
+					? `Above Log (<${Math.round(minLogTvd!)}m)`
+					: isBelowLog
+						? `Below Log (>${Math.round(maxLogTvd!)}m)`
+						: 'No Log at TVD'
+			};
+		}
 
 		const i = bestIdx;
 		const tvdVal = w.tvd[i];
 		if (tvdVal === null || !Number.isFinite(tvdVal)) return null;
 		const effTvd = isFlattened ? tvdVal - datumDepth : tvdVal;
 		const md = w.depths?.[i] ?? tvdVal;
-		const zn = w.zones?.[i] ?? 'ALL';
+		const zn = w.zones?.[i] ?? zoneFromTops ?? 'ALL';
 		const bvo = w.bvo?.[i] ?? null;
 		const phit = w.phit?.[i] ?? null;
 		const swt = w.swt?.[i] ?? null;
@@ -845,33 +905,39 @@
 		};
 	}
 
-	let activeWellName = $derived(
-		hoveredWellName ??
-			hoverReadout.well ??
-			workbench.wellId ??
-			orderedWells[0]?.well_name ??
-			null
-	);
+	let allWellReadouts = $derived.by(() => {
+		if (!showInspectionLine || activeInspectionTvd === null) return [];
+		return orderedWells.map((well, wIdx) => {
+			const dom = trackDomains[wIdx] ?? [0, 1];
+			const leftPct = dom[0] * 100;
+			const widthPct = Math.max(2, (dom[1] - dom[0]) * 100);
+			const isHovered = (hoveredWellName ?? workbench.wellId) === well.well_name;
 
-	let activeReadout = $derived.by(() => {
-		if (!showInspectionLine || activeInspectionTvd === null) return null;
-		if (
-			hoverReadout.well === activeWellName &&
-			hoverReadout.tvd !== null &&
-			Math.abs(hoverReadout.tvd - activeInspectionTvd) < 0.8
-		) {
-			return hoverReadout;
-		}
-		return getWellReadoutAtTvd(activeWellName, activeInspectionTvd);
-	});
+			let readout: WellStickReadout | null = null;
+			if (
+				hoverReadout.well === well.well_name &&
+				hoverReadout.tvd !== null &&
+				Math.abs(hoverReadout.tvd - activeInspectionTvd) < 0.8
+			) {
+				readout = {
+					...hoverReadout,
+					well: well.well_name,
+					isGas: Boolean(hoverReadout.isGas)
+				};
+			} else {
+				readout = getWellReadoutAtTvd(well.well_name, activeInspectionTvd);
+			}
 
-	let cardLeftPct = $derived.by(() => {
-		if (!activeWellName || orderedWells.length === 0) return 50;
-		const idx = orderedWells.findIndex((w) => w.well_name === activeWellName);
-		if (idx === -1) return 50;
-		const dom = trackDomains[idx] ?? [0, 1];
-		const mid = ((dom[0] + dom[1]) / 2) * 100;
-		return Math.max(12, Math.min(88, mid));
+			return {
+				well,
+				wIdx,
+				dom,
+				leftPct,
+				widthPct,
+				isHovered,
+				readout
+			};
+		});
 	});
 
 	function buildStickPlot() {
@@ -2422,121 +2488,120 @@
 								</div>
 							</div>
 
-							<!-- Floating Value Card Anchored to Active Well -->
-							{#if activeReadout}
-								<div
-									style="{isAbove
-										? `bottom: ${100 - inspectionPct}%; margin-bottom: 24px;`
-										: `top: ${inspectionPct}%; margin-top: 24px;`} left: {cardLeftPct}%;"
-									class="pointer-events-none absolute z-30 -translate-x-1/2 w-48 rounded-xs border border-slate-300/90 bg-white/95 p-1.5 text-[8.5px] leading-tight text-slate-900 shadow-lg backdrop-blur-sm dark:border-slate-700 dark:bg-slate-900/95 dark:text-slate-100"
-								>
-									<!-- Card Header: Well & Zone -->
+							<!-- Floating Inspection Cards for All Wells Across Crosshair -->
+							<div
+								style="{isAbove
+									? `bottom: ${100 - inspectionPct}%; margin-bottom: 24px;`
+									: `top: ${inspectionPct}%; margin-top: 24px;`}"
+								class="pointer-events-none absolute right-0 left-0 z-30"
+							>
+								{#each allWellReadouts as item (item.well.well_name)}
+									{@const r = item.readout}
 									<div
-										class="mb-1 flex items-center justify-between border-b border-slate-200/80 pb-1 font-semibold dark:border-slate-700/80"
+										style="left: {item.leftPct}%; width: {item.widthPct}%;"
+										class="absolute top-0 px-1"
 									>
-										<span
-											class="truncate text-[9.5px] font-bold text-[var(--accent-primary)]"
-											>{activeReadout.well}</span
-										>
-										{#if activeReadout.zone}
-											<span
-												class="rounded-2xs bg-slate-100 px-1 py-0.2 text-[7.5px] text-slate-600 dark:bg-slate-800 dark:text-slate-300"
-											>
-												{activeReadout.zone}
-											</span>
-										{/if}
-									</div>
-
-									<!-- Depths Row -->
-									<div
-										class="mono-num mb-1 flex items-center justify-between text-[7.5px] text-slate-500 dark:text-slate-400"
-									>
-										<span
-											>{workbench.stickPlotDatumMode === 'flattened'
-												? 'Rel Depth:'
-												: 'TVDSS:'}
-											<strong class="text-slate-800 dark:text-slate-200"
-												>{fmtDepth(activeReadout.tvd)}</strong
-											></span
-										>
-										{#if activeReadout.md !== null}
-											<span
-												>MD: <strong class="text-slate-800 dark:text-slate-200"
-													>{fmtDepth(activeReadout.md)}</strong
-												></span
-											>
-										{/if}
-									</div>
-
-									<!-- Curves Grid -->
-									<div class="mono-num grid grid-cols-2 gap-x-2 gap-y-0.5 text-[8px]">
-										{#if activeReadout.gr !== null}
-											<div class="flex items-center justify-between">
-												<span class="font-bold text-emerald-700">GR</span>
-												<span
-													>{fmtNum(activeReadout.gr, 1)}
-													<span class="text-[7px] text-slate-400">gAPI</span
-													></span
-												>
-											</div>
-										{/if}
-										{#if activeReadout.vcoal !== null && activeReadout.vcoal > 0.005}
-											<div class="flex items-center justify-between">
-												<span class="font-bold text-zinc-900 dark:text-zinc-300"
-													>VCOAL</span
-												>
-												<span>{fmtNum(activeReadout.vcoal, 3)}</span>
-											</div>
-										{/if}
-										<div class="flex items-center justify-between">
-											<span class="font-bold text-emerald-700"
-												>{activeReadout.isGas ? 'BVG' : 'BVO'} (Log)</span
-											>
-											<span class="font-semibold"
-												>{fmtNum(activeReadout.bvo, 3)}</span
-											>
-										</div>
-										{#if activeReadout.bvoh !== null}
-											<div class="flex items-center justify-between">
-												<span class="font-bold text-red-600"
-													>{activeReadout.isGas ? 'BVG' : 'BVO'} (SHF)</span
-												>
-												<span class="font-semibold"
-													>{fmtNum(activeReadout.bvoh, 3)}</span
-												>
-											</div>
-										{/if}
-										{#if activeReadout.phit !== null}
-											<div class="flex items-center justify-between">
-												<span class="font-bold text-blue-700">PHIT</span>
-												<span>{fmtNum(activeReadout.phit, 3)}</span>
-											</div>
-										{/if}
-										{#if activeReadout.swt !== null}
-											<div class="flex items-center justify-between">
-												<span class="font-bold text-slate-700 dark:text-slate-300"
-													>SWT</span
-												>
-												<span>{fmtNum(activeReadout.swt, 3)}</span>
-											</div>
-										{/if}
-										{#if activeReadout.shf !== null}
-											<div class="flex items-center justify-between">
-												<span class="font-bold text-red-700">SHF</span>
-												<span>{fmtNum(activeReadout.shf, 3)}</span>
-											</div>
-										{/if}
-										{#if activeReadout.hafwl !== null}
+										{#if r}
 											<div
-												class="col-span-2 flex items-center justify-between border-t border-slate-100 pt-0.5 dark:border-slate-800"
+												class="rounded-xs border p-1 text-[8px] leading-tight shadow-md backdrop-blur-sm transition-all {item.isHovered
+													? 'border-indigo-500 bg-white/98 ring-1 ring-indigo-400 dark:border-indigo-400 dark:bg-slate-900/98 text-slate-900 dark:text-slate-100 shadow-indigo-100 dark:shadow-none'
+													: 'border-slate-300/80 bg-white/92 dark:border-slate-700/80 dark:bg-slate-900/92 text-slate-800 dark:text-slate-200'}"
 											>
-												<span class="font-bold text-blue-700">HAFWL</span>
-												<span>{fmtNum(activeReadout.hafwl, 1)} m</span>
+												<!-- Card Header: Well & Zone -->
+												<div
+													class="mb-0.5 flex items-center justify-between border-b border-slate-200/80 pb-0.5 font-semibold dark:border-slate-700/80"
+												>
+													<button
+														type="button"
+														onclick={() => projectData.selectWell(item.well.well_name)}
+														class="pointer-events-auto truncate text-[8.5px] font-bold hover:underline cursor-pointer {item.isHovered
+															? 'text-indigo-600 dark:text-indigo-400'
+															: 'text-slate-800 dark:text-slate-100'}"
+														title="Select {item.well.well_name}"
+													>
+														{item.well.well_name}
+													</button>
+													{#if r.zone && r.zone !== 'ALL' && r.zone !== '—'}
+														<span
+															class="rounded-2xs truncate bg-slate-100 px-1 py-0 text-[7px] text-slate-600 dark:bg-slate-800 dark:text-slate-300 max-w-[50%]"
+															title={r.zone}
+														>
+															{r.zone}
+														</span>
+													{/if}
+												</div>
+
+												{#if r.statusText}
+													<!-- Muted Status when outside logged curves -->
+													<div
+														class="py-1 text-center font-medium text-slate-400 dark:text-slate-500 text-[7.5px]"
+													>
+														{r.statusText}
+													</div>
+												{:else}
+													<!-- Compact Curves Grid -->
+													<div class="mono-num grid grid-cols-2 gap-x-1 gap-y-0.5 text-[7.5px]">
+														{#if r.gr !== null}
+															<div class="flex items-center justify-between">
+																<span class="font-bold text-emerald-700">GR</span>
+																<span>{fmtNum(r.gr, 1)}</span>
+															</div>
+														{/if}
+														{#if r.vcoal !== null && r.vcoal > 0.005}
+															<div class="flex items-center justify-between">
+																<span class="font-bold text-zinc-900 dark:text-zinc-300"
+																	>COAL</span
+																>
+																<span>{fmtNum(r.vcoal, 2)}</span>
+															</div>
+														{/if}
+														<div class="flex items-center justify-between">
+															<span class="font-bold text-emerald-700"
+																>{r.isGas ? 'BVG' : 'BVO'}</span
+															>
+															<span class="font-semibold">{fmtNum(r.bvo, 3)}</span>
+														</div>
+														{#if r.bvoh !== null}
+															<div class="flex items-center justify-between">
+																<span class="font-bold text-red-600">SHF</span>
+																<span class="font-semibold">{fmtNum(r.bvoh, 3)}</span>
+															</div>
+														{/if}
+														{#if r.phit !== null}
+															<div class="flex items-center justify-between">
+																<span class="font-bold text-blue-700">PHIT</span>
+																<span>{fmtNum(r.phit, 3)}</span>
+															</div>
+														{/if}
+														{#if r.swt !== null}
+															<div class="flex items-center justify-between">
+																<span class="font-bold text-slate-600 dark:text-slate-400"
+																	>SWT</span
+																>
+																<span>{fmtNum(r.swt, 3)}</span>
+															</div>
+														{/if}
+														{#if r.shf !== null}
+															<div class="flex items-center justify-between">
+																<span class="font-bold text-red-700">SHF_M</span>
+																<span>{fmtNum(r.shf, 3)}</span>
+															</div>
+														{/if}
+														{#if r.hafwl !== null}
+															<div
+																class="col-span-2 flex items-center justify-between border-t border-slate-100 pt-0.5 dark:border-slate-800"
+															>
+																<span class="font-bold text-blue-700">HAFWL</span>
+																<span>{fmtNum(r.hafwl, 1)}m</span>
+															</div>
+														{/if}
+													</div>
+												{/if}
 											</div>
 										{/if}
 									</div>
-								</div>
-							{/if}
+								{/each}
+							</div>
 						</div>
 					{/if}
 				{/if}
