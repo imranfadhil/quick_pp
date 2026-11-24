@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
+	import { untrack, onDestroy } from 'svelte';
 	import { browser } from '$app/environment';
 	import { projectData } from '$lib/state/projectData.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
@@ -12,6 +12,13 @@
 	let plotAreaLeft = $state(54);
 	let plotAreaRight = $state(12);
 	let yRange = $state<[number, number] | null>(null);
+	let defaultYRange = $state<[number, number] | null>(null);
+
+	let showInspectionLine = $state(false);
+	let isInspectionLocked = $state(false);
+	let lockedTvd = $state<number | null>(null);
+	let cursorTvd = $state<number | null>(null);
+	let hoveredWellName = $state<string | null>(null);
 
 	let hoverReadout = $state<{
 		well: string | null;
@@ -26,6 +33,7 @@
 		hafwl: number | null;
 		gr: number | null;
 		vcoal: number | null;
+		isGas?: boolean;
 	}>({
 		well: null,
 		tvd: null,
@@ -38,7 +46,8 @@
 		shf: null,
 		hafwl: null,
 		gr: null,
-		vcoal: null
+		vcoal: null,
+		isGas: false
 	});
 
 	function syncPlotBounds() {
@@ -647,6 +656,224 @@
 		}
 	}
 
+	let activeInspectionTvd = $derived(
+		isInspectionLocked && lockedTvd !== null ? lockedTvd : cursorTvd
+	);
+
+	function depthToPercent(depth: number): number | null {
+		const range = yRange ?? defaultYRange;
+		if (!range) return null;
+		const [d0, d1] = range;
+		if (!Number.isFinite(d0) || !Number.isFinite(d1) || d0 === d1) return null;
+		const topD = Math.min(d0, d1);
+		const botD = Math.max(d0, d1);
+		const span = botD - topD;
+		if (span <= 0) return null;
+		const ratio = (depth - topD) / span;
+		if (ratio < 0 || ratio > 1) return null;
+		return ratio * 100;
+	}
+
+	let inspectionPct = $derived(
+		showInspectionLine && activeInspectionTvd !== null
+			? depthToPercent(activeInspectionTvd)
+			: null
+	);
+
+	function toggleInspectionLock() {
+		if (!showInspectionLine) return;
+		isInspectionLocked = !isInspectionLocked;
+		if (isInspectionLocked) {
+			lockedTvd = activeInspectionTvd;
+		} else {
+			lockedTvd = null;
+		}
+	}
+
+	function unlockInspection() {
+		isInspectionLocked = false;
+		lockedTvd = null;
+	}
+
+	let pointerMoveRaf = 0;
+	function handlePlotPointerMove(e: PointerEvent) {
+		if (!plotContainer) return;
+		const rect = plotContainer.getBoundingClientRect();
+		const plotLeft = rect.left + plotAreaLeft;
+		const plotWidth = Math.max(1, rect.width - (plotAreaLeft + plotAreaRight));
+		const relX = (e.clientX - plotLeft) / plotWidth;
+
+		if (relX >= 0 && relX <= 1) {
+			const foundIdx = trackDomains.findIndex(([x0, x1]) => relX >= x0 && relX <= x1);
+			if (foundIdx !== -1 && orderedWells[foundIdx]) {
+				hoveredWellName = orderedWells[foundIdx].well_name;
+			}
+		}
+
+		if (!showInspectionLine || isInspectionLocked) return;
+
+		const plotTop = rect.top + 8;
+		const plotHeight = Math.max(1, rect.height - 34);
+		const range = yRange ?? defaultYRange;
+		if (!range) return;
+		const [d0, d1] = range;
+		if (!Number.isFinite(d0) || !Number.isFinite(d1) || d0 === d1) return;
+
+		const topD = Math.min(d0, d1);
+		const botD = Math.max(d0, d1);
+		const relY = Math.min(1, Math.max(0, (e.clientY - plotTop) / plotHeight));
+		const nextTvd = Number((topD + relY * (botD - topD)).toFixed(1));
+
+		cancelAnimationFrame(pointerMoveRaf);
+		pointerMoveRaf = requestAnimationFrame(() => {
+			if (isInspectionLocked) return;
+			cursorTvd = nextTvd;
+		});
+	}
+
+	$effect(() => {
+		if (!browser) return;
+		const handleKeyDown = (e: KeyboardEvent) => {
+			const target = e.target as HTMLElement | null;
+			if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
+			if (e.key === 'i' || e.key === 'I' || e.key === 'c' || e.key === 'C') {
+				showInspectionLine = !showInspectionLine;
+				if (!showInspectionLine) unlockInspection();
+			} else if (e.code === 'Space' || e.key === ' ') {
+				if (showInspectionLine) {
+					e.preventDefault();
+					toggleInspectionLock();
+				}
+			}
+		};
+		window.addEventListener('keydown', handleKeyDown);
+		return () => {
+			window.removeEventListener('keydown', handleKeyDown);
+		};
+	});
+
+	onDestroy(() => {
+		cancelAnimationFrame(pointerMoveRaf);
+	});
+
+	function getWellReadoutAtTvd(wellName: string | null, targetTvd: number | null) {
+		if (!wellName || targetTvd === null || !Number.isFinite(targetTvd)) return null;
+		const w = orderedWells.find((item) => item.well_name === wellName);
+		if (!w || !w.tvd || w.tvd.length === 0) return null;
+
+		const isFlattened = workbench.stickPlotDatumMode === 'flattened';
+		const targetTop = effectiveFlattenTop;
+		let datumDepth = 0;
+		if (isFlattened) {
+			const mTop = w.tops?.find((t) => t.name === targetTop && Number.isFinite(t.tvd));
+			datumDepth = mTop ? mTop.tvd : (w.top_reservoir_tvd ?? w.min_tvd ?? 0);
+		}
+
+		const searchTvd = isFlattened ? targetTvd + datumDepth : targetTvd;
+		let bestIdx = -1;
+		let bestDiff = Infinity;
+		for (let i = 0; i < w.tvd.length; i++) {
+			const t = w.tvd[i];
+			if (t === null || !Number.isFinite(t)) continue;
+			const diff = Math.abs(t - searchTvd);
+			if (diff < bestDiff) {
+				bestDiff = diff;
+				bestIdx = i;
+			}
+		}
+
+		if (bestIdx === -1 || bestDiff > 30) return null;
+
+		const i = bestIdx;
+		const tvdVal = w.tvd[i];
+		if (tvdVal === null || !Number.isFinite(tvdVal)) return null;
+		const effTvd = isFlattened ? tvdVal - datumDepth : tvdVal;
+		const md = w.depths?.[i] ?? tvdVal;
+		const zn = w.zones?.[i] ?? 'ALL';
+		const bvo = w.bvo?.[i] ?? null;
+		const phit = w.phit?.[i] ?? null;
+		const swt = w.swt?.[i] ?? null;
+		let shf = w.shf?.[i] ?? null;
+
+		const wShfMap = liveShfLookup.get(w.well_name);
+		if (wShfMap && md !== null) {
+			const liveVal = findNearestDepthValue(wShfMap.depths, wShfMap.values, md, 2.5);
+			if (liveVal !== undefined) shf = liveVal;
+		}
+		if (
+			(shf === null || shf === undefined || !Number.isFinite(shf)) &&
+			phit !== null &&
+			Number.isFinite(phit)
+		) {
+			const activeZone = workbench.stickPlotZoneFilter;
+			const sampleFwl = resolveEffectiveFwl(activeZone !== 'ALL' ? activeZone : zn, [
+				zn,
+				...w.zones
+			]);
+			if (sampleFwl !== null) {
+				shf = evalContinuousShfFallback(phit, tvdVal, sampleFwl);
+			}
+		}
+
+		const bvoh =
+			phit !== null && shf !== null && Number.isFinite(phit) && Number.isFinite(shf)
+				? Math.max(0, Math.min(1, phit * (1 - shf)))
+				: (w.bvoh?.[i] ?? null);
+
+		const isGas = Boolean(
+			(w.gas_flag && w.gas_flag[i] === 1) ||
+				(w.bvg && w.bvg[i] !== null && Number(w.bvg[i]) > 0.005)
+		);
+
+		const activeZone = workbench.stickPlotZoneFilter;
+		const fwl = resolveEffectiveFwl(activeZone !== 'ALL' ? activeZone : zn, [zn, ...w.zones]);
+
+		return {
+			well: w.well_name,
+			tvd: effTvd,
+			md,
+			zone: zn,
+			bvo,
+			bvoh,
+			phit,
+			swt,
+			shf,
+			hafwl: fwl !== null && typeof tvdVal === 'number' ? fwl - tvdVal : null,
+			gr: w.gr?.[i] ?? null,
+			vcoal: w.vcoal?.[i] ?? null,
+			isGas
+		};
+	}
+
+	let activeWellName = $derived(
+		hoveredWellName ??
+			hoverReadout.well ??
+			workbench.wellId ??
+			orderedWells[0]?.well_name ??
+			null
+	);
+
+	let activeReadout = $derived.by(() => {
+		if (!showInspectionLine || activeInspectionTvd === null) return null;
+		if (
+			hoverReadout.well === activeWellName &&
+			hoverReadout.tvd !== null &&
+			Math.abs(hoverReadout.tvd - activeInspectionTvd) < 0.8
+		) {
+			return hoverReadout;
+		}
+		return getWellReadoutAtTvd(activeWellName, activeInspectionTvd);
+	});
+
+	let cardLeftPct = $derived.by(() => {
+		if (!activeWellName || orderedWells.length === 0) return 50;
+		const idx = orderedWells.findIndex((w) => w.well_name === activeWellName);
+		if (idx === -1) return 50;
+		const dom = trackDomains[idx] ?? [0, 1];
+		const mid = ((dom[0] + dom[1]) / 2) * 100;
+		return Math.max(12, Math.min(88, mid));
+	});
+
 	function buildStickPlot() {
 		const wells = orderedWells;
 		const domains = trackDomains;
@@ -975,11 +1202,12 @@
 				x: bvoArr,
 				y: tvdArr,
 				customdata: customDataArr,
+				text: customDataArr.map((cd) => (cd.isGas ? 'BVG (Gas)' : 'BVO (Oil)')),
 				line: { color: '#047857', width: 1.5 },
 				hovertemplate:
 					`<b>${w.well_name}</b><br>` +
 					`${isFlattened ? 'Rel Depth' : 'TVDSS'}: %{y:.1f} m<br>` +
-					'%{customdata.isGas ? "BVG (Gas)" : "BVO (Oil)"}: %{x:.3f} v/v<extra></extra>'
+					'%{text}: %{x:.3f} v/v<extra></extra>'
 			});
 
 			// BVHC_SHF Fill & Stroke
@@ -1010,11 +1238,12 @@
 					x: bvohArr,
 					y: tvdArr,
 					customdata: customDataArr,
+					text: customDataArr.map((cd) => (cd.isGas ? 'BVG (SHF)' : 'BVO (SHF)')),
 					line: { color: '#B91C1C', width: 1.6, dash: '4px,2px' },
 					hovertemplate:
 						`<b>${w.well_name}</b><br>` +
 						`${isFlattened ? 'Rel Depth' : 'TVDSS'}: %{y:.1f} m<br>` +
-						'BVHC (SHF): %{x:.3f} v/v<extra></extra>'
+						'%{text}: %{x:.3f} v/v<extra></extra>'
 				});
 			}
 
@@ -1475,6 +1704,7 @@
 			Number((maxTvd + pad).toFixed(1)),
 			Number((minTvd - pad).toFixed(1))
 		];
+		defaultYRange = computedRange;
 
 		// Stratigraphic Datum flattening horizontal reference line at y = 0
 		if (isFlattened) {
@@ -1666,6 +1896,10 @@
 					const pt = ev?.points?.[0];
 					const cd = pt?.customdata;
 					if (cd && typeof cd === 'object') {
+						if (cd.well) hoveredWellName = cd.well;
+						if (typeof cd.tvd === 'number' && !isInspectionLocked) {
+							cursorTvd = cd.tvd;
+						}
 						const fwl = resolveEffectiveFwl(workbench.stickPlotZoneFilter, [cd.zone]);
 						hoverReadout = {
 							well: cd.well,
@@ -1679,7 +1913,8 @@
 							shf: cd.shf,
 							hafwl: fwl !== null && typeof cd.tvd === 'number' ? fwl - cd.tvd : null,
 							gr: typeof cd.gr === 'number' ? cd.gr : null,
-							vcoal: typeof cd.vcoal === 'number' ? cd.vcoal : null
+							vcoal: typeof cd.vcoal === 'number' ? cd.vcoal : null,
+							isGas: Boolean(cd.isGas)
 						};
 						if (typeof cd.md === 'number') {
 							workbench.cursorDepth = cd.md;
@@ -1861,6 +2096,41 @@
 				/>
 				<span>PHIT</span>
 			</label>
+			<button
+				type="button"
+				title="Toggle horizontal cursor inspection line across all wells (Shortcut: 'I' or 'C')"
+				onclick={() => {
+					showInspectionLine = !showInspectionLine;
+					if (!showInspectionLine) unlockInspection();
+				}}
+				class="flex h-5 items-center gap-1 rounded-sm border px-1.5 text-[10px] font-semibold transition-colors {showInspectionLine
+					? 'border-indigo-600 bg-indigo-50 text-indigo-700 dark:border-indigo-500 dark:bg-indigo-950/60 dark:text-indigo-300'
+					: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+			>
+				<svg
+					class="h-3 w-3"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2"
+				>
+					<path d="M4 12h16" stroke-width="2.5" />
+					<path d="M12 4v16" stroke-dasharray="2 2" stroke-width="1.5" />
+				</svg>
+				<span>{showInspectionLine ? 'Inspection ON' : 'Inspection'}</span>
+			</button>
+			{#if showInspectionLine}
+				<button
+					type="button"
+					title="Lock / freeze inspection line at current depth (Shortcut: Space)"
+					onclick={toggleInspectionLock}
+					class="flex h-5 items-center gap-1 rounded-sm border px-1.5 text-[10px] font-semibold transition-colors {isInspectionLocked
+						? 'border-amber-500 bg-amber-50 text-amber-800 shadow-2xs dark:border-amber-600 dark:bg-amber-950/60 dark:text-amber-200'
+						: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+				>
+					<span>{isInspectionLocked ? '🔒 Locked' : '🔓 Lock (Space)'}</span>
+				</button>
+			{/if}
 			<button
 				type="button"
 				disabled={projectData.isLoadingStickPlot}
@@ -2073,7 +2343,10 @@
 			</div>
 
 			<!-- Multi-Well TVDSS Stick Plot Canvas -->
-			<div class="relative min-h-0 flex-1 overflow-hidden">
+			<div
+				class="relative min-h-0 flex-1 overflow-hidden"
+				onpointermove={handlePlotPointerMove}
+			>
 				{#if projectData.isLoadingStickPlot && orderedWells.length === 0}
 					<div
 						class="flex h-full w-full items-center justify-center text-xs text-[var(--text-muted)]"
@@ -2110,74 +2383,199 @@
 					</div>
 				{:else}
 					<div bind:this={plotContainer} class="h-full w-full"></div>
+
+					<!-- Toggleable Horizontal Inspection Crosshair & Active Well Inspection Card -->
+					{#if showInspectionLine && inspectionPct !== null}
+						{@const isAbove = inspectionPct > 22}
+						<div
+							style="top: 8px; bottom: 26px; left: {plotAreaLeft}px; right: {plotAreaRight}px;"
+							class="pointer-events-none absolute z-20 overflow-visible"
+						>
+							<!-- Horizontal line spanning all wells -->
+							<div
+								style="top: {inspectionPct}%;"
+								class="pointer-events-none absolute right-0 left-0 z-25 -translate-y-1/2 border-t-[1.5px] {isInspectionLocked
+									? 'border-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.55)]'
+									: 'border-indigo-500/95 shadow-[0_0_8px_rgba(99,102,241,0.45)]'}"
+							>
+								<!-- Depth Badge on Left Edge -->
+								<div
+									class="rounded-2xs pointer-events-auto absolute -top-2.5 left-1 flex items-center gap-1 border px-1.5 py-0.2 text-[8px] font-bold shadow-xs backdrop-blur-xs {isInspectionLocked
+										? 'border-amber-400 bg-amber-50/95 text-amber-900'
+										: 'border-indigo-300 bg-indigo-50/95 text-indigo-900'}"
+								>
+									<span>
+										{isInspectionLocked ? '🔒 ' : ''}
+										{workbench.stickPlotDatumMode === 'flattened' ? 'Rel Depth:' : 'TVDSS:'}
+										{activeInspectionTvd !== null ? `${activeInspectionTvd.toFixed(1)}m` : '—'}
+									</span>
+									{#if isInspectionLocked}
+										<button
+											type="button"
+											onclick={unlockInspection}
+											class="ml-0.5 text-[9px] font-bold text-amber-700 hover:text-amber-950 cursor-pointer"
+											title="Unlock inspection line (Space)"
+										>
+											×
+										</button>
+									{/if}
+								</div>
+							</div>
+
+							<!-- Floating Value Card Anchored to Active Well -->
+							{#if activeReadout}
+								<div
+									style="{isAbove
+										? `bottom: ${100 - inspectionPct}%; margin-bottom: 24px;`
+										: `top: ${inspectionPct}%; margin-top: 24px;`} left: {cardLeftPct}%;"
+									class="pointer-events-none absolute z-30 -translate-x-1/2 w-48 rounded-xs border border-slate-300/90 bg-white/95 p-1.5 text-[8.5px] leading-tight text-slate-900 shadow-lg backdrop-blur-sm dark:border-slate-700 dark:bg-slate-900/95 dark:text-slate-100"
+								>
+									<!-- Card Header: Well & Zone -->
+									<div
+										class="mb-1 flex items-center justify-between border-b border-slate-200/80 pb-1 font-semibold dark:border-slate-700/80"
+									>
+										<span
+											class="truncate text-[9.5px] font-bold text-[var(--accent-primary)]"
+											>{activeReadout.well}</span
+										>
+										{#if activeReadout.zone}
+											<span
+												class="rounded-2xs bg-slate-100 px-1 py-0.2 text-[7.5px] text-slate-600 dark:bg-slate-800 dark:text-slate-300"
+											>
+												{activeReadout.zone}
+											</span>
+										{/if}
+									</div>
+
+									<!-- Depths Row -->
+									<div
+										class="mono-num mb-1 flex items-center justify-between text-[7.5px] text-slate-500 dark:text-slate-400"
+									>
+										<span
+											>{workbench.stickPlotDatumMode === 'flattened'
+												? 'Rel Depth:'
+												: 'TVDSS:'}
+											<strong class="text-slate-800 dark:text-slate-200"
+												>{fmtDepth(activeReadout.tvd)}</strong
+											></span
+										>
+										{#if activeReadout.md !== null}
+											<span
+												>MD: <strong class="text-slate-800 dark:text-slate-200"
+													>{fmtDepth(activeReadout.md)}</strong
+												></span
+											>
+										{/if}
+									</div>
+
+									<!-- Curves Grid -->
+									<div class="mono-num grid grid-cols-2 gap-x-2 gap-y-0.5 text-[8px]">
+										{#if activeReadout.gr !== null}
+											<div class="flex items-center justify-between">
+												<span class="font-bold text-emerald-700">GR</span>
+												<span
+													>{fmtNum(activeReadout.gr, 1)}
+													<span class="text-[7px] text-slate-400">gAPI</span
+													></span
+												>
+											</div>
+										{/if}
+										{#if activeReadout.vcoal !== null && activeReadout.vcoal > 0.005}
+											<div class="flex items-center justify-between">
+												<span class="font-bold text-zinc-900 dark:text-zinc-300"
+													>VCOAL</span
+												>
+												<span>{fmtNum(activeReadout.vcoal, 3)}</span>
+											</div>
+										{/if}
+										<div class="flex items-center justify-between">
+											<span class="font-bold text-emerald-700"
+												>{activeReadout.isGas ? 'BVG' : 'BVO'} (Log)</span
+											>
+											<span class="font-semibold"
+												>{fmtNum(activeReadout.bvo, 3)}</span
+											>
+										</div>
+										{#if activeReadout.bvoh !== null}
+											<div class="flex items-center justify-between">
+												<span class="font-bold text-red-600"
+													>{activeReadout.isGas ? 'BVG' : 'BVO'} (SHF)</span
+												>
+												<span class="font-semibold"
+													>{fmtNum(activeReadout.bvoh, 3)}</span
+												>
+											</div>
+										{/if}
+										{#if activeReadout.phit !== null}
+											<div class="flex items-center justify-between">
+												<span class="font-bold text-blue-700">PHIT</span>
+												<span>{fmtNum(activeReadout.phit, 3)}</span>
+											</div>
+										{/if}
+										{#if activeReadout.swt !== null}
+											<div class="flex items-center justify-between">
+												<span class="font-bold text-slate-700 dark:text-slate-300"
+													>SWT</span
+												>
+												<span>{fmtNum(activeReadout.swt, 3)}</span>
+											</div>
+										{/if}
+										{#if activeReadout.shf !== null}
+											<div class="flex items-center justify-between">
+												<span class="font-bold text-red-700">SHF</span>
+												<span>{fmtNum(activeReadout.shf, 3)}</span>
+											</div>
+										{/if}
+										{#if activeReadout.hafwl !== null}
+											<div
+												class="col-span-2 flex items-center justify-between border-t border-slate-100 pt-0.5 dark:border-slate-800"
+											>
+												<span class="font-bold text-blue-700">HAFWL</span>
+												<span>{fmtNum(activeReadout.hafwl, 1)} m</span>
+											</div>
+										{/if}
+									</div>
+								</div>
+							{/if}
+						</div>
+					{/if}
 				{/if}
 			</div>
 		</div>
 	</div>
 
-	<!-- Synchronized Bottom Readout Bar -->
+	<!-- Synchronized Bottom Status & Legend Bar -->
 	<div
 		class="mono-num flex h-7 shrink-0 items-center justify-between border-t border-[var(--border-hairline)] bg-[var(--bg-app)] px-2.5 text-[11px] text-[var(--text-secondary)]"
 	>
-		<div class="flex flex-wrap items-center gap-x-3">
-			<span>
-				<strong class="text-[var(--text-primary)]">Well:</strong>
-				{hoverReadout.well ?? workbench.wellId ?? '—'}
-			</span>
-			<span>
-				<strong class="text-[var(--text-primary)]">
-					{workbench.stickPlotDatumMode === 'flattened' ? 'Rel Depth:' : 'TVDSS:'}
-				</strong>
-				{fmtDepth(hoverReadout.tvd)}
-			</span>
-			<span>
-				<strong>MD:</strong>
-				{fmtDepth(hoverReadout.md ?? workbench.cursorDepth)}
-			</span>
-			{#if hoverReadout.zone}
-				<span>
-					<strong>Zone:</strong>
-					{hoverReadout.zone}
+		<div class="flex items-center gap-x-2 text-[10.5px]">
+			{#if showInspectionLine}
+				<span class="inline-flex items-center gap-1 font-medium text-[var(--text-primary)]">
+					{#if isInspectionLocked}
+						<span class="inline-flex items-center gap-1 text-amber-700 dark:text-amber-400">
+							🔒 Locked at {workbench.stickPlotDatumMode === 'flattened' ? 'Rel Depth' : 'TVDSS'}:
+							<strong class="mono-num">{fmtDepth(activeInspectionTvd)}</strong>
+						</span>
+						<button
+							type="button"
+							onclick={unlockInspection}
+							class="text-[10px] text-amber-700 underline hover:text-amber-900 cursor-pointer"
+						>
+							(Unlock: Space)
+						</button>
+					{:else}
+						<span class="inline-flex items-center gap-1 text-indigo-700 dark:text-indigo-400">
+							<span>Inspection active:</span>
+							<strong class="mono-num">{fmtDepth(activeInspectionTvd)}</strong>
+						</span>
+						<span class="text-[10px] text-[var(--text-muted)]">
+							· [Space] to freeze · [I] to toggle
+						</span>
+					{/if}
 				</span>
-			{/if}
-			{#if hoverReadout.gr !== null && hoverReadout.gr !== undefined}
-				<span>
-					<strong class="text-emerald-700">GR:</strong>
-					{fmtNum(hoverReadout.gr, 1)} gAPI
-				</span>
-			{/if}
-			{#if hoverReadout.vcoal !== null && hoverReadout.vcoal !== undefined && hoverReadout.vcoal > 0.001}
-				<span>
-					<strong class="text-zinc-800">VCOAL:</strong>
-					{fmtNum(hoverReadout.vcoal, 3)}
-				</span>
-			{/if}
-			<span>
-				<strong class="text-emerald-700">BVO (Log):</strong>
-				{fmtNum(hoverReadout.bvo, 3)}
-			</span>
-			<span>
-				<strong class="text-red-600">BVO (SHF):</strong>
-				{fmtNum(hoverReadout.bvoh, 3)}
-			</span>
-			<span>
-				<strong class="text-blue-700">PHIT:</strong>
-				{fmtNum(hoverReadout.phit, 3)}
-			</span>
-			<span>
-				<strong>SWT:</strong>
-				{fmtNum(hoverReadout.swt, 3)}
-			</span>
-			{#if hoverReadout.shf !== null && hoverReadout.shf !== undefined}
-				<span>
-					<strong>SHF:</strong>
-					{fmtNum(hoverReadout.shf, 3)}
-				</span>
-			{/if}
-			{#if hoverReadout.hafwl !== null && hoverReadout.hafwl !== undefined}
-				<span>
-					<strong class="text-blue-700">HAFWL:</strong>
-					{fmtNum(hoverReadout.hafwl, 1)} m
+			{:else}
+				<span class="text-[10.5px] text-[var(--text-muted)]">
+					Multi-Well Stick Plot · Press <kbd class="rounded-xs border border-slate-300 bg-slate-100 px-1 py-0.2 text-[9.5px] font-sans">I</kbd> to inspect across wells
 				</span>
 			{/if}
 		</div>
