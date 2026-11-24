@@ -10213,6 +10213,33 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                     for rf_k, f_val in src_fits.items():
                         fits[rf_k] = dict(f_val)
 
+        # Ensure all defined rock types exist in fits
+        all_expected_rts = (
+            [str(r) for r in range(1, len(req.cutoffs or []) + 2)]
+            if req.cutoffs
+            else [str(r) for r in reservoir_flags]
+        )
+        if fits and all_expected_rts:
+            fallback_fit = next(
+                iter(fits.values()),
+                {"a": 0.2, "b": 0.3, "rmse": 0.0, "r2": 0.0, "count": 0},
+            )
+            for r_key in all_expected_rts:
+                if r_key not in fits:
+                    numeric_keys = [k for k in fits.keys() if k.isdigit()]
+                    if numeric_keys and r_key.isdigit():
+                        nearest_key = min(
+                            numeric_keys, key=lambda k: abs(int(k) - int(r_key))
+                        )
+                        fits[r_key] = {
+                            **fits[nearest_key],
+                            "rmse": 0.0,
+                            "r2": 0.0,
+                            "count": 0,
+                        }
+                    else:
+                        fits[r_key] = {**fallback_fit, "rmse": 0.0, "r2": 0.0, "count": 0}
+
         # Recompute fit diagnostics (rmse, r2, count) against SCAL points for all entries in fits
         if not scal_df_fit.empty and fits:
             j_sat_col = "SW" if j_sat_mode == "sw" else "SWN"
@@ -10312,8 +10339,14 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
         if model == "leverett_j":
             if j_sat_mode == "sw":
                 fits_sw = {k: dict(v) for k, v in fits.items()}
+                for k, v in fits.items():
+                    if k not in fits_swn:
+                        fits_swn[k] = dict(v)
             else:
                 fits_swn = {k: dict(v) for k, v in fits.items()}
+                for k, v in fits.items():
+                    if k not in fits_sw:
+                        fits_sw[k] = dict(v)
 
         fwl_zone_map: Dict[str, float] = {}
         if req.fwl_by_zone:

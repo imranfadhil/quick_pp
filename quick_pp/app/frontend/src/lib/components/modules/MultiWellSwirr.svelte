@@ -285,7 +285,7 @@
 			projectData.swirrConfig.rules = res.rules || {};
 			projectData.swirrResult = res;
 			projectData.recomputeSwirrClientSide(autoFit);
-			void projectData.persistProjectParams([], ['swirr-corr']);
+			void projectData.persistProjectParams([], ['swirr-corr', 'shf']);
 		} catch (e: any) {
 			projectData.error = e?.message || 'Swirr correlation fit failed';
 		} finally {
@@ -347,7 +347,7 @@
 			);
 			projectData.swirrApplyResult = applyRes;
 			projectData.markMultiWellComputed('swirr-corr');
-			void projectData.persistProjectParams([], ['swirr-corr']);
+			void projectData.persistProjectParams([], ['swirr-corr', 'shf']);
 			applyActiveWellSwirrCurve(applyRes);
 		} catch (e: any) {
 			projectData.error = e?.message || 'Failed to compute Swirr & Pc fit';
@@ -360,6 +360,7 @@
 	async function saveAllWells() {
 		if (!workbench.projectId || !projectData.hasPendingMultiWell('swirr-corr')) return;
 		await projectData.saveMultiWellComputed('swirr-corr');
+		await projectData.persistProjectParams([], ['swirr-corr', 'shf']);
 	}
 
 	function setExtractionMode(mode: SwirrExtractionMode) {
@@ -425,7 +426,7 @@
 		if (!src || !projectData.shfResult) return;
 		projectData.shfManualFitOverride = true;
 		const curTarget = fits[targetRf] || { a: 0.1, b: 1.5, count: 0 };
-		projectData.shfResult.fits = {
+		const nextFits = {
 			...fits,
 			[targetRf]: {
 				...curTarget,
@@ -436,7 +437,20 @@
 				count: curTarget.count ?? 0
 			}
 		};
+		const isSwMode = (projectData.shfParams.jSatMode ?? 'swn') === 'sw';
+		projectData.shfResult = {
+			...projectData.shfResult,
+			fits: nextFits,
+			fits_swn: isSwMode ? projectData.shfResult.fits_swn : nextFits,
+			fits_sw: isSwMode ? nextFits : projectData.shfResult.fits_sw
+		};
+		projectData.shfSavedFits = {
+			model: projectData.shfParams.model,
+			j_sat_mode: projectData.shfParams.jSatMode ?? 'swn',
+			fits: { ...nextFits }
+		};
 		workbench.swirrCrossplotTab = 'scal-fit';
+		void projectData.persistProjectParams([], ['swirr-corr', 'shf']);
 	}
 
 	function selectShfModel(m: 'leverett_j' | 'skelt_harrison' | 'cuddy') {
@@ -464,7 +478,13 @@
 			fits_swn: isSwMode ? projectData.shfResult.fits_swn : nextFits,
 			fits_sw: isSwMode ? nextFits : projectData.shfResult.fits_sw
 		};
+		projectData.shfSavedFits = {
+			model: projectData.shfParams.model,
+			j_sat_mode: projectData.shfParams.jSatMode ?? 'swn',
+			fits: { ...nextFits }
+		};
 		workbench.swirrCrossplotTab = 'scal-fit';
+		void projectData.persistProjectParams([], ['swirr-corr', 'shf']);
 	}
 
 	function clearExcludedPlugs() {

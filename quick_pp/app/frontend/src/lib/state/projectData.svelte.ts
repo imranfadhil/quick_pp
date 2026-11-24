@@ -2395,6 +2395,11 @@ class ProjectDataState {
 			rock_flags: existing?.rock_flags ?? [],
 			shf: existing?.shf ?? []
 		};
+		this.shfSavedFits = {
+			model: activeModel,
+			j_sat_mode: jSatMode,
+			fits: { ...nextFits }
+		};
 	}
 
 	toggleSwirrPlugExclusion(plugId: string) {

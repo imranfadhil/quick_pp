@@ -180,7 +180,16 @@
 		try {
 			const sp = projectData.shfParams;
 			const jSatMode = sp.jSatMode ?? 'swn';
-			// Restored SHF fits (from saved project params) are used on non-reset runs
+			// Prefer active in-memory fits (from SCAL or manual adjustments), falling back to restored fits from saved project params
+			const inMemoryFits =
+				!resetFits &&
+				projectData.shfResult?.model === sp.model &&
+				(sp.model !== 'leverett_j' ||
+					(projectData.shfResult?.j_sat_mode ?? 'swn') === jSatMode) &&
+				projectData.shfResult?.fits &&
+				Object.keys(projectData.shfResult.fits).length > 0
+					? projectData.shfResult.fits
+					: null;
 			const saved = projectData.shfSavedFits;
 			const restoredFits =
 				!resetFits &&
@@ -190,16 +199,7 @@
 				Object.keys(saved.fits ?? {}).length > 0
 					? saved.fits
 					: null;
-			const customFits =
-				restoredFits ??
-				(!resetFits &&
-				projectData.shfResult?.model === sp.model &&
-				(sp.model !== 'leverett_j' ||
-					(projectData.shfResult?.j_sat_mode ?? 'swn') === jSatMode) &&
-				projectData.shfResult?.fits &&
-				Object.keys(projectData.shfResult.fits).length > 0
-					? projectData.shfResult.fits
-					: null);
+			const customFits = inMemoryFits ?? restoredFits;
 			const fwlByZonePayload =
 				sp.fwlByZone && Object.keys(sp.fwlByZone).length > 0 ? sp.fwlByZone : null;
 			const data = await postJson<any>(
@@ -230,15 +230,24 @@
 					save: false
 				}
 			);
+			const mergedFits = {
+				...(customFits ?? {}),
+				...(data.fits ?? {})
+			};
 			projectData.shfResult = {
 				model: data.model ?? sp.model,
 				j_sat_mode: data.j_sat_mode ?? jSatMode,
-				fits: data.fits ?? {},
-				fits_swn: data.fits_swn ?? (jSatMode === 'swn' ? data.fits : undefined),
-				fits_sw: data.fits_sw ?? (jSatMode === 'sw' ? data.fits : undefined),
+				fits: mergedFits,
+				fits_swn: data.fits_swn ?? (jSatMode === 'swn' ? mergedFits : undefined),
+				fits_sw: data.fits_sw ?? (jSatMode === 'sw' ? mergedFits : undefined),
 				fwl_by_zone: data.fwl_by_zone ?? sp.fwlByZone,
 				scal_data: data.scal_data,
 				...data.data
+			};
+			projectData.shfSavedFits = {
+				model: data.model ?? sp.model,
+				j_sat_mode: data.j_sat_mode ?? jSatMode,
+				fits: { ...mergedFits }
 			};
 			if (markDirty) {
 				projectData.markMultiWellComputed('shf');
