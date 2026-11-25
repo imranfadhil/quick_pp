@@ -33,7 +33,7 @@ This Single-Well Computer-Processed Interpretation (CPI) & Formation Evaluation 
 {% if include_ai_commentary and ai_commentary.executive_summary %}
 {{ ai_commentary.executive_summary }}
 {% else %}
-This technical petrophysical evaluation report documents the deterministic and probabilistic log, core, and special core analysis (SCAL) interpretation for **{{ project_name }}** across **{{ wells|length }}** evaluated well(s) (`{{ well_names|join(', ') }}`) targeting **{{ target_zones|join(', ') }}**, prepared for Static Geological Modeling (Petrel/RMS) and Dynamic Reservoir Simulation (Eclipse/Intersect) handover.
+This technical petrophysical evaluation report documents the deterministic and probabilistic log, core, and special core analysis (SCAL) interpretation for **{{ project_name }}** across **{{ wells|length }}** evaluated {{ (wells|length) | pluralize('well') }} (`{{ well_names|join(', ') }}`) targeting **{{ target_zones|join(', ') }}**, prepared for Static Geological Modeling (Petrel/RMS) and Dynamic Reservoir Simulation (Eclipse/Intersect) handover.
 {% endif %}
 
 {% if custom_notes %}

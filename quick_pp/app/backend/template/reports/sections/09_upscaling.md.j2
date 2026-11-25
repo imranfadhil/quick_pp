@@ -18,6 +18,10 @@ Fine-scale evaluated CPI logs ($0.1524\text{ m}$ sampling) were upscaled onto ce
 | **{{ up.well_name }}** | {{ up.fine_samples }} | {{ up.n_cells }} | {{ "%.1f"|format(up.gross_m) if up.gross_m is defined else "—" }} | {{ "%.3f"|format(up.phit_up) }} | {{ "%.3f"|format(up.swt_up) }} | {{ "%.1f"|format(up.k_arith) }} | {{ "%.1f"|format(up.k_geom) }} | {{ "%.2f"|format(up.k_harm) }} | {{ "%.3f"|format(up.kv_kh) }} |
 {% endfor %}
 
+{% if upscaling_summary and upscaling_summary.mean_kv_kh is defined %}
+Cardwell-Parsons directional permeability bounds yield a field-mean vertical-to-horizontal anisotropy ratio of **$K_v / K_h = {{ '%.3f'|format(upscaling_summary.mean_kv_kh) }}$** (range `{{ '%.3f'|format(upscaling_summary.min_kv_kh) }}–{{ '%.3f'|format(upscaling_summary.max_kv_kh) }}`) across the evaluated {{ wells|length }} {{ (wells|length) | pluralize('well') }}, preserving thin-bed vertical baffles for Eclipse/Intersect dynamic simulation.
+{% endif %}
+
 #### Table 9.2: Active Net-Reservoir Cellular Blocked Averages & Volumetric Conservation Audit
 
 | Well Name | Active Res Cells | Blocked NTG (v/v) | Blocked $\bar{\phi}_{e,res}$ (v/v) | Fine-Scale $\bar{\phi}_{e,res}$ (v/v) | Blocked $\bar{S}_{w,res}$ (v/v) | Fine-Scale $\bar{S}_{w,res}$ (v/v) | $\Delta\phi$ Conservation | Audit Status |

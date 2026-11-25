@@ -69,12 +69,23 @@ REPORTS_TEMPLATE_DIR = BACKEND_DIR / "template" / "reports"
 REPORTS_STATIC_ROOT = BACKEND_DIR / "static" / "reports"
 REPORTS_STATIC_ROOT.mkdir(parents=True, exist_ok=True)
 
+
+def _pluralize(count: Any, singular: str, plural: Optional[str] = None) -> str:
+    """Lightweight Jinja2 pluralization helper (Task 4.3)."""
+    try:
+        c = int(count)
+    except Exception:
+        c = 1
+    return singular if c == 1 else (plural or f"{singular}s")
+
+
 _jinja_env = jinja2.Environment(
     loader=jinja2.FileSystemLoader(str(REPORTS_TEMPLATE_DIR)),
     autoescape=False,
     trim_blocks=True,
     lstrip_blocks=True,
 )
+_jinja_env.filters["pluralize"] = _pluralize
 
 SECTION_TEMPLATE_MAP: Dict[str, str] = {
     "01_executive_summary": "sections/01_executive_summary.md.j2",
@@ -179,14 +190,51 @@ GENERIC_PLACEHOLDER_ZONES = {
 }
 
 
+_STRATIGRAPHIC_CORRECTIONS = {
+    re.compile(r"\bWest\s*Phalian\b", re.IGNORECASE): "Westphalian",
+    re.compile(r"\bSteph\s*Anian\b", re.IGNORECASE): "Stephanian",
+    re.compile(r"\bNamur\s*Ian\b", re.IGNORECASE): "Namurian",
+    re.compile(r"\bVise\s*An\b", re.IGNORECASE): "Visean",
+    re.compile(r"\bKimme\s*Ridg\s*Ian\b", re.IGNORECASE): "Kimmeridgian",
+    re.compile(r"\bRot\s*Liegend\b", re.IGNORECASE): "Rotliegend",
+    re.compile(r"\bZech\s*Stein\b", re.IGNORECASE): "Zechstein",
+    re.compile(r"\bStat\s*Fjord\b", re.IGNORECASE): "Statfjord",
+}
+
+
 def _normalize_zone_name(
     raw_zone: Any,
     well_zones_upper: Optional[set[str]] = None,
 ) -> str:
-    """Clean and normalize a formation/zone name without field-specific hardcoded aliases."""
+    """Clean and normalize a formation/zone name preserving stratigraphic stage capitalization (Task 4.2)."""
     s = str(raw_zone or "").strip()
-    if not s or s.lower() in ("nan", "none"):
+    if not s or s.lower() in ("nan", "none", "unknown"):
         return "Unknown"
+
+    # If ALL_CAPS, all-lowercase, or snake_case, format to clean Title Case preserving alphanumeric / Roman numeral suffixes
+    if s.isupper() or s.islower() or "_" in s:
+        words = s.replace("_", " ").split()
+        norm_words = []
+        for w in words:
+            if len(w) <= 2 or w.upper() in (
+                "II",
+                "III",
+                "IV",
+                "VI",
+                "VII",
+                "VIII",
+                "IX",
+                "X",
+            ):
+                norm_words.append(w.upper())
+            else:
+                norm_words.append(w.capitalize())
+        s = " ".join(norm_words)
+
+    # Post-normalization stratigraphic stage replacement dictionary
+    for pattern, replacement in _STRATIGRAPHIC_CORRECTIONS.items():
+        s = pattern.sub(replacement, s)
+
     return s
 
 
@@ -444,6 +492,226 @@ def _load_project_wells_fast(
                 }
             )
         return project_name, selected_wells_meta
+
+
+def _gather_and_analyze_fpt_data(
+    project_id: int,
+    wells_inventory: List[Dict[str, Any]],
+    merged_configs: Dict[str, Any],
+    fluid_contacts_rows: List[Dict[str, Any]],
+    target_zones: List[str],
+    fwl_val: Optional[float] = None,
+) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    """Gather and analyze Formation Pressure Test (FPT) data for Section 6.3 (GAP-13)."""
+    raw_points: List[Dict[str, Any]] = []
+
+    # Priority 1: Direct injection in configs (e.g. tests or pre-calculated)
+    if "fpt_points" in merged_configs and isinstance(
+        merged_configs["fpt_points"], list
+    ):
+        raw_points = list(merged_configs["fpt_points"])
+    elif any(int(w.get("pressure_test_count", 0)) > 0 for w in wells_inventory):
+        try:
+            from quick_pp.app.backend.services.fpt import _collect_fpt_points
+
+            w_names = [w["name"] for w in wells_inventory]
+            raw_points = _collect_fpt_points(int(project_id), w_names)
+        except Exception as exc:
+            logger.debug(f"Failed collecting FPT points via service: {exc}")
+
+    if not raw_points:
+        return {
+            "has_data": False,
+            "total_stations": 0,
+            "valid_stations": 0,
+            "well_fpt_rows": [],
+            "fpt_gradient_rows": [],
+            "fpt_contacts": [],
+            "fitted_densities": {},
+            "fwl": fwl_val,
+        }, []
+
+    # Filter valid stations
+    valid_points = [
+        p
+        for p in raw_points
+        if str(p.get("test_quality", "VALID")).strip().upper() == "VALID"
+        and p.get("pressure") is not None
+        and float(p["pressure"]) > 0
+    ]
+
+    well_fpt_rows = []
+    wells_with_pts = sorted({p["well_name"] for p in raw_points})
+    for wn in wells_with_pts:
+        w_all = [p for p in raw_points if p["well_name"] == wn]
+        w_val = [p for p in valid_points if p["well_name"] == wn]
+        tvdss_l = [
+            float(p["tvdss"])
+            for p in w_val
+            if p.get("tvdss") is not None and np.isfinite(float(p["tvdss"]))
+        ]
+        p_l = [
+            float(p["pressure"])
+            for p in w_val
+            if p.get("pressure") is not None and np.isfinite(float(p["pressure"]))
+        ]
+        mob_l = [
+            float(p["mobility"])
+            for p in w_val
+            if p.get("mobility") is not None
+            and np.isfinite(float(p["mobility"]))
+            and float(p["mobility"]) > 0
+        ]
+
+        d_str = f"{min(tvdss_l):.1f} – {max(tvdss_l):.1f} m TVDss" if tvdss_l else "—"
+        p_str = f"{min(p_l):.1f} – {max(p_l):.1f} psia" if p_l else "—"
+        m_str = f"{min(mob_l):.1f} – {max(mob_l):.1f} mD/cP" if mob_l else "—"
+
+        # Determine overpressure regime relative to normal hydrostatic (0.433 - 0.465 psi/ft)
+        if tvdss_l and p_l:
+            mean_p = float(np.mean(p_l))
+            mean_z_ft = float(np.mean(tvdss_l)) * 3.28084
+            grad_est = mean_p / max(mean_z_ft, 1.0)
+            if grad_est < 0.42:
+                regime = "Depleted / Sub-Hydrostatic"
+            elif grad_est <= 0.47:
+                regime = "Normal Hydrostatic"
+            else:
+                regime = "Moderately Overpressured"
+        else:
+            regime = "Normal Hydrostatic"
+
+        well_fpt_rows.append(
+            {
+                "well_name": wn,
+                "total_count": len(w_all),
+                "valid_count": len(w_val),
+                "depth_range": d_str,
+                "pressure_range": p_str,
+                "mobility_range": m_str,
+                "overpressure_regime": regime,
+            }
+        )
+
+    # Fit fluid gradients via FormationPressureAnalyzer
+    fpt_gradient_rows = []
+    fpt_contacts = []
+    fitted_densities: Dict[str, Dict[str, Any]] = {}
+
+    if len(valid_points) >= 2:
+        try:
+            from quick_pp.fluid_type import FormationPressureAnalyzer
+
+            fpa_df = pd.DataFrame(
+                {
+                    "ID": [p.get("id", i + 1) for i, p in enumerate(valid_points)],
+                    "WELL_NAME": [p["well_name"] for p in valid_points],
+                    "TVDSS": [
+                        float(p["tvdss"]) if p.get("tvdss") is not None else np.nan
+                        for p in valid_points
+                    ],
+                    "PRESSURE": [float(p["pressure"]) for p in valid_points],
+                    "FLUID_TYPE": [
+                        str(p.get("fluid_type", "UNASSIGNED")).upper()
+                        for p in valid_points
+                    ],
+                    "TEST_QUALITY": [
+                        str(p.get("test_quality", "VALID")).upper()
+                        for p in valid_points
+                    ],
+                    "MOBILITY": [p.get("mobility") for p in valid_points],
+                }
+            ).dropna(subset=["TVDSS", "PRESSURE"])
+
+            fpa = FormationPressureAnalyzer(
+                fpa_df,
+                pressure_unit="psi",
+                depth_unit="m",
+                id_col="ID",
+            )
+            if all(f == "UNASSIGNED" for f in fpa_df["FLUID_TYPE"]):
+                fpa.auto_classify_points()
+
+            fpa.fit_all()
+            contacts_res = fpa.estimate_contacts()
+
+            ref_fwl = fwl_val if fwl_val is not None else 2500.0
+            for fl, g in fpa.gradients.items():
+                g_dict = g.to_dict()
+                g_psi_m = _safe_float(g_dict.get("gradient"), 0.0)
+                g_psi_ft = round(g_psi_m * 0.3048, 4)
+                rho_gcc = round(_safe_float(g_dict.get("density_gcc"), 0.0), 3)
+                r2 = round(_safe_float(g_dict.get("r_squared"), 0.0), 3)
+                t_range = g_dict.get("tvdss_range", [0, 0])
+                t_str = (
+                    f"{t_range[0]:.1f} – {t_range[1]:.1f} m TVDss"
+                    if t_range and t_range[0] is not None
+                    else "—"
+                )
+                datum_p = round(
+                    g_psi_m * ref_fwl + _safe_float(g_dict.get("intercept"), 0.0), 1
+                )
+
+                fpt_gradient_rows.append(
+                    {
+                        "zone": target_zones[0] if target_zones else "Target Reservoir",
+                        "fluid_type": fl.title(),
+                        "gradient_psi_ft": g_psi_ft,
+                        "density_gcc": rho_gcc,
+                        "datum_pressure": datum_p,
+                        "r_squared": r2,
+                        "n_points": int(g_dict.get("n_points", 0)),
+                        "tvdss_range": t_str,
+                    }
+                )
+                fitted_densities[fl.upper()] = {
+                    "density_gcc": rho_gcc,
+                    "r_squared": r2,
+                    "n_points": int(g_dict.get("n_points", 0)),
+                    "gradient_psi_ft": g_psi_ft,
+                    "fluid_type": fl,
+                }
+
+            for c_key, c_val in contacts_res.items():
+                c_dict = c_val.to_dict()
+                p50_tvdss = _safe_float(c_dict.get("tvdss_p50"))
+                p10_tvdss = _safe_float(c_dict.get("tvdss_p10"), p50_tvdss)
+                p90_tvdss = _safe_float(c_dict.get("tvdss_p90"), p50_tvdss)
+                p_contact = _safe_float(c_dict.get("pressure_at_contact"), 0.0)
+                delta_log = round(p50_tvdss - ref_fwl, 1)
+                status_str = (
+                    "✓ RECONCILED (< 2.0 m)"
+                    if abs(delta_log) <= 2.0
+                    else f"Δ = {delta_log:+.1f} m"
+                )
+
+                fpt_contacts.append(
+                    {
+                        "contact_type": c_dict.get(
+                            "label", c_dict.get("contact_type", c_key)
+                        ),
+                        "tvdss_p50": p50_tvdss,
+                        "tvdss_p10": p10_tvdss,
+                        "tvdss_p90": p90_tvdss,
+                        "pressure_at_contact": p_contact,
+                        "delta_log_tvdss": delta_log,
+                        "status": status_str,
+                    }
+                )
+        except Exception as exc:
+            logger.debug(f"Formation pressure gradient regression fallback: {exc}")
+
+    fpt_summary = {
+        "has_data": len(valid_points) > 0,
+        "total_stations": len(raw_points),
+        "valid_stations": len(valid_points),
+        "well_fpt_rows": well_fpt_rows,
+        "fpt_gradient_rows": fpt_gradient_rows,
+        "fpt_contacts": fpt_contacts,
+        "fitted_densities": fitted_densities,
+        "fwl": fwl_val,
+    }
+    return fpt_summary, raw_points
 
 
 # ---------------------------------------------------------------------------
@@ -2370,9 +2638,35 @@ def build_report_context(
         .lower()
     )
 
+    # Gather & analyze Formation Pressure Test (FPT) data for Section 6.3 & SHF density reconciliation (GAP-13)
+    fpt_summary, raw_fpt_points = _gather_and_analyze_fpt_data(
+        project_id=pid,
+        wells_inventory=wells_inventory,
+        merged_configs=merged_configs,
+        fluid_contacts_rows=fluid_contacts_rows,
+        target_zones=resolved_target_zones,
+        fwl_val=fwl_val,
+    )
+    fitted_dens = fpt_summary.get("fitted_densities", {})
+    water_fit = fitted_dens.get("WATER")
+    gas_fit = fitted_dens.get("GAS")
+    oil_fit = fitted_dens.get("OIL")
+
     contact_types_seen = {r["contact_type"] for r in fluid_contacts_rows}
-    has_gas_contacts = bool({"GUT", "GDT", "GWC"} & contact_types_seen)
-    has_oil_contacts = bool({"OUT", "ODT", "OWC"} & contact_types_seen)
+    has_gas_contacts = bool({"GUT", "GDT", "GWC"} & contact_types_seen) or (
+        bool(
+            gas_fit
+            and gas_fit.get("r_squared", 0.0) >= 0.85
+            and gas_fit.get("n_points", 0) >= 2
+        )
+    )
+    has_oil_contacts = bool({"OUT", "ODT", "OWC"} & contact_types_seen) or (
+        bool(
+            oil_fit
+            and oil_fit.get("r_squared", 0.0) >= 0.85
+            and oil_fit.get("n_points", 0) >= 2
+        )
+    )
 
     raw_rho_hc = (
         merged_configs.get("rho_hc") or shf_cfg.get("ghc") or litho_cfg.get("rho_hc")
@@ -2392,20 +2686,49 @@ def build_report_context(
             "oil" if has_oil_contacts else ("gas" if has_gas_contacts else "oil")
         )
 
-    gw_val = _safe_float(
-        shf_cfg.get("gw") or merged_configs.get("rho_w") or merged_configs.get("gw"),
-        1.05,
-    )
+    # Measured FPT Formation Water Gradient reconciliation
+    if (
+        water_fit
+        and water_fit.get("r_squared", 0.0) >= 0.90
+        and water_fit.get("n_points", 0) >= 3
+    ):
+        gw_val = water_fit["density_gcc"]
+        gw_basis = f"Measured FPT Formation Water Gradient ({water_fit['density_gcc']:.3f} g/cc, R²={water_fit['r_squared']:.2f})"
+    else:
+        gw_val = _safe_float(
+            shf_cfg.get("gw")
+            or merged_configs.get("rho_w")
+            or merged_configs.get("gw"),
+            1.05,
+        )
+        gw_basis = "Configured / Regional Formation Water Density"
+
+    # Measured FPT Hydrocarbon Gradient reconciliation
     if res_fluid == "gas":
-        if rho_hc_cand is not None and rho_hc_cand < 0.45:
+        if (
+            gas_fit
+            and gas_fit.get("r_squared", 0.0) >= 0.90
+            and gas_fit.get("n_points", 0) >= 3
+        ):
+            ghc_val = gas_fit["density_gcc"]
+            ghc_basis = f"Measured FPT Gas Gradient ({gas_fit['density_gcc']:.3f} g/cc, R²={gas_fit['r_squared']:.2f})"
+        elif rho_hc_cand is not None and rho_hc_cand < 0.45:
             ghc_val = round(rho_hc_cand, 3)
             ghc_basis = "Configured Gas Density"
         else:
             ghc_val = 0.22
             ghc_basis = "Default Dry/Wet Gas Reservoir Density (No PVT/FPT Override)"
     else:
-        ghc_val = round(rho_hc_cand if rho_hc_cand is not None else 0.80, 3)
-        ghc_basis = "Configured Oil Density"
+        if (
+            oil_fit
+            and oil_fit.get("r_squared", 0.0) >= 0.90
+            and oil_fit.get("n_points", 0) >= 3
+        ):
+            ghc_val = oil_fit["density_gcc"]
+            ghc_basis = f"Measured FPT Oil Gradient ({oil_fit['density_gcc']:.3f} g/cc, R²={oil_fit['r_squared']:.2f})"
+        else:
+            ghc_val = round(rho_hc_cand if rho_hc_cand is not None else 0.80, 3)
+            ghc_basis = "Configured Oil Density"
     delta_rho = round(gw_val - ghc_val, 3)
 
     # Re-evaluate SHF curve using resolved FWL and phase-aware delta_rho (GAP-07)
@@ -2955,6 +3278,7 @@ def build_report_context(
             round(25.0 * pc_scale_cfg, 3),
         ),
         "gw": gw_val,
+        "gw_basis": gw_basis,
         "ghc": ghc_val,
         "delta_rho": delta_rho,
         "ghc_basis": ghc_basis,
@@ -3020,8 +3344,17 @@ def build_report_context(
         if upscaling_table
         else 0.0
     )
+    kv_kh_vals = [
+        r["kv_kh"]
+        for r in upscaling_table
+        if r.get("kv_kh") is not None and r["kv_kh"] > 0
+    ]
+    min_kv_kh = round(float(np.min(kv_kh_vals)), 3) if kv_kh_vals else mean_kv_kh
+    max_kv_kh = round(float(np.max(kv_kh_vals)), 3) if kv_kh_vals else mean_kv_kh
     upscaling_summary = {
         "mean_kv_kh": mean_kv_kh,
+        "min_kv_kh": min_kv_kh,
+        "max_kv_kh": max_kv_kh,
         "cell_size": upscaling_params["cell_size"],
         "omega": upscaling_params["omega"],
     }
@@ -3313,6 +3646,8 @@ def build_report_context(
         "upscaling_params": upscaling_params,
         "upscaling_table": upscaling_table,
         "upscaling_summary": upscaling_summary,
+        "fpt_summary": fpt_summary,
+        "_fpt_points": raw_fpt_points,
         "anomaly_flags": anomaly_flags,
         "well_core_parity": well_core_parity,
         "_full_df": full_df,
@@ -3430,12 +3765,12 @@ def validate_fdp_report_payload(context: Dict[str, Any]) -> List[Dict[str, str]]
             "rule": "Monotonic Uncertainty Percentiles (P90 ≤ P50 ≤ P10)",
             "category": "Uncertainty Quantification",
             "criterion": "P90 ≤ P50 ≤ P10 monotonically across all zones",
-            "measured": f"Verified across {len(unc_list)} target zone(s)",
+            "measured": f"Verified across {len(unc_list)} target {_pluralize(len(unc_list), 'zone')}",
             "status": "PASS" if chk04_ok else "FAIL",
             "action_note": "Volumetric percentiles mathematically verified."
             if chk04_ok
             else "Distribution error: P90 exceeds P10.",
-            "detail": f"Verified across {len(unc_list)} target zone(s).",
+            "detail": f"Verified across {len(unc_list)} target {_pluralize(len(unc_list), 'zone')}.",
         }
     )
 
@@ -3728,7 +4063,7 @@ def synthesize_domain_ai_commentary(
             ),
             "inventory_narrative": (
                 f"Well **`{focal_well}`** penetrates **{context.get('total_logged_thickness', 0.0):.1f} m** of logged "
-                f"section across **{len(context.get('target_zones', []))} target reservoir zone(s)** (`{', '.join(context.get('target_zones', []))}`)."
+                f"section across **{len(context.get('target_zones', []))} target reservoir {_pluralize(len(context.get('target_zones', [])), 'zone')}** (`{', '.join(context.get('target_zones', []))}`)."
             ),
             "qaqc_narrative": (
                 f"Borehole environmental quality control was performed on well **`{focal_well}`** prior to quantitative CPI "
@@ -3789,7 +4124,7 @@ def synthesize_domain_ai_commentary(
                 f"This Field Development Plan (FDP) Petrophysical Evaluation integrates wireline log conditioning, "
                 f"{context['litho_params']['model_name']} lithology evaluation, Routine Core Analysis (RCA), "
                 f"Hydraulic Flow Unit ($FZI$) rock typing, and Leverett-$J$ Saturation Height Modeling ($SHF$) across "
-                f"**{len(well_names)} evaluated well(s)** (`{', '.join(well_names)}`) in **{proj_name}**, focusing on the "
+                f"**{len(well_names)} evaluated {_pluralize(len(well_names), 'well')}** (`{', '.join(well_names)}`) in **{proj_name}**, focusing on the "
                 f"target reservoir succession (`{', '.join(context.get('target_zones', []))}`). "
                 f"Across the evaluated target zones, net-thickness-weighted mean effective porosity ($\\phi_e$) is "
                 f"**${mean_phie:.3f}\\text{{ v/v}}$** with a pore-volume weighted water saturation ($S_w$) of "
@@ -3806,16 +4141,16 @@ def synthesize_domain_ai_commentary(
                 )
             ),
             "inventory_narrative": (
-                f"The petrophysical database for **{proj_name}** comprises **{len(wells)} wells** totaling "
+                f"The petrophysical database for **{proj_name}** comprises **{len(wells)} {_pluralize(len(wells), 'well')}** totaling "
                 f"**{context.get('total_logged_thickness', 0.0):.1f} m** of logged borehole section across "
                 f"**{len(context.get('all_zones', []))} mapped geological formations**, with volumetric and CPI reporting "
-                f"filtered to the **{len(context.get('target_zones', []))} target reservoir zone(s)** (`{', '.join(context.get('target_zones', []))}`). "
+                f"filtered to the **{len(context.get('target_zones', []))} target reservoir {_pluralize(len(context.get('target_zones', [])), 'zone')}** (`{', '.join(context.get('target_zones', []))}`). "
                 f"A total of **{c_tot_cnt} Routine Core Analysis (RCA) plug measurements** are loaded in the project inventory (Table 2.1), "
                 f"of which **{c_cal_cnt} valid plugs** overlap log-evaluated target reservoir intervals for active porosity calibration."
             ),
             "qaqc_narrative": (
                 f"Rigorous borehole environmental conditioning and multi-well normalization were executed prior to quantitative "
-                f"interpretation. Across the {len(qaqc_tbl)} evaluated well(s), maximum washout/bad-hole flagging is "
+                f"interpretation. Across the {len(qaqc_tbl)} evaluated {_pluralize(len(qaqc_tbl), 'well')}, maximum washout/bad-hole flagging is "
                 f"**{max_bh:.1f}%** (using caliper washout $> {context['qaqc_params']['caliper_limit']}$ in (inches) and "
                 f"$\\Delta\\rho > {context['qaqc_params']['drho_limit']}$ g/cc criteria). "
                 + (
@@ -3874,8 +4209,10 @@ def synthesize_domain_ai_commentary(
             "upscaling_narrative": (
                 f"Fine-scale evaluated CPI logs within the target reservoir succession were blocked to "
                 f"${context['upscaling_params']['cell_size']:.1f}\\text{{ m}}$ cellular resolution honoring geological zone boundaries. "
-                f"Cardwell-Parsons directional permeability bounds yield a field-mean vertical-to-horizontal anisotropy ratio "
-                f"($K_v / K_h = K_{{harm}} / K_{{arith}} = {context.get('upscaling_summary', {}).get('mean_kv_kh', 0.0):.3f}$) across the evaluated wells, preserving thin-bed vertical baffles for Eclipse/Intersect dynamic simulation."
+                f"Cardwell-Parsons directional permeability bounds yield a field-mean vertical-to-horizontal anisotropy ratio of "
+                f"**$K_v / K_h = {context.get('upscaling_summary', {}).get('mean_kv_kh', 0.0):.3f}$** "
+                f"(range `{context.get('upscaling_summary', {}).get('min_kv_kh', 0.0):.3f}–{context.get('upscaling_summary', {}).get('max_kv_kh', 0.0):.3f}`) "
+                f"across the evaluated {len(well_names)} {_pluralize(len(well_names), 'well')}, preserving thin-bed vertical baffles for Eclipse/Intersect dynamic simulation."
             ),
         }
 
@@ -4147,6 +4484,16 @@ def _generate_all_report_plots(
             output_dir=out_dir,
             url_prefix=url_prefix,
         )
+        if context.get("fpt_summary", {}).get("has_data"):
+            try:
+                assets["fpt_pressure_plot"] = report_plots.generate_fpt_pressure_plot(
+                    fpt_points=context.get("_fpt_points", []),
+                    fpt_summary=context.get("fpt_summary", {}),
+                    output_dir=out_dir,
+                    url_prefix=url_prefix,
+                )
+            except Exception as exc:
+                logger.debug(f"Failed generating FPT pressure plot: {exc}")
     if "07_shf_scal" in enabled_section_ids:
         assets["shf_scal_plot"] = report_plots.generate_shf_j_function_plot(
             full_df,

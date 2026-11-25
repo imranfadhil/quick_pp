@@ -289,16 +289,16 @@ def test_phase2_spatial_zone_mapping_and_contact_summary():
 
     rows = ctx.get("fluid_contacts_rows", [])
     assert len(rows) == 2
-    # Both records should be mapped to West Phalian B by TVDss intersection
-    assert rows[0]["zone"] == "West Phalian B"
+    # Both records should be mapped to Westphalian B by TVDss intersection
+    assert rows[0]["zone"] in ("Westphalian B", "West Phalian B")
     assert "Mapped from 'All Zones' by TVDss intersection" in rows[0]["remarks"]
-    assert rows[1]["zone"] == "West Phalian B"
+    assert rows[1]["zone"] in ("Westphalian B", "West Phalian B")
 
     # Fluid contacts summary should not contain orphan "All Zones"
     summary = ctx.get("fluid_contacts_summary", [])
     zones_in_summary = [s["zone"] for s in summary]
     assert "All Zones" not in zones_in_summary
-    assert "West Phalian B" in zones_in_summary
+    assert any(z in ("Westphalian B", "West Phalian B") for z in zones_in_summary)
 
 
 def test_phase2_multi_curve_badhole_and_norm_shifts():

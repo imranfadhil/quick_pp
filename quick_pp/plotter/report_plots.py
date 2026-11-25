@@ -2133,3 +2133,197 @@ def generate_well_cpi_plot(
         color="#0f172a",
     )
     return _save_fig(fig, filename, output_dir, url_prefix)
+
+
+def generate_fpt_pressure_plot(
+    fpt_points: Optional[List[Dict[str, Any]]] = None,
+    fpt_summary: Optional[Dict[str, Any]] = None,
+    output_dir: Optional[Union[str, Path]] = None,
+    url_prefix: Optional[str] = None,
+) -> str:
+    """Generate Figure 6.2: Multi-Well Formation Pressure vs. TVDss & Excess Pressure Plot.
+
+    Left Panel: Formation Pressure vs TVDss with fluid gradient lines (Gas, Oil, Water) and contacts.
+    Right Panel: Excess Pressure (P* = P - rho_w * g * TVDss) demonstrating hydraulic communication vs barriers.
+    """
+    fig = Figure(figsize=(11.8, 5.2))
+    gs = GridSpec(1, 2, figure=fig, width_ratios=[1.15, 1.0], wspace=0.35)
+    ax1 = fig.add_subplot(gs[0, 0])
+    ax2 = fig.add_subplot(gs[0, 1])
+
+    points = fpt_points or []
+    valid_points = [
+        p
+        for p in points
+        if str(p.get("test_quality", "VALID")).strip().upper() == "VALID"
+        and p.get("pressure") is not None
+        and p.get("tvdss") is not None
+        and np.isfinite(float(p["pressure"]))
+        and np.isfinite(float(p["tvdss"]))
+    ]
+
+    if not valid_points and points:
+        valid_points = [
+            p
+            for p in points
+            if p.get("pressure") is not None
+            and p.get("tvdss") is not None
+            and np.isfinite(float(p["pressure"]))
+            and np.isfinite(float(p["tvdss"]))
+        ]
+
+    if not valid_points:
+        ax1.text(
+            0.5,
+            0.5,
+            "No Valid Formation Pressure Stations Available",
+            ha="center",
+            va="center",
+            transform=ax1.transAxes,
+            fontsize=10,
+            fontweight="bold",
+            color="#64748b",
+        )
+        ax2.axis("off")
+        return _save_fig(fig, "fig_6_2_fpt_pressure_plot.png", output_dir, url_prefix)
+
+    wells = sorted({p["well_name"] for p in points})
+    well_color_map = {w: PALETTE[i % len(PALETTE)] for i, w in enumerate(wells)}
+
+    # Panel 1: Formation Pressure vs TVDss
+    for wn in wells:
+        w_val = [p for p in valid_points if p["well_name"] == wn]
+        w_non_val = [
+            p
+            for p in points
+            if p["well_name"] == wn
+            and str(p.get("test_quality", "VALID")).strip().upper() != "VALID"
+            and p.get("pressure") is not None
+            and p.get("tvdss") is not None
+            and np.isfinite(float(p["pressure"]))
+            and np.isfinite(float(p["tvdss"]))
+        ]
+        color = well_color_map[wn]
+        if w_val:
+            ax1.scatter(
+                [float(p["pressure"]) for p in w_val],
+                [float(p["tvdss"]) for p in w_val],
+                color=color,
+                edgecolors="#0f172a",
+                s=48,
+                alpha=0.85,
+                label=f"{wn} (Valid)",
+                zorder=4,
+            )
+        if w_non_val:
+            ax1.scatter(
+                [float(p["pressure"]) for p in w_non_val],
+                [float(p["tvdss"]) for p in w_non_val],
+                color=color,
+                marker="x",
+                s=40,
+                alpha=0.55,
+                label=f"{wn} (Tight/Seal)",
+                zorder=3,
+            )
+
+    # Plot fluid gradients if present in fpt_summary
+    grad_rows = (fpt_summary or {}).get("fpt_gradient_rows", [])
+    grad_colors = {"Gas": "#ea580c", "Oil": "#16a34a", "Water": "#2563eb"}
+    tvdss_all = [float(p["tvdss"]) for p in valid_points]
+    z_min, z_max = (min(tvdss_all), max(tvdss_all)) if tvdss_all else (2000.0, 3000.0)
+    z_eval = np.linspace(max(0.0, z_min - 25.0), z_max + 25.0, 50)
+
+    for g in grad_rows:
+        fl = g.get("fluid_type", "")
+        col = grad_colors.get(fl, "#64748b")
+        g_psi_m = (
+            g.get("gradient_psi_ft", 0.0) / 0.3048
+            if g.get("gradient_psi_ft")
+            else g.get("density_gcc", 1.0) * 1.422
+        )
+        datum_p = g.get("datum_pressure")
+        if datum_p and g_psi_m > 0:
+            ref_z = (fpt_summary or {}).get("fwl", z_max)
+            p_line = datum_p + g_psi_m * (z_eval - ref_z)
+            ax1.plot(
+                p_line,
+                z_eval,
+                color=col,
+                linestyle="--",
+                lw=1.8,
+                label=f"{fl} Trend ({g.get('density_gcc', 0.0):.2f} g/cc)",
+                zorder=2,
+            )
+
+    # Overlay contacts
+    contacts = (fpt_summary or {}).get("fpt_contacts", [])
+    for c in contacts:
+        c_depth = c.get("tvdss_p50")
+        if c_depth and np.isfinite(c_depth):
+            ax1.axhline(
+                c_depth,
+                color="#b91c1c",
+                linestyle="-.",
+                lw=1.5,
+                label=f"{c.get('contact_type')}: {c_depth:.1f} m",
+                zorder=3,
+            )
+            ax2.axhline(c_depth, color="#b91c1c", linestyle="-.", lw=1.5, zorder=3)
+
+    ax1.invert_yaxis()
+    ax1.set_xlabel("Formation Pressure (psia)", fontsize=9.5, fontweight="bold")
+    ax1.set_ylabel("Depth (m TVDss)", fontsize=9.5, fontweight="bold")
+    ax1.set_title(
+        "Formation Pressure vs. TVDss & Fluid Regimes", fontsize=10.0, fontweight="bold"
+    )
+    ax1.grid(True, linestyle=":", alpha=0.55)
+    ax1.legend(loc="lower left", fontsize=7.5)
+
+    # Panel 2: Excess Pressure / Hydraulic Head
+    ref_grad_psi_m = 1.4206  # 0.433 psi/ft normal hydrostatic reference
+    for wn in wells:
+        w_val = sorted(
+            [p for p in valid_points if p["well_name"] == wn],
+            key=lambda x: float(x["tvdss"]),
+        )
+        if w_val:
+            z_pts = [float(p["tvdss"]) for p in w_val]
+            p_pts = [float(p["pressure"]) for p in w_val]
+            p_excess = [
+                p - ref_grad_psi_m * z for p, z in zip(p_pts, z_pts, strict=False)
+            ]
+            color = well_color_map[wn]
+            ax2.plot(
+                p_excess,
+                z_pts,
+                color=color,
+                linestyle="-",
+                marker="o",
+                markersize=5,
+                lw=1.2,
+                alpha=0.85,
+                label=wn,
+            )
+
+    ax2.invert_yaxis()
+    ax2.set_xlabel(
+        "Excess Pressure P* (psi relative to hydrostatic)",
+        fontsize=9.5,
+        fontweight="bold",
+    )
+    ax2.set_ylabel("Depth (m TVDss)", fontsize=9.5, fontweight="bold")
+    ax2.set_title(
+        "Excess Pressure & Hydraulic Continuity Track", fontsize=10.0, fontweight="bold"
+    )
+    ax2.grid(True, linestyle=":", alpha=0.55)
+    ax2.legend(loc="lower left", fontsize=8.0)
+
+    fig.suptitle(
+        "Formation Pressure Tester (RFT/MDT/XPT) Fluid Gradients & Hydraulic Equilibrium",
+        fontsize=11.5,
+        fontweight="bold",
+        color="#0f172a",
+        y=0.98,
+    )
+    return _save_fig(fig, "fig_6_2_fpt_pressure_plot.png", output_dir, url_prefix)

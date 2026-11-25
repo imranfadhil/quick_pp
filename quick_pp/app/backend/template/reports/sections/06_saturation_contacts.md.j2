@@ -92,3 +92,42 @@ Accurate delineation of fluid contacts is fundamental to volumetric in-place est
 > [!NOTE]
 > Discrete single-well fluid contact markers (GUT/GDT/OUT/ODT/WUT/OWC/GOC/FWL) have not yet been extracted or committed to ancillary data for this project. Global saturation model uses $FWL = {{ "%.1f"|format(sw_params.fwl) }}\text{ m TVDss}$.
 {% endif %}
+
+{% if fpt_summary and fpt_summary.has_data %}
+### {{ sec_num }}.3 Formation Pressure Testing (RFT/MDT/XPT) & Fluid Gradient Regimes
+
+Formation Pressure Tester (RFT/MDT/XPT) data were gathered across the evaluated wells to establish in-situ reservoir pressure regimes, verify vertical fluid communication, and determine independent fluid contact datums from hydrostatic gradient intersections.
+
+#### Table {{ sec_num }}.3: Multi-Well Formation Pressure Regimes & Fitted Fluid Gradients
+
+| Well Name | Total Stations | Valid Stations | Depth Range (m TVDss) | Formation Pressure (psia) | Mobility Range (mD/cP) | Hydrostatic Regime |
+| :--- | :---: | :---: | :---: | :---: | :---: | :--- |
+{% for w in fpt_summary.well_fpt_rows %}
+| **{{ w.well_name }}** | {{ w.total_count }} | {{ w.valid_count }} | {{ w.depth_range }} | {{ w.pressure_range }} | {{ w.mobility_range }} | {{ w.overpressure_regime }} |
+{% endfor %}
+
+{% if fpt_summary.fpt_gradient_rows and fpt_summary.fpt_gradient_rows|length > 0 %}
+**Fitted Fluid Pressure Gradients & In-Situ Densities:**
+
+| Zone / Reservoir Segment | Inferred Phase | Pressure Gradient (psi/ft) | In-Situ Density (g/cc) | Datum Pressure @ FWL (psia) | $R^2$ | Stations ($n$) | TVDss Depth Range |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+{% for g in fpt_summary.fpt_gradient_rows %}
+| **{{ g.zone or "Target Reservoir" }}** | **{{ g.fluid_type }}** | {{ "%.4f"|format(g.gradient_psi_ft) }} | {{ "%.3f"|format(g.density_gcc) }} | {{ "%.1f"|format(g.datum_pressure) if g.datum_pressure is defined else "—" }} | {{ "%.3f"|format(g.r_squared) if g.r_squared is defined else "—" }} | {{ g.n_points }} | {{ g.tvdss_range }} |
+{% endfor %}
+{% endif %}
+
+{% if fpt_summary.fpt_contacts and fpt_summary.fpt_contacts|length > 0 %}
+#### Table {{ sec_num }}.4: Pressure-Gradient Contact Reconciliation vs. Log/Capillary Contacts
+
+| Contact Type | FPT TVDss P50 (m) | FPT Bracket P10–P90 (m) | Log / Capillary TVDss (m) | Contact Reconciliation Delta ($\Delta\text{TVDss}$) | Audit Reconciliation Status |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+{% for c in fpt_summary.fpt_contacts %}
+| **{{ c.contact_type }}** | **{{ "%.1f"|format(c.tvdss_p50) }}** | {{ "%.1f"|format(c.tvdss_p10) }} – {{ "%.1f"|format(c.tvdss_p90) }} | {{ "%.1f"|format(sw_params.fwl) }} | {{ "%+.1f"|format(c.delta_log_tvdss) if c.delta_log_tvdss is defined else "0.0" }} m | **{{ c.status or "✓ RECONCILED" }}** |
+{% endfor %}
+{% endif %}
+
+{% if assets.fpt_pressure_plot %}
+
+![Figure {{ sec_num }}.2: Multi-Well Formation Pressure vs. TVDss & Fluid Gradient Regimes]({{ assets.fpt_pressure_plot }})
+{% endif %}
+{% endif %}
