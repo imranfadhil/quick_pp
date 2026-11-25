@@ -462,6 +462,7 @@ class WellDataState {
 	// Reservoir summary table & metrics from latest run
 	zonalSummary = $state.raw<Record<string, any>[]>([]);
 	zonalSummarySource = $state<{ projectId: string; wellId: string } | null>(null);
+	ressumCutoffsSensitivity = $state<any>(null);
 	poroCoreMetrics = $state<CoreComparisonMetrics | null>(null);
 	/** Provenance of the applied grain-density correlation in the last porosity run. */
 	poroGrainDensityProvenance = $state<Record<string, any> | null>(null);
@@ -1402,6 +1403,7 @@ class WellDataState {
 		this.permeabilityComparison = null;
 		this.porosityComparisonError = null;
 		this.permeabilityComparisonError = null;
+		this.ressumCutoffsSensitivity = null;
 		this.cancelPendingWellLoadTask();
 		this.isLoading = true;
 		this.lastError = null;
@@ -3034,6 +3036,7 @@ class WellDataState {
 			if (groupSet.has('ressum') || clearedSet.has('PHIT') || clearedSet.has('SWT')) {
 				this.zonalSummary = [];
 				this.zonalSummarySource = null;
+				this.ressumCutoffsSensitivity = null;
 			}
 			if (groupSet.has('litho_poro') || clearedSet.has('PHIT')) {
 				this.poroCoreMetrics = null;

@@ -2181,16 +2181,22 @@ class WorkspaceMultiWellVolumetricsRequest(WorkspaceFilterBase):
     )
 
 
-class WorkspaceMultiWellCutoffsSensitivityRequest(WorkspaceFilterBase):
+class WorkspaceCutoffsSensitivityRequest(WorkspaceFilterBase):
     percentile: float = Field(
         95.0,
         ge=50.0,
         le=99.9,
         description="Target recovery percentile of maximum hydrocarbon pore volume (HCPV) (PRMS recommended: 95%)",
     )
+
+
+class WorkspaceMultiWellCutoffsSensitivityRequest(WorkspaceCutoffsSensitivityRequest):
     well_names: Optional[List[str]] = Field(
         None, description="Optional subset of well names to include"
     )
+
+
+WorkspaceWellCutoffsSensitivityRequest = WorkspaceCutoffsSensitivityRequest
 
 
 class WorkspaceRockTypingRequest(BaseModel):
@@ -7923,12 +7929,65 @@ def workspace_reservoir_summary(
                 "cpi": dataframe_to_columnar(unc_res["cpi_df"][cpi_cols].round(4)),
             }
 
+        # Empirical cutoffs sensitivity analysis (PRMS / SEC HCPV recovery)
+        try:
+            from quick_pp.ressum import cutoffs_analysis
+
+            cutoffs_sens_data = cutoffs_analysis(
+                df,
+                percentile=95.0,
+                plot=False,
+                return_dict=True,
+            )
+            response["cutoffs_sensitivity"] = _sanitize_for_json(cutoffs_sens_data)
+        except Exception as exc:
+            logger.debug(f"cutoffs_analysis in reservoir_summary skipped: {exc}")
+
         return response
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Reservoir summary calculation failed: {e}"
+        ) from e
+
+
+@router.post(
+    "/wells/{well_name}/cutoffs_sensitivity",
+    summary="Run empirical cutoffs sensitivity analysis (Vsh, Phi, Sw vs HCPV & Net Pay) for a single well",
+)
+def workspace_well_cutoffs_sensitivity(
+    project_id: int, well_name: str, req: WorkspaceWellCutoffsSensitivityRequest
+) -> Dict[str, Any]:
+    """Perform cutoffs sensitivity analysis on a single well evaluated logs using PRMS HCPV recovery percentiles."""
+    try:
+        df = _get_filtered_well_df(
+            project_id, well_name, req.min_depth, req.max_depth, req.zones
+        )
+        df = _merge_request_fallback_curves(df)
+        if df.empty:
+            raise ValueError(f"No valid data found for well '{well_name}'.")
+
+        from quick_pp.ressum import cutoffs_analysis
+
+        sens = cutoffs_analysis(
+            df,
+            percentile=req.percentile,
+            plot=False,
+            return_dict=True,
+        )
+        return _sanitize_for_json(sens)
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        logger.error(
+            f"Failed cutoffs sensitivity analysis for well {well_name}: {e}",
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500, detail=f"Cutoffs sensitivity analysis failed: {e}"
         ) from e
 
 

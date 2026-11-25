@@ -185,3 +185,43 @@ def test_cutoffs_sensitivity_endpoint_and_return(test_setup):
     assert len(sens["phi_sensitivity"]) > 0
     assert len(sens["sw_sensitivity"]) > 0
 
+
+def test_single_well_cutoffs_sensitivity_endpoint(test_setup, monkeypatch):
+    """Verify single-well cutoffs sensitivity endpoint returns PRMS optimal cutoffs and sweep curves."""
+    project_id = test_setup
+    depths = np.linspace(2400.0, 2450.0, 50)
+    well_df = pd.DataFrame(
+        {
+            "DEPTH": depths,
+            "WELL_NAME": ["Well-1"] * len(depths),
+            "VCLAY": [0.15] * len(depths),
+            "PHIT": [0.22] * len(depths),
+            "SWT": [0.35] * len(depths),
+            "ZONES": ["Zone A"] * len(depths),
+        }
+    )
+    monkeypatch.setattr(ws_service, "_get_filtered_well_df", lambda *a, **kw: well_df.copy())
+    req = ws_service.WorkspaceWellCutoffsSensitivityRequest(percentile=95.0)
+    sens = ws_service.workspace_well_cutoffs_sensitivity(project_id, "Well-1", req)
+
+    assert "optimal_cutoffs" in sens
+    assert "vsh_sensitivity" in sens
+    assert "phi_sensitivity" in sens
+    assert "sw_sensitivity" in sens
+    assert sens["percentile"] == 95.0
+    assert sens["optimal_cutoffs"]["vshale"] > 0
+    assert sens["optimal_cutoffs"]["phit"] > 0
+    assert sens["optimal_cutoffs"]["swt"] > 0
+    assert len(sens["vsh_sensitivity"]) > 0
+    assert len(sens["phi_sensitivity"]) > 0
+    assert len(sens["sw_sensitivity"]) > 0
+
+    # Also verify workspace_reservoir_summary automatically attaches cutoffs_sensitivity
+    res_req = ws_service.WorkspaceReservoirSummaryRequest(
+        cut_offs={"VSHALE": 0.4, "PHIT": 0.05, "SWT": 0.8}
+    )
+    res_summary = ws_service.workspace_reservoir_summary(project_id, "Well-1", res_req)
+    assert "cutoffs_sensitivity" in res_summary
+    assert "optimal_cutoffs" in res_summary["cutoffs_sensitivity"]
+    assert len(res_summary["cutoffs_sensitivity"]["vsh_sensitivity"]) > 0
+
