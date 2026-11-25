@@ -595,17 +595,31 @@ export interface MultiWellVolumetricResult {
 	well_summary: Array<{
 		well_name: string;
 		zone: string;
+		flag?: 'ALL' | 'ROCK' | 'RES' | 'PAY';
 		top: number;
 		bottom: number;
 		gross: number;
+		net?: number;
+		ntg?: number;
 		net_res: number;
 		ntg_res: number;
 		net_pay: number;
 		ntg_pay: number;
+		net_oil_pay?: number;
+		net_gas_pay?: number;
+		phit?: number;
 		phie: number;
 		sw: number;
+		sw_shf?: number | null;
 		perm_geom: number;
 		hcpt: number;
+		curves_used?: {
+			vsh?: string;
+			phi?: string;
+			sw?: string;
+			perm?: string;
+			shf?: string | null;
+		};
 	}>;
 	zonal_summary: ZonalVolumetricSummary[];
 	field_totals: FieldVolumetricTotals;
@@ -616,6 +630,37 @@ export interface MultiWellVolumetricResult {
 		source: string;
 	};
 	assumptions_register?: AssumptionsRegister;
+	cutoffs_sensitivity?: {
+		optimal_cutoffs: {
+			vshale: number;
+			phit: number;
+			swt: number;
+		};
+		percentile: number;
+		total_gross: number;
+		total_hcpv: number;
+		vsh_sensitivity: Array<{
+			cutoff: number;
+			hcpv: number;
+			hcpv_pct: number;
+			net_pay: number;
+			ntg: number;
+		}>;
+		phi_sensitivity: Array<{
+			cutoff: number;
+			hcpv: number;
+			hcpv_pct: number;
+			net_pay: number;
+			ntg: number;
+		}>;
+		sw_sensitivity: Array<{
+			cutoff: number;
+			hcpv: number;
+			hcpv_pct: number;
+			net_pay: number;
+			ntg: number;
+		}>;
+	};
 }
 
 export interface VolumetricZoneParamConfig {

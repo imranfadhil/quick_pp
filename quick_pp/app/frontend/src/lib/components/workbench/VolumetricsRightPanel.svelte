@@ -30,13 +30,13 @@
 	function exportZonalCsv() {
 		const res = projectData.volumetricResult;
 		if (!res?.zonal_summary?.length) return;
-		const rows = res.zonal_summary.map((z) => ({
+		const rows = res.zonal_summary.map((z: any) => ({
 			Zone: z.zone,
 			Wells: z.well_count,
 			Gross_m: z.mean_gross,
 			Net_Pay_m: z.mean_net_pay,
 			NTG_pay: z.ntg_pay,
-			PHIE_pay: z.mean_phie,
+			PHIT_pay: z.mean_phit ?? z.mean_phie,
 			Sw_pay: z.mean_sw,
 			HCPT_m: z.mean_hcpt,
 			Mode: z.mode,
@@ -57,10 +57,33 @@
 	function exportWellMatrixCsv() {
 		const res = projectData.volumetricResult;
 		if (!res?.well_summary?.length) return;
+		const hasShf = res.well_summary.some((w: any) => w.sw_shf !== undefined && w.sw_shf !== null);
+		const rows = res.well_summary.map((w: any) => {
+			const r: Record<string, any> = {
+				well_name: w.well_name,
+				zone: w.zone,
+				flag: w.flag ?? 'PAY',
+				top: w.top,
+				bottom: w.bottom,
+				gross: w.gross,
+				net: w.net ?? w.net_pay ?? 0,
+				ntg: w.ntg ?? w.ntg_pay ?? 0,
+				net_oil_pay: w.net_oil_pay ?? 0,
+				net_gas_pay: w.net_gas_pay ?? 0,
+				phit: w.phit ?? w.phie ?? 0,
+				sw: w.sw ?? 0
+			};
+			if (hasShf) {
+				r.sw_shf = w.sw_shf ?? '';
+			}
+			r.perm_geom = w.perm_geom ?? 0;
+			r.hcpt = w.hcpt ?? 0;
+			return r;
+		});
 		downloadCsv(
 			'MultiWell_Zonal_Well_Matrix.csv',
-			Object.keys(res.well_summary[0]),
-			res.well_summary
+			Object.keys(rows[0]),
+			rows
 		);
 	}
 </script>
@@ -210,7 +233,7 @@
 									<th class="px-1 text-center font-semibold">Wells</th>
 									<th class="px-1.5 text-right font-semibold">Net Pay (m)</th>
 									<th class="px-1.5 text-right font-semibold">NTG</th>
-									<th class="px-1.5 text-right font-semibold">Φe</th>
+									<th class="px-1.5 text-right font-semibold">Φt</th>
 									<th class="px-1.5 text-right font-semibold">Sw</th>
 									{#if isOil}
 										<th class="px-1.5 text-right font-semibold bg-amber-50/50">1P</th>
@@ -276,31 +299,65 @@
 		{:else if mv.rightTab === 'well_matrix'}
 			<div class="p-2">
 				{#if activeResult?.well_summary?.length}
+					{@const hasShf = activeResult.well_summary.some((w: any) => w.sw_shf !== undefined && w.sw_shf !== null)}
 					<div class="overflow-x-auto border border-[var(--border-hairline)] rounded-xs">
 						<table class="w-full border-collapse text-left text-xs">
 							<thead class="bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
 								<tr class="h-6 border-b border-[var(--border-hairline)]">
 									<th class="px-2 font-semibold">Well</th>
 									<th class="px-1.5 font-semibold">Zone</th>
+									<th class="px-1 text-center font-semibold">Flag</th>
 									<th class="px-1.5 text-right font-semibold">Gross (m)</th>
-									<th class="px-1.5 text-right font-semibold">Net Pay (m)</th>
+									<th class="px-1.5 text-right font-semibold">Net (m)</th>
 									<th class="px-1.5 text-right font-semibold">NTG</th>
-									<th class="px-1.5 text-right font-semibold">Φe</th>
+									<th class="px-1.5 text-right font-semibold">Φt</th>
 									<th class="px-1.5 text-right font-semibold">Sw</th>
+									{#if hasShf}
+										<th class="px-1.5 text-right font-semibold text-purple-700 bg-purple-50/50">Sw SHF</th>
+									{/if}
+									<th class="px-1.5 text-right font-semibold">K (mD)</th>
 									<th class="px-1.5 text-right font-semibold">HCPT (m)</th>
+									<th class="px-1.5 text-left font-semibold">Curves Used</th>
 								</tr>
 							</thead>
 							<tbody class="divide-y divide-[var(--border-hairline)]">
 								{#each activeResult.well_summary as w}
+									{@const flagName = w.flag ?? 'PAY'}
 									<tr class="h-6 hover:bg-[var(--bg-subtle)]/50">
 										<td class="px-2 font-semibold text-slate-800">{w.well_name}</td>
 										<td class="px-1.5 font-medium">{w.zone}</td>
+										<td class="px-1 text-center">
+											<span class="inline-block rounded-xs px-1 py-0.2 text-[9px] font-bold {
+												flagName === 'PAY'
+													? 'bg-emerald-100 text-emerald-800'
+													: flagName === 'RES'
+													? 'bg-blue-100 text-blue-800'
+													: flagName === 'ROCK'
+													? 'bg-amber-100 text-amber-800'
+													: 'bg-slate-100 text-slate-700'
+											}">
+												{flagName}
+											</span>
+										</td>
 										<td class="mono-num px-1.5 text-right">{fmtNum(w.gross, 1)}</td>
-										<td class="mono-num px-1.5 text-right font-medium text-blue-700">{fmtNum(w.net_pay, 1)}</td>
-										<td class="mono-num px-1.5 text-right">{fmtNum(w.ntg_pay, 2)}</td>
-										<td class="mono-num px-1.5 text-right">{fmtNum(w.phie, 3)}</td>
+										<td class="mono-num px-1.5 text-right font-medium {flagName === 'PAY' ? 'text-blue-700' : ''}">{fmtNum(w.net ?? w.net_pay, 1)}</td>
+										<td class="mono-num px-1.5 text-right">{fmtNum(w.ntg ?? w.ntg_pay, 2)}</td>
+										<td class="mono-num px-1.5 text-right">{fmtNum(w.phit ?? w.phie, 3)}</td>
 										<td class="mono-num px-1.5 text-right">{fmtNum(w.sw, 3)}</td>
-										<td class="mono-num px-1.5 text-right font-bold text-emerald-800">{fmtNum(w.hcpt, 2)}</td>
+										{#if hasShf}
+											<td class="mono-num px-1.5 text-right text-purple-800 bg-purple-50/30">{w.sw_shf !== undefined && w.sw_shf !== null ? fmtNum(w.sw_shf, 3) : '—'}</td>
+										{/if}
+										<td class="mono-num px-1.5 text-right">{fmtNum(w.perm_geom, 1)}</td>
+										<td class="mono-num px-1.5 text-right font-bold {flagName === 'PAY' ? 'text-emerald-800' : 'text-slate-500'}">{fmtNum(w.hcpt, 2)}</td>
+										<td class="px-1.5 text-[9.5px] font-mono text-[var(--text-secondary)]">
+											{#if w.curves_used}
+												<span class="rounded-xs bg-[var(--bg-subtle)] px-1 py-0.5 border border-[var(--border-hairline)]" title="Vshale: {w.curves_used.vsh}&#10;Porosity: {w.curves_used.phi}&#10;Saturation: {w.curves_used.sw}&#10;Perm: {w.curves_used.perm}&#10;SHF: {w.curves_used.shf || 'None'}">
+													{w.curves_used.phi} · {w.curves_used.sw}
+												</span>
+											{:else}
+												—
+											{/if}
+										</td>
 									</tr>
 								{/each}
 							</tbody>

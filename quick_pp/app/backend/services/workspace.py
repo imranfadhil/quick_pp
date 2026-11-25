@@ -2181,6 +2181,18 @@ class WorkspaceMultiWellVolumetricsRequest(WorkspaceFilterBase):
     )
 
 
+class WorkspaceMultiWellCutoffsSensitivityRequest(WorkspaceFilterBase):
+    percentile: float = Field(
+        95.0,
+        ge=50.0,
+        le=99.9,
+        description="Target recovery percentile of maximum hydrocarbon pore volume (HCPV) (PRMS recommended: 95%)",
+    )
+    well_names: Optional[List[str]] = Field(
+        None, description="Optional subset of well names to include"
+    )
+
+
 class WorkspaceRockTypingRequest(BaseModel):
     well_names: Optional[List[str]] = Field(
         None, description="Optional subset of well names to include"
@@ -12048,18 +12060,7 @@ def workspace_stick_plot(
                         pd.to_numeric(wdf_sorted["VOIL"], errors="coerce").fillna(0.0)
                         > 0.01
                     ).astype(int)
-                else:
-                    oil_flag_s = ((bvo_s > 0.005) & (gas_flag_s == 0)).astype(int)
 
-                bvg_s = bvo_s.where(gas_flag_s == 1, 0.0)
-                bvo_pure_s = bvo_s.where(gas_flag_s == 0, 0.0)
-
-                wdf_sorted["GAS_FLAG"] = gas_flag_s
-                wdf_sorted["OIL_FLAG"] = oil_flag_s
-                wdf_sorted["BVG"] = bvg_s
-                wdf_sorted["BVO_PURE"] = bvo_pure_s
-
-                # Extract fluid contacts & map MD -> TVD
                 contacts_raw = anc.get("fluid_contacts")
                 if isinstance(contacts_raw, pd.DataFrame):
                     contacts_list = (
@@ -12069,7 +12070,7 @@ def workspace_stick_plot(
                     )
                 elif isinstance(contacts_raw, list):
                     contacts_list = contacts_raw
-                else:
+
                     contacts_list = []
 
                 contact_items: List[Dict[str, Any]] = []
@@ -12203,6 +12204,8 @@ def workspace_stick_plot(
                 wdf_sorted["SWT"] = swt_s
                 wdf_sorted["BVO"] = bvo_s
                 wdf_sorted["BVOH"] = bvoh_s
+                wdf_sorted["GAS_FLAG"] = gas_flag_s
+                wdf_sorted["OIL_FLAG"] = oil_flag_s
                 try:
                     wdf_sorted = update_fluid_contacts(wdf_sorted, contact_dict_tvd)
                 except Exception:
@@ -17030,6 +17033,46 @@ def _calc_dist_summary(
 
 
 @router.post(
+    "/multi_well_volumetrics/cutoffs_sensitivity",
+    summary="Run empirical cutoffs sensitivity analysis (Vsh, Phi, Sw vs HCPV & Net Pay) across project wells",
+)
+def workspace_multi_well_cutoffs_sensitivity(
+    project_id: int, req: WorkspaceMultiWellCutoffsSensitivityRequest
+) -> Dict[str, Any]:
+    """Perform cutoffs sensitivity analysis across multi-well evaluated logs using PRMS HCPV recovery percentiles."""
+    try:
+        well_dfs = _load_multi_well_dfs(
+            project_id,
+            well_names=req.well_names,
+            min_depth=req.min_depth,
+            max_depth=req.max_depth,
+            zones=req.zones,
+        )
+        if not well_dfs:
+            raise ValueError("No wells found or selected in project.")
+
+        merged_df = pd.concat(well_dfs, ignore_index=True)
+        from quick_pp.ressum import cutoffs_analysis
+
+        sens = cutoffs_analysis(
+            merged_df,
+            percentile=req.percentile,
+            plot=False,
+            return_dict=True,
+        )
+        return _sanitize_for_json(sens)
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        logger.error(f"Failed cutoffs sensitivity analysis: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500, detail=f"Cutoffs sensitivity analysis failed: {e}"
+        ) from e
+
+
+@router.post(
     "/multi_well_volumetrics",
     summary="Run multi-well volumetric assessment and Latin Hypercube Monte Carlo uncertainty across project wells",
 )
@@ -17059,8 +17102,11 @@ def workspace_multi_well_volumetrics(
         sw_cut = float(req.cut_offs.get("SWT", req.cut_offs.get("SWE", 0.80)))
         cutoffs_dict = {"VSHALE": vsh_cut, "PHIT": phi_cut, "SWT": sw_cut}
 
-        # 0. Load project ancillary data to inherit SHF FWL and fluid contacts
+        # 0. Load SHF parameters, module_params, and well fluid contacts to inherit Step 5 SHF & FPT contacts
         anc_data: Dict[str, Any] = {}
+        shf_mp_params: Dict[str, Any] = {}
+        shf_mp_fits: Dict[str, Any] = {}
+        well_contacts_map: Dict[str, Dict[str, float]] = {}
         try:
             with get_db() as session:
                 proj_inst = db_objects.Project.load(session, project_id=project_id)
@@ -17071,49 +17117,123 @@ def workspace_multi_well_volumetrics(
                 )
                 if not isinstance(anc_data, dict):
                     anc_data = {}
+
+                # Query database fluid contacts across project wells
+                try:
+                    all_wns = proj_inst.get_well_names()
+                    for wn_item in all_wns:
+                        try:
+                            w_obj = proj_inst.get_well(wn_item)
+                            fc_df = w_obj.get_fluid_contacts()
+                            if isinstance(fc_df, pd.DataFrame) and not fc_df.empty:
+                                for _, fc_row in fc_df.iterrows():
+                                    c_t = str(fc_row.get("contact_type") or fc_row.get("name") or "").strip().upper()
+                                    c_d = fc_row.get("depth")
+                                    c_z = str(fc_row.get("zone") or "").strip()
+                                    if c_t and c_d is not None and pd.notna(c_d):
+                                        well_contacts_map.setdefault(wn_item, {})[c_t] = float(c_d)
+                                        if c_z:
+                                            well_contacts_map.setdefault(c_z, {})[c_t] = float(c_d)
+                        except Exception:
+                            continue
+                except Exception:
+                    pass
         except Exception:
             pass
 
+        # Load saved project module_params (where Step 5 SHF saves fwl, fwlByZone, fluidSystem, fits)
+        try:
+            mp_all, _ = _load_project_module_params(project_id)
+            shf_mp_dict = mp_all.get("shf") if isinstance(mp_all, dict) else {}
+            if isinstance(shf_mp_dict, dict) and shf_mp_dict:
+                # Look for matching zone entry or 'ALL' or first available entry
+                entry_candidates = []
+                if req.zones:
+                    for zk in req.zones:
+                        entry_candidates.append(zk)
+                        entry_candidates.append(f"zone:{zk}")
+                entry_candidates.extend(["all", "ALL", "default"])
+                chosen_entry = None
+                for cand in entry_candidates:
+                    if cand in shf_mp_dict:
+                        chosen_entry = shf_mp_dict[cand]
+                        break
+                if not chosen_entry and shf_mp_dict:
+                    chosen_entry = next(iter(shf_mp_dict.values()))
+                if isinstance(chosen_entry, dict):
+                    ep = chosen_entry.get("params") or {}
+                    if isinstance(ep, dict):
+                        shf_mp_params = ep.get("shfParams") or {}
+                        shf_mp_fits = ep.get("fits") or chosen_entry.get("fits") or {}
+        except Exception:
+            pass
+
+        # Combine SHF parameters prioritizing request payload, then saved module_params, then ancillary
+        req_shf = req.shf_params or {}
         shf_anc = anc_data.get("shf_params") or {}
         shf_module_anc = anc_data.get("shf") or {}
+
+        shf_global_fwl = (
+            req_shf.get("fwl")
+            if req_shf.get("fwl") is not None
+            else (shf_mp_params.get("fwl") if shf_mp_params.get("fwl") is not None else shf_anc.get("fwl"))
+        )
+        if shf_global_fwl is not None:
+            shf_global_fwl = float(shf_global_fwl)
+
+        shf_zonal_fwl: Dict[str, float] = {}
+        for z_src in (shf_anc.get("fwlByZone"), shf_mp_params.get("fwlByZone"), req_shf.get("fwl_by_zone")):
+            if isinstance(z_src, dict):
+                for zk, zv in z_src.items():
+                    if zv is not None and pd.notna(zv):
+                        try:
+                            shf_zonal_fwl[str(zk).strip()] = float(zv)
+                        except (ValueError, TypeError):
+                            pass
+
+        shf_fluid_system = (
+            req_shf.get("fluid_system")
+            or shf_mp_params.get("fluidSystem")
+            or shf_anc.get("fluid_system")
+            or ("gas" if req.reservoir_type == "gas_only" else ("oil" if req.reservoir_type == "oil_only" else "auto"))
+        )
+
         shf_fits_anc = (
-            shf_anc.get("fits")
+            req_shf.get("fits")
+            or shf_mp_fits
+            or shf_anc.get("fits")
             or (shf_module_anc.get("fits") if isinstance(shf_module_anc, dict) else {})
             or {}
         )
         shf_a_default = 0.35
         shf_b_default = -0.45
         shf_swirr_default = 0.12
-        shf_ift_default = float(shf_anc.get("ift", 30.0))
-        shf_theta_default = float(shf_anc.get("theta", 30.0))
-        shf_gw_default = float(shf_anc.get("gw", 1.05))
-        shf_ghc_default = float(shf_anc.get("ghc", 0.80 if req.compute_oil else 0.20))
+        shf_ift_default = float(req_shf.get("ift") or shf_mp_params.get("ift") or shf_anc.get("ift", 30.0))
+        shf_theta_default = float(req_shf.get("theta") or shf_mp_params.get("theta") or shf_anc.get("theta", 30.0))
+        shf_gw_default = float(req_shf.get("gw") or shf_mp_params.get("gw") or shf_anc.get("gw", 1.05))
+        shf_ghc_default = float(
+            req_shf.get("ghc") or shf_mp_params.get("ghc") or shf_anc.get("ghc", 0.80 if req.compute_oil else 0.20)
+        )
 
         if isinstance(shf_fits_anc, dict) and shf_fits_anc:
             first_fit = next(iter(shf_fits_anc.values()), {})
             if isinstance(first_fit, dict):
                 shf_a_default = float(first_fit.get("a", shf_a_default))
                 shf_b_default = float(first_fit.get("b", shf_b_default))
-        if shf_anc.get("swirr") is not None:
+        if req_shf.get("a") is not None:
+            shf_a_default = float(req_shf["a"])
+        if req_shf.get("b") is not None:
+            shf_b_default = float(req_shf["b"])
+        if req_shf.get("swirr") is not None:
+            shf_swirr_default = float(req_shf["swirr"])
+        elif shf_anc.get("swirr") is not None:
             shf_swirr_default = float(shf_anc["swirr"])
         elif shf_anc.get("swirr_params", {}).get("mean_swirr") is not None:
             shf_swirr_default = float(shf_anc["swirr_params"]["mean_swirr"])
 
-        if req.shf_params:
-            shf_a_default = float(req.shf_params.get("a", shf_a_default))
-            shf_b_default = float(req.shf_params.get("b", shf_b_default))
-            shf_swirr_default = float(req.shf_params.get("swirr", shf_swirr_default))
-            shf_ift_default = float(req.shf_params.get("ift", shf_ift_default))
-            shf_theta_default = float(req.shf_params.get("theta", shf_theta_default))
-            shf_gw_default = float(req.shf_params.get("gw", shf_gw_default))
-            shf_ghc_default = float(req.shf_params.get("ghc", shf_ghc_default))
-
+        # Inherited database fluid contacts
         contacts_anc_raw = anc_data.get("fluid_contacts")
         inherited_contacts: Dict[str, float] = {}
-
-        shf_global_fwl = shf_anc.get("fwl")
-        shf_zonal_fwl = shf_anc.get("fwlByZone") or {}
-
         if isinstance(contacts_anc_raw, list):
             for c in contacts_anc_raw:
                 if isinstance(c, dict):
@@ -17130,92 +17250,283 @@ def workspace_multi_well_volumetrics(
                 if c_name and c_tvd is not None and pd.notna(c_tvd):
                     inherited_contacts[c_name] = float(c_tvd)
 
+        # Merge well-level database contacts into inherited_contacts if not present
+        for _, w_c_dict in well_contacts_map.items():
+            for c_k, c_v in w_c_dict.items():
+                if c_k not in inherited_contacts:
+                    inherited_contacts[c_k] = c_v
+
+        def _align_contact_depth(c_val: Optional[float], ref_arr: np.ndarray) -> Optional[float]:
+            """Ensure contact TVDSS sign matches the depth array sign (subsea negative vs absolute positive)."""
+            if c_val is None or len(ref_arr) == 0:
+                return c_val
+            med = float(np.median(ref_arr))
+            if med > 0 and c_val < 0:
+                return abs(c_val)
+            elif med < 0 and c_val > 0:
+                return -abs(c_val)
+            return c_val
+
         def _get_zone_contacts(z_n: str) -> Dict[str, Optional[float]]:
             z_override = req.contacts_by_zone.get(z_n) or {}
-            owc_val = (
-                z_override.get("owc") if z_override.get("owc") is not None else req.owc
+            if req.contact_source == "custom":
+                owc_val = z_override.get("owc") if z_override.get("owc") is not None else req.owc
+                goc_val = z_override.get("goc") if z_override.get("goc") is not None else req.goc
+                gwc_val = z_override.get("gwc") if z_override.get("gwc") is not None else req.gwc
+                return {"owc": owc_val, "goc": goc_val, "gwc": gwc_val}
+
+            # INHERIT (Step 5 SHF & FPT) MODE:
+            # 1. Check zone-specific override if explicitly provided
+            owc_val = z_override.get("owc")
+            goc_val = z_override.get("goc")
+            gwc_val = z_override.get("gwc")
+
+            # 2. Check zonal FWL from Step 5 SHF
+            z_fwl = shf_zonal_fwl.get(z_n)
+            if z_fwl is None:
+                z_fwl = shf_global_fwl
+
+            # Check database contacts for this zone
+            z_db = well_contacts_map.get(z_n, {})
+            if z_fwl is None:
+                z_fwl = z_db.get("FWL") or inherited_contacts.get("FWL")
+
+            if goc_val is None:
+                goc_val = z_db.get("GOC") or inherited_contacts.get("GOC")
+
+            is_gas = (
+                req.reservoir_type == "gas_only"
+                or shf_fluid_system in ("gas", "gas_water")
+                or (req.compute_gas and not req.compute_oil)
             )
-            goc_val = (
-                z_override.get("goc") if z_override.get("goc") is not None else req.goc
-            )
-            gwc_val = (
-                z_override.get("gwc") if z_override.get("gwc") is not None else req.gwc
+            is_oil = (
+                req.reservoir_type == "oil_only"
+                or shf_fluid_system in ("oil", "oil_water")
+                or (req.compute_oil and not req.compute_gas)
             )
 
-            if req.contact_source == "inherit":
-                if owc_val is None and gwc_val is None:
-                    if z_n in shf_zonal_fwl and shf_zonal_fwl[z_n] is not None:
-                        owc_val = float(shf_zonal_fwl[z_n])
-                    elif shf_global_fwl is not None:
-                        owc_val = float(shf_global_fwl)
-                    elif "OWC" in inherited_contacts:
-                        owc_val = inherited_contacts["OWC"]
-                    elif "GWC" in inherited_contacts:
-                        gwc_val = inherited_contacts["GWC"]
-
-                if goc_val is None and "GOC" in inherited_contacts:
-                    goc_val = inherited_contacts["GOC"]
+            if is_gas:
+                if gwc_val is None:
+                    gwc_val = (
+                        z_fwl
+                        or z_db.get("GWC")
+                        or inherited_contacts.get("GWC")
+                        or z_db.get("OWC")
+                        or inherited_contacts.get("OWC")
+                    )
+            elif is_oil:
+                if owc_val is None:
+                    owc_val = z_fwl or z_db.get("OWC") or inherited_contacts.get("OWC")
+            else:
+                # Dual / Auto regime:
+                if goc_val is not None:
+                    if owc_val is None:
+                        owc_val = z_fwl or z_db.get("OWC") or inherited_contacts.get("OWC")
+                else:
+                    if owc_val is None and gwc_val is None:
+                        if z_fwl is not None:
+                            if req.compute_gas and not req.compute_oil:
+                                gwc_val = z_fwl
+                            else:
+                                owc_val = z_fwl
+                        elif "OWC" in inherited_contacts:
+                            owc_val = inherited_contacts["OWC"]
+                        elif "GWC" in inherited_contacts:
+                            gwc_val = inherited_contacts["GWC"]
 
             return {"owc": owc_val, "goc": goc_val, "gwc": gwc_val}
 
         # 1. Compute per-well reservoir summary
+        def _find_curve(candidates: tuple, df: pd.DataFrame) -> Optional[str]:
+            for cand in candidates:
+                for c in df.columns:
+                    if c.strip().upper() == cand.upper():
+                        if pd.to_numeric(df[c], errors="coerce").notna().any():
+                            return c
+            return None
+
         well_records: List[Dict[str, Any]] = []
         for wdf in well_dfs:
             wn = str(wdf["WELL_NAME"].iloc[0])
+
+            # Robust depth column detection
+            depth_col = next(
+                (
+                    c
+                    for c in ("DEPTH", "DEPT", "MD")
+                    if c in wdf.columns and pd.to_numeric(wdf[c], errors="coerce").notna().any()
+                ),
+                "DEPTH",
+            )
             depth = (
-                pd.to_numeric(wdf["DEPTH"], errors="coerce")
-                if "DEPTH" in wdf.columns
+                pd.to_numeric(wdf[depth_col], errors="coerce")
+                if depth_col in wdf.columns
                 else pd.Series([], dtype=float)
             )
+
+            # Robust TVDSS & TVD column detection
+            tvdss_col = next(
+                (
+                    c
+                    for c in ("TVDSS", "DEPT_TVDSS", "DEPTH_TVDSS", "TVD_SS")
+                    if c in wdf.columns and pd.to_numeric(wdf[c], errors="coerce").notna().any()
+                ),
+                None,
+            )
+            tvd_col = next(
+                (
+                    c
+                    for c in ("TVD", "DEPT_TVD", "DEPTH_TVD")
+                    if c in wdf.columns and pd.to_numeric(wdf[c], errors="coerce").notna().any()
+                ),
+                None,
+            )
             tvd = (
-                pd.to_numeric(wdf["TVDSS"], errors="coerce")
-                if "TVDSS" in wdf.columns
-                else (
-                    pd.to_numeric(wdf["TVD"], errors="coerce")
-                    if "TVD" in wdf.columns
-                    else depth
-                )
+                pd.to_numeric(wdf[tvdss_col], errors="coerce")
+                if tvdss_col is not None
+                else (pd.to_numeric(wdf[tvd_col], errors="coerce") if tvd_col is not None else depth)
             )
+
+            # Robust Vclay / Vshale curve detection (picks up saved interpreted curve from Lithology step)
+            vclay_candidates = (
+                "VCLAY",
+                "VSHALE",
+                "VCL",
+                "VSH",
+                "VWCL",
+                "VSH_GR",
+                "VSHALE_COMP",
+                "VCLAY_COMP",
+                "VSH_STEIBER",
+                "VSH_CLAVIER",
+                "VSH_LARIONOV",
+                "VSH_LINEAR",
+            )
+            vclay_col = _find_curve(vclay_candidates, wdf)
             vclay = (
-                pd.to_numeric(wdf["VCLAY"], errors="coerce")
-                if "VCLAY" in wdf.columns
-                else (
-                    pd.to_numeric(wdf["VSHALE"], errors="coerce")
-                    if "VSHALE" in wdf.columns
-                    else pd.Series(0.0, index=wdf.index, dtype=float)
-                )
-            )
-            phit = (
-                pd.to_numeric(wdf["PHIT"], errors="coerce")
-                if "PHIT" in wdf.columns
-                else (
-                    pd.to_numeric(wdf["PHIE"], errors="coerce")
-                    if "PHIE" in wdf.columns
-                    else pd.Series(np.nan, index=wdf.index, dtype=float)
-                )
-            )
-            swt = (
-                pd.to_numeric(wdf["SWT"], errors="coerce")
-                if "SWT" in wdf.columns
-                else (
-                    pd.to_numeric(wdf["SWE"], errors="coerce")
-                    if "SWE" in wdf.columns
-                    else pd.Series(np.nan, index=wdf.index, dtype=float)
-                )
-            )
-            perm_col = (
-                "PERM_TRANS"
-                if ("PERM_TRANS" in wdf.columns and wdf["PERM_TRANS"].notna().any())
-                else "PERM"
-            )
-            perm = (
-                pd.to_numeric(wdf[perm_col], errors="coerce")
-                if perm_col in wdf.columns
+                pd.to_numeric(wdf[vclay_col], errors="coerce")
+                if vclay_col is not None
                 else pd.Series(0.0, index=wdf.index, dtype=float)
             )
+
+            # Robust Porosity curve detection (picks up saved interpreted curve from Porosity step)
+            phi_candidates = (
+                "PHIT",
+                "PHIE",
+                "PHIT_COMP",
+                "PHIE_COMP",
+                "PHIT_ND",
+                "PHIT_D",
+                "PHIT_S",
+                "POROSITY",
+                "POR",
+            )
+            phi_col = _find_curve(phi_candidates, wdf)
+            phit = (
+                pd.to_numeric(wdf[phi_col], errors="coerce")
+                if phi_col is not None
+                else pd.Series(np.nan, index=wdf.index, dtype=float)
+            )
+
+            # Robust Water Saturation curve detection:
+            # If saturation_method == "shf", prioritize saved SHF curve from Step 5 SHF!
+            if req.saturation_method == "shf":
+                sw_candidates = (
+                    "SHF",
+                    "SW_SHF",
+                    "SWT",
+                    "SWE",
+                    "SW",
+                    "SW_ARCHIE",
+                    "SW_SIMANDOUX",
+                    "SW_DUAL_WATER",
+                    "SW_WS",
+                    "SWT_COMP",
+                    "SWE_COMP",
+                )
+            else:
+                sw_candidates = (
+                    "SWT",
+                    "SWE",
+                    "SW",
+                    "SW_ARCHIE",
+                    "SW_SIMANDOUX",
+                    "SW_DUAL_WATER",
+                    "SW_WS",
+                    "SWT_COMP",
+                    "SWE_COMP",
+                    "SHF",
+                    "SW_SHF",
+                )
+            sw_col = _find_curve(sw_candidates, wdf)
+            swt = (
+                pd.to_numeric(wdf[sw_col], errors="coerce")
+                if sw_col is not None
+                else pd.Series(np.nan, index=wdf.index, dtype=float)
+            )
+
+            # Robust Permeability curve detection (picks up saved curve from Perm Transform step)
+            perm_candidates = (
+                "PERM_TRANS",
+                "PERM",
+                "PERM_COMP",
+                "PERM_TIMUR",
+                "PERM_COATES",
+                "KLOGH",
+                "PERMEABILITY",
+                "K",
+                "CPERM",
+                "CORE_PERM",
+            )
+            perm_col = _find_curve(perm_candidates, wdf)
+            if perm_col is not None:
+                perm = pd.to_numeric(wdf[perm_col], errors="coerce")
+            else:
+                # Fallback: empirical poro-perm estimate so permeability is not zero
+                # k = 10^(14 * phit - 1.5) bounded to [0.01, 10000.0]
+                perm = (10.0 ** (14.0 * phit.fillna(0.0) - 1.5)).clip(0.01, 10000.0)
+
+            # SHF curve detection for dedicated Sw SHF column
+            shf_candidates = (
+                "SHF",
+                "SW_SHF",
+                "SW_J",
+                "SW_HEIGHT",
+                "SW_LAMBDA",
+            )
+            shf_col = _find_curve(shf_candidates, wdf)
+            shf_series = (
+                pd.to_numeric(wdf[shf_col], errors="coerce")
+                if shf_col is not None
+                else None
+            )
+
+            # If SHF curve is not directly in well data, evaluate SHF on the fly if Step 5 params exist
+            if shf_series is None and shf_global_fwl is not None:
+                try:
+                    zc_fwl = _get_zone_contacts("ALL").get("owc") or _get_zone_contacts("ALL").get("gwc") or shf_global_fwl
+                    if zc_fwl is not None and len(tvd) > 0:
+                        ref_fwl = _align_contact_depth(zc_fwl, tvd.to_numpy(dtype=float))
+                        if ref_fwl is not None:
+                            h_above_fwl = np.maximum(0.0, ref_fwl - tvd.to_numpy(dtype=float))
+                            shf_p = req.shf_params or shf_mp_params or {}
+                            shf_a_val = float(getattr(req, "shf_a", 0.0) or shf_p.get("a", 0.0) or shf_a_default)
+                            shf_b_val = float(getattr(req, "shf_b", 0.0) or shf_p.get("b", 0.0) or shf_b_default)
+                            if shf_a_val > 0 and shf_b_val > 0:
+                                h_safe = np.maximum(h_above_fwl, 0.01)
+                                sw_eval = np.where(
+                                    h_above_fwl > 0,
+                                    np.clip((h_safe / shf_a_val) ** (-1.0 / max(0.01, shf_b_val)), 0.02, 1.0),
+                                    1.0,
+                                )
+                                shf_series = pd.Series(sw_eval, index=wdf.index, dtype=float)
+                except Exception:
+                    pass
+
+            zones_col = next((c for c in ("ZONES", "ZONE") if c.upper() in [x.upper() for x in wdf.columns]), None)
             zones = (
-                wdf["ZONES"].fillna("ALL").astype(str)
-                if "ZONES" in wdf.columns
+                wdf[zones_col].fillna("ALL").astype(str)
+                if zones_col is not None
                 else pd.Series("ALL", index=wdf.index, dtype=str)
             )
 
@@ -17228,7 +17539,7 @@ def workspace_multi_well_volumetrics(
                     vshale=vclay.fillna(0.0),
                     phit=phit.fillna(0.0),
                     swt=swt.fillna(1.0),
-                    perm=perm.fillna(0.0),
+                    perm=perm.fillna(0.01).clip(lower=0.001),
                     zones=zones,
                     cutoffs=cutoffs_dict,
                 )
@@ -17255,90 +17566,175 @@ def workspace_multi_well_volumetrics(
                     if req.zones and z_name not in req.zones:
                         continue
 
+                    # 4 cutoff levels: ALL, ROCK (phit cut off), RES (phit + vshale cutoff), PAY (phit + vshale + swt cutoff)
+                    raw_flag = str(row.get("flag", "pay")).strip().lower()
+                    flag_label = {
+                        "all": "ALL",
+                        "rock": "ROCK",
+                        "reservoir": "RES",
+                        "pay": "PAY",
+                    }.get(raw_flag, raw_flag.upper())
+
                     top_v = float(row.get("top", 0.0))
                     bot_v = float(row.get("bottom", 0.0))
                     gross_v = float(row.get("gross", 0.0))
-                    net_res_v = float(row.get("net_res", row.get("net", 0.0)))
-                    ntg_res_v = float(row.get("ntg_res", row.get("ntg", 0.0)))
-                    net_pay_v = float(row.get("net_pay", row.get("net", 0.0)))
-                    ntg_pay_v = float(row.get("ntg_pay", row.get("ntg", 0.0)))
-                    phie_pay_v = float(row.get("av_phit", row.get("av_phie", 0.0)))
-                    sw_pay_v = float(row.get("av_swt", row.get("av_sw", 1.0)))
-                    perm_pay_v = float(row.get("av_perm", 0.0))
-                    hcpt_v = float(
-                        row.get("hcpt", net_pay_v * phie_pay_v * (1.0 - sw_pay_v))
+                    net_v = float(row.get("net", 0.0))
+                    ntg_v = float(row.get("ntg", 0.0))
+
+                    # Porosity (PHIT) for this cutoff stage
+                    phi_v = float(
+                        row.get("av_phit")
+                        if pd.notna(row.get("av_phit")) and row.get("av_phit") > 0
+                        else (
+                            row.get("av_phit_pay")
+                            if pd.notna(row.get("av_phit_pay")) and row.get("av_phit_pay") > 0
+                            else 0.0
+                        )
                     )
-
-                    # Contact partitioning for this well & zone
-                    zc = _get_zone_contacts(z_name)
-                    owc_d = zc.get("owc")
-                    goc_d = zc.get("goc")
-                    gwc_d = zc.get("gwc")
-
-                    z_mask = (zones == z_name) & pay_mask
-                    z_tvd = (
-                        tvd[z_mask].to_numpy(dtype=float)
-                        if z_mask.any()
-                        else np.array([])
+                    # Water Saturation for this cutoff stage
+                    sw_v = float(
+                        row.get("av_swt")
+                        if pd.notna(row.get("av_swt"))
+                        else (row.get("av_sw_pay") if pd.notna(row.get("av_sw_pay")) else 1.0)
                     )
-
-                    oil_count = 0
-                    gas_count = 0
-                    if len(z_tvd) > 0:
-                        for d_val in z_tvd:
-                            if goc_d is not None and d_val <= goc_d:
-                                gas_count += 1
-                            elif (
-                                goc_d is not None
-                                and owc_d is not None
-                                and goc_d < d_val <= owc_d
-                            ):
-                                oil_count += 1
-                            elif goc_d is None and owc_d is not None:
-                                if d_val <= owc_d:
-                                    oil_count += 1
-                            elif goc_d is None and gwc_d is not None:
-                                if d_val <= gwc_d:
-                                    gas_count += 1
-                            else:
-                                if req.reservoir_type == "gas_only":
-                                    gas_count += 1
-                                else:
-                                    oil_count += 1
-
-                    oil_pay_m = round(oil_count * sample_dz, 2)
-                    gas_pay_m = round(gas_count * sample_dz, 2)
-
-                    if oil_pay_m == 0 and gas_pay_m == 0 and net_pay_v > 0:
-                        if req.reservoir_type == "gas_only":
-                            gas_pay_m = net_pay_v
-                        elif req.reservoir_type == "oil_only":
-                            oil_pay_m = net_pay_v
-                        else:
-                            oil_pay_m = net_pay_v if req.compute_oil else 0.0
-                            gas_pay_m = (
-                                net_pay_v
-                                if (req.compute_gas and not req.compute_oil)
+                    # Geometric mean Permeability for this cutoff stage
+                    perm_v = float(
+                        row.get("av_perm_gm")
+                        if pd.notna(row.get("av_perm_gm")) and row.get("av_perm_gm") > 0
+                        else (
+                            row.get("av_perm_geom_pay")
+                            if pd.notna(row.get("av_perm_geom_pay")) and row.get("av_perm_geom_pay") > 0
+                            else (
+                                row.get("av_perm_am")
+                                if pd.notna(row.get("av_perm_am")) and row.get("av_perm_am") > 0
                                 else 0.0
                             )
+                        )
+                    )
+                    hcpt_v = float(
+                        row.get("hcpt", net_v * phi_v * (1.0 - sw_v))
+                    )
+
+                    # Average SHF water saturation for this flag interval (if available)
+                    sw_shf_v = None
+                    if shf_series is not None:
+                        flag_samples_mask = (zones == z_name)
+                        if flag_label == "ROCK":
+                            flag_samples_mask = flag_samples_mask & (phit.fillna(0.0) >= phi_cut)
+                        elif flag_label == "RES":
+                            flag_samples_mask = flag_samples_mask & (vclay.fillna(1.0) <= vsh_cut) & (phit.fillna(0.0) >= phi_cut)
+                        elif flag_label == "PAY":
+                            flag_samples_mask = flag_samples_mask & pay_mask
+
+                        z_shf = shf_series[flag_samples_mask].to_numpy(dtype=float)
+                        z_phi = phit[flag_samples_mask].to_numpy(dtype=float)
+                        valid_shf = np.isfinite(z_shf) & np.isfinite(z_phi) & (z_shf > 0)
+                        if np.any(valid_shf):
+                            pv = np.maximum(0.0, z_phi[valid_shf])
+                            pv_sum = float(np.sum(pv))
+                            if pv_sum > 0:
+                                sw_shf_v = float(np.sum(pv * z_shf[valid_shf]) / pv_sum)
+                            else:
+                                sw_shf_v = float(np.mean(z_shf[valid_shf]))
+                            sw_shf_v = round(min(1.0, max(0.0, sw_shf_v)), 4)
+
+                    # Fluid contact partitioning applies to PAY interval
+                    oil_pay_m = 0.0
+                    gas_pay_m = 0.0
+
+                    if flag_label == "PAY" and net_v > 0:
+                        zc = _get_zone_contacts(z_name)
+                        owc_d = zc.get("owc")
+                        goc_d = zc.get("goc")
+                        gwc_d = zc.get("gwc")
+
+                        z_mask = (zones == z_name) & pay_mask
+                        z_tvd = (
+                            tvd[z_mask].to_numpy(dtype=float)
+                            if z_mask.any()
+                            else np.array([])
+                        )
+
+                        ref_goc = _align_contact_depth(goc_d, z_tvd)
+                        ref_owc = _align_contact_depth(owc_d, z_tvd)
+                        ref_gwc = _align_contact_depth(gwc_d, z_tvd)
+
+                        oil_count = 0
+                        gas_count = 0
+                        if len(z_tvd) > 0:
+                            for d_val in z_tvd:
+                                if ref_goc is not None and d_val <= ref_goc:
+                                    gas_count += 1
+                                elif ref_goc is not None and ref_owc is not None and ref_goc < d_val <= ref_owc:
+                                    oil_count += 1
+                                elif ref_goc is None and ref_owc is not None:
+                                    if d_val <= ref_owc:
+                                        oil_count += 1
+                                elif ref_goc is None and ref_gwc is not None:
+                                    if d_val <= ref_gwc:
+                                        gas_count += 1
+                                else:
+                                    if req.reservoir_type == "gas_only":
+                                        gas_count += 1
+                                    elif req.reservoir_type == "oil_only":
+                                        oil_count += 1
+                                    else:
+                                        if req.compute_gas and not req.compute_oil:
+                                            gas_count += 1
+                                        else:
+                                            oil_count += 1
+
+                        oil_pay_m = round(oil_count * sample_dz, 2)
+                        gas_pay_m = round(gas_count * sample_dz, 2)
+
+                        tot_pay_calc = oil_pay_m + gas_pay_m
+                        if tot_pay_calc > 0 and abs(tot_pay_calc - net_v) > 0.05:
+                            oil_pay_m = round(oil_pay_m * (net_v / tot_pay_calc), 2)
+                            gas_pay_m = round(net_v - oil_pay_m, 2)
+
+                        if oil_pay_m == 0 and gas_pay_m == 0:
+                            if req.reservoir_type == "gas_only":
+                                gas_pay_m = net_v
+                            elif req.reservoir_type == "oil_only":
+                                oil_pay_m = net_v
+                            else:
+                                oil_pay_m = net_v if req.compute_oil else 0.0
+                                gas_pay_m = (
+                                    net_v
+                                    if (req.compute_gas and not req.compute_oil)
+                                    else 0.0
+                                )
 
                     well_records.append(
                         {
                             "well_name": wn,
                             "zone": z_name,
+                            "flag": flag_label,
                             "top": round(top_v, 2),
                             "bottom": round(bot_v, 2),
                             "gross": round(gross_v, 2),
-                            "net_res": round(net_res_v, 2),
-                            "ntg_res": round(ntg_res_v, 4),
-                            "net_pay": round(net_pay_v, 2),
+                            "net": round(net_v, 2),
+                            "ntg": round(ntg_v, 4),
                             "net_oil_pay": oil_pay_m,
                             "net_gas_pay": gas_pay_m,
-                            "ntg_pay": round(ntg_pay_v, 4),
-                            "phie": round(phie_pay_v, 4),
-                            "sw": round(sw_pay_v, 4),
-                            "perm_geom": round(perm_pay_v, 2),
+                            "phit": round(phi_v, 4),
+                            "sw": round(sw_v, 4),
+                            "sw_shf": sw_shf_v,
+                            "perm_geom": round(perm_v, 2),
                             "hcpt": round(hcpt_v, 2),
+                            # Backward compatibility aliases
+                            "net_res": round(net_v, 2),
+                            "ntg_res": round(ntg_v, 4),
+                            "net_pay": round(net_v, 2),
+                            "ntg_pay": round(ntg_v, 4),
+                            "phie": round(phi_v, 4),
+                            "curves_used": {
+                                "vsh": vclay_col or "None",
+                                "phi": phi_col or "None",
+                                "sw": sw_col or "None",
+                                "perm": perm_col or ("Estimated (phi)" if perm_col is None else "None"),
+                                "shf": shf_col or ("Computed (Step 5)" if shf_series is not None else "None"),
+                            },
                         }
                     )
             except Exception:
@@ -17398,15 +17794,22 @@ def workspace_multi_well_volumetrics(
             rows = zone_groups[z_name]
             w_count = len({r["well_name"] for r in rows})
 
-            gross_vals = [r["gross"] for r in rows if r["gross"] > 0]
-            net_res_vals = [r["net_res"] for r in rows]
-            net_pay_vals = [r["net_pay"] for r in rows]
-            net_oil_pay_vals = [r.get("net_oil_pay", r["net_pay"]) for r in rows]
-            net_gas_pay_vals = [r.get("net_gas_pay", 0.0) for r in rows]
-            phie_vals = [r["phie"] for r in rows if r["phie"] > 0]
-            sw_vals = [r["sw"] for r in rows if r["sw"] > 0]
-            perm_vals = [r["perm_geom"] for r in rows if r["perm_geom"] > 0]
-            hcpt_vals = [r["hcpt"] for r in rows]
+            # For volumetric Monte Carlo distributions, strictly use the PAY rows (or RES if pay is 0)
+            pay_rows = [r for r in rows if r.get("flag") == "PAY"]
+            if not pay_rows:
+                pay_rows = [r for r in rows if r.get("flag") == "RES"] or rows
+
+            res_rows = [r for r in rows if r.get("flag") == "RES"]
+
+            gross_vals = [r["gross"] for r in pay_rows if r["gross"] > 0]
+            net_res_vals = [r["net"] for r in res_rows] if res_rows else [r["net"] for r in pay_rows]
+            net_pay_vals = [r["net"] for r in pay_rows]
+            net_oil_pay_vals = [r.get("net_oil_pay", r["net"]) for r in pay_rows]
+            net_gas_pay_vals = [r.get("net_gas_pay", 0.0) for r in pay_rows]
+            phie_vals = [r.get("phit", r.get("phie", 0.0)) for r in pay_rows if r.get("phit", r.get("phie", 0.0)) > 0]
+            sw_vals = [r["sw"] for r in pay_rows if r["sw"] > 0]
+            perm_vals = [r["perm_geom"] for r in pay_rows if r["perm_geom"] > 0]
+            hcpt_vals = [r["hcpt"] for r in pay_rows]
 
             mean_gross = float(np.mean(gross_vals)) if gross_vals else 0.0
             mean_net_res = float(np.mean(net_res_vals)) if net_res_vals else 0.0
@@ -17869,6 +18272,7 @@ def workspace_multi_well_volumetrics(
                     "mean_gas_pay": round(mean_gas_pay, 2),
                     "ntg_pay": round(ntg_pay, 3),
                     "mean_phie": round(mean_phie, 3),
+                    "mean_phit": round(mean_phie, 3),
                     "mean_sw": round(mean_sw, 3),
                     "mean_perm_geom": round(mean_perm, 2),
                     "mean_hcpt": round(mean_hcpt, 2),
@@ -17985,9 +18389,50 @@ def workspace_multi_well_volumetrics(
         }
 
         # Basis of Estimate & Assumptions Register
-        primary_owc = req.owc or inherited_contacts.get("OWC") or shf_global_fwl
-        primary_goc = req.goc or inherited_contacts.get("GOC")
-        primary_gwc = req.gwc or inherited_contacts.get("GWC")
+        is_gas_regime = (
+            req.reservoir_type == "gas_only"
+            or shf_fluid_system in ("gas", "gas_water")
+            or (req.compute_gas and not req.compute_oil)
+        )
+        is_oil_regime = (
+            req.reservoir_type == "oil_only"
+            or shf_fluid_system in ("oil", "oil_water")
+            or (req.compute_oil and not req.compute_gas)
+        )
+
+        if req.contact_source == "custom":
+            primary_owc = req.owc
+            primary_goc = req.goc
+            primary_gwc = req.gwc
+        else:
+            # Inherit from Step 5 SHF & FPT / well contacts
+            if is_gas_regime:
+                primary_gwc = (
+                    shf_global_fwl
+                    or inherited_contacts.get("GWC")
+                    or inherited_contacts.get("FWL")
+                    or inherited_contacts.get("OWC")
+                )
+                primary_owc = None
+                primary_goc = inherited_contacts.get("GOC")
+            elif is_oil_regime:
+                primary_owc = shf_global_fwl or inherited_contacts.get("OWC") or inherited_contacts.get("FWL")
+                primary_gwc = None
+                primary_goc = inherited_contacts.get("GOC")
+            else:
+                primary_owc = inherited_contacts.get("OWC") or shf_global_fwl
+                primary_goc = inherited_contacts.get("GOC")
+                primary_gwc = inherited_contacts.get("GWC")
+
+        # If a single zone was evaluated, reflect its specific contacts
+        if len(zonal_summaries) == 1:
+            z_c_first = zonal_summaries[0].get("contacts") or {}
+            if z_c_first.get("owc") is not None:
+                primary_owc = z_c_first["owc"]
+            if z_c_first.get("goc") is not None:
+                primary_goc = z_c_first["goc"]
+            if z_c_first.get("gwc") is not None:
+                primary_gwc = z_c_first["gwc"]
 
         assumptions_register = {
             "standard": "SPE-PRMS (2018) Guidelines for Evaluation of Petroleum Reserves and Resources",
@@ -18012,25 +18457,25 @@ def workspace_multi_well_volumetrics(
                 "swt_max": sw_cut,
             },
             "contacts": {
-                "source": "Inherited from Step 5 SHF / FPT"
-                if req.contact_source == "inherit"
-                else "Custom In-Situ TVDSS",
-                "owc": round(float(primary_owc), 1)
-                if primary_owc is not None
-                else None,
-                "goc": round(float(primary_goc), 1)
-                if primary_goc is not None
-                else None,
-                "gwc": round(float(primary_gwc), 1)
-                if primary_gwc is not None
-                else None,
+                "source": "Inherited from Step 5 SHF"
+                if (req.contact_source == "inherit" and (shf_global_fwl is not None or shf_zonal_fwl))
+                else ("Inherited from FPT / Database" if req.contact_source == "inherit" else "Custom In-Situ TVDSS"),
+                "fwl": round(float(shf_global_fwl), 1) if shf_global_fwl is not None else None,
+                "owc": round(float(primary_owc), 1) if primary_owc is not None else None,
+                "goc": round(float(primary_goc), 1) if primary_goc is not None else None,
+                "gwc": round(float(primary_gwc), 1) if primary_gwc is not None else None,
+                "fluid_system": shf_fluid_system,
                 "field_regime": (
-                    "Gas Cap + Oil Leg"
-                    if (field_st["p50"] > 0 and field_gi["p50"] > field_ag["p50"])
+                    "Gas Reservoir"
+                    if req.reservoir_type == "gas_only"
                     else (
                         "Oil Reservoir (Solution Gas)"
-                        if field_st["p50"] > 0
-                        else "Gas Reservoir"
+                        if req.reservoir_type == "oil_only"
+                        else (
+                            "Gas Cap + Oil Leg"
+                            if (field_st["p50"] > 0 and field_gi["p50"] > field_ag["p50"])
+                            else ("Oil Reservoir (Solution Gas)" if field_st["p50"] > 0 else "Gas Reservoir")
+                        )
                     )
                 ),
             },
@@ -18042,18 +18487,14 @@ def workspace_multi_well_volumetrics(
             },
             "parameters": [
                 {
-                    "name": "Drainage Area"
-                    if req.mode == "area"
-                    else "Gross Rock Volume",
+                    "name": "Drainage Area" if req.mode == "area" else "Gross Rock Volume",
                     "symbol": "A" if req.mode == "area" else "GRV",
                     "distribution": "Truncated Normal",
                     "unit": "acres" if req.mode == "area" else "10⁶ m³",
                     "basis": "Seismic closure mapping & fault compartment interpretation",
                 },
                 {
-                    "name": "Net Pay Thickness"
-                    if req.mode == "area"
-                    else "Net-to-Gross",
+                    "name": "Net Pay Thickness" if req.mode == "area" else "Net-to-Gross",
                     "symbol": "h_pay" if req.mode == "area" else "NTG",
                     "distribution": "Truncated Normal",
                     "unit": "ft" if req.mode == "area" else "v/v",
@@ -18131,6 +18572,21 @@ def workspace_multi_well_volumetrics(
             except Exception:
                 pass
 
+        # Empirical cutoffs sensitivity analysis (PRMS / SEC HCPV recovery)
+        cutoffs_sens_data = None
+        try:
+            from quick_pp.ressum import cutoffs_analysis
+
+            merged_all_df = pd.concat(well_dfs, ignore_index=True)
+            cutoffs_sens_data = cutoffs_analysis(
+                merged_all_df,
+                percentile=95.0,
+                plot=False,
+                return_dict=True,
+            )
+        except Exception as exc:
+            logger.debug(f"cutoffs_analysis in multi_well_volumetrics skipped: {exc}")
+
         return _sanitize_for_json(
             {
                 "project_id": project_id,
@@ -18142,6 +18598,7 @@ def workspace_multi_well_volumetrics(
                 "field_totals": field_totals,
                 "contacts": assumptions_register["contacts"],
                 "assumptions_register": assumptions_register,
+                "cutoffs_sensitivity": cutoffs_sens_data,
             }
         )
     except HTTPException:

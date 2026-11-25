@@ -147,13 +147,13 @@
 	function exportZonalCsv() {
 		const res = projectData.volumetricResult;
 		if (!res?.zonal_summary?.length) return;
-		const rows = res.zonal_summary.map((z) => ({
+		const rows = res.zonal_summary.map((z: any) => ({
 			Zone: z.zone,
 			Wells: z.well_count,
 			Gross_m: z.mean_gross,
 			Net_Pay_m: z.mean_net_pay,
 			NTG_pay: z.ntg_pay,
-			PHIE_pay: z.mean_phie,
+			PHIT_pay: z.mean_phit ?? z.mean_phie,
 			Sw_pay: z.mean_sw,
 			HCPT_m: z.mean_hcpt,
 			Mode: z.mode,
@@ -174,10 +174,33 @@
 	function exportWellMatrixCsv() {
 		const res = projectData.volumetricResult;
 		if (!res?.well_summary?.length) return;
+		const hasShf = res.well_summary.some((w: any) => w.sw_shf !== undefined && w.sw_shf !== null);
+		const rows = res.well_summary.map((w: any) => {
+			const r: Record<string, any> = {
+				well_name: w.well_name,
+				zone: w.zone,
+				flag: w.flag ?? 'PAY',
+				top: w.top,
+				bottom: w.bottom,
+				gross: w.gross,
+				net: w.net ?? w.net_pay ?? 0,
+				ntg: w.ntg ?? w.ntg_pay ?? 0,
+				net_oil_pay: w.net_oil_pay ?? 0,
+				net_gas_pay: w.net_gas_pay ?? 0,
+				phit: w.phit ?? w.phie ?? 0,
+				sw: w.sw ?? 0
+			};
+			if (hasShf) {
+				r.sw_shf = w.sw_shf ?? '';
+			}
+			r.perm_geom = w.perm_geom ?? 0;
+			r.hcpt = w.hcpt ?? 0;
+			return r;
+		});
 		downloadCsv(
 			'MultiWell_Zonal_Well_Matrix.csv',
-			Object.keys(res.well_summary[0]),
-			res.well_summary
+			Object.keys(rows[0]),
+			rows
 		);
 	}
 </script>
@@ -1053,30 +1076,50 @@
 									</tr>
 								</thead>
 								<tbody class="divide-y divide-[var(--border-hairline)]">
-									<tr class="h-7 hover:bg-[var(--bg-subtle)]/40">
-										<td class="px-2 font-medium">Gas-Oil Contact (GOC)</td>
-										<td class="mono-num px-2 font-bold text-blue-800">
-											{activeResult?.contacts?.goc != null ? `${activeResult.contacts.goc} m` : 'Not Encountered / Above Top'}
-										</td>
-										<td class="px-2 font-medium text-amber-800">Gas Cap (Free Gas)</td>
-										<td class="px-2 text-[11px] text-[var(--text-secondary)]">
-											Interval above GOC contributes to Net Gas Pay (h_gas) & GIIP.
-										</td>
-									</tr>
-									<tr class="h-7 hover:bg-[var(--bg-subtle)]/40">
-										<td class="px-2 font-medium">Oil-Water Contact (OWC)</td>
-										<td class="mono-num px-2 font-bold text-blue-800">
-											{activeResult?.contacts?.owc != null ? `${activeResult.contacts.owc} m` : 'Not Encountered / Below TD'}
-										</td>
-										<td class="px-2 font-medium text-amber-800">Oil Leg (STOIIP)</td>
-										<td class="px-2 text-[11px] text-[var(--text-secondary)]">
-											Interval between GOC and OWC contributes to Net Oil Pay (h_oil) & STOIIP + Associated Gas (Rs).
-										</td>
-									</tr>
+									{#if activeResult?.contacts?.gwc != null}
+										<tr class="h-7 hover:bg-[var(--bg-subtle)]/40">
+											<td class="px-2 font-medium">Gas-Water Contact (GWC / FWL)</td>
+											<td class="mono-num px-2 font-bold text-blue-800">
+												{activeResult.contacts.gwc} m
+											</td>
+											<td class="px-2 font-medium text-blue-800">Gas Column (GIIP)</td>
+											<td class="px-2 text-[11px] text-[var(--text-secondary)]">
+												Interval above GWC contributes to Net Gas Pay (h_gas) & GIIP.
+											</td>
+										</tr>
+									{/if}
+									{#if activeResult?.contacts?.goc != null || activeResult?.contacts?.gwc == null}
+										<tr class="h-7 hover:bg-[var(--bg-subtle)]/40">
+											<td class="px-2 font-medium">Gas-Oil Contact (GOC)</td>
+											<td class="mono-num px-2 font-bold text-blue-800">
+												{activeResult?.contacts?.goc != null ? `${activeResult.contacts.goc} m` : 'Not Encountered / Above Top'}
+											</td>
+											<td class="px-2 font-medium text-amber-800">Gas Cap (Free Gas)</td>
+											<td class="px-2 text-[11px] text-[var(--text-secondary)]">
+												Interval above GOC contributes to Net Gas Pay (h_gas) & GIIP.
+											</td>
+										</tr>
+									{/if}
+									{#if activeResult?.contacts?.owc != null || activeResult?.contacts?.gwc == null}
+										<tr class="h-7 hover:bg-[var(--bg-subtle)]/40">
+											<td class="px-2 font-medium">Oil-Water Contact (OWC)</td>
+											<td class="mono-num px-2 font-bold text-blue-800">
+												{activeResult?.contacts?.owc != null ? `${activeResult.contacts.owc} m` : 'Not Encountered / Below TD'}
+											</td>
+											<td class="px-2 font-medium text-amber-800">Oil Leg (STOIIP)</td>
+											<td class="px-2 text-[11px] text-[var(--text-secondary)]">
+												Interval between GOC and OWC contributes to Net Oil Pay (h_oil) & STOIIP + Associated Gas (Rs).
+											</td>
+										</tr>
+									{/if}
 									<tr class="h-7 hover:bg-[var(--bg-subtle)]/40">
 										<td class="px-2 font-medium">Free Water Level / Aquifer</td>
 										<td class="mono-num px-2 text-[var(--text-muted)]">
-											{activeResult?.contacts?.owc != null ? `Below ${activeResult.contacts.owc} m` : 'Below Reservoir Base'}
+											{activeResult?.contacts?.gwc != null
+												? `Below ${activeResult.contacts.gwc} m`
+												: activeResult?.contacts?.owc != null
+													? `Below ${activeResult.contacts.owc} m`
+													: 'Below Reservoir Base'}
 										</td>
 										<td class="px-2 font-medium text-slate-500">Water Leg / Aquifer</td>
 										<td class="px-2 text-[11px] text-[var(--text-secondary)]">
@@ -1344,6 +1387,7 @@
 
 			<!-- TAB 4: Well-by-Well Matrix -->
 			{#if mv.activeTab === 'well_matrix'}
+				{@const hasShf = activeResult.well_summary.some((w) => w.sw_shf !== undefined && w.sw_shf !== null)}
 				<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-3 shadow-xs">
 					<div class="mb-2 flex items-center justify-between text-xs">
 						<div>
@@ -1369,31 +1413,48 @@
 								<tr class="h-6 border-b border-[var(--border-hairline)]">
 									<th class="px-2 font-semibold">Well</th>
 									<th class="px-2 font-semibold">Zone</th>
+									<th class="px-2 text-center font-semibold">Flag</th>
 									<th class="px-2 text-right font-semibold">Gross (m)</th>
-									<th class="px-2 text-right font-semibold">Net Res (m)</th>
-									<th class="px-2 text-right font-semibold">NTG (Res)</th>
-									<th class="px-2 text-right font-semibold">Net Pay (m)</th>
-									<th class="px-2 text-right font-semibold">NTG (Pay)</th>
-									<th class="px-2 text-right font-semibold">Φe (v/v)</th>
+									<th class="px-2 text-right font-semibold">Net (m)</th>
+									<th class="px-2 text-right font-semibold">NTG</th>
+									<th class="px-2 text-right font-semibold">Φt (v/v)</th>
 									<th class="px-2 text-right font-semibold">Sw (v/v)</th>
+									{#if hasShf}
+										<th class="px-2 text-right font-semibold text-purple-700 bg-purple-50/50">Sw SHF (v/v)</th>
+									{/if}
 									<th class="px-2 text-right font-semibold">K (mD)</th>
 									<th class="px-2 text-right font-semibold">HCPT (m)</th>
 								</tr>
 							</thead>
 							<tbody class="divide-y divide-[var(--border-hairline)]">
 								{#each activeResult.well_summary as w}
+									{@const flagName = w.flag ?? 'PAY'}
 									<tr class="h-6 hover:bg-[var(--bg-subtle)]/50">
 										<td class="px-2 font-semibold text-slate-800">{w.well_name}</td>
 										<td class="px-2 font-medium">{w.zone}</td>
+										<td class="px-2 text-center">
+											<span class="inline-block rounded-xs px-1.5 py-0.2 text-[10px] font-bold {
+												flagName === 'PAY'
+													? 'bg-emerald-100 text-emerald-800'
+													: flagName === 'RES'
+													? 'bg-blue-100 text-blue-800'
+													: flagName === 'ROCK'
+													? 'bg-amber-100 text-amber-800'
+													: 'bg-slate-100 text-slate-700'
+											}">
+												{flagName}
+											</span>
+										</td>
 										<td class="mono-num px-2 text-right">{fmtNum(w.gross, 1)}</td>
-										<td class="mono-num px-2 text-right">{fmtNum(w.net_res, 1)}</td>
-										<td class="mono-num px-2 text-right">{fmtNum(w.ntg_res, 2)}</td>
-										<td class="mono-num px-2 text-right font-medium text-blue-700">{fmtNum(w.net_pay, 1)}</td>
-										<td class="mono-num px-2 text-right">{fmtNum(w.ntg_pay, 2)}</td>
-										<td class="mono-num px-2 text-right">{fmtNum(w.phie, 3)}</td>
+										<td class="mono-num px-2 text-right font-medium {flagName === 'PAY' ? 'text-blue-700' : ''}">{fmtNum(w.net ?? w.net_pay, 1)}</td>
+										<td class="mono-num px-2 text-right">{fmtNum(w.ntg ?? w.ntg_pay, 2)}</td>
+										<td class="mono-num px-2 text-right">{fmtNum(w.phit ?? w.phie, 3)}</td>
 										<td class="mono-num px-2 text-right">{fmtNum(w.sw, 3)}</td>
+										{#if hasShf}
+											<td class="mono-num px-2 text-right text-purple-800 bg-purple-50/30">{w.sw_shf !== undefined && w.sw_shf !== null ? fmtNum(w.sw_shf, 3) : '—'}</td>
+										{/if}
 										<td class="mono-num px-2 text-right">{fmtNum(w.perm_geom, 1)}</td>
-										<td class="mono-num px-2 text-right font-bold text-emerald-800">{fmtNum(w.hcpt, 2)}</td>
+										<td class="mono-num px-2 text-right font-bold {flagName === 'PAY' ? 'text-emerald-800' : 'text-slate-500'}">{fmtNum(w.hcpt, 2)}</td>
 									</tr>
 								{/each}
 							</tbody>

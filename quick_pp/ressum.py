@@ -11,7 +11,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from scipy.stats import truncnorm
-from tqdm import tqdm
 
 from quick_pp import logger
 from quick_pp.uncertainty import (
@@ -19,7 +18,6 @@ from quick_pp.uncertainty import (
     mc_volumetric_uncertainty,
     run_log_uncertainty,
 )
-from quick_pp.utils import minmax_scale
 
 __all__ = [
     "arith_upscale",
@@ -934,152 +932,229 @@ def sensitivity_analysis(
     plt.show()
 
 
-def cutoffs_analysis(df, percentile=95):
+def cutoffs_analysis(df, percentile=95, plot=False, return_dict=False, n_steps=50):
     """Perform sensitivity analysis on Vshale, PHIT and SWT cutoffs against hydrocarbon pore volume.
 
+    Calculates the cumulative hydrocarbon pore volume (HCPV) and net pay retention across
+    systematic cutoff parameter sweeps, determining optimal PRMS/SEC cutoff thresholds
+    corresponding to the specified target recovery percentile (default 95%).
+
     Args:
-        df (pd.DataFrame): A DataFrame containing 'VSHALE', 'PHIT', and 'SWT' columns.
-        percentile (int, optional): The percentile to use for determining the optimal cutoff point
-                                    from the cumulative HCPV curve. Defaults to 95.
+        df (pd.DataFrame): A DataFrame containing Vshale, PHIT, and SWT columns.
+        percentile (float, optional): Target recovery percentage (50-99.9) of maximum HCPV. Defaults to 95.
+        plot (bool, optional): Whether to display sensitivity crossplots via matplotlib. Defaults to False.
+        return_dict (bool, optional): If True, returns full structured sensitivity curves for UI/APIs. Defaults to False.
+        n_steps (int, optional): Number of evaluation points along each sensitivity sweep. Defaults to 50.
 
     Returns:
-        tuple[float, float, float]: A tuple containing the optimal cutoffs for VSHALE, PHIT, and SWT.
+        tuple[float, float, float] or dict: (optimal_vsh_cut, optimal_phit_cut, optimal_sw_cut),
+                                            or full sensitivity dictionary when return_dict=True.
     """
-    logger.debug("Starting cutoffs sensitivity analysis")
+    logger.debug(f"Starting cutoffs sensitivity analysis (target percentile={percentile}%)")
 
-    # Calculate distances from each point to line between endpoints
-    def find_percentile_point(x, y, percentile):
-        # Sort values by y
-        sorted_indices = y.sort_values().index
-        sorted_y = y.iloc[sorted_indices].round(3)
-        sorted_x = x.iloc[sorted_indices].round(3)
-        # Remove duplicates and find index closest to specified percentile
-        unique_y = sorted_y.drop_duplicates()
-        target_value = np.percentile(unique_y, percentile)
-        idx = (np.abs(sorted_y - target_value)).argmin()
-        # Return x value at percentile
-        return sorted_x.iloc[idx]
+    c_cols = {str(c).strip().upper(): c for c in df.columns}
+    vsh_col = next((c_cols[k] for k in ("VSHALE", "VCLAY", "VSH", "VWCL") if k in c_cols), None)
+    phi_col = next((c_cols[k] for k in ("PHIT", "PHIE", "PHI", "POROSITY") if k in c_cols), None)
+    sw_col = next((c_cols[k] for k in ("SWT", "SW", "SWE") if k in c_cols), None)
 
-    # Define parameter ranges
-    vsh_range = np.linspace(1.0, 0.0, 100)
-    phit_range = np.linspace(0.0, 1.0, 100)
-    swt_range = np.linspace(1.0, 0.0, 100)
-
-    # Calculate total hydrocarbon pore volume
-    df["HCPV"] = df["PHIT"] * (1 - df["SWT"])
-
-    # Sensitivity analysis for VSHALE
-    results = []
-    phi = 0
-    sw = 1
-    for vsh in tqdm(vsh_range, desc="Analyzing cutoffs"):
-        cutoffs = {"VSHALE": vsh, "PHIT": phi, "SWT": sw}
-        rock_flag, _, _ = flag_interval(df["VSHALE"], df["PHIT"], df["SWT"], cutoffs)
-        # Calculate total hydrocarbon pore volume
-        hcpv = np.sum(df.loc[rock_flag == 1, "HCPV"])
-        results.append(
-            {
-                "flag": "rock",
-                "vshale_cut": vsh,
-                "phit_cut": phi,
-                "swt_cut": sw,
-                "HCPV": hcpv,
+    if not vsh_col or not phi_col or not sw_col:
+        logger.warning("cutoffs_analysis requires Vshale, PHIT, and SWT columns; returning defaults.")
+        if return_dict:
+            return {
+                "optimal_cutoffs": {"vshale": 0.40, "phit": 0.05, "swt": 0.80},
+                "percentile": percentile,
+                "total_gross": 0.0,
+                "total_hcpv": 0.0,
+                "vsh_sensitivity": [],
+                "phi_sensitivity": [],
+                "sw_sensitivity": [],
             }
-        )
-    temp_df = pd.DataFrame(results).reset_index(drop=True)
-    temp_df["HCPV"] = minmax_scale(temp_df["HCPV"])
-    optimal_vsh_cut = find_percentile_point(
-        temp_df["vshale_cut"], temp_df["HCPV"], percentile
-    )
+        return 0.40, 0.05, 0.80
 
-    # Sensitivity analysis for PHIT
-    vsh = optimal_vsh_cut
-    sw = 1
-    for phi in phit_range:
-        cutoffs = {"VSHALE": vsh, "PHIT": phi, "SWT": sw}
-        _, res_flag, _ = flag_interval(df["VSHALE"], df["PHIT"], df["SWT"], cutoffs)
-        # Calculate total hydrocarbon pore volume
-        hcpv = np.sum(df.loc[res_flag == 1, "HCPV"])
-        results.append(
-            {
-                "flag": "res",
-                "vshale_cut": vsh,
-                "phit_cut": phi,
-                "swt_cut": sw,
-                "HCPV": hcpv,
+    h_col = next((c_cols[k] for k in ("H", "THICKNESS", "DZ") if k in c_cols), None)
+    if h_col:
+        h_arr = pd.to_numeric(df[h_col], errors="coerce").fillna(0.1524).to_numpy(dtype=float)
+    elif "DEPTH" in c_cols or "DEPT" in c_cols:
+        d_col = c_cols.get("DEPTH", c_cols.get("DEPT"))
+        d = pd.to_numeric(df[d_col], errors="coerce").to_numpy(dtype=float)
+        diffs = np.abs(np.diff(d))
+        pos_diffs = diffs[np.isfinite(diffs) & (diffs > 0)]
+        med_dz = float(np.median(pos_diffs)) if len(pos_diffs) > 0 else 0.1524
+        h_arr = np.ones(len(df), dtype=float) * med_dz
+    else:
+        h_arr = np.ones(len(df), dtype=float) * 0.1524
+
+    vsh_s = pd.to_numeric(df[vsh_col], errors="coerce").fillna(1.0).to_numpy(dtype=float)
+    phi_s = pd.to_numeric(df[phi_col], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+    sw_s = pd.to_numeric(df[sw_col], errors="coerce").fillna(1.0).to_numpy(dtype=float)
+
+    valid = np.isfinite(vsh_s) & np.isfinite(phi_s) & np.isfinite(sw_s) & np.isfinite(h_arr) & (h_arr > 0)
+    if not np.any(valid):
+        if return_dict:
+            return {
+                "optimal_cutoffs": {"vshale": 0.40, "phit": 0.05, "swt": 0.80},
+                "percentile": percentile,
+                "total_gross": 0.0,
+                "total_hcpv": 0.0,
+                "vsh_sensitivity": [],
+                "phi_sensitivity": [],
+                "sw_sensitivity": [],
             }
-        )
-    temp_df = pd.DataFrame(results)
-    temp_df = temp_df[temp_df["flag"] == "res"].reset_index(drop=True)
-    temp_df["HCPV"] = minmax_scale(temp_df["HCPV"])
-    optimal_phit_cut = find_percentile_point(
-        temp_df["phit_cut"], temp_df["HCPV"], percentile
-    )
+        return 0.40, 0.05, 0.80
 
-    # Sensitivity analysis for SWT
-    vsh = optimal_vsh_cut
-    phi = optimal_phit_cut
-    for sw in swt_range:
-        cutoffs = {"VSHALE": vsh, "PHIT": phi, "SWT": sw}
-        _, _, pay_flag = flag_interval(df["VSHALE"], df["PHIT"], df["SWT"], cutoffs)
-        # Calculate total hydrocarbon pore volume
-        hcpv = np.sum(df.loc[pay_flag == 1, "HCPV"])
-        results.append(
-            {
-                "flag": "pay",
-                "vshale_cut": vsh,
-                "phit_cut": phi,
-                "swt_cut": sw,
-                "HCPV": hcpv,
+    vsh = np.clip(vsh_s[valid], 0.0, 1.0)
+    phi = np.clip(phi_s[valid], 0.0, 1.0)
+    sw = np.clip(sw_s[valid], 0.0, 1.0)
+    h = h_arr[valid]
+
+    # Baseline Hydrocarbon Pore Volume: h * phi * (1 - sw)
+    hcpv_sample = h * phi * np.clip(1.0 - sw, 0.0, 1.0)
+    total_hcpv = float(np.sum(hcpv_sample))
+    total_gross = float(np.sum(h))
+
+    if total_hcpv <= 0 or total_gross <= 0:
+        if return_dict:
+            return {
+                "optimal_cutoffs": {"vshale": 0.40, "phit": 0.05, "swt": 0.80},
+                "percentile": percentile,
+                "total_gross": round(total_gross, 1),
+                "total_hcpv": 0.0,
+                "vsh_sensitivity": [],
+                "phi_sensitivity": [],
+                "sw_sensitivity": [],
             }
-        )
+        return 0.40, 0.05, 0.80
 
-    # Convert results to DataFrame
-    results_df = pd.DataFrame(results)
-    temp_df = results_df[results_df["flag"] == "pay"].reset_index(drop=True)
-    temp_df["HCPV"] = minmax_scale(temp_df["HCPV"])
-    optimal_sw_cut = find_percentile_point(
-        temp_df["swt_cut"], temp_df["HCPV"], percentile
-    )
+    pct_target = float(percentile)
+
+    # 1. Sensitivity Analysis for VSHALE (vsh_cut: from 0.05 to 0.95)
+    vsh_steps = np.linspace(0.05, 0.95, n_steps)
+    vsh_results = []
+    optimal_vsh_cut = 0.40
+    found_vsh = False
+
+    for v_cut in vsh_steps:
+        m = (vsh <= v_cut)
+        h_ret = float(np.sum(hcpv_sample[m]))
+        n_ret = float(np.sum(h[m]))
+        h_pct = (h_ret / total_hcpv * 100.0) if total_hcpv > 0 else 0.0
+        ntg = (n_ret / total_gross) if total_gross > 0 else 0.0
+        vsh_results.append({
+            "cutoff": round(float(v_cut), 3),
+            "hcpv": round(h_ret, 2),
+            "hcpv_pct": round(h_pct, 1),
+            "net_pay": round(n_ret, 1),
+            "ntg": round(ntg, 3),
+        })
+        if not found_vsh and h_pct >= pct_target:
+            optimal_vsh_cut = round(float(v_cut), 3)
+            found_vsh = True
+
+    if not found_vsh and vsh_results:
+        optimal_vsh_cut = vsh_results[-1]["cutoff"]
+
+    # 2. Sensitivity Analysis for PHIT (phi_cut: from 0.01 to 0.35 with optimal Vsh)
+    phi_steps = np.linspace(0.01, 0.35, n_steps)
+    phi_results = []
+    optimal_phit_cut = 0.05
+    found_phi = False
+
+    # For phi, as cutoff increases, retained HCPV decreases
+    for p_cut in phi_steps:
+        m = (vsh <= optimal_vsh_cut) & (phi >= p_cut)
+        h_ret = float(np.sum(hcpv_sample[m]))
+        n_ret = float(np.sum(h[m]))
+        h_pct = (h_ret / total_hcpv * 100.0) if total_hcpv > 0 else 0.0
+        ntg = (n_ret / total_gross) if total_gross > 0 else 0.0
+        phi_results.append({
+            "cutoff": round(float(p_cut), 3),
+            "hcpv": round(h_ret, 2),
+            "hcpv_pct": round(h_pct, 1),
+            "net_pay": round(n_ret, 1),
+            "ntg": round(ntg, 3),
+        })
+
+    # Pick the largest phi cutoff that still retains >= target percentile of HCPV
+    for r in phi_results:
+        if r["hcpv_pct"] >= pct_target:
+            optimal_phit_cut = r["cutoff"]
+            found_phi = True
+
+    if not found_phi and phi_results:
+        optimal_phit_cut = phi_results[0]["cutoff"]
+
+    # 3. Sensitivity Analysis for SWT (sw_cut: from 0.20 to 0.95 with optimal Vsh and PHIT)
+    sw_steps = np.linspace(0.20, 0.95, n_steps)
+    sw_results = []
+    optimal_sw_cut = 0.80
+    found_sw = False
+
+    for s_cut in sw_steps:
+        m = (vsh <= optimal_vsh_cut) & (phi >= optimal_phit_cut) & (sw <= s_cut)
+        h_ret = float(np.sum(hcpv_sample[m]))
+        n_ret = float(np.sum(h[m]))
+        h_pct = (h_ret / total_hcpv * 100.0) if total_hcpv > 0 else 0.0
+        ntg = (n_ret / total_gross) if total_gross > 0 else 0.0
+        sw_results.append({
+            "cutoff": round(float(s_cut), 3),
+            "hcpv": round(h_ret, 2),
+            "hcpv_pct": round(h_pct, 1),
+            "net_pay": round(n_ret, 1),
+            "ntg": round(ntg, 3),
+        })
+        if not found_sw and h_pct >= pct_target:
+            optimal_sw_cut = round(float(s_cut), 3)
+            found_sw = True
+
+    if not found_sw and sw_results:
+        optimal_sw_cut = sw_results[-1]["cutoff"]
 
     logger.info(
-        f"Optimal cutoffs found - Vshale: {optimal_vsh_cut:.3f}, "
+        f"Optimal cutoffs ({pct_target}% HCPV recovery) - Vshale: {optimal_vsh_cut:.3f}, "
         f"PHIT: {optimal_phit_cut:.3f}, SWT: {optimal_sw_cut:.3f}"
     )
 
-    # Plot sensitivity crossplots
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-    for ax, (flag, data) in zip(axes, results_df.groupby("flag"), strict=True):
-        param = (
-            "vshale_cut"
-            if flag == "rock"
-            else "phit_cut"
-            if flag == "res"
-            else "swt_cut"
-        )
-        data["HCPV"] = minmax_scale(data["HCPV"])
-        ax.plot(data[param], data["HCPV"], "b-", label="HCPV")
-        cut_off = (
-            optimal_vsh_cut
-            if flag == "rock"
-            else optimal_phit_cut
-            if flag == "res"
-            else optimal_sw_cut
-        )
-        ax.axvline(
-            x=cut_off,
-            color="r",
-            linestyle="--",
-            label=f"Optimal Cutoff for {param}={round(cut_off, 3)}",
-        )
-        ax.set_xlabel(param)
-        ax.set_ylabel("HCPV")
-        ax.set_title("HCPV vs " + param + " with Optimal Cutoff Point")
-        ax.grid(True)
-        ax.legend()
+    if plot:
+        try:
+            fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+            axes[0].plot([r["cutoff"] for r in vsh_results], [r["hcpv_pct"] for r in vsh_results], "b-", label="HCPV %")
+            axes[0].axvline(optimal_vsh_cut, color="r", linestyle="--", label=f"Opt Vsh={optimal_vsh_cut}")
+            axes[0].set_xlabel("Vshale Cutoff")
+            axes[0].set_ylabel("HCPV Retained (%)")
+            axes[0].grid(True)
+            axes[0].legend()
 
-    plt.tight_layout()
-    plt.show()
+            axes[1].plot([r["cutoff"] for r in phi_results], [r["hcpv_pct"] for r in phi_results], "g-", label="HCPV %")
+            axes[1].axvline(optimal_phit_cut, color="r", linestyle="--", label=f"Opt PHIT={optimal_phit_cut}")
+            axes[1].set_xlabel("PHIT Cutoff")
+            axes[1].grid(True)
+            axes[1].legend()
+
+            axes[2].plot([r["cutoff"] for r in sw_results], [r["hcpv_pct"] for r in sw_results], "m-", label="HCPV %")
+            axes[2].axvline(optimal_sw_cut, color="r", linestyle="--", label=f"Opt SWT={optimal_sw_cut}")
+            axes[2].set_xlabel("SWT Cutoff")
+            axes[2].grid(True)
+            axes[2].legend()
+
+            plt.tight_layout()
+            plt.show()
+        except Exception as exc:
+            logger.debug(f"Plotting skipped in cutoffs_analysis: {exc}")
+
+    if return_dict:
+        return {
+            "optimal_cutoffs": {
+                "vshale": optimal_vsh_cut,
+                "phit": optimal_phit_cut,
+                "swt": optimal_sw_cut,
+            },
+            "percentile": pct_target,
+            "total_gross": round(total_gross, 1),
+            "total_hcpv": round(total_hcpv, 2),
+            "vsh_sensitivity": vsh_results,
+            "phi_sensitivity": phi_results,
+            "sw_sensitivity": sw_results,
+        }
 
     return optimal_vsh_cut, optimal_phit_cut, optimal_sw_cut
 
