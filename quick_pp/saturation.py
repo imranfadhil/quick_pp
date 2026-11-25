@@ -361,7 +361,10 @@ def estimate_b_waxman_smits(T, rw):
     """
     logger.debug("Estimating B parameter for Waxman-Smits (Juhasz 1981)")
     B = (-1.28 + 0.225 * T - 0.0004059 * T**2) / (1 + (0.045 * T - 0.27) * rw**1.23)
-    logger.debug(f"B parameter range: {B.min():.3f} - {B.max():.3f}")
+    b_arr = np.asarray(B)
+    logger.debug(
+        f"B parameter range: {float(b_arr.min()):.3f} - {float(b_arr.max()):.3f}"
+    )
     return B
 
 

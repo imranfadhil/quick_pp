@@ -273,9 +273,7 @@ def generate_inventory_heatmap(
         "MDT/PRESS",
         "TOPS",
     ]
-    canonical_aliases = {
-        k: set(v) for k, v in Config.CANONICAL_CURVE_ALIASES.items()
-    }
+    canonical_aliases = {k: set(v) for k, v in Config.CANONICAL_CURVE_ALIASES.items()}
     well_labels = [str(w.get("name", f"Well-{i + 1}")) for i, w in enumerate(wells)]
     if not well_labels:
         well_labels = ["No Wells"]
@@ -1441,16 +1439,12 @@ def generate_shf_j_function_plot(
         lo = float(scal.get("lo", 2.0))
         eo = float(scal.get("eo", 1.5))
         to = float(scal.get("to", 2.0))
-        krw = (
-            krw0
-            * (lw * (se**ew))
-            / np.maximum(lw * (se**ew) + tw * ((1.0 - se) ** ew), 1e-9)
-        )
-        kro = (
-            kro0
-            * (lo * ((1.0 - se) ** eo))
-            / np.maximum(lo * ((1.0 - se) ** eo) + to * (se**eo), 1e-9)
-        )
+        se_lw = se**lw
+        denom_w = np.maximum(se_lw + ew * ((1.0 - se) ** tw), 1e-9)
+        krw = krw0 * (se_lw / denom_w)
+        som_lo = (1.0 - se) ** lo
+        denom_o = np.maximum(som_lo + eo * (se**to), 1e-9)
+        kro = kro0 * (som_lo / denom_o)
         krw_label = f"Krw LET (L={lw:.1f}, E={ew:.1f}, T={tw:.1f})"
         kro_label = f"Kro LET (L={lo:.1f}, E={eo:.1f}, T={to:.1f})"
     else:

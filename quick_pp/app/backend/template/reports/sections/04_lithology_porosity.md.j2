@@ -47,19 +47,19 @@ $$V_{sand} + V_{silt} + V_{clay} = 1, \quad \phi_D = \frac{\rho_{ma} - \rho_b}{\
 {% else %}
 | Dry Clay Density | $\rho_{clay}$ | {{ litho_params.rho_clay }} | $\text{g/cc}$ | Clay Mineralogy Endpoint |
 | Dry Clay Neutron | $NPHI_{clay}$ | {{ litho_params.nphi_clay }} | $\text{v/v}$ | Neutron-Density Crossplot Clay Point |
+{% if not litho_params.gamma or litho_params.gamma.get('gamma_source', 'gr') == 'gr' %}
 | Clean GR Endpoint | $GR_{clean}$ | {{ litho_params.gr_clean }} | $\text{gAPI}$ | P5 Clean Reservoir Baseline |
 | Shale GR Endpoint | $GR_{shale}$ | {{ litho_params.gr_shale }} | $\text{gAPI}$ | P95 Intra-Reservoir Shale Baseline |
-{% if litho_params.model_key == 'vsh_gr' and litho_params.gamma %}
-| Gamma source | $\gamma$ | {{ litho_params.gamma.get('gamma_source', 'gr') }} | — | Calibrate for the selected response |
+{% endif %}
+{% if litho_params.model_key == 'vsh_gr' and litho_params.gamma and litho_params.gamma.get('gamma_source') != 'gr' %}
+| Gamma source | $\gamma$ | {{ litho_params.gamma.get('gamma_source') }} | — | Calibrate for the selected response |
 {% if litho_params.gamma.get('gamma_source') == 'cgr' %}
 | Gamma curve | — | {{ litho_params.gamma.get('gamma_curve') }} | — | Selected curve |
 {% elif litho_params.gamma.get('gamma_source') == 'derived_cgr' %}
 | Derived CGR inputs | — | {{ litho_params.gamma.get('thorium_curve') }} / {{ litho_params.gamma.get('potassium_curve') }} | ppm / % | Th / K |
 | CGR coefficients | $a_{Th}$ / $a_K$ | {{ litho_params.gamma.get('cgr_th_coefficient') }} / {{ litho_params.gamma.get('cgr_k_coefficient') }} | gAPI/ppm / gAPI/% | Verify tool calibration |
 {% endif %}
-{% if litho_params.gamma.get('gamma_source') != 'gr' %}
 | Clean / shale gamma endpoints | — | {{ litho_params.gamma.get('gamma_clean') }} / {{ litho_params.gamma.get('gamma_shale') }} | gAPI | Selected gamma response |
-{% endif %}
 {% endif %}
 {% endif %}
 | Total Core Plugs Loaded | $N_{core,total}$ | {{ poro_params.total_core_count }} | plugs | Full-Wellbore RCA Inventory (Table 2.1) |

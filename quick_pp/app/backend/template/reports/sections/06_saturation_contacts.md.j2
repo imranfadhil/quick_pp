@@ -6,11 +6,22 @@
 ### {{ sec_num }}.1 Electrical Properties, Formation Water Resistivity & Saturation Equation
 
 * **Saturation Model:** `{{ sw_params.model_name }}`
-* **Free Water Level ($FWL$):** ${{ "%.1f"|format(sw_params.fwl) }}\text{ m TVDss}$
-* **Formation Water Salinity & Resistivity:** ${{ sw_params.salinity|int }}\text{ ppm NaCl equivalent}$, $R_w = {{ "%.3f"|format(sw_params.rw) }}\text{ }\Omega\cdot\text{m} \text{ @ } {{ "%.1f"|format(sw_params.temp) }}^\circ\text{C}$ (Arps temperature scaling).
+* **Free Water Level ($FWL$):** ${{ "%.1f"|format(sw_params.fwl) }}\text{ m TVDss}$ (Basis: `{{ sw_params.fwl_basis }}`)
+* **Formation Water Salinity & Resistivity:** ${{ sw_params.salinity|int }}\text{ ppm NaCl equivalent}$, $R_w = {{ "%.3f"|format(sw_params.rw) }}\text{ }\Omega\cdot\text{m} \text{ @ } {{ "%.1f"|format(sw_params.temp) }}^\circ\text{C}$ ({{ sw_params.temp_basis }}).
 * **Electrical Tortuosity, Cementation & Saturation Exponents:** $a = {{ sw_params.a }}$, $m = {{ sw_params.m }}$, $n = {{ sw_params.n }}$
 
-$$S_w^n + R_w \cdot B \cdot Q_v \cdot S_w^{n-1} = \frac{a \cdot R_w}{\phi_t^m \cdot R_t} \quad \text{(Waxman-Smits Shaly-Sand)} \qquad S_w = \left(\frac{a \cdot R_w}{\phi_t^m \cdot R_t}\right)^{1/n} \quad \text{(Archie)}$$
+{% if sw_params.model_key == 'waxman_smits' %}
+$$S_w^n + B \cdot Q_v \cdot R_w \cdot S_w^{n-1} = \frac{a \cdot R_w}{\phi_t^m \cdot R_t} \quad \text{(Active Waxman-Smits Shaly-Sand)}$$
+$$\text{Clean-Sand Baseline (Archie Reference): } S_w = \left(\frac{a \cdot R_w}{\phi_t^m \cdot R_t}\right)^{1/n}$$
+{% elif sw_params.model_key == 'dual_water' %}
+$$\frac{1}{R_t} = \frac{\phi_t^m}{a} \left( S_{wt}^n \frac{1}{R_{wf}} + S_{wb} \left( \frac{1}{R_{wb}} - \frac{1}{R_{wf}} \right) S_{wt}^{n-1} \right) \quad \text{(Active Dual-Water Model)}$$
+$$\text{Clean-Sand Baseline (Archie Reference): } S_w = \left(\frac{a \cdot R_w}{\phi_t^m \cdot R_t}\right)^{1/n}$$
+{% elif sw_params.model_key in ('simandoux', 'indonesian') %}
+$$\frac{1}{R_t} = \frac{\phi_e^m \cdot S_w^n}{a \cdot R_w (1 - V_{sh})} + \frac{V_{sh} \cdot S_w}{R_{sh}} \quad \text{(Active Shaly-Sand Model)}$$
+$$\text{Clean-Sand Baseline (Archie Reference): } S_w = \left(\frac{a \cdot R_w}{\phi_t^m \cdot R_t}\right)^{1/n}$$
+{% else %}
+$$S_w = \left(\frac{a \cdot R_w}{\phi_t^m \cdot R_t}\right)^{1/n} \quad \text{(Active Archie Equation)}$$
+{% endif %}
 
 | Parameter | Symbol | Value | Unit | Basis / Calibration |
 | :--- | :---: | :---: | :---: | :--- |
@@ -18,7 +29,18 @@ $$S_w^n + R_w \cdot B \cdot Q_v \cdot S_w^{n-1} = \frac{a \cdot R_w}{\phi_t^m \c
 | Cementation Exponent | $m$ | {{ sw_params.m }} | unitless | Formation Factor ($F = a / \phi^m$) |
 | Saturation Exponent | $n$ | {{ sw_params.n }} | unitless | Resistivity Index ($RI = S_w^{-n}$) |
 | Formation Water Resistivity | $R_w$ | {{ "%.3f"|format(sw_params.rw) }} | $\Omega\cdot\text{m}$ | Water Zone Pickett $S_w = 100\%$ Ro Trend |
-| Free Water Level | $FWL$ | {{ "%.1f"|format(sw_params.fwl) }} | $\text{m TVDss}$ | Resistivity-Porosity Fluid Contact Interpretation |
+| Formation Temperature | $T_{res}$ | {{ "%.1f"|format(sw_params.temp) }} | $^\circ\text{C}$ | {{ sw_params.temp_basis }} |
+| Free Water Level | $FWL$ | {{ "%.1f"|format(sw_params.fwl) }} | $\text{m TVDss}$ | {{ sw_params.fwl_basis }} |
+{% if sw_params.model_key == 'waxman_smits' %}
+| Clay Counter-Ion Conductance | $B$ | {{ sw_params.b_conductance }} | $\text{L}\cdot\text{equiv}^{-1}\cdot\Omega^{-1}\cdot\text{m}^{-1}$ | Juhasz (1981) Empirical Model @ $T_{res}$ & $R_w$ |
+| Cation Exchange Capacity / Pore Vol | $Q_v$ | {{ sw_params.qv }} | $\text{meq/mL}$ | {{ sw_params.qv_method }} |
+| Shale Porosity | $\phi_{sh}$ | {{ sw_params.phish }} | $\text{v/v}$ | Clay-Bound Water ($CBW$) Partitioning Endpoint |
+{% elif sw_params.model_key == 'dual_water' %}
+| Bound Water Resistivity | $R_{wb}$ | {{ "%.3f"|format(sw_params.rwb) }} | $\Omega\cdot\text{m}$ | Dual Water Bound-Water Calibration |
+| Bound Water Saturation Endpoint | $S_{wb}$ | {{ "%.2f"|format(sw_params.swb) }} | $\text{v/v}$ | Clay-Bound Water Saturation Limit |
+{% elif sw_params.model_key in ('simandoux', 'indonesian') %}
+| Shale Resistivity | $R_{sh}$ | {{ "%.2f"|format(sw_params.rsh) }} | $\Omega\cdot\text{m}$ | Adjacent Pure Shale Bed Resistivity Baseline |
+{% endif %}
 
 {% if include_ai_commentary and ai_commentary.saturation_narrative %}
 {{ ai_commentary.saturation_narrative }}
