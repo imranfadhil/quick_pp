@@ -1,0 +1,28 @@
+# 10. Petrophysical QA/QC Gate-Check & Peer-Review Audit Log
+
+Automated subsurface verification rules (`CHK-01` through `CHK-08`) evaluate data conditioning integrity, depth matching, core calibration, saturation-height reconciliation, and uncertainty propagation before static geomodel and dynamic simulation handover.
+
+### 10.1 Automated Subsurface Gate-Check Matrix
+
+| Gate ID | Check Category | Acceptance Criterion | Measured Value / Finding | Status | Action / Sign-off Note |
+| :---: | :--- | :--- | :--- | :---: | :--- |
+{% for c in gate_checks %}
+| **{{ c.id }}** | {{ c.category }} | {{ c.criterion }} | {{ c.measured }} | **{{ c.status }}** | {{ c.action_note }} |
+{% endfor %}
+
+### 10.2 Detected Subsurface Anomalies & Handover Remediation
+
+{% if anomaly_flags and anomaly_flags|length > 0 %}
+| Anomaly Category | Target Well / Zone | Severity | Root-Cause Analysis | Required Remediation / Action Prior to Handover |
+| :--- | :--- | :---: | :--- | :--- |
+{% for a in anomaly_flags %}
+| **{{ a.category }}** | `{{ a.target }}` | `{{ a.severity if a.severity else ("HIGH" if "CHK-03" in a.category or "Missing" in a.category else "MEDIUM") }}` | {{ a.message }} | {{ a.mitigation }} |
+{% endfor %}
+{% else %}
+> [!NOTE]
+> Zero critical subsurface anomalies or unmitigated flag conditions were detected for this project dataset.
+{% endif %}
+
+{% if custom_notes %}
+> **Petrophysicist Peer-Review Note:** {{ custom_notes }}
+{% endif %}

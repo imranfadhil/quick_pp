@@ -75,6 +75,16 @@ $$V_{sand} + V_{silt} + V_{clay} = 1, \quad \phi_D = \frac{\rho_{ma} - \rho_b}{\
 | Core-to-Log Calibration | $R^2$ / $\text{RMSE}$ | {{ "%.2f"|format(poro_params.core_r2) }} / {{ "%.3f"|format(poro_params.core_rmse) }} | $\text{v/v}$ | Mean Bias ($\phi_{log} - \phi_{core}$) $= {{ "%+.3f"|format(poro_params.core_bias) }}\text{ v/v}$ |
 {% endif %}
 
+{% if well_core_parity and (poro_params.core_r2 < 0.40 or poro_params.core_count == 0) and not is_single_well %}
+#### Well-by-Well Core-to-Log Porosity Parity & Depth Alignment Diagnostics
+
+| Well Name | Valid Plugs | Applied Shift (m) | $R^2$ ($\phi_t$) | $R^2$ ($\phi_e$) | RMSE (v/v) | Mean Bias (v/v) | Parity Status | Diagnostic Recommendation |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
+{% for wp in well_core_parity %}
+| **{{ wp.well_name }}** | {{ wp.n_plugs }} | {{ "%+.2f"|format(wp.mean_shift_m) }} | {{ "%.2f"|format(wp.r2_phit) }} | {{ "%.2f"|format(wp.r2_phie) }} | {{ "%.3f"|format(wp.rmse_phi) }} | {{ "%+.3f"|format(wp.bias_phi) }} | **{{ wp.status }}** | {{ wp.recommendation }} |
+{% endfor %}
+{% endif %}
+
 {% if poro_params.core_shift_applied %}
 > **Core-to-Log Depth Matching Lineage:** Driller's core plug depths were depth-matched to wireline logs using **{{ poro_params.core_shift_mode_label }}** ($\Delta d = {{ "%+.2f"|format(poro_params.core_shift_delta) }}\text{ m}$, stretch factor $s = {{ "%.4f"|format(poro_params.core_stretch_factor) }}\times${% if poro_params.core_pivot_depth %}, anchor pivot $d_{ref} = {{ "%.1f"|format(poro_params.core_pivot_depth) }}\text{ m}${% endif %}, mean plug shift $= {{ "%+.2f"|format(poro_params.core_shift_mean_m) }}\text{ m}$). Original unshifted driller's depths (`RAW_DEPTH`) and per-plug shifts (`SHIFT_M`) are preserved on every RCA sample, while unshifted log-grid curves are retained as `CPORE_UNSHIFTED` and `CPERM_UNSHIFTED`.
 {% endif %}

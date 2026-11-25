@@ -70,7 +70,13 @@ DEFAULT_REPORT_SECTIONS: List[Dict[str, Any]] = [
         "include_ai_commentary": True,
     },
     {
-        "section_id": "10_appendix_cpi",
+        "section_id": "10_gate_checks",
+        "title": "10. Petrophysical QA/QC Gate-Check & Peer-Review Audit Log",
+        "enabled": True,
+        "include_ai_commentary": False,
+    },
+    {
+        "section_id": "11_appendix_cpi",
         "title": "Appendix A: Composite Petrophysical Evaluation Logs (CPI)",
         "enabled": True,
         "include_ai_commentary": False,

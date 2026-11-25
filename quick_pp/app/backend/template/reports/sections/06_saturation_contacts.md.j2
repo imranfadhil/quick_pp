@@ -84,7 +84,7 @@ Accurate delineation of fluid contacts is fundamental to volumetric in-place est
   - **Oil-Water Contact (OWC):** ${{ "%.1f"|format(z.owc) }}\text{ m TVDss}$ (Bracket: ${{ "%.1f"|format(z.odt) if z.odt else "N/A" }}\text{ m}$ to ${{ "%.1f"|format(z.wut) if z.wut else "N/A" }}\text{ m}$).
   {% endif %}
   {% if z.fwl is not none %}
-  - **Free Water Level (FWL):** ${{ "%.1f"|format(z.fwl) }}\text{ m TVDss}$ (Capillary $P_c = 0$ Datum).
+  - **Free Water Level (FWL):** ${{ "%.1f"|format(z.fwl) if z.fwl is number else z.fwl }}\text{ m TVDss}$ (Capillary $P_c = 0$ Datum).
   {% endif %}
 {% endfor %}
 {% endif %}

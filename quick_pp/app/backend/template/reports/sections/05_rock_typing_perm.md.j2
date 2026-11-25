@@ -29,6 +29,16 @@ $$RQI = 0.0314 \sqrt{\frac{K}{\phi_e}}, \quad \phi_z = \frac{\phi_e}{1 - \phi_e}
 {% endif %}
 {% endif %}
 
+{% if well_core_parity and (poro_params.core_perm_r2 < 0.40 or poro_params.core_perm_count == 0) and not is_single_well %}
+#### Well-by-Well Core-to-Log Permeability Parity Diagnostics
+
+| Well Name | Valid Plugs | Applied Shift (m) | $R^2$ ($\log_{10} K$) | RMSE ($\text{dec}$) | Factor Error | Parity Status | Diagnostic Recommendation |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
+{% for wp in well_core_parity %}
+| **{{ wp.well_name }}** | {{ wp.n_perm_plugs if wp.n_perm_plugs is defined else wp.n_plugs }} | {{ "%+.2f"|format(wp.mean_shift_m) }} | {{ "%.2f"|format(wp.r2_perm if wp.r2_perm is defined else 0.0) }} | {{ "%.3f"|format(wp.rmse_log_perm if wp.rmse_log_perm is defined else 0.0) }} | {{ "%.2f"|format(wp.factor_err_perm if wp.factor_err_perm is defined else 1.0) }}\times$ | **{{ wp.perm_status if wp.perm_status is defined else wp.status }}** | {{ wp.perm_recommendation if wp.perm_recommendation is defined else wp.recommendation }} |
+{% endfor %}
+{% endif %}
+
 {% if include_ai_commentary and ai_commentary.rock_typing_narrative %}
 {{ ai_commentary.rock_typing_narrative }}
 {% endif %}
