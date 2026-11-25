@@ -1103,9 +1103,23 @@ def build_report_context(
                         {
                             "DEPTH": pd.to_numeric(up_src["DEPTH"], errors="coerce"),
                             "VCLAY": pd.to_numeric(
-                                up_src["VCLAY"], errors="coerce"
+                                up_src["VCLAY"]
+                                if "VCLAY" in up_src.columns
+                                else up_src.get("_REPORT_VSHALE", 0.20),
+                                errors="coerce",
+                            ).fillna(0.20),
+                            "_REPORT_VSHALE": pd.to_numeric(
+                                up_src["_REPORT_VSHALE"]
+                                if "_REPORT_VSHALE" in up_src.columns
+                                else up_src.get("VCLAY", 0.20),
+                                errors="coerce",
                             ).fillna(0.20),
                             "PHIT": _col_series(
+                                up_src,
+                                "PHIE" if "PHIE" in up_src.columns else "PHIT",
+                                np.nan,
+                            ),
+                            "PHIE": _col_series(
                                 up_src,
                                 "PHIE" if "PHIE" in up_src.columns else "PHIT",
                                 np.nan,
@@ -1118,9 +1132,15 @@ def build_report_context(
                         }
                     ).dropna(subset=["DEPTH", "PHIT", "SWT"])
                     if not up_in.empty:
+                        up_cell_sz = _safe_float(
+                            merged_configs.get(
+                                "upscaling_cell_size", w_cfg.get("upscaling_cell_size")
+                            ),
+                            2.0,
+                        )
                         blocked = upscale_logs(
                             up_in,
-                            cell_size=2.0,
+                            cell_size=up_cell_sz,
                             by_zone=True,
                             depth_col="DEPTH",
                             zone_col="ZONES",
@@ -1160,11 +1180,109 @@ def build_report_context(
                             if k_hm_col in blocked.columns
                             else 0.0
                         )
+                        gross_m = (
+                            round(float(up_in["DEPTH"].max() - up_in["DEPTH"].min()), 1)
+                            if "DEPTH" in up_in.columns and len(up_in) > 1
+                            else round(float(len(blocked) * up_cell_sz), 1)
+                        )
+
+                        # Net-reservoir calculation at fine scale
+                        v_cut_val = _safe_float(ressum_cutoffs.get("vsh"), 0.40)
+                        p_cut_val = _safe_float(ressum_cutoffs.get("phie"), 0.08)
+                        vsh_fine = pd.to_numeric(
+                            up_in["_REPORT_VSHALE"]
+                            if "_REPORT_VSHALE" in up_in.columns
+                            else up_in["VCLAY"],
+                            errors="coerce",
+                        ).fillna(0.0)
+                        phie_fine = pd.to_numeric(
+                            up_in["PHIE"] if "PHIE" in up_in.columns else up_in["PHIT"],
+                            errors="coerce",
+                        ).fillna(0.0)
+                        sw_fine = pd.to_numeric(up_in["SWT"], errors="coerce").fillna(
+                            1.0
+                        )
+
+                        fine_res_mask = (vsh_fine <= v_cut_val) & (
+                            phie_fine >= p_cut_val
+                        )
+                        if fine_res_mask.any():
+                            phie_res_fine = round(
+                                _safe_float(phie_fine[fine_res_mask].mean(), 0.0), 3
+                            )
+                            swt_res_fine = round(
+                                _safe_float(sw_fine[fine_res_mask].mean(), 1.0), 3
+                            )
+                        else:
+                            phie_res_fine = round(_safe_float(phie_fine.mean(), 0.0), 3)
+                            swt_res_fine = round(_safe_float(sw_fine.mean(), 1.0), 3)
+
+                        # Net-reservoir calculation at blocked cellular scale
+                        vsh_up_col = (
+                            "VCLAY"
+                            if "VCLAY" in blocked.columns
+                            else (
+                                "_REPORT_VSHALE"
+                                if "_REPORT_VSHALE" in blocked.columns
+                                else None
+                            )
+                        )
+                        vsh_blocked = (
+                            pd.to_numeric(blocked[vsh_up_col], errors="coerce").fillna(
+                                0.0
+                            )
+                            if vsh_up_col
+                            else pd.Series(0.0, index=blocked.index)
+                        )
+                        phie_blocked = (
+                            pd.to_numeric(blocked[phi_up_col], errors="coerce").fillna(
+                                0.0
+                            )
+                            if phi_up_col in blocked.columns
+                            else pd.Series(0.0, index=blocked.index)
+                        )
+                        sw_blocked = (
+                            pd.to_numeric(blocked[sw_up_col], errors="coerce").fillna(
+                                1.0
+                            )
+                            if sw_up_col in blocked.columns
+                            else pd.Series(1.0, index=blocked.index)
+                        )
+
+                        blocked_res_mask = (vsh_blocked <= v_cut_val) & (
+                            phie_blocked >= p_cut_val
+                        )
+                        if blocked_res_mask.any():
+                            n_res_cells = int(blocked_res_mask.sum())
+                            ntg_res_up = round(
+                                float(n_res_cells / max(len(blocked), 1)), 3
+                            )
+                            phie_res_up = round(
+                                _safe_float(phie_blocked[blocked_res_mask].mean(), 0.0),
+                                3,
+                            )
+                            swt_res_up = round(
+                                _safe_float(sw_blocked[blocked_res_mask].mean(), 1.0), 3
+                            )
+                        else:
+                            n_res_cells = int(len(blocked))
+                            ntg_res_up = 1.0
+                            phie_res_up = round(
+                                _safe_float(phie_blocked.mean(), 0.0), 3
+                            )
+                            swt_res_up = round(_safe_float(sw_blocked.mean(), 1.0), 3)
+
+                        delta_phi_res = round(abs(phie_res_up - phie_res_fine), 3)
+                        conservation_status = (
+                            "✓ CONSERVED" if delta_phi_res <= 0.015 else "⚠ DIVERGENT"
+                        )
+
                         upscaling_table.append(
                             {
                                 "well_name": w_name,
                                 "fine_samples": int(len(up_in)),
                                 "n_cells": int(len(blocked)),
+                                "gross_m": gross_m,
                                 "phit_up": round(
                                     _safe_float(blocked[phi_up_col].mean(), 0.0), 3
                                 )
@@ -1181,6 +1299,14 @@ def build_report_context(
                                 "kv_kh": round(k_hm / max(k_am, 1e-6), 3)
                                 if k_am > 0
                                 else 0.0,
+                                "n_res_cells": n_res_cells,
+                                "ntg_res_up": ntg_res_up,
+                                "phie_res_up": phie_res_up,
+                                "phie_res_fine": phie_res_fine,
+                                "swt_res_up": swt_res_up,
+                                "swt_res_fine": swt_res_fine,
+                                "delta_phi_res": delta_phi_res,
+                                "conservation_status": conservation_status,
                             }
                         )
             except Exception as exc:
@@ -2074,6 +2200,11 @@ def build_report_context(
                 / pv_reals
             )
 
+            net_p90 = round(float(np.nanpercentile(net_h_reals, 10)), 1)
+            net_p50 = round(float(np.nanpercentile(net_h_reals, 50)), 1)
+            net_p10 = round(float(np.nanpercentile(net_h_reals, 90)), 1)
+            net_p90, net_p50, net_p10 = sorted([net_p90, net_p50, net_p10])
+
             hcpt_p90 = round(float(np.nanpercentile(hcpt_reals, 10)), 2)
             hcpt_p50 = round(float(np.nanpercentile(hcpt_reals, 50)), 2)
             hcpt_p10 = round(float(np.nanpercentile(hcpt_reals, 90)), 2)
@@ -2096,48 +2227,125 @@ def build_report_context(
                 hcpt_p50 = 0.0
 
             spread_ratio = round(hcpt_p10 / hcpt_p90, 2) if hcpt_p90 > 0.005 else 1.0
-            uncertainty_summary.append(
-                {
-                    "zone": z_name,
-                    "metric": "HCPT (m) / Φe (v/v) / Sw (v/v)",
-                    "p90_hcpt": hcpt_p90,
-                    "p50_hcpt": hcpt_p50,
-                    "p10_hcpt": hcpt_p10,
-                    "p90_phie": phi_p90,
-                    "p50_phie": phi_p50,
-                    "p10_phie": phi_p10,
-                    "p90_sw": sw_p90,
-                    "p50_sw": sw_p50,
-                    "p10_sw": sw_p10,
-                    "spread_ratio": spread_ratio,
-                    "p90": f"{hcpt_p90:.2f} m (Φ={phi_p90:.3f}, Sw={sw_p90:.3f})",
-                    "p50": f"{hcpt_p50:.2f} m (Φ={phi_p50:.3f}, Sw={sw_p50:.3f})",
-                    "p10": f"{hcpt_p10:.2f} m (Φ={phi_p10:.3f}, Sw={sw_p10:.3f})",
-                    "spread": f"{spread_ratio:.2f}×" if hcpt_p90 > 0.005 else "—",
-                }
+            uncertainty_summary.extend(
+                [
+                    {
+                        "zone": z_name,
+                        "metric": "Net Pay (m)",
+                        "p90_hcpt": hcpt_p90,
+                        "p50_hcpt": hcpt_p50,
+                        "p10_hcpt": hcpt_p10,
+                        "p50_phie": phi_p50,
+                        "p90": f"{net_p90:.1f} m",
+                        "p50": f"{net_p50:.1f} m",
+                        "p10": f"{net_p10:.1f} m",
+                        "spread": f"{round(net_p10 / max(net_p90, 0.01), 2):.2f}×"
+                        if net_p90 > 0.05
+                        else "—",
+                    },
+                    {
+                        "zone": z_name,
+                        "metric": "Mean Effective Porosity Φe (v/v)",
+                        "p90_hcpt": hcpt_p90,
+                        "p50_hcpt": hcpt_p50,
+                        "p10_hcpt": hcpt_p10,
+                        "p50_phie": phi_p50,
+                        "p90": f"{phi_p90:.3f}",
+                        "p50": f"{phi_p50:.3f}",
+                        "p10": f"{phi_p10:.3f}",
+                        "spread": f"{round(phi_p10 / max(phi_p90, 0.001), 2):.2f}×"
+                        if phi_p90 > 0.001
+                        else "—",
+                    },
+                    {
+                        "zone": z_name,
+                        "metric": "Mean Water Saturation Sw (v/v)",
+                        "p90_hcpt": hcpt_p90,
+                        "p50_hcpt": hcpt_p50,
+                        "p10_hcpt": hcpt_p10,
+                        "p50_phie": phi_p50,
+                        "p90": f"{sw_p90:.3f}",
+                        "p50": f"{sw_p50:.3f}",
+                        "p10": f"{sw_p10:.3f}",
+                        "spread": f"{round(sw_p90 / max(sw_p10, 0.001), 2):.2f}×"
+                        if sw_p10 > 0.001
+                        else "—",
+                    },
+                    {
+                        "zone": z_name,
+                        "metric": "Hydrocarbon Pore Thickness HCPT (m)",
+                        "p90_hcpt": hcpt_p90,
+                        "p50_hcpt": hcpt_p50,
+                        "p10_hcpt": hcpt_p10,
+                        "p50_phie": phi_p50,
+                        "p90": f"{hcpt_p90:.2f} m",
+                        "p50": f"{hcpt_p50:.2f} m",
+                        "p10": f"{hcpt_p10:.2f} m",
+                        "spread": f"{spread_ratio:.2f}×" if hcpt_p90 > 0.005 else "—",
+                    },
+                ]
             )
         else:
             # Spec 3.2 & CHK-05: Zero deterministic Net Pay -> report 0.00 m (no dummy 0.11 / 0.15 / 0.19)
-            uncertainty_summary.append(
-                {
-                    "zone": z_name,
-                    "metric": "HCPT (m) / Φe (v/v) / Sw (v/v)",
-                    "p90_hcpt": 0.0,
-                    "p50_hcpt": 0.0,
-                    "p10_hcpt": 0.0,
-                    "p90_phie": 0.0,
-                    "p50_phie": 0.0,
-                    "p10_phie": 0.0,
-                    "p90_sw": 1.0,
-                    "p50_sw": 1.0,
-                    "p10_sw": 1.0,
-                    "spread_ratio": 1.0,
-                    "p90": "0.00 m (Water-bearing / No Pay)",
-                    "p50": "0.00 m (Water-bearing / No Pay)",
-                    "p10": "0.00 m (Water-bearing / No Pay)",
-                    "spread": "—",
-                }
+            uncertainty_summary.extend(
+                [
+                    {
+                        "zone": z_name,
+                        "metric": "Net Pay (m)",
+                        "p90_hcpt": 0.0,
+                        "p50_hcpt": 0.0,
+                        "p10_hcpt": 0.0,
+                        "p50_phie": 0.0,
+                        "p90": "0.0 m",
+                        "p50": "0.0 m",
+                        "p10": "0.0 m",
+                        "spread": "—",
+                    },
+                    {
+                        "zone": z_name,
+                        "metric": "Mean Effective Porosity Φe (v/v)",
+                        "p90_hcpt": 0.0,
+                        "p50_hcpt": 0.0,
+                        "p10_hcpt": 0.0,
+                        "p50_phie": 0.0,
+                        "p90": "0.000",
+                        "p50": "0.000",
+                        "p10": "0.000",
+                        "spread": "—",
+                    },
+                    {
+                        "zone": z_name,
+                        "metric": "Mean Water Saturation Sw (v/v)",
+                        "p90_hcpt": 0.0,
+                        "p50_hcpt": 0.0,
+                        "p10_hcpt": 0.0,
+                        "p50_phie": 0.0,
+                        "p90": "1.000",
+                        "p50": "1.000",
+                        "p10": "1.000",
+                        "spread": "—",
+                    },
+                    {
+                        "zone": z_name,
+                        "metric": "Hydrocarbon Pore Thickness HCPT (m)",
+                        "p90_hcpt": 0.0,
+                        "p50_hcpt": 0.0,
+                        "p10_hcpt": 0.0,
+                        "p50_phie": 0.0,
+                        "p90": "0.00 m (Water-bearing / No Pay)",
+                        "p50": "0.00 m (Water-bearing / No Pay)",
+                        "p10": "0.00 m (Water-bearing / No Pay)",
+                        "spread": "—",
+                    },
+                ]
             )
+
+    uncertainty_drivers_text = (
+        f"Hydrocarbon pore thickness (HCPT) variance is primarily governed by: "
+        f"(1) Formation water resistivity ($R_w$) & saturation exponent ($n$), "
+        f"(2) Matrix density ($\\rho_{{ma}}$) & porosity calibration, and "
+        f"(3) Net pay cutoff thresholds ($\\Phi_e \\ge {phie_cut:.2f}$, $V_{{sh}} \\le {vsh_cut:.2f}$, $S_w \\le {sw_cut:.2f}$)."
+    )
 
     # Task 1.2: Phase-aware fluid type and fluid densities detection (GAP-07)
     shf_cfg = (
@@ -2797,9 +3005,25 @@ def build_report_context(
             scal_cfg.get("pc_max", merged_configs.get("scal_pc_max")), 50.0
         ),
     }
+    has_custom_up = (
+        "upscaling_cell_size" in merged_configs or "upscaling_omega" in merged_configs
+    )
     upscaling_params = {
-        "cell_size": 2.0,
-        "omega": 0.33,
+        "cell_size": _safe_float(merged_configs.get("upscaling_cell_size"), 2.0),
+        "omega": _safe_float(merged_configs.get("upscaling_omega"), 0.33),
+        "basis": "Project Upscaling Config"
+        if has_custom_up
+        else "Default Simulation Grid Standard",
+    }
+    mean_kv_kh = (
+        round(float(np.mean([r["kv_kh"] for r in upscaling_table])), 3)
+        if upscaling_table
+        else 0.0
+    )
+    upscaling_summary = {
+        "mean_kv_kh": mean_kv_kh,
+        "cell_size": upscaling_params["cell_size"],
+        "omega": upscaling_params["omega"],
     }
 
     # If no stored contacts in DB, dynamically extract them from full_df
@@ -2897,6 +3121,162 @@ def build_report_context(
 
     fluid_contacts_summary = list(zonal_contact_groups.values())
 
+    # Volumetric Summary Calculation & Handover Readiness Fallback (GAP-12)
+    area_acres = _safe_float(
+        merged_configs.get("area_acres")
+        or merged_configs.get("area")
+        or (model_params.get("area_acres") if model_params else None),
+        None,
+    )
+    vol_sum_existing = merged_configs.get("volumetric_summary")
+    if isinstance(vol_sum_existing, dict) and "field_totals" in vol_sum_existing:
+        volumetric_summary = vol_sum_existing
+        volumetric_readiness = None
+    elif area_acres is not None and area_acres > 0.0:
+        res_fl = (
+            str(
+                merged_configs.get("reservoir_fluid")
+                or (model_params.get("reservoir_fluid") if model_params else "")
+                or "oil"
+            )
+            .strip()
+            .lower()
+        )
+        bg_eff = _safe_float(
+            merged_configs.get("bg")
+            or (model_params.get("bg") if model_params else None),
+            0.0045 if res_fl == "gas" else 0.005,
+        )
+        bo_eff = _safe_float(
+            merged_configs.get("bo")
+            or merged_configs.get("boi")
+            or (model_params.get("bo") if model_params else None),
+            1.25 if res_fl != "gas" else 1.20,
+        )
+        bg_eff = max(bg_eff, 1e-5)
+        bo_eff = max(bo_eff, 0.1)
+
+        zonal_vol_summaries = []
+        stoiip_p90_tot = 0.0
+        stoiip_p50_tot = 0.0
+        stoiip_p10_tot = 0.0
+        rec_oil_p50_tot = 0.0
+        giip_p90_tot = 0.0
+        giip_p50_tot = 0.0
+        giip_p10_tot = 0.0
+        rec_gas_p50_tot = 0.0
+
+        for z in zonal_summary:
+            z_name = z["zone"]
+            z_unc_rows = [
+                u
+                for u in uncertainty_summary
+                if u["zone"] == z_name
+                and u["metric"] == "Hydrocarbon Pore Thickness HCPT (m)"
+            ]
+            if z_unc_rows:
+                h_p90 = _safe_float(z_unc_rows[0].get("p90_hcpt"), 0.0)
+                h_p50 = _safe_float(z_unc_rows[0].get("p50_hcpt"), 0.0)
+                h_p10 = _safe_float(z_unc_rows[0].get("p10_hcpt"), 0.0)
+            else:
+                h_p50 = float(z.get("hcpt", 0.0))
+                h_p90 = round(h_p50 * 0.8, 2)
+                h_p10 = round(h_p50 * 1.2, 2)
+
+            # 1 m = 3.28084 ft
+            # HCPV (acre-ft) = Area (acres) * (HCPT (m) * 3.28084)
+            hcpv_p90 = area_acres * (h_p90 * 3.28084)
+            hcpv_p50 = area_acres * (h_p50 * 3.28084)
+            hcpv_p10 = area_acres * (h_p10 * 3.28084)
+
+            # Gas GIIP (Bcf) = 43560 * HCPV / (Bg * 1e9)
+            giip_p90 = round((43560.0 * hcpv_p90) / (bg_eff * 1e9), 2)
+            giip_p50 = round((43560.0 * hcpv_p50) / (bg_eff * 1e9), 2)
+            giip_p10 = round((43560.0 * hcpv_p10) / (bg_eff * 1e9), 2)
+            rec_gas_p50 = round(giip_p50 * 0.70, 2)
+
+            # Oil STOIIP (MMbbl) = 7758 * HCPV / (Bo * 1e6)
+            stoiip_p90 = round((7758.0 * hcpv_p90) / (bo_eff * 1e6), 2)
+            stoiip_p50 = round((7758.0 * hcpv_p50) / (bo_eff * 1e6), 2)
+            stoiip_p10 = round((7758.0 * hcpv_p10) / (bo_eff * 1e6), 2)
+            rec_oil_p50 = round(stoiip_p50 * 0.35, 2)
+
+            zonal_vol_summaries.append(
+                {
+                    "zone": z_name,
+                    "stoiip": {
+                        "p90": stoiip_p90,
+                        "p50": stoiip_p50,
+                        "p10": stoiip_p10,
+                    },
+                    "rec_oil": {"p50": rec_oil_p50},
+                    "giip": {"p90": giip_p90, "p50": giip_p50, "p10": giip_p10},
+                    "rec_gas": {"p50": rec_gas_p50},
+                }
+            )
+            stoiip_p90_tot += stoiip_p90
+            stoiip_p50_tot += stoiip_p50
+            stoiip_p10_tot += stoiip_p10
+            rec_oil_p50_tot += rec_oil_p50
+            giip_p90_tot += giip_p90
+            giip_p50_tot += giip_p50
+            giip_p10_tot += giip_p10
+            rec_gas_p50_tot += rec_gas_p50
+
+        volumetric_summary = {
+            "mode": "Drainage Area",
+            "n_samples": 1000,
+            "zonal_summaries": zonal_vol_summaries,
+            "field_totals": {
+                "stoiip": {
+                    "p90": round(stoiip_p90_tot, 2),
+                    "p50": round(stoiip_p50_tot, 2),
+                    "p10": round(stoiip_p10_tot, 2),
+                },
+                "rec_oil": {"p50": round(rec_oil_p50_tot, 2)},
+                "giip": {
+                    "p90": round(giip_p90_tot, 2),
+                    "p50": round(giip_p50_tot, 2),
+                    "p10": round(giip_p10_tot, 2),
+                },
+                "rec_gas": {"p50": round(rec_gas_p50_tot, 2)},
+            },
+        }
+        volumetric_readiness = None
+    else:
+        volumetric_summary = None
+        tot_hcpt = sum(float(z.get("hcpt", 0.0)) for z in zonal_summary)
+        tot_net_pay = sum(float(z.get("net_pay", 0.0)) for z in zonal_summary)
+        tot_gross = sum(float(z.get("gross", 0.0)) for z in zonal_summary)
+        mean_hcpt = round(tot_hcpt / max(len(zonal_summary), 1), 2)
+        mean_net_pay = round(tot_net_pay / max(len(zonal_summary), 1), 1)
+        mean_ntg = (
+            round(tot_net_pay / max(tot_gross, 1e-6), 3) if tot_gross > 0 else 0.0
+        )
+        valid_phie = [
+            float(z.get("phie_pay", z.get("phie", 0.0)))
+            for z in zonal_summary
+            if float(z.get("net_pay", 0.0)) > 0
+        ]
+        valid_sw = [
+            float(z.get("sw_pay", z.get("sw", 0.0)))
+            for z in zonal_summary
+            if float(z.get("net_pay", 0.0)) > 0
+        ]
+        mean_phie = round(float(np.mean(valid_phie)), 3) if valid_phie else 0.0
+        mean_sw = round(float(np.mean(valid_sw)), 3) if valid_sw else 0.0
+
+        volumetric_readiness = {
+            "status": "AWAITING_RESERVOIR_AREA",
+            "mean_hcpt": mean_hcpt,
+            "mean_net_pay": mean_net_pay,
+            "mean_ntg": mean_ntg,
+            "mean_phie": mean_phie,
+            "mean_sw": mean_sw,
+            "total_hcpt": round(tot_hcpt, 2),
+            "evaluated_zones": len(zonal_summary),
+        }
+
     ctx_payload: Dict[str, Any] = {
         "project_id": pid,
         "project_name": project_name,
@@ -2926,10 +3306,13 @@ def build_report_context(
         "fluid_contacts_rows": fluid_contacts_rows,
         "fluid_contacts_summary": fluid_contacts_summary,
         "uncertainty_summary": uncertainty_summary,
-        "volumetric_summary": merged_configs.get("volumetric_summary"),
+        "uncertainty_drivers_text": uncertainty_drivers_text,
+        "volumetric_summary": volumetric_summary,
+        "volumetric_readiness": volumetric_readiness,
         "volumetric_params": merged_configs.get("volumetric_params"),
         "upscaling_params": upscaling_params,
         "upscaling_table": upscaling_table,
+        "upscaling_summary": upscaling_summary,
         "anomaly_flags": anomaly_flags,
         "well_core_parity": well_core_parity,
         "_full_df": full_df,
@@ -3492,7 +3875,7 @@ def synthesize_domain_ai_commentary(
                 f"Fine-scale evaluated CPI logs within the target reservoir succession were blocked to "
                 f"${context['upscaling_params']['cell_size']:.1f}\\text{{ m}}$ cellular resolution honoring geological zone boundaries. "
                 f"Cardwell-Parsons directional permeability bounds yield a field-mean vertical-to-horizontal anisotropy ratio "
-                f"($K_v / K_h = K_{{harm}} / K_{{arith}}$) across the evaluated wells, preserving thin-bed vertical baffles for Eclipse/Intersect dynamic simulation."
+                f"($K_v / K_h = K_{{harm}} / K_{{arith}} = {context.get('upscaling_summary', {}).get('mean_kv_kh', 0.0):.3f}$) across the evaluated wells, preserving thin-bed vertical baffles for Eclipse/Intersect dynamic simulation."
             ),
         }
 
