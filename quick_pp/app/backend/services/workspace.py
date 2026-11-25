@@ -11601,6 +11601,36 @@ def _interp_or_extrapolate_depth(
     return out
 
 
+def _align_and_interp_depth(
+    md_values: np.ndarray, ref_md: np.ndarray, ref_tvd: np.ndarray
+) -> np.ndarray:
+    """Interpolate ref_tvd along md_values, reconciling unit differences (metres vs feet)."""
+    target_md = np.asarray(md_values, dtype=float).copy()
+    valid_t = target_md[np.isfinite(target_md)]
+    valid_r = ref_md[np.isfinite(ref_md)]
+    valid_z = ref_tvd[np.isfinite(ref_tvd)]
+    med_t = float(np.median(valid_t)) if len(valid_t) > 0 else 0.0
+    med_r = float(np.median(valid_r)) if len(valid_r) > 0 else 0.0
+    med_z = float(np.median(valid_z)) if len(valid_z) > 0 else 0.0
+
+    scale_back = 1.0
+    # 1. Reconcile target_md scale to ref_md scale for proper interpolation bracket
+    if med_t > 0 and med_r > 0:
+        ratio_tr = med_t / med_r
+        if 2.7 < ratio_tr < 3.7:  # target in ft, ref in m
+            target_md *= 0.3048
+        elif 0.27 < ratio_tr < 0.37:  # target in m, ref in ft
+            target_md /= 0.3048
+            scale_back = 0.3048  # ref_tvd is in ft, scale back to m to match target_md
+
+    # 2. Check if ref_tvd itself is in ft while ref_md is in m (ratio ~ 3.28)
+    if med_r > 0 and med_z > 0 and 2.5 < (med_z / med_r) < 3.8:
+        ref_tvd = ref_tvd * 0.3048
+
+    res = _interp_or_extrapolate_depth(target_md, ref_md, ref_tvd)
+    return res * scale_back
+
+
 def _resolve_well_tvd_array(
     md_values: np.ndarray,
     well_df: Optional[pd.DataFrame],
@@ -11647,7 +11677,7 @@ def _resolve_well_tvd_array(
                     .drop_duplicates(subset=["DEPTH"], keep="last")
                 )
                 if len(sub) >= 2:
-                    return _interp_or_extrapolate_depth(
+                    return _align_and_interp_depth(
                         md_values,
                         sub["DEPTH"].to_numpy(dtype=float),
                         sub["TVDSS"].to_numpy(dtype=float),
@@ -11669,7 +11699,7 @@ def _resolve_well_tvd_array(
                     .drop_duplicates(subset=["DEPTH"], keep="last")
                 )
                 if len(sub) >= 2:
-                    return _interp_or_extrapolate_depth(
+                    return _align_and_interp_depth(
                         md_values,
                         sub["DEPTH"].to_numpy(dtype=float),
                         sub["TVDSS"].to_numpy(dtype=float),
@@ -11706,7 +11736,7 @@ def _resolve_well_tvd_array(
                 if mds[0] > 1.0:
                     mds = np.insert(mds, 0, 0.0)
                     tvds = np.insert(tvds, 0, -elev if is_already_subsea else 0.0)
-                interp_tvd = _interp_or_extrapolate_depth(md_values, mds, tvds)
+                interp_tvd = _align_and_interp_depth(md_values, mds, tvds)
                 return interp_tvd if is_already_subsea else (interp_tvd - elev)
 
         if md_c and inc_c and azi_c:
@@ -11736,7 +11766,7 @@ def _resolve_well_tvd_array(
                     dev = wpp.deviation(mds, incs, azis)
                     pos = dev.minimum_curvature()
                     return (
-                        _interp_or_extrapolate_depth(
+                        _align_and_interp_depth(
                             md_values,
                             np.asarray(pos.md, dtype=float),
                             np.asarray(pos.depth, dtype=float),
@@ -17186,13 +17216,25 @@ def workspace_multi_well_volumetrics(
                             fc_df = w_obj.get_fluid_contacts()
                             if isinstance(fc_df, pd.DataFrame) and not fc_df.empty:
                                 for _, fc_row in fc_df.iterrows():
-                                    c_t = str(fc_row.get("contact_type") or fc_row.get("name") or "").strip().upper()
+                                    c_t = (
+                                        str(
+                                            fc_row.get("contact_type")
+                                            or fc_row.get("name")
+                                            or ""
+                                        )
+                                        .strip()
+                                        .upper()
+                                    )
                                     c_d = fc_row.get("depth")
                                     c_z = str(fc_row.get("zone") or "").strip()
                                     if c_t and c_d is not None and pd.notna(c_d):
-                                        well_contacts_map.setdefault(wn_item, {})[c_t] = float(c_d)
+                                        well_contacts_map.setdefault(wn_item, {})[
+                                            c_t
+                                        ] = float(c_d)
                                         if c_z:
-                                            well_contacts_map.setdefault(c_z, {})[c_t] = float(c_d)
+                                            well_contacts_map.setdefault(c_z, {})[
+                                                c_t
+                                            ] = float(c_d)
                         except Exception:
                             continue
                 except Exception:
@@ -17235,13 +17277,21 @@ def workspace_multi_well_volumetrics(
         shf_global_fwl = (
             req_shf.get("fwl")
             if req_shf.get("fwl") is not None
-            else (shf_mp_params.get("fwl") if shf_mp_params.get("fwl") is not None else shf_anc.get("fwl"))
+            else (
+                shf_mp_params.get("fwl")
+                if shf_mp_params.get("fwl") is not None
+                else shf_anc.get("fwl")
+            )
         )
         if shf_global_fwl is not None:
             shf_global_fwl = float(shf_global_fwl)
 
         shf_zonal_fwl: Dict[str, float] = {}
-        for z_src in (shf_anc.get("fwlByZone"), shf_mp_params.get("fwlByZone"), req_shf.get("fwl_by_zone")):
+        for z_src in (
+            shf_anc.get("fwlByZone"),
+            shf_mp_params.get("fwlByZone"),
+            req_shf.get("fwl_by_zone"),
+        ):
             if isinstance(z_src, dict):
                 for zk, zv in z_src.items():
                     if zv is not None and pd.notna(zv):
@@ -17254,7 +17304,11 @@ def workspace_multi_well_volumetrics(
             req_shf.get("fluid_system")
             or shf_mp_params.get("fluidSystem")
             or shf_anc.get("fluid_system")
-            or ("gas" if req.reservoir_type == "gas_only" else ("oil" if req.reservoir_type == "oil_only" else "auto"))
+            or (
+                "gas"
+                if req.reservoir_type == "gas_only"
+                else ("oil" if req.reservoir_type == "oil_only" else "auto")
+            )
         )
 
         shf_fits_anc = (
@@ -17267,11 +17321,21 @@ def workspace_multi_well_volumetrics(
         shf_a_default = 0.35
         shf_b_default = -0.45
         shf_swirr_default = 0.12
-        shf_ift_default = float(req_shf.get("ift") or shf_mp_params.get("ift") or shf_anc.get("ift", 30.0))
-        shf_theta_default = float(req_shf.get("theta") or shf_mp_params.get("theta") or shf_anc.get("theta", 30.0))
-        shf_gw_default = float(req_shf.get("gw") or shf_mp_params.get("gw") or shf_anc.get("gw", 1.05))
+        shf_ift_default = float(
+            req_shf.get("ift") or shf_mp_params.get("ift") or shf_anc.get("ift", 30.0)
+        )
+        shf_theta_default = float(
+            req_shf.get("theta")
+            or shf_mp_params.get("theta")
+            or shf_anc.get("theta", 30.0)
+        )
+        shf_gw_default = float(
+            req_shf.get("gw") or shf_mp_params.get("gw") or shf_anc.get("gw", 1.05)
+        )
         shf_ghc_default = float(
-            req_shf.get("ghc") or shf_mp_params.get("ghc") or shf_anc.get("ghc", 0.80 if req.compute_oil else 0.20)
+            req_shf.get("ghc")
+            or shf_mp_params.get("ghc")
+            or shf_anc.get("ghc", 0.80 if req.compute_oil else 0.20)
         )
 
         if isinstance(shf_fits_anc, dict) and shf_fits_anc:
@@ -17315,7 +17379,9 @@ def workspace_multi_well_volumetrics(
                 if c_k not in inherited_contacts:
                     inherited_contacts[c_k] = c_v
 
-        def _align_contact_depth(c_val: Optional[float], ref_arr: np.ndarray) -> Optional[float]:
+        def _align_contact_depth(
+            c_val: Optional[float], ref_arr: np.ndarray
+        ) -> Optional[float]:
             """Ensure contact TVDSS sign matches the depth array sign (subsea negative vs absolute positive)."""
             if c_val is None or len(ref_arr) == 0:
                 return c_val
@@ -17329,9 +17395,21 @@ def workspace_multi_well_volumetrics(
         def _get_zone_contacts(z_n: str) -> Dict[str, Optional[float]]:
             z_override = req.contacts_by_zone.get(z_n) or {}
             if req.contact_source == "custom":
-                owc_val = z_override.get("owc") if z_override.get("owc") is not None else req.owc
-                goc_val = z_override.get("goc") if z_override.get("goc") is not None else req.goc
-                gwc_val = z_override.get("gwc") if z_override.get("gwc") is not None else req.gwc
+                owc_val = (
+                    z_override.get("owc")
+                    if z_override.get("owc") is not None
+                    else req.owc
+                )
+                goc_val = (
+                    z_override.get("goc")
+                    if z_override.get("goc") is not None
+                    else req.goc
+                )
+                gwc_val = (
+                    z_override.get("gwc")
+                    if z_override.get("gwc") is not None
+                    else req.gwc
+                )
                 return {"owc": owc_val, "goc": goc_val, "gwc": gwc_val}
 
             # INHERIT (Step 5 SHF & FPT) MODE:
@@ -17380,7 +17458,9 @@ def workspace_multi_well_volumetrics(
                 # Dual / Auto regime:
                 if goc_val is not None:
                     if owc_val is None:
-                        owc_val = z_fwl or z_db.get("OWC") or inherited_contacts.get("OWC")
+                        owc_val = (
+                            z_fwl or z_db.get("OWC") or inherited_contacts.get("OWC")
+                        )
                 else:
                     if owc_val is None and gwc_val is None:
                         if z_fwl is not None:
@@ -17413,7 +17493,8 @@ def workspace_multi_well_volumetrics(
                 (
                     c
                     for c in ("DEPTH", "DEPT", "MD")
-                    if c in wdf.columns and pd.to_numeric(wdf[c], errors="coerce").notna().any()
+                    if c in wdf.columns
+                    and pd.to_numeric(wdf[c], errors="coerce").notna().any()
                 ),
                 "DEPTH",
             )
@@ -17428,7 +17509,8 @@ def workspace_multi_well_volumetrics(
                 (
                     c
                     for c in ("TVDSS", "DEPT_TVDSS", "DEPTH_TVDSS", "TVD_SS")
-                    if c in wdf.columns and pd.to_numeric(wdf[c], errors="coerce").notna().any()
+                    if c in wdf.columns
+                    and pd.to_numeric(wdf[c], errors="coerce").notna().any()
                 ),
                 None,
             )
@@ -17436,14 +17518,19 @@ def workspace_multi_well_volumetrics(
                 (
                     c
                     for c in ("TVD", "DEPT_TVD", "DEPTH_TVD")
-                    if c in wdf.columns and pd.to_numeric(wdf[c], errors="coerce").notna().any()
+                    if c in wdf.columns
+                    and pd.to_numeric(wdf[c], errors="coerce").notna().any()
                 ),
                 None,
             )
             tvd = (
                 pd.to_numeric(wdf[tvdss_col], errors="coerce")
                 if tvdss_col is not None
-                else (pd.to_numeric(wdf[tvd_col], errors="coerce") if tvd_col is not None else depth)
+                else (
+                    pd.to_numeric(wdf[tvd_col], errors="coerce")
+                    if tvd_col is not None
+                    else depth
+                )
             )
 
             # Robust Vclay / Vshale curve detection (picks up saved interpreted curve from Lithology step)
@@ -17563,26 +17650,56 @@ def workspace_multi_well_volumetrics(
             # If SHF curve is not directly in well data, evaluate SHF on the fly if Step 5 params exist
             if shf_series is None and shf_global_fwl is not None:
                 try:
-                    zc_fwl = _get_zone_contacts("ALL").get("owc") or _get_zone_contacts("ALL").get("gwc") or shf_global_fwl
+                    zc_fwl = (
+                        _get_zone_contacts("ALL").get("owc")
+                        or _get_zone_contacts("ALL").get("gwc")
+                        or shf_global_fwl
+                    )
                     if zc_fwl is not None and len(tvd) > 0:
-                        ref_fwl = _align_contact_depth(zc_fwl, tvd.to_numpy(dtype=float))
+                        ref_fwl = _align_contact_depth(
+                            zc_fwl, tvd.to_numpy(dtype=float)
+                        )
                         if ref_fwl is not None:
-                            h_above_fwl = np.maximum(0.0, ref_fwl - tvd.to_numpy(dtype=float))
+                            h_above_fwl = np.maximum(
+                                0.0, ref_fwl - tvd.to_numpy(dtype=float)
+                            )
                             shf_p = req.shf_params or shf_mp_params or {}
-                            shf_a_val = float(getattr(req, "shf_a", 0.0) or shf_p.get("a", 0.0) or shf_a_default)
-                            shf_b_val = float(getattr(req, "shf_b", 0.0) or shf_p.get("b", 0.0) or shf_b_default)
+                            shf_a_val = float(
+                                getattr(req, "shf_a", 0.0)
+                                or shf_p.get("a", 0.0)
+                                or shf_a_default
+                            )
+                            shf_b_val = float(
+                                getattr(req, "shf_b", 0.0)
+                                or shf_p.get("b", 0.0)
+                                or shf_b_default
+                            )
                             if shf_a_val > 0 and shf_b_val > 0:
                                 h_safe = np.maximum(h_above_fwl, 0.01)
                                 sw_eval = np.where(
                                     h_above_fwl > 0,
-                                    np.clip((h_safe / shf_a_val) ** (-1.0 / max(0.01, shf_b_val)), 0.02, 1.0),
+                                    np.clip(
+                                        (h_safe / shf_a_val)
+                                        ** (-1.0 / max(0.01, shf_b_val)),
+                                        0.02,
+                                        1.0,
+                                    ),
                                     1.0,
                                 )
-                                shf_series = pd.Series(sw_eval, index=wdf.index, dtype=float)
+                                shf_series = pd.Series(
+                                    sw_eval, index=wdf.index, dtype=float
+                                )
                 except Exception:
                     pass
 
-            zones_col = next((c for c in ("ZONES", "ZONE") if c.upper() in [x.upper() for x in wdf.columns]), None)
+            zones_col = next(
+                (
+                    c
+                    for c in ("ZONES", "ZONE")
+                    if c.upper() in [x.upper() for x in wdf.columns]
+                ),
+                None,
+            )
             zones = (
                 wdf[zones_col].fillna("ALL").astype(str)
                 if zones_col is not None
@@ -17646,7 +17763,8 @@ def workspace_multi_well_volumetrics(
                         if pd.notna(row.get("av_phit")) and row.get("av_phit") > 0
                         else (
                             row.get("av_phit_pay")
-                            if pd.notna(row.get("av_phit_pay")) and row.get("av_phit_pay") > 0
+                            if pd.notna(row.get("av_phit_pay"))
+                            and row.get("av_phit_pay") > 0
                             else 0.0
                         )
                     )
@@ -17654,7 +17772,11 @@ def workspace_multi_well_volumetrics(
                     sw_v = float(
                         row.get("av_swt")
                         if pd.notna(row.get("av_swt"))
-                        else (row.get("av_sw_pay") if pd.notna(row.get("av_sw_pay")) else 1.0)
+                        else (
+                            row.get("av_sw_pay")
+                            if pd.notna(row.get("av_sw_pay"))
+                            else 1.0
+                        )
                     )
                     # Geometric mean Permeability for this cutoff stage
                     perm_v = float(
@@ -17662,32 +17784,40 @@ def workspace_multi_well_volumetrics(
                         if pd.notna(row.get("av_perm_gm")) and row.get("av_perm_gm") > 0
                         else (
                             row.get("av_perm_geom_pay")
-                            if pd.notna(row.get("av_perm_geom_pay")) and row.get("av_perm_geom_pay") > 0
+                            if pd.notna(row.get("av_perm_geom_pay"))
+                            and row.get("av_perm_geom_pay") > 0
                             else (
                                 row.get("av_perm_am")
-                                if pd.notna(row.get("av_perm_am")) and row.get("av_perm_am") > 0
+                                if pd.notna(row.get("av_perm_am"))
+                                and row.get("av_perm_am") > 0
                                 else 0.0
                             )
                         )
                     )
-                    hcpt_v = float(
-                        row.get("hcpt", net_v * phi_v * (1.0 - sw_v))
-                    )
+                    hcpt_v = float(row.get("hcpt", net_v * phi_v * (1.0 - sw_v)))
 
                     # Average SHF water saturation for this flag interval (if available)
                     sw_shf_v = None
                     if shf_series is not None:
-                        flag_samples_mask = (zones == z_name)
+                        flag_samples_mask = zones == z_name
                         if flag_label == "ROCK":
-                            flag_samples_mask = flag_samples_mask & (phit.fillna(0.0) >= phi_cut)
+                            flag_samples_mask = flag_samples_mask & (
+                                phit.fillna(0.0) >= phi_cut
+                            )
                         elif flag_label == "RES":
-                            flag_samples_mask = flag_samples_mask & (vclay.fillna(1.0) <= vsh_cut) & (phit.fillna(0.0) >= phi_cut)
+                            flag_samples_mask = (
+                                flag_samples_mask
+                                & (vclay.fillna(1.0) <= vsh_cut)
+                                & (phit.fillna(0.0) >= phi_cut)
+                            )
                         elif flag_label == "PAY":
                             flag_samples_mask = flag_samples_mask & pay_mask
 
                         z_shf = shf_series[flag_samples_mask].to_numpy(dtype=float)
                         z_phi = phit[flag_samples_mask].to_numpy(dtype=float)
-                        valid_shf = np.isfinite(z_shf) & np.isfinite(z_phi) & (z_shf > 0)
+                        valid_shf = (
+                            np.isfinite(z_shf) & np.isfinite(z_phi) & (z_shf > 0)
+                        )
                         if np.any(valid_shf):
                             pv = np.maximum(0.0, z_phi[valid_shf])
                             pv_sum = float(np.sum(pv))
@@ -17724,7 +17854,11 @@ def workspace_multi_well_volumetrics(
                             for d_val in z_tvd:
                                 if ref_goc is not None and d_val <= ref_goc:
                                     gas_count += 1
-                                elif ref_goc is not None and ref_owc is not None and ref_goc < d_val <= ref_owc:
+                                elif (
+                                    ref_goc is not None
+                                    and ref_owc is not None
+                                    and ref_goc < d_val <= ref_owc
+                                ):
                                     oil_count += 1
                                 elif ref_goc is None and ref_owc is not None:
                                     if d_val <= ref_owc:
@@ -17791,8 +17925,14 @@ def workspace_multi_well_volumetrics(
                                 "vsh": vclay_col or "None",
                                 "phi": phi_col or "None",
                                 "sw": sw_col or "None",
-                                "perm": perm_col or ("Estimated (phi)" if perm_col is None else "None"),
-                                "shf": shf_col or ("Computed (Step 5)" if shf_series is not None else "None"),
+                                "perm": perm_col
+                                or ("Estimated (phi)" if perm_col is None else "None"),
+                                "shf": shf_col
+                                or (
+                                    "Computed (Step 5)"
+                                    if shf_series is not None
+                                    else "None"
+                                ),
                             },
                         }
                     )
@@ -17861,11 +18001,19 @@ def workspace_multi_well_volumetrics(
             res_rows = [r for r in rows if r.get("flag") == "RES"]
 
             gross_vals = [r["gross"] for r in pay_rows if r["gross"] > 0]
-            net_res_vals = [r["net"] for r in res_rows] if res_rows else [r["net"] for r in pay_rows]
+            net_res_vals = (
+                [r["net"] for r in res_rows]
+                if res_rows
+                else [r["net"] for r in pay_rows]
+            )
             net_pay_vals = [r["net"] for r in pay_rows]
             net_oil_pay_vals = [r.get("net_oil_pay", r["net"]) for r in pay_rows]
             net_gas_pay_vals = [r.get("net_gas_pay", 0.0) for r in pay_rows]
-            phie_vals = [r.get("phit", r.get("phie", 0.0)) for r in pay_rows if r.get("phit", r.get("phie", 0.0)) > 0]
+            phie_vals = [
+                r.get("phit", r.get("phie", 0.0))
+                for r in pay_rows
+                if r.get("phit", r.get("phie", 0.0)) > 0
+            ]
             sw_vals = [r["sw"] for r in pay_rows if r["sw"] > 0]
             perm_vals = [r["perm_geom"] for r in pay_rows if r["perm_geom"] > 0]
             hcpt_vals = [r["hcpt"] for r in pay_rows]
@@ -18475,7 +18623,11 @@ def workspace_multi_well_volumetrics(
                 primary_owc = None
                 primary_goc = inherited_contacts.get("GOC")
             elif is_oil_regime:
-                primary_owc = shf_global_fwl or inherited_contacts.get("OWC") or inherited_contacts.get("FWL")
+                primary_owc = (
+                    shf_global_fwl
+                    or inherited_contacts.get("OWC")
+                    or inherited_contacts.get("FWL")
+                )
                 primary_gwc = None
                 primary_goc = inherited_contacts.get("GOC")
             else:
@@ -18517,12 +18669,27 @@ def workspace_multi_well_volumetrics(
             },
             "contacts": {
                 "source": "Inherited from Step 5 SHF"
-                if (req.contact_source == "inherit" and (shf_global_fwl is not None or shf_zonal_fwl))
-                else ("Inherited from FPT / Database" if req.contact_source == "inherit" else "Custom In-Situ TVDSS"),
-                "fwl": round(float(shf_global_fwl), 1) if shf_global_fwl is not None else None,
-                "owc": round(float(primary_owc), 1) if primary_owc is not None else None,
-                "goc": round(float(primary_goc), 1) if primary_goc is not None else None,
-                "gwc": round(float(primary_gwc), 1) if primary_gwc is not None else None,
+                if (
+                    req.contact_source == "inherit"
+                    and (shf_global_fwl is not None or shf_zonal_fwl)
+                )
+                else (
+                    "Inherited from FPT / Database"
+                    if req.contact_source == "inherit"
+                    else "Custom In-Situ TVDSS"
+                ),
+                "fwl": round(float(shf_global_fwl), 1)
+                if shf_global_fwl is not None
+                else None,
+                "owc": round(float(primary_owc), 1)
+                if primary_owc is not None
+                else None,
+                "goc": round(float(primary_goc), 1)
+                if primary_goc is not None
+                else None,
+                "gwc": round(float(primary_gwc), 1)
+                if primary_gwc is not None
+                else None,
                 "fluid_system": shf_fluid_system,
                 "field_regime": (
                     "Gas Reservoir"
@@ -18532,8 +18699,15 @@ def workspace_multi_well_volumetrics(
                         if req.reservoir_type == "oil_only"
                         else (
                             "Gas Cap + Oil Leg"
-                            if (field_st["p50"] > 0 and field_gi["p50"] > field_ag["p50"])
-                            else ("Oil Reservoir (Solution Gas)" if field_st["p50"] > 0 else "Gas Reservoir")
+                            if (
+                                field_st["p50"] > 0
+                                and field_gi["p50"] > field_ag["p50"]
+                            )
+                            else (
+                                "Oil Reservoir (Solution Gas)"
+                                if field_st["p50"] > 0
+                                else "Gas Reservoir"
+                            )
                         )
                     )
                 ),
@@ -18546,14 +18720,18 @@ def workspace_multi_well_volumetrics(
             },
             "parameters": [
                 {
-                    "name": "Drainage Area" if req.mode == "area" else "Gross Rock Volume",
+                    "name": "Drainage Area"
+                    if req.mode == "area"
+                    else "Gross Rock Volume",
                     "symbol": "A" if req.mode == "area" else "GRV",
                     "distribution": "Truncated Normal",
                     "unit": "acres" if req.mode == "area" else "10⁶ m³",
                     "basis": "Seismic closure mapping & fault compartment interpretation",
                 },
                 {
-                    "name": "Net Pay Thickness" if req.mode == "area" else "Net-to-Gross",
+                    "name": "Net Pay Thickness"
+                    if req.mode == "area"
+                    else "Net-to-Gross",
                     "symbol": "h_pay" if req.mode == "area" else "NTG",
                     "distribution": "Truncated Normal",
                     "unit": "ft" if req.mode == "area" else "v/v",

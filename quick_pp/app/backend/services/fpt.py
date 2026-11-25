@@ -57,10 +57,12 @@ class ManualGradientOverride(BaseModel):
         None, description="Alternative to `gradient`: fixed in-situ density (g/cc)"
     )
     anchor_tvdss: Optional[float] = Field(
-        None, description="Anchor TVDSS (display depth unit) for a manual / regional line"
+        None,
+        description="Anchor TVDSS (display depth unit) for a manual / regional line",
     )
     anchor_pressure: Optional[float] = Field(
-        None, description="Anchor pressure (display pressure unit) for a manual / regional line"
+        None,
+        description="Anchor pressure (display pressure unit) for a manual / regional line",
     )
     std_err_gradient: Optional[float] = Field(0.0, ge=0.0)
 
@@ -75,7 +77,9 @@ class PointOverride(BaseModel):
 class AutoClassifyOptions(BaseModel):
     """Configuration options for automatic mobility/supercharge quality flagging and phase clustering."""
 
-    min_mobility: Optional[float] = Field(None, description="Flag TIGHT below this mobility (mD/cP)")
+    min_mobility: Optional[float] = Field(
+        None, description="Flag TIGHT below this mobility (mD/cP)"
+    )
     ransac_residual_threshold: Optional[float] = Field(
         None,
         description="Supercharge threshold (display pressure unit); 0 = automatic (2.5 x MAD)",
@@ -196,7 +200,12 @@ def _resolve_fpt_point_zone(
                         z_val = well_df.loc[idx_near, "ZONES"]
                         if pd.notna(z_val):
                             z_str = str(z_val).strip()
-                            if z_str and z_str.lower() not in ("nan", "none", "unknown", "unzoned"):
+                            if z_str and z_str.lower() not in (
+                                "nan",
+                                "none",
+                                "unknown",
+                                "unzoned",
+                            ):
                                 return z_str, "well_logs"
         except Exception:
             pass
@@ -270,6 +279,16 @@ def _collect_fpt_points(
             except Exception:
                 tvd_arr = np.full(len(md_arr), np.nan)
 
+            w_uom = (
+                getattr(well, "depth_uom", None)
+                or getattr(getattr(well, "_orm_well", None), "depth_uom", None)
+                or "m"
+            )
+            is_well_ft = isinstance(w_uom, str) and w_uom.strip().lower() in (
+                "ft",
+                "feet",
+            )
+
             for i, row in enumerate(ptdf.to_dict(orient="records")):
                 override = row.get("tvdss")
                 if override is not None and np.isfinite(float(override)):
@@ -279,6 +298,23 @@ def _collect_fpt_points(
                 else:
                     tvdss, src = None, "missing"
                 md = float(row["depth"])
+
+                # Storage contract: psi & metres. Normalize MD and TVDSS to metres.
+                # 1. If well is explicitly imperial (depth_uom = ft):
+                if is_well_ft and md > 1000:
+                    md *= 0.3048
+                    if tvdss is not None:
+                        tvdss *= 0.3048
+
+                # 2. Physics & unit mismatch check: TVDSS <= MD.
+                # If TVDSS is ~3.28x MD (or MD is ~3.28x TVDSS), one is in feet and one in metres.
+                if tvdss is not None and md > 0:
+                    ratio = tvdss / md
+                    if 2.5 < ratio < 3.8:  # TVDSS in ft, MD in m
+                        tvdss *= 0.3048
+                    elif 0.27 < ratio < 0.37 and md > 3500:  # MD in ft, TVDSS in m
+                        md *= 0.3048
+
                 z_name, z_src = _resolve_fpt_point_zone(
                     md, row.get("zone"), well_df, tops
                 )
@@ -306,14 +342,21 @@ def _collect_fpt_points(
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
-@router.get("/points", summary="List formation pressure points across wells with resolved TVDSS")
+@router.get(
+    "/points", summary="List formation pressure points across wells with resolved TVDSS"
+)
 def fpt_list_points(
     project_id: int,
     well_names: Optional[str] = Query(None, description="Comma-separated well names"),
 ) -> Dict[str, Any]:
     """List formation pressure points across wells in a project with resolved TVDSS and zone."""
     try:
-        wn_list = [w.strip() for w in well_names.split(",")] if well_names else None
+        if isinstance(well_names, str):
+            wn_list = [w.strip() for w in well_names.split(",") if w.strip()]
+        elif isinstance(well_names, (list, tuple, set)):
+            wn_list = [str(w).strip() for w in well_names if str(w).strip()]
+        else:
+            wn_list = None
         pts = _collect_fpt_points(project_id, wn_list)
         return _sanitize_for_json(
             {
@@ -328,7 +371,9 @@ def fpt_list_points(
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to list FPT points: {e}") from e
+        raise HTTPException(
+            status_code=500, detail=f"Failed to list FPT points: {e}"
+        ) from e
 
 
 def _find_zone_override(
@@ -362,7 +407,9 @@ def _analyze_subset(
         {
             "ID": [p["id"] for p in pts_sub],
             "WELL_NAME": [p["well_name"] for p in pts_sub],
-            "TVDSS": [p["tvdss"] * df_ if p["tvdss"] is not None else np.nan for p in pts_sub],
+            "TVDSS": [
+                p["tvdss"] * df_ if p["tvdss"] is not None else np.nan for p in pts_sub
+            ],
             "PRESSURE": [p["pressure"] * pf for p in pts_sub],
             "FLUID_TYPE": [p["fluid_type"] for p in pts_sub],
             "TEST_QUALITY": [p["test_quality"] for p in pts_sub],
@@ -393,7 +440,9 @@ def _analyze_subset(
             continue
         grad = ov.gradient
         if grad is None and ov.density_gcc is not None:
-            grad = density_to_gradient(ov.density_gcc, req.pressure_unit, req.depth_unit)
+            grad = density_to_gradient(
+                ov.density_gcc, req.pressure_unit, req.depth_unit
+            )
         if grad is None:
             continue
         ov_dict[fl.upper()] = {
@@ -402,8 +451,12 @@ def _analyze_subset(
             "anchor_pressure": ov.anchor_pressure,
             "std_err_gradient": ov.std_err_gradient or 0.0,
         }
-    fpa.fit_all(method=req.regression_method, overrides=ov_dict, allowed_fluids=allowed_fluids)
-    contacts = fpa.estimate_contacts(n_simulations=req.n_simulations, allowed_fluids=allowed_fluids)
+    fpa.fit_all(
+        method=req.regression_method, overrides=ov_dict, allowed_fluids=allowed_fluids
+    )
+    contacts = fpa.estimate_contacts(
+        n_simulations=req.n_simulations, allowed_fluids=allowed_fluids
+    )
     excess = fpa.calculate_excess_pressure(
         req.ref_water_gradient, req.datum_tvdss, req.datum_pressure
     )
@@ -444,7 +497,9 @@ def _analyze_subset(
         "plot_lines": plot_lines,
         "reference": {
             "gradient": m_ref,
-            "density_gcc": gradient_to_density(m_ref, req.pressure_unit, req.depth_unit),
+            "density_gcc": gradient_to_density(
+                m_ref, req.pressure_unit, req.depth_unit
+            ),
             "datum_tvdss": z0,
             "datum_pressure": p0,
         },
@@ -454,7 +509,10 @@ def _analyze_subset(
     }
 
 
-@router.post("/analyze", summary="Fit fluid gradients and estimate contacts with P10/P50/P90 uncertainty")
+@router.post(
+    "/analyze",
+    summary="Fit fluid gradients and estimate contacts with P10/P50/P90 uncertainty",
+)
 def fpt_analyze(project_id: int, req: FPTAnalysisRequest) -> Dict[str, Any]:
     """Run fluid gradient regression, fluid contact intersection, and excess pressure analysis."""
     try:
@@ -480,7 +538,9 @@ def fpt_analyze(project_id: int, req: FPTAnalysisRequest) -> Dict[str, Any]:
 
             pts = [p for p in pts if _matches_zone(p.get("zone") or "")]
         if not pts:
-            raise ValueError("No formation pressure points found for the selected wells / zones.")
+            raise ValueError(
+                "No formation pressure points found for the selected wells / zones."
+            )
 
         overrides = req.point_overrides or {}
         for p in pts:
@@ -498,11 +558,18 @@ def fpt_analyze(project_id: int, req: FPTAnalysisRequest) -> Dict[str, Any]:
             # Group points by zone (or 'Unzoned' if empty)
             zone_pts_map: Dict[str, List[Dict[str, Any]]] = {}
             for p in pts:
-                z_name = p["zone"].strip() if (p.get("zone") and str(p["zone"]).strip()) else "Unzoned"
+                z_name = (
+                    p["zone"].strip()
+                    if (p.get("zone") and str(p["zone"]).strip())
+                    else "Unzoned"
+                )
                 zone_pts_map.setdefault(z_name, []).append(p)
 
             for z_name, z_pts in zone_pts_map.items():
-                z_ov = _find_zone_override(req.overrides_by_zone, z_name) or req.manual_overrides
+                z_ov = (
+                    _find_zone_override(req.overrides_by_zone, z_name)
+                    or req.manual_overrides
+                )
                 sub_res = _analyze_subset(z_pts, req, overrides=z_ov)
                 by_zone_res[z_name] = {
                     "gradients": sub_res["gradients"],
@@ -518,18 +585,28 @@ def fpt_analyze(project_id: int, req: FPTAnalysisRequest) -> Dict[str, Any]:
                 excess = sub_res["excess"]
                 for i, p in enumerate(z_pts):
                     row = fpa_df.iloc[i]
-                    p["tvdss_display"] = None if pd.isna(row["TVDSS"]) else float(row["TVDSS"])
+                    p["tvdss_display"] = (
+                        None if pd.isna(row["TVDSS"]) else float(row["TVDSS"])
+                    )
                     p["pressure_display"] = float(row["PRESSURE"])
                     p["fluid_type"] = row["FLUID_TYPE"]
                     p["test_quality"] = row["TEST_QUALITY"]
-                    p["excess_pressure"] = None if pd.isna(excess.iloc[i]) else float(excess.iloc[i])
-                    p["used_in_fit"] = any(p["id"] in g.point_ids for g in fpa_grads.values())
+                    p["excess_pressure"] = (
+                        None if pd.isna(excess.iloc[i]) else float(excess.iloc[i])
+                    )
+                    p["used_in_fit"] = any(
+                        p["id"] in g.point_ids for g in fpa_grads.values()
+                    )
 
             available_zones = sorted(by_zone_res.keys())
             active = "ALL"
             if req.active_zone and req.active_zone != "ALL":
                 matched_key = next(
-                    (k for k in by_zone_res if k.strip().upper() == req.active_zone.strip().upper()),
+                    (
+                        k
+                        for k in by_zone_res
+                        if k.strip().upper() == req.active_zone.strip().upper()
+                    ),
                     None,
                 )
                 if matched_key:
@@ -552,13 +629,26 @@ def fpt_analyze(project_id: int, req: FPTAnalysisRequest) -> Dict[str, Any]:
                     for w in zr["warnings"]:
                         top_warnings.append(f"[{z_name}] {w}")
                 # For top-level fallback, use the zone with the most points
-                largest_z = max(by_zone_res.keys(), key=lambda k: by_zone_res[k]["n_points"]) if by_zone_res else None
+                largest_z = (
+                    max(by_zone_res.keys(), key=lambda k: by_zone_res[k]["n_points"])
+                    if by_zone_res
+                    else None
+                )
                 top_gradients = by_zone_res[largest_z]["gradients"] if largest_z else {}
                 top_contacts = by_zone_res[largest_z]["contacts"] if largest_z else {}
-                top_plot_lines = by_zone_res[largest_z]["plot_lines"] if largest_z else {}
-                top_reference = by_zone_res[largest_z]["reference"] if largest_z else {
-                    "gradient": 0.0, "density_gcc": 1.0, "datum_tvdss": 0.0, "datum_pressure": 0.0
-                }
+                top_plot_lines = (
+                    by_zone_res[largest_z]["plot_lines"] if largest_z else {}
+                )
+                top_reference = (
+                    by_zone_res[largest_z]["reference"]
+                    if largest_z
+                    else {
+                        "gradient": 0.0,
+                        "density_gcc": 1.0,
+                        "datum_tvdss": 0.0,
+                        "datum_pressure": 0.0,
+                    }
+                )
         else:
             # Fit globally across all points
             sub_res = _analyze_subset(pts, req, overrides=req.manual_overrides)
@@ -567,12 +657,18 @@ def fpt_analyze(project_id: int, req: FPTAnalysisRequest) -> Dict[str, Any]:
             excess = sub_res["excess"]
             for i, p in enumerate(pts):
                 row = fpa_df.iloc[i]
-                p["tvdss_display"] = None if pd.isna(row["TVDSS"]) else float(row["TVDSS"])
+                p["tvdss_display"] = (
+                    None if pd.isna(row["TVDSS"]) else float(row["TVDSS"])
+                )
                 p["pressure_display"] = float(row["PRESSURE"])
                 p["fluid_type"] = row["FLUID_TYPE"]
                 p["test_quality"] = row["TEST_QUALITY"]
-                p["excess_pressure"] = None if pd.isna(excess.iloc[i]) else float(excess.iloc[i])
-                p["used_in_fit"] = any(p["id"] in g.point_ids for g in fpa_grads.values())
+                p["excess_pressure"] = (
+                    None if pd.isna(excess.iloc[i]) else float(excess.iloc[i])
+                )
+                p["used_in_fit"] = any(
+                    p["id"] in g.point_ids for g in fpa_grads.values()
+                )
 
             top_gradients = sub_res["gradients"]
             top_contacts = sub_res["contacts"]
@@ -617,7 +713,10 @@ def fpt_analyze(project_id: int, req: FPTAnalysisRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"FPT analysis failed: {e}") from e
 
 
-@router.patch("/points", summary="Persist fluid phase / test quality / zone assignments for pressure points")
+@router.patch(
+    "/points",
+    summary="Persist fluid phase / test quality / zone assignments for pressure points",
+)
 def fpt_patch_points(project_id: int, req: FPTPointsPatchRequest) -> Dict[str, Any]:
     """Persist fluid phase, test quality, zone, or TVDSS overrides for pressure points."""
     if not req.updates:
@@ -626,7 +725,9 @@ def fpt_patch_points(project_id: int, req: FPTPointsPatchRequest) -> Dict[str, A
         by_well: Dict[str, List[Dict[str, Any]]] = {}
         for u in req.updates:
             fields = u.fields or [
-                f for f in ("fluid_type", "test_quality", "zone", "tvdss") if getattr(u, f) is not None
+                f
+                for f in ("fluid_type", "test_quality", "zone", "tvdss")
+                if getattr(u, f) is not None
             ]
             payload: Dict[str, Any] = {"test_id": u.test_id}
             for f in fields:
@@ -646,7 +747,9 @@ def fpt_patch_points(project_id: int, req: FPTPointsPatchRequest) -> Dict[str, A
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to update FPT points: {e}") from e
+        raise HTTPException(
+            status_code=500, detail=f"Failed to update FPT points: {e}"
+        ) from e
 
 
 @router.post(
@@ -676,17 +779,30 @@ def fpt_apply_contacts(project_id: int, req: FPTApplyContactsRequest) -> Dict[st
                     surveys_df = None
                 wdf = _get_merged_dataframe_sync(project_id, wn)
                 if wdf is None or wdf.empty or "DEPTH" not in wdf.columns:
-                    results.append({"well_name": wn, "written": {}, "skipped": "no depth data"})
+                    results.append(
+                        {"well_name": wn, "written": {}, "skipped": "no depth data"}
+                    )
                     continue
-                md = np.sort(pd.to_numeric(wdf["DEPTH"], errors="coerce").dropna().unique())
+                md = np.sort(
+                    pd.to_numeric(wdf["DEPTH"], errors="coerce").dropna().unique()
+                )
                 tvd = _resolve_well_tvd_array(md, wdf, surveys_df)
                 ok = np.isfinite(tvd)
                 if ok.sum() < 2:
-                    results.append({"well_name": wn, "written": {}, "skipped": "no TVD/TVDSS"})
+                    results.append(
+                        {"well_name": wn, "written": {}, "skipped": "no TVD/TVDSS"}
+                    )
                     continue
                 md_ok, tvd_ok = md[ok], tvd[ok]
+                if len(tvd_ok) > 0 and len(md_ok) > 0:
+                    med_tvd = float(np.median(tvd_ok))
+                    med_md = float(np.median(md_ok))
+                    if med_md > 0 and med_tvd > 0 and 2.5 < (med_tvd / med_md) < 3.8:
+                        tvd_ok = tvd_ok * 0.3048
                 # Keep monotonic TVDSS branch for inversion (ignore horizontal / up-dip sections)
-                mono = np.concatenate([[True], np.diff(np.maximum.accumulate(tvd_ok)) > 1e-6])
+                mono = np.concatenate(
+                    [[True], np.diff(np.maximum.accumulate(tvd_ok)) > 1e-6]
+                )
                 md_ok, tvd_ok = md_ok[mono], tvd_ok[mono]
                 written: Dict[str, float] = {}
                 outside: List[str] = []
@@ -694,13 +810,15 @@ def fpt_apply_contacts(project_id: int, req: FPTApplyContactsRequest) -> Dict[st
                 for name, z in contacts.items():
                     if tvd_ok[0] <= z <= tvd_ok[-1]:
                         md_c = float(np.interp(z, tvd_ok, md_ok))
-                        payload.append({
-                            "name": name,
-                            "depth": round(md_c, 3),
-                            "contact_type": name,
-                            "source": "FPT Analysis",
-                            "remarks": "Formation Pressure Test gradient intersection",
-                        })
+                        payload.append(
+                            {
+                                "name": name,
+                                "depth": round(md_c, 3),
+                                "contact_type": name,
+                                "source": "FPT Analysis",
+                                "remarks": "Formation Pressure Test gradient intersection",
+                            }
+                        )
                         written[name] = round(md_c, 3)
                     else:
                         outside.append(name)
@@ -727,4 +845,6 @@ def fpt_apply_contacts(project_id: int, req: FPTApplyContactsRequest) -> Dict[st
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to apply contacts: {e}") from e
+        raise HTTPException(
+            status_code=500, detail=f"Failed to apply contacts: {e}"
+        ) from e

@@ -383,3 +383,62 @@ def test_zone_overrides_case_insensitive_and_fallback(fpt_client):
     assert sand_a_alias_oil["density_gcc"] == pytest.approx(0.72, abs=0.01)
 
 
+def test_tvdss_feet_unit_reconciliation_preventing_inflation(fpt_client):
+    """Verify that TVDSS provided in feet (e.g. 8090 ft) for a metric well (MD ~ 2491.7 m)
+    does not shoot to 26542 ft (~3.28x / 4x) when analyzed in display unit 'ft'.
+    """
+    pid, session = fpt_client
+    w = Well(db_session=session, project_id=pid, name="21-25-2", uwi="21-25-2", depth_uom="m")
+    w.save()
+
+    # Pressure tests with MD in metres (2491.7 m) and TVDSS stored in feet (8090.0 ft)
+    w.add_pressure_tests(
+        [
+            {"depth": 2491.7, "pressure": 5848.0, "tvdss": 8090.0, "fluid_type": "OIL"},
+            {"depth": 2507.0, "pressure": 5863.0, "tvdss": 8139.4, "fluid_type": "OIL"},
+            {"depth": 2516.3, "pressure": 5869.0, "tvdss": 8164.4, "fluid_type": "OIL"},
+            {"depth": 2551.8, "pressure": 5892.0, "tvdss": 8287.5, "fluid_type": "OIL"},
+        ]
+    )
+    session.commit()
+
+    pts_res = fpt_service.fpt_list_points(pid, well_names=["21-25-2"])
+    pts = pts_res["points"]
+    p0 = next(p for p in pts if p["md"] == pytest.approx(2491.7, abs=0.1))
+    # Stored canonical TVDSS should be converted to metres (~2465.8 m), NOT left at 8090 m
+    assert p0["tvdss"] == pytest.approx(8090.0 * 0.3048, abs=0.5)
+
+    # When analyzed in feet ('ft'):
+    # TVDSS should display as 8090 ft, NOT shoot to 26542 ft!
+    res_ft = _analyze(pid, well_names=["21-25-2"], depth_unit="ft", pressure_unit="psi", n_simulations=100)
+    p0_ft = next(p for p in res_ft["points"] if p["md"] == pytest.approx(2491.7, abs=0.1))
+    assert p0_ft["tvdss_display"] == pytest.approx(8090.0, abs=1.0)
+    assert p0_ft["tvdss_display"] < 10000.0  # Must not shoot to ~26542 ft!
+
+    # Oil gradient must be ~0.22 psi/ft (not 0.0711 psi/ft)
+    oil_grad = res_ft["gradients"]["OIL"]["gradient"]
+    assert 0.18 < oil_grad < 0.28
+    # Oil density must be ~0.51 g/cc (not 0.164 g/cc)
+    oil_rho = res_ft["gradients"]["OIL"]["density_gcc"]
+    assert 0.45 < oil_rho < 0.65
+
+
+def test_resolve_well_tvd_array_unit_alignment():
+    """Verify _resolve_well_tvd_array reconciles when well_df TVDSS is in feet and target MD in metres."""
+    # Well log dataframe with DEPTH in metres (~2500m) and TVDSS in feet (~8090ft)
+    depths_m = np.linspace(2480.0, 2560.0, 81)
+    tvdss_ft = depths_m * (1.0 / 0.3048) - 85.0  # ~8050 to 8315 ft
+    well_df = pd.DataFrame({"DEPTH": depths_m, "TVDSS": tvdss_ft})
+
+    target_md_m = np.array([2491.7, 2507.0, 2551.8])
+    resolved_m = ws_service._resolve_well_tvd_array(target_md_m, well_df, None)
+
+    # Resolved TVDSS must be in metres (~2465 m), not in feet (~8090 ft)
+    assert np.all(resolved_m < 3000.0)
+    assert np.all(resolved_m > 2400.0)
+    expected_m = (target_md_m * (1.0 / 0.3048) - 85.0) * 0.3048
+    assert resolved_m == pytest.approx(expected_m, abs=0.5)
+
+
+
+
