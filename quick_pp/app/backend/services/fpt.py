@@ -10,7 +10,7 @@ Storage units are psi (pressure) and metres (MD / TVDSS); analysis results are r
 requested display units (psi | bar | kPa, m | ft).
 """
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -149,6 +149,80 @@ def _zone_for_md(md: float, tops: List[Dict[str, Any]]) -> str:
     return zone
 
 
+def _resolve_fpt_point_zone(
+    md: float,
+    stored_zone: Optional[str],
+    well_df: Optional[pd.DataFrame],
+    tops: List[Dict[str, Any]],
+) -> Tuple[str, str]:
+    """Resolve geological zone for a formation pressure test point with fallback and unit alignment.
+
+    Priority:
+    1. Explicit stored zone on the pressure test record (if non-empty).
+    2. Continuous ZONES curve in well_df at the nearest depth sample (with unit scale check).
+    3. Formation tops intervals (with unit scale check).
+    """
+    if stored_zone and str(stored_zone).strip():
+        z_str = str(stored_zone).strip()
+        if z_str.lower() not in ("nan", "none", "unknown", "unzoned"):
+            return z_str, "stored"
+
+    # 1. Try well_df continuous ZONES curve
+    if (
+        well_df is not None
+        and not well_df.empty
+        and "DEPTH" in well_df.columns
+        and "ZONES" in well_df.columns
+    ):
+        try:
+            w_depths = pd.to_numeric(well_df["DEPTH"], errors="coerce")
+            valid_d = w_depths.dropna()
+            if not valid_d.empty:
+                med_w = float(valid_d.median())
+                target_md = float(md)
+                if med_w > 0:
+                    ratio = target_md / med_w
+                    if 2.8 < ratio < 3.6:  # md in ft, well_df in m
+                        target_md *= 0.3048
+                    elif 0.27 < ratio < 0.35:  # md in m, well_df in ft
+                        target_md /= 0.3048
+
+                diff = (w_depths - target_md).abs()
+                idx_near = diff.idxmin()
+                if pd.notna(idx_near):
+                    span = abs(float(valid_d.iloc[-1] - valid_d.iloc[0]))
+                    tol = max(5.0, span * 0.05) if span > 0 else 5.0
+                    if float(diff.loc[idx_near]) <= tol:
+                        z_val = well_df.loc[idx_near, "ZONES"]
+                        if pd.notna(z_val):
+                            z_str = str(z_val).strip()
+                            if z_str and z_str.lower() not in ("nan", "none", "unknown", "unzoned"):
+                                return z_str, "well_logs"
+        except Exception:
+            pass
+
+    # 2. Fallback to tops with unit scale alignment
+    if tops:
+        try:
+            top_depths = [float(t["depth"]) for t in tops if t.get("depth") is not None]
+            target_md = float(md)
+            if top_depths:
+                med_t = float(np.median(top_depths))
+                if med_t > 0:
+                    ratio = target_md / med_t
+                    if 2.8 < ratio < 3.6:  # md in ft, tops in m
+                        target_md *= 0.3048
+                    elif 0.27 < ratio < 0.35:  # md in m, tops in ft
+                        target_md /= 0.3048
+            resolved = _zone_for_md(target_md, tops)
+            if resolved:
+                return resolved, "tops"
+        except Exception:
+            pass
+
+    return "", "missing"
+
+
 def _collect_fpt_points(
     project_id: int, well_names: Optional[List[str]] = None
 ) -> List[Dict[str, Any]]:
@@ -205,6 +279,9 @@ def _collect_fpt_points(
                 else:
                     tvdss, src = None, "missing"
                 md = float(row["depth"])
+                z_name, z_src = _resolve_fpt_point_zone(
+                    md, row.get("zone"), well_df, tops
+                )
                 points.append(
                     {
                         "id": int(row["test_id"]),
@@ -218,8 +295,8 @@ def _collect_fpt_points(
                         "temperature": row.get("temperature"),
                         "fluid_type": row.get("fluid_type") or "UNASSIGNED",
                         "test_quality": row.get("test_quality") or "VALID",
-                        "zone": (row.get("zone") or "").strip() or _zone_for_md(md, tops),
-                        "zone_source": "stored" if (row.get("zone") or "").strip() else "tops",
+                        "zone": z_name,
+                        "zone_source": z_src,
                         "remarks": row.get("remarks") or "",
                     }
                 )
@@ -252,6 +329,26 @@ def fpt_list_points(
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list FPT points: {e}") from e
+
+
+def _find_zone_override(
+    overrides_by_zone: Optional[Dict[str, Any]], z_name: str
+) -> Optional[Any]:
+    """Resolve zone manual overrides case-insensitively with alias support."""
+    if not overrides_by_zone or not z_name:
+        return None
+    if z_name in overrides_by_zone:
+        return overrides_by_zone[z_name]
+    z_clean = z_name.strip().upper()
+    for k, v in overrides_by_zone.items():
+        if k and k.strip().upper() == z_clean:
+            return v
+    for k, v in overrides_by_zone.items():
+        if k:
+            k_clean = k.strip().upper()
+            if k_clean in z_clean or z_clean in k_clean:
+                return v
+    return None
 
 
 def _analyze_subset(
@@ -363,8 +460,25 @@ def fpt_analyze(project_id: int, req: FPTAnalysisRequest) -> Dict[str, Any]:
     try:
         pts = _collect_fpt_points(project_id, req.well_names)
         if req.zones:
-            allowed_z = {z.strip() for z in req.zones if z and z.strip()}
-            pts = [p for p in pts if p["zone"] in allowed_z]
+            allowed_z_raw = {str(z).strip() for z in req.zones if z and str(z).strip()}
+            allowed_z_upper = {z.upper() for z in allowed_z_raw}
+
+            def _matches_zone(z_name: str) -> bool:
+                if not z_name:
+                    return False
+                z_clean = z_name.strip()
+                if z_clean in allowed_z_raw:
+                    return True
+                z_up = z_clean.upper()
+                if z_up in allowed_z_upper:
+                    return True
+                # Check sub-formation / alias matches (e.g. 'FULMAR SAND' matching 'FULMAR')
+                for az in allowed_z_upper:
+                    if az in z_up or z_up in az:
+                        return True
+                return False
+
+            pts = [p for p in pts if _matches_zone(p.get("zone") or "")]
         if not pts:
             raise ValueError("No formation pressure points found for the selected wells / zones.")
 
@@ -388,7 +502,7 @@ def fpt_analyze(project_id: int, req: FPTAnalysisRequest) -> Dict[str, Any]:
                 zone_pts_map.setdefault(z_name, []).append(p)
 
             for z_name, z_pts in zone_pts_map.items():
-                z_ov = (req.overrides_by_zone or {}).get(z_name) or req.manual_overrides
+                z_ov = _find_zone_override(req.overrides_by_zone, z_name) or req.manual_overrides
                 sub_res = _analyze_subset(z_pts, req, overrides=z_ov)
                 by_zone_res[z_name] = {
                     "gradients": sub_res["gradients"],
@@ -412,7 +526,18 @@ def fpt_analyze(project_id: int, req: FPTAnalysisRequest) -> Dict[str, Any]:
                     p["used_in_fit"] = any(p["id"] in g.point_ids for g in fpa_grads.values())
 
             available_zones = sorted(by_zone_res.keys())
-            active = req.active_zone if (req.active_zone and req.active_zone in by_zone_res) else ("ALL" if len(available_zones) > 1 else available_zones[0])
+            active = "ALL"
+            if req.active_zone and req.active_zone != "ALL":
+                matched_key = next(
+                    (k for k in by_zone_res if k.strip().upper() == req.active_zone.strip().upper()),
+                    None,
+                )
+                if matched_key:
+                    active = matched_key
+                elif len(available_zones) == 1:
+                    active = available_zones[0]
+            elif len(available_zones) == 1:
+                active = available_zones[0]
 
             if active in by_zone_res:
                 top_gradients = by_zone_res[active]["gradients"]

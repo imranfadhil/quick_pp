@@ -292,3 +292,94 @@ def test_analyze_by_zone(fpt_client):
     assert r_b["active_zone"] == "Sand-B"
     assert r_b["gradients"]["OIL"]["gradient"] == pytest.approx(PSI_PER_M_OIL, abs=0.05)
     assert r_b["contacts"]["OWC"]["tvdss_p50"] == pytest.approx(1815.0, abs=1.0)
+
+
+def test_zone_filtering_case_insensitive_and_aliases(fpt_client):
+    pid, _ = fpt_client
+    # Lowercase / uppercase zone filter should cleanly match Sand-A
+    r_lower = _analyze(pid, zones=["sand-a"], n_simulations=100)
+    assert r_lower["n_points"] == 9
+    assert all("Sand-A" in p["zone"] for p in r_lower["points"])
+
+    r_upper = _analyze(pid, zones=["SAND-A"], n_simulations=100)
+    assert r_upper["n_points"] == 9
+
+    # Alias / substring filter: 'Sand-A Formation' matching 'Sand-A'
+    r_alias = _analyze(pid, zones=["Sand-A Formation"], n_simulations=100)
+    assert r_alias["n_points"] == 9
+
+
+def test_zone_resolution_from_well_logs_and_unit_alignment():
+    # Test _resolve_fpt_point_zone directly
+    from quick_pp.app.backend.services.fpt import _resolve_fpt_point_zone
+
+    # Case 1: Stored zone wins
+    z, src = _resolve_fpt_point_zone(1000.0, "Fulmar", None, [])
+    assert z == "Fulmar"
+    assert src == "stored"
+
+    # Case 2: Resolved from well_df ZONES curve with depth in meters
+    wdf_m = pd.DataFrame({
+        "DEPTH": np.linspace(2400.0, 2500.0, 101),
+        "ZONES": ["Fulmar"] * 60 + ["Skagerrak"] * 41,
+    })
+    z_m, src_m = _resolve_fpt_point_zone(2420.0, None, wdf_m, [])
+    assert z_m == "Fulmar"
+    assert src_m == "well_logs"
+
+    # Case 3: md in feet (7939.6 ft ~ 2420 m) while well_df is in meters
+    z_ft, src_ft = _resolve_fpt_point_zone(7939.6, None, wdf_m, [])
+    assert z_ft == "Fulmar"
+    assert src_ft == "well_logs"
+
+    # Case 4: Fallback to formation tops with unit alignment (md in ft, tops in m)
+    tops_m = [
+        {"name": "Fulmar", "depth": 2400.0},
+        {"name": "Skagerrak", "depth": 2492.0},
+    ]
+    z_top, src_top = _resolve_fpt_point_zone(7940.0, None, None, tops_m)
+    assert z_top == "Fulmar"
+    assert src_top == "tops"
+
+
+def test_zone_overrides_case_insensitive_and_fallback(fpt_client):
+    pid, _ = fpt_client
+
+    # 1. Zone override matching case-insensitively ('sand-a' matching 'Sand-A')
+    res_ov = _analyze(
+        pid,
+        group_by_zone=True,
+        overrides_by_zone={
+            "sand-a": {
+                "OIL": {
+                    "density_gcc": 0.80,
+                    "mode": "fixed",
+                }
+            }
+        },
+        n_simulations=100,
+    )
+    assert "Sand-A" in res_ov["by_zone"]
+    sand_a_oil = res_ov["by_zone"]["Sand-A"]["gradients"]["OIL"]
+    assert sand_a_oil["density_gcc"] == pytest.approx(0.80, abs=0.01)
+    assert sand_a_oil["method"] == "fixed_gradient"
+
+    # 2. Substring / alias zone override ('Sand-A Reservoir' matching 'Sand-A')
+    res_alias_ov = _analyze(
+        pid,
+        group_by_zone=True,
+        overrides_by_zone={
+            "Sand-A Reservoir": {
+                "OIL": {
+                    "density_gcc": 0.72,
+                    "mode": "fixed",
+                }
+            }
+        },
+        n_simulations=100,
+    )
+    assert "Sand-A" in res_alias_ov["by_zone"]
+    sand_a_alias_oil = res_alias_ov["by_zone"]["Sand-A"]["gradients"]["OIL"]
+    assert sand_a_alias_oil["density_gcc"] == pytest.approx(0.72, abs=0.01)
+
+

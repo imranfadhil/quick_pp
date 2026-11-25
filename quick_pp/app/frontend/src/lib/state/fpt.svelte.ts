@@ -10,7 +10,11 @@ import { getJson, patchJson, postJson } from '$lib/api/client';
 import { METERS_PER_FOOT, type DepthUnit } from '$lib/utils/depthUnits';
 import { appStatus } from './status.svelte';
 import { projectData } from './projectData.svelte';
-import { zoneSelectionKey, zoneSelectionLabel } from './projectParams.svelte';
+import {
+	resolveMatchingProjectParamsEntry,
+	zoneSelectionKey,
+	zoneSelectionLabel
+} from './projectParams.svelte';
 import { workbench } from './workbench.svelte';
 
 export type FptFluid = 'GAS' | 'OIL' | 'WATER' | 'UNASSIGNED';
@@ -280,10 +284,21 @@ class FptState {
 	getOverridesForZone(zone?: string): Record<FptPhase, FptOverride> {
 		const z = zone ?? this.activeZone;
 		if (!z || z === 'ALL') return this.overrides;
-		if (!this.overridesByZone[z]) {
-			this.overridesByZone[z] = DEFAULT_OVERRIDES();
+		const existingKey = Object.keys(this.overridesByZone).find(
+			(k) => k.trim().toUpperCase() === z.trim().toUpperCase()
+		);
+		const targetKey = existingKey ?? z;
+		if (!this.overridesByZone[targetKey]) {
+			this.overridesByZone[targetKey] = DEFAULT_OVERRIDES();
+		} else {
+			const def = DEFAULT_OVERRIDES();
+			for (const ph of FPT_PHASES) {
+				if (!this.overridesByZone[targetKey][ph]) {
+					this.overridesByZone[targetKey][ph] = def[ph];
+				}
+			}
 		}
-		return this.overridesByZone[z];
+		return this.overridesByZone[targetKey];
 	}
 
 	setOverride(ph: FptPhase, patch: Partial<FptOverride>, zone?: string): void {
@@ -291,10 +306,14 @@ class FptState {
 		if (!z || z === 'ALL') {
 			this.overrides = { ...this.overrides, [ph]: { ...this.overrides[ph], ...patch } };
 		} else {
-			const current = this.getOverridesForZone(z);
+			const existingKey = Object.keys(this.overridesByZone).find(
+				(k) => k.trim().toUpperCase() === z.trim().toUpperCase()
+			);
+			const targetKey = existingKey ?? z;
+			const current = this.getOverridesForZone(targetKey);
 			this.overridesByZone = {
 				...this.overridesByZone,
-				[z]: { ...current, [ph]: { ...current[ph], ...patch } }
+				[targetKey]: { ...current, [ph]: { ...current[ph], ...patch } }
 			};
 		}
 	}
@@ -305,6 +324,10 @@ class FptState {
 			this.overrides = DEFAULT_OVERRIDES();
 		} else {
 			const next = { ...this.overridesByZone };
+			const existingKey = Object.keys(next).find(
+				(k) => k.trim().toUpperCase() === z.trim().toUpperCase()
+			);
+			if (existingKey) delete next[existingKey];
 			delete next[z];
 			this.overridesByZone = next;
 		}
@@ -429,9 +452,14 @@ class FptState {
 	/** Contact depth in metres TVDSS (storage/SHF reference). Optional zone target. */
 	contactTvdssM(key: 'GOC' | 'OWC' | 'GWC', zone?: string): number | null {
 		const targetZone = zone ?? (this.activeZone !== 'ALL' ? this.activeZone : undefined);
-		if (targetZone && this.result?.by_zone?.[targetZone]) {
-			const c = this.result.by_zone[targetZone].contacts[key];
-			return c && Number.isFinite(c.tvdss_p50_m) ? c.tvdss_p50_m : null;
+		if (targetZone && this.result?.by_zone) {
+			const matchedKey = Object.keys(this.result.by_zone).find(
+				(k) => k.trim().toUpperCase() === targetZone.trim().toUpperCase()
+			);
+			if (matchedKey && this.result.by_zone[matchedKey]) {
+				const c = this.result.by_zone[matchedKey].contacts[key];
+				return c && Number.isFinite(c.tvdss_p50_m) ? c.tvdss_p50_m : null;
+			}
 		}
 		const c = this.result?.contacts?.[key];
 		return c && Number.isFinite(c.tvdss_p50_m) ? c.tvdss_p50_m : null;
@@ -511,14 +539,16 @@ class FptState {
 		};
 	}
 
-	/** Restore saved settings for the current zone selection (once per project + zone key). */
-	restoreSettings(force = false): void {
-		const key = `${workbench.projectId}|${zoneSelectionKey()}`;
-		if (!force && this.settingsLoadedKey === key) return;
+	/** Restore saved settings for the current zone selection. */
+	restoreSettings(force = false): boolean {
+		const modMap = (projectData.projectModuleParams as any)?.fpt;
+		const resolved = resolveMatchingProjectParamsEntry(modMap, workbench.selectedZones);
+		const p = resolved?.entry?.params;
+		if (!p) return false;
+		const key = `${workbench.projectId}|${resolved?.key ?? zoneSelectionKey()}`;
+		if (!force && this.settingsLoadedKey === key) return false;
 		this.settingsLoadedKey = key;
-		const entry = (projectData.projectModuleParams as any)?.fpt?.[zoneSelectionKey()];
-		const p = entry?.params;
-		if (!p) return;
+
 		if (p.pressureUnit) this.pressureUnit = p.pressureUnit;
 		if (p.depthUnit) this.depthUnit = p.depthUnit;
 		if (p.method) this.method = p.method;
@@ -526,8 +556,26 @@ class FptState {
 		if (typeof p.useZoneFilter === 'boolean') this.useZoneFilter = p.useZoneFilter;
 		if (typeof p.groupZones === 'boolean') this.groupZones = p.groupZones;
 		if (p.activeZone) this.activeZone = p.activeZone;
-		if (p.overrides) this.overrides = { ...DEFAULT_OVERRIDES(), ...p.overrides };
-		if (p.overridesByZone) this.overridesByZone = p.overridesByZone;
+		if (p.overrides) {
+			const def = DEFAULT_OVERRIDES();
+			this.overrides = {
+				GAS: { ...def.GAS, ...(p.overrides.GAS ?? {}) },
+				OIL: { ...def.OIL, ...(p.overrides.OIL ?? {}) },
+				WATER: { ...def.WATER, ...(p.overrides.WATER ?? {}) }
+			};
+		}
+		if (p.overridesByZone && typeof p.overridesByZone === 'object') {
+			const merged: Record<string, Record<FptPhase, FptOverride>> = {};
+			for (const [z, ovMap] of Object.entries(p.overridesByZone)) {
+				const def = DEFAULT_OVERRIDES();
+				merged[z] = {
+					GAS: { ...def.GAS, ...((ovMap as any)?.GAS ?? {}) },
+					OIL: { ...def.OIL, ...((ovMap as any)?.OIL ?? {}) },
+					WATER: { ...def.WATER, ...((ovMap as any)?.WATER ?? {}) }
+				};
+			}
+			this.overridesByZone = merged;
+		}
 		this.refDensity = p.refDensity ?? null;
 		if (typeof p.showHydrostaticLine === 'boolean') this.showHydrostaticLine = p.showHydrostaticLine;
 		if (Number.isFinite(p.hydrostaticDensity)) this.hydrostaticDensity = p.hydrostaticDensity;
@@ -536,13 +584,18 @@ class FptState {
 		if ('autoMinMobility' in p) this.autoMinMobility = p.autoMinMobility;
 		if (typeof p.autoSupercharge === 'boolean') this.autoSupercharge = p.autoSupercharge;
 		if (typeof p.autoAssignFluids === 'boolean') this.autoAssignFluids = p.autoAssignFluids;
-		this.statusMsg = `Restored saved FPT settings (${entry.label ?? zoneSelectionLabel()})`;
+		this.statusMsg = `Restored saved FPT settings (${resolved?.entry?.label ?? zoneSelectionLabel()})`;
+		void this.analyze();
+		return true;
 	}
 
 	async saveSettings(): Promise<void> {
 		const pid = workbench.projectId;
 		if (!pid) return;
 		try {
+			if (this.pendingCount > 0) {
+				await this.saveAssignments();
+			}
 			const res = await postJson<any>(
 				`/quick_pp/workspace/projects/${encodeURIComponent(pid)}/module_params`,
 				{
