@@ -51,7 +51,11 @@ class ZipStreamingResponse(Response):
         media_type: Optional[str] = None,
         background: Any = None,
     ) -> None:
-        raw_bytes = content.getvalue() if isinstance(content, io.BytesIO) else bytes(content or b"")
+        raw_bytes = (
+            content.getvalue()
+            if isinstance(content, io.BytesIO)
+            else bytes(content or b"")
+        )
         super().__init__(
             content=raw_bytes,
             status_code=status_code,
@@ -225,7 +229,9 @@ async def create_project(payload: dict, request: Request):
 
 
 @router.get("/projects", summary="List projects")
-async def list_projects(request: Request):
+async def list_projects(request: Request, response: Response = None):
+    if response is not None:
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
     try:
         with get_db() as session:
             stmt = select(db_models.Project)
@@ -877,7 +883,9 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                 contacts_list_by_well.setdefault(wid, []).append(
                     {
                         "type": str(cname or "OWC").upper(),
-                        "depth": round(float(cdepth), 2) if cdepth is not None else None,
+                        "depth": round(float(cdepth), 2)
+                        if cdepth is not None
+                        else None,
                     }
                 )
 
@@ -921,7 +929,9 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                         {
                             "name": str(pname or "Perf"),
                             "top": round(float(ptop), 2) if ptop is not None else None,
-                            "bottom": round(float(pbot), 2) if pbot is not None else None,
+                            "bottom": round(float(pbot), 2)
+                            if pbot is not None
+                            else None,
                             "description": str(pdesc or ""),
                         }
                     )
@@ -1061,13 +1071,17 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                 well_curve_set = set(curves_by_well.get(wid, []))
                 live_df: Optional[pd.DataFrame] = None
                 cached_entry = _merged_data_cache.get(f"{project_id}_{w.name}_0.16")
-                if cached_entry is not None and isinstance(cached_entry[1], pd.DataFrame):
+                if cached_entry is not None and isinstance(
+                    cached_entry[1], pd.DataFrame
+                ):
                     live_df = cached_entry[1]
                 else:
                     eph_w = _ephemeral_wells.get(project_id, {}).get(w.name)
                     if isinstance(eph_w, pd.DataFrame):
                         live_df = eph_w
-                    elif isinstance(eph_w, dict) and isinstance(eph_w.get("data"), pd.DataFrame):
+                    elif isinstance(eph_w, dict) and isinstance(
+                        eph_w.get("data"), pd.DataFrame
+                    ):
                         live_df = eph_w["data"]
                 if live_df is not None:
                     for col_name in live_df.columns:
@@ -1089,7 +1103,9 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                     w.config_data if isinstance(w.config_data, dict) else None,
                     target_depth_uom=w.depth_uom or "m",
                 )
-                w_meta = dict(extract_las_metadata(w_hdr_src, fallback_well_name=w.name))
+                w_meta = dict(
+                    extract_las_metadata(w_hdr_src, fallback_well_name=w.name)
+                )
                 w_ovr = (
                     w_hdr_src.get("header_overrides")
                     if isinstance(w_hdr_src.get("header_overrides"), dict)
@@ -1129,14 +1145,12 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                 # Compute per-formation depth intervals and curve availability
                 w_tops = tops_list_by_well.get(wid, [])
                 unique_top_depths = sorted(
-                    {
-                        float(t["depth"])
-                        for t in w_tops
-                        if t.get("depth") is not None
-                    }
+                    {float(t["depth"]) for t in w_tops if t.get("depth") is not None}
                 )
                 w_cid_map = curve_ids_by_well_mnemonic.get(wid, {})
-                zone_intervals: List[Tuple[str, float, float, Optional[Dict[str, Any]]]] = []
+                zone_intervals: List[
+                    Tuple[str, float, float, Optional[Dict[str, Any]]]
+                ] = []
                 seen_zone_names = set()
                 for t in w_tops:
                     z_name = str(t.get("name") or "").strip()
@@ -1654,7 +1668,9 @@ def get_well_data(
                     # table can surface them directly (porosity/permeability/grain density).
                     meas_by_prop = {}
                     for m in measurements:
-                        prop = str(m.get("property") or m.get("property_name") or "").upper()
+                        prop = str(
+                            m.get("property") or m.get("property_name") or ""
+                        ).upper()
                         if prop and m.get("value") is not None:
                             meas_by_prop[prop] = m.get("value")
                     sample_entry = {
@@ -1795,7 +1811,12 @@ def _compute_tvd_from_survey(
     """Compute TVD along md_values from directional survey minimum curvature (or survey TVD column).
     Returns None if no valid survey with >= 2 stations is available (never assumes TVD == MD).
     """
-    if len(md_values) == 0 or surveys_df is None or not isinstance(surveys_df, pd.DataFrame) or surveys_df.empty:
+    if (
+        len(md_values) == 0
+        or surveys_df is None
+        or not isinstance(surveys_df, pd.DataFrame)
+        or surveys_df.empty
+    ):
         return None
 
     col_map = {str(c).lower(): c for c in surveys_df.columns}
@@ -1942,9 +1963,7 @@ def _get_merged_dataframe_sync(
 
                 well = proj.get_well(db_well_name)
                 well_header_data = (
-                    dict(well.header_data)
-                    if isinstance(well.header_data, dict)
-                    else {}
+                    dict(well.header_data) if isinstance(well.header_data, dict) else {}
                 )
                 well_config_data = (
                     dict(well._orm_well.config_data)
@@ -2025,9 +2044,7 @@ def _get_merged_dataframe_sync(
                 disc_df: pd.DataFrame, max_tol: float
             ) -> Dict[str, List[Any]]:
                 cols = [c for c in disc_df.columns if c != "depth"]
-                out_cols: Dict[str, List[Any]] = {
-                    c: [np.nan] * n_log for c in cols
-                }
+                out_cols: Dict[str, List[Any]] = {c: [np.nan] * n_log for c in cols}
                 if n_log == 0 or disc_df.empty or not cols:
                     return out_cols
                 best_dist_at_idx: Dict[int, float] = {}
@@ -2121,7 +2138,10 @@ def _get_merged_dataframe_sync(
                 )
                 if prop_up in ("POR", "CPORE", "POROSITY") and "cpore" not in row_entry:
                     row_entry["cpore"] = val / 100.0 if val > 1.0 else val
-                elif prop_up in ("PERM", "CPERM", "PERMEABILITY") and "cperm" not in row_entry:
+                elif (
+                    prop_up in ("PERM", "CPERM", "PERMEABILITY")
+                    and "cperm" not in row_entry
+                ):
                     row_entry["cperm"] = val
 
             if core_rows_by_depth:
@@ -2137,7 +2157,9 @@ def _get_merged_dataframe_sync(
                     merged["core_sample_name"] = mapped_core["core_sample_name"]
                 for c_col in ("cpore", "cperm"):
                     if c_col in mapped_core:
-                        s_mapped = pd.Series(mapped_core[c_col], index=merged.index, dtype=float)
+                        s_mapped = pd.Series(
+                            mapped_core[c_col], index=merged.index, dtype=float
+                        )
                         if s_mapped.notna().any():
                             merged[c_col] = s_mapped
             else:
@@ -2147,12 +2169,16 @@ def _get_merged_dataframe_sync(
                 has_ck = "cperm" in merged.columns
                 if (has_cp or has_ck) and n_log > 1:
                     cp_vals = (
-                        pd.to_numeric(merged["cpore"], errors="coerce").to_numpy(dtype=float)
+                        pd.to_numeric(merged["cpore"], errors="coerce").to_numpy(
+                            dtype=float
+                        )
                         if has_cp
                         else np.full(n_log, np.nan)
                     )
                     ck_vals = (
-                        pd.to_numeric(merged["cperm"], errors="coerce").to_numpy(dtype=float)
+                        pd.to_numeric(merged["cperm"], errors="coerce").to_numpy(
+                            dtype=float
+                        )
                         if has_ck
                         else np.full(n_log, np.nan)
                     )
@@ -2396,8 +2422,16 @@ def _collect_project_handover_bundles(
     well_names_filter: Optional[List[str]] = None,
 ) -> tuple[str, str, List[Dict[str, Any]], Dict[str, Any]]:
     """Gather project metadata, project-level multi-well config, and per-well handover dictionaries (including ephemeral/cached live edits)."""
-    from quick_pp.app.backend.services.workspace import _ephemeral_well_configs
+    from quick_pp.app.backend.services import workspace as ws_service
     from quick_pp.handover import collect_well_handover_dict
+
+    _ephemeral_well_configs = getattr(ws_service, "_ephemeral_well_configs", {})
+    _ephemeral_project_module_params = getattr(
+        ws_service, "_ephemeral_project_module_params", {}
+    )
+    _module_params_key = getattr(
+        ws_service, "MODULE_PARAMS_CONFIG_KEY", "module_params"
+    )
 
     if project_id in _demo_deleted_projects:
         raise ValueError(f"Project {project_id} not found")
@@ -2421,6 +2455,15 @@ def _collect_project_handover_bundles(
         eph_proj_cfg = _ephemeral_well_configs.get((project_id, "__PROJECT__"))
         if isinstance(eph_proj_cfg, dict):
             proj_cfg.update(eph_proj_cfg)
+        eph_proj_mp = _ephemeral_project_module_params.get(project_id)
+        if isinstance(eph_proj_mp, dict) and eph_proj_mp:
+            existing_mp = (
+                dict(proj_cfg.get(_module_params_key))
+                if isinstance(proj_cfg.get(_module_params_key), dict)
+                else {}
+            )
+            existing_mp.update(eph_proj_mp)
+            proj_cfg[_module_params_key] = existing_mp
 
         wells_bundle: List[Dict[str, Any]] = []
         seen_names = set()
@@ -2446,16 +2489,17 @@ def _collect_project_handover_bundles(
             ):
                 live_df = eph_entry["data"]
             else:
-                cached = _merged_data_cache.get(f"{project_id}_{curr_n}_0.16")
-                if cached is not None:
-                    live_df = cached[1]
-                else:
-                    try:
-                        live_df = _get_merged_dataframe_sync(project_id, curr_n)
-                    except Exception:
-                        live_df = None
+                try:
+                    live_df = _get_merged_dataframe_sync(project_id, curr_n)
+                except Exception:
+                    live_df = None
 
-            eph_w_cfg = _ephemeral_well_configs.get((project_id, curr_n)) or _ephemeral_well_configs.get((project_id, orig_n))
+            eph_w_cfg = _ephemeral_well_configs.get(
+                (project_id, curr_n)
+            ) or _ephemeral_well_configs.get((project_id, orig_n))
+            eph_w_hdr = _ephemeral_well_headers.get(
+                (project_id, curr_n)
+            ) or _ephemeral_well_headers.get((project_id, orig_n))
             with get_db() as w_session:
                 well_obj = db_objects.Well(w_session, well_id=w_id)
                 b_dict = collect_well_handover_dict(
@@ -2463,6 +2507,10 @@ def _collect_project_handover_bundles(
                     override_df=live_df,
                     override_config=eph_w_cfg if isinstance(eph_w_cfg, dict) else None,
                 )
+                if isinstance(eph_w_hdr, dict) and eph_w_hdr:
+                    merged_h = dict(b_dict.get("header") or {})
+                    merged_h.update(eph_w_hdr)
+                    b_dict["header"] = merged_h
                 b_dict["name"] = curr_n
                 return b_dict
 
@@ -2509,7 +2557,20 @@ def _collect_project_handover_bundles(
                     "formation_tops": pd.DataFrame(columns=["name", "depth"]),
                     "fluid_contacts": pd.DataFrame(columns=["name", "depth"]),
                     "perforations": pd.DataFrame(
-                        columns=["name", "top_depth", "bottom_depth", "description"]
+                        columns=["name", "top", "bottom", "description"]
+                    ),
+                    "hole_sections": pd.DataFrame(
+                        columns=[
+                            "name",
+                            "top",
+                            "bottom",
+                            "bit_size",
+                            "mud_type",
+                            "mud_weight",
+                            "mud_salinity",
+                            "rmf",
+                            "rmf_temp",
+                        ]
                     ),
                     "well_surveys": pd.DataFrame(columns=["md", "inc", "azim"]),
                     "pressure_tests": pd.DataFrame(
@@ -2563,8 +2624,10 @@ def export_project_handover(
         elif wells:
             filter_list = [w.strip() for w in wells.split(",") if w.strip()]
 
-        proj_name, proj_desc, wells_bundle, proj_cfg = _collect_project_handover_bundles(
-            project_id=project_id, well_names_filter=filter_list
+        proj_name, proj_desc, wells_bundle, proj_cfg = (
+            _collect_project_handover_bundles(
+                project_id=project_id, well_names_filter=filter_list
+            )
         )
         if not wells_bundle:
             raise ValueError("No matching wells found to export.")
@@ -2654,30 +2717,42 @@ def export_well_las_endpoint(project_id: int, well_name: str):
         ) from e
 
 
-
 @router.post(
     "/projects/import-handover/inspect",
     summary="Inspect a Petrophysical Handover Package (.zip) before ingestion",
 )
 def inspect_handover_package_endpoint(file: UploadFile = File(...)):
     """Inspect an uploaded Petrophysical Handover Package (.zip) and return metadata preview."""
+    from sqlalchemy import func
+
     from quick_pp.handover import inspect_handover_archive
 
     try:
         content = file.file.read()
         preview = inspect_handover_archive(content)
+        base_name = str(preview.get("project_name") or "Imported_Project").strip()
+        preview["project_name"] = base_name
         with get_db() as session:
+            existing_names_lower = {
+                str(n).strip().lower()
+                for (n,) in session.query(db_models.Project.name).all()
+                if n is not None
+            }
             existing = (
                 session.query(db_models.Project)
-                .filter_by(name=preview["project_name"])
+                .filter(func.lower(db_models.Project.name) == base_name.lower())
                 .first()
             )
             preview["is_duplicate_name"] = bool(existing)
-            preview["suggested_name"] = (
-                f"{preview['project_name']}_Imported"
-                if existing
-                else preview["project_name"]
-            )
+            if existing:
+                candidate = f"{base_name}_Imported"
+                suffix = 2
+                while candidate.lower() in existing_names_lower:
+                    candidate = f"{base_name}_Imported_{suffix}"
+                    suffix += 1
+                preview["suggested_name"] = candidate
+            else:
+                preview["suggested_name"] = base_name
         return preview
     except Exception as e:
         logger.exception("Failed to inspect handover package")
@@ -2703,16 +2778,23 @@ def commit_handover_package_endpoint(
     try:
         current_user = get_current_user_optional(request)
         user_id = int(current_user["user_id"]) if current_user else None
+        cleaned_name = (
+            project_name.strip()
+            if isinstance(project_name, str) and project_name.strip()
+            else None
+        )
         content = file.file.read()
         with get_db() as session:
             res = import_handover_archive(
                 db_session=session,
                 zip_source=content,
-                target_project_name=project_name,
+                target_project_name=cleaned_name,
                 target_project_id=project_id,
                 created_by_user_id=user_id,
                 overwrite_existing_wells=overwrite_existing,
             )
+            if res.get("project_id") is not None:
+                invalidate_well_cache(project_id=int(res["project_id"]))
             return res
     except Exception as e:
         logger.exception("Failed to import handover package")

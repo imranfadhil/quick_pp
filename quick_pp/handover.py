@@ -28,6 +28,7 @@ from quick_pp import logger
 from quick_pp.config import Config
 from quick_pp.las_handler import (
     _las_header_to_dataframe,
+    _sanitize_json_value,
     export_to_las_string,
     extract_las_metadata,
     extract_well_df_elevation,
@@ -93,9 +94,7 @@ def _interpolate_tvd(
     return np.asarray(md_values, dtype=float).copy()
 
 
-def _assign_zones_from_tops(
-    depths: np.ndarray, tops_df: pd.DataFrame
-) -> List[str]:
+def _assign_zones_from_tops(depths: np.ndarray, tops_df: pd.DataFrame) -> List[str]:
     """Assign formation top zone labels to a depth array (vectorized with np.searchsorted)."""
     if len(depths) == 0:
         return []
@@ -128,7 +127,11 @@ def _compute_well_zonal_summary(
 
     # Resolve VSHALE / VCLAY, PHIT / PHIE, SWT / SWE, PERM
     vsh_col = next(
-        (c for c in ("VSHALE", "VCLAY", "VSH_GR") if c in df.columns and df[c].notna().any()),
+        (
+            c
+            for c in ("VSHALE", "VCLAY", "VSH_GR")
+            if c in df.columns and df[c].notna().any()
+        ),
         None,
     )
     phi_col = next(
@@ -136,7 +139,11 @@ def _compute_well_zonal_summary(
         None,
     )
     sw_col = next(
-        (c for c in ("SWT", "SWE", "SW_WS", "SW_ARCHIE", "SHF") if c in df.columns and df[c].notna().any()),
+        (
+            c
+            for c in ("SWT", "SWE", "SW_WS", "SW_ARCHIE", "SHF")
+            if c in df.columns and df[c].notna().any()
+        ),
         None,
     )
     perm_col = next(
@@ -231,6 +238,7 @@ LAS_DIR = os.path.join(HANDOVER_DIR, "01_well_logs_las")
 TOPS_CSV = os.path.join(HANDOVER_DIR, "02_tops_and_contacts", "formation_tops.csv")
 CONTACTS_CSV = os.path.join(HANDOVER_DIR, "02_tops_and_contacts", "fluid_contacts.csv")
 PERFS_CSV = os.path.join(HANDOVER_DIR, "02_tops_and_contacts", "perforations.csv")
+HOLE_SECTIONS_CSV = os.path.join(HANDOVER_DIR, "02_tops_and_contacts", "hole_sections.csv")
 HEADERS_CSV = os.path.join(HANDOVER_DIR, "03_surveys", "well_headers_and_datum.csv")
 SURVEYS_CSV = os.path.join(HANDOVER_DIR, "03_surveys", "well_surveys.csv")
 RCA_LAS_DIR = os.path.join(HANDOVER_DIR, "04_core_and_pressure", "las_point_sets")
@@ -412,6 +420,65 @@ def import_perforations_csv(csv_path, dataset_name="PERFORATIONS"):
             db.variableSave(wn, dataset_name, "PERF_NAME", "Zone Name", "unitless", names)
 
 
+def import_hole_sections_csv(csv_path, dataset_name="HOLE_SECTIONS"):
+    """Load wellbore hole sections & mud program CSV into Techlog interval dataset."""
+    if not os.path.exists(csv_path):
+        return
+    by_well = {{}}
+    with open(csv_path, mode="r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            wn = row.get("WELL_NAME", "").strip()
+            name = row.get("SECTION_NAME", "").strip() or "SECTION"
+            top_str = row.get("TOP_MD", "")
+            bot_str = row.get("BOTTOM_MD", "")
+            if wn and top_str != "" and bot_str != "":
+                def _num(v):
+                    try:
+                        return float(v) if v not in (None, "") else -999.25
+                    except ValueError:
+                        return -999.25
+
+                by_well.setdefault(wn, []).append(
+                    (
+                        float(top_str),
+                        float(bot_str),
+                        name,
+                        _num(row.get("BIT_SIZE")),
+                        (row.get("MUD_TYPE") or "WBM").strip(),
+                        _num(row.get("MUD_WEIGHT")),
+                        _num(row.get("MUD_SALINITY")),
+                        _num(row.get("RMF")),
+                        _num(row.get("RMF_TEMP")),
+                    )
+                )
+
+    for wn, items in by_well.items():
+        items.sort(key=lambda x: x[0])
+        tops = [x[0] for x in items]
+        bots = [x[1] for x in items]
+        names = [x[2] for x in items]
+        bit_sizes = [x[3] for x in items]
+        mud_types = [x[4] for x in items]
+        mud_weights = [x[5] for x in items]
+        mud_sals = [x[6] for x in items]
+        rmfs = [x[7] for x in items]
+        rmf_temps = [x[8] for x in items]
+        print(f"[Techlog] Loading {{len(items)}} hole sections into {{wn}}.{{dataset_name}}")
+        if db is not None:
+            if not db.wellExists(wn):
+                db.wellCreate(wn)
+            db.datasetCreate(wn, dataset_name, "MD", "Measured Depth", "m", tops, "interval")
+            db.variableSave(wn, dataset_name, "BOTTOM_MD", "Measured Depth", "m", bots)
+            db.variableSave(wn, dataset_name, "SECTION_NAME", "Zone Name", "unitless", names)
+            db.variableSave(wn, dataset_name, "BS", "Bit Size", "in", bit_sizes)
+            db.variableSave(wn, dataset_name, "MUD_TYPE", "Mud Type", "unitless", mud_types)
+            db.variableSave(wn, dataset_name, "MUD_WEIGHT", "Mud Weight", "ppg", mud_weights)
+            db.variableSave(wn, dataset_name, "MUD_SALINITY", "Salinity", "ppm", mud_sals)
+            db.variableSave(wn, dataset_name, "RMF", "Mud Filtrate Resistivity", "ohm.m", rmfs)
+            db.variableSave(wn, dataset_name, "RMF_TEMP", "Temperature", "degC", rmf_temps)
+
+
 def main():
     print("=== Starting quick_pp Handover Import for '{project_name}' ===")
     las_files = sorted(glob.glob(os.path.join(LAS_DIR, "*.las")))
@@ -430,6 +497,7 @@ def main():
     import_zonation_csv(TOPS_CSV, dataset_name="ZONATION")
     import_zonation_csv(CONTACTS_CSV, dataset_name="FLUID_CONTACTS")
     import_perforations_csv(PERFS_CSV, dataset_name="PERFORATIONS")
+    import_hole_sections_csv(HOLE_SECTIONS_CSV, dataset_name="HOLE_SECTIONS")
     print("=== Handover Import Completed ===")
 
 
@@ -501,6 +569,7 @@ Generated by **quick_pp v{quick_pp_version}** on `{manifest.get("exported_at", "
 - **Formation Tops**: {counts.get("formation_tops", 0)} markers
 - **Fluid Contacts**: {counts.get("fluid_contacts", 0)} contacts
 - **Perforation Intervals**: {counts.get("perforations", 0)} intervals
+- **Hole Sections / Mud Program**: {counts.get("hole_sections", 0)} intervals
 - **Well Deviation Surveys**: {counts.get("well_surveys", 0)} station points
 - **Core RCA Plugs**: {counts.get("core_rca_samples", 0)} samples ({counts.get("core_measurements_long", 0)} measurements)
 - **SCAL Capillary Pressure ($P_c$)**: {counts.get("scal_pc_points", 0)} pairs
@@ -516,8 +585,9 @@ Generated by **quick_pp v{quick_pp_version}** on `{manifest.get("exported_at", "
 | :--- | :--- |
 | `01_well_logs_las/*.las` | **Continuous Evaluated Well Logs (LAS 2.0)** — Raw logs + computed CPI logs (`VCLAY`, `VSHALE`, `PHIT`, `PHIE`, `SWT`, `SWIRR`, `PERM`, `ROCK_FLAG`, `RES_FLAG`, `PAY_FLAG`, `BADHOLE`, `TVD`, `TVDSS`). Each LAS file embeds the well's header datum/coordinates in `~Well` and petrophysical parameters (`m`, `n`, salinity, mineral endpoints, cutoffs) inside the `~Parameter` (`~P`) block. |
 | `02_tops_and_contacts/formation_tops.csv` | **Multi-Well Formation Tops** (`WELL_NAME, UWI, TOP_NAME, MD, TVD, TVDSS, DEPTH_UOM`) ready for batch Zonation import. |
-| `02_tops_and_contacts/fluid_contacts.csv` | **Multi-Well Fluid Contacts** (`WELL_NAME, UWI, CONTACT_NAME, MD, TVD, TVDSS, DEPTH_UOM`) such as OWC, GOC, FWL, ODT. |
+| `02_tops_and_contacts/fluid_contacts.csv` | **Multi-Well Fluid Contacts** (`WELL_NAME, UWI, CONTACT_NAME, MD, TVD, TVDSS, CONTACT_TYPE, ZONE, FAULT_BLOCK, SOURCE, REMARKS, DEPTH_UOM`) such as OWC, GOC, FWL, ODT. |
 | `02_tops_and_contacts/perforations.csv` | **Multi-Well Perforation Intervals** (`WELL_NAME, UWI, PERF_NAME, TOP_MD, BOTTOM_MD, TOP_TVD, BOTTOM_TVD, TOP_TVDSS, BOTTOM_TVDSS, DESCRIPTION, DEPTH_UOM`). |
+| `02_tops_and_contacts/hole_sections.csv` | **Multi-Well Hole Sections & Mud Program** (`WELL_NAME, UWI, SECTION_NAME, TOP_MD, BOTTOM_MD, TOP_TVD, BOTTOM_TVD, TOP_TVDSS, BOTTOM_TVDSS, BIT_SIZE, MUD_TYPE, MUD_WEIGHT, MUD_SALINITY, RMF, RMF_TEMP, DEPTH_UOM`). |
 | `03_surveys/well_headers_and_datum.csv` | **Well Headers, Datum Elevations & Surface Coordinates** (`WELL_NAME, UWI, DEPTH_UOM, DATUM_TYPE, DATUM_ELEVATION, KB, DF, GL, WATER_DEPTH, TOTAL_DEPTH, X_COORD, Y_COORD, LAT, LON, CRS, FIELD, COMPANY, COUNTRY, LOCATION`). |
 | `03_surveys/well_surveys.csv` | **Multi-Well Deviation Surveys** (`WELL_NAME, UWI, MD, INC, AZIM, TVD, TVDSS, DEPTH_UOM`). |
 | `04_core_and_pressure/core_rca_points.csv` | **Discrete Core Plug RCA Table (Wide)** (`WELL_NAME, UWI, SAMPLE_NAME, DEPTH, RAW_DEPTH, SHIFT_M, TVD, TVDSS, CPORE, CPERM, CPORE_AMB, CPERM_AIR, DESCRIPTION, REMARK`). |
@@ -567,9 +637,7 @@ def _process_single_well_bundle(
     w_hdr: Dict[str, Any] = dict(w.get("header") or {})
     w_cfg: Dict[str, Any] = dict(w.get("config") or {})
     w_df: pd.DataFrame = (
-        w["data"].copy()
-        if isinstance(w.get("data"), pd.DataFrame)
-        else pd.DataFrame()
+        w["data"].copy() if isinstance(w.get("data"), pd.DataFrame) else pd.DataFrame()
     )
     tops_df: pd.DataFrame = (
         w["formation_tops"].copy()
@@ -586,6 +654,11 @@ def _process_single_well_bundle(
         if isinstance(w.get("perforations"), pd.DataFrame)
         else pd.DataFrame()
     )
+    hole_sections_df: pd.DataFrame = (
+        w["hole_sections"].copy()
+        if isinstance(w.get("hole_sections"), pd.DataFrame)
+        else pd.DataFrame()
+    )
     surveys_df: pd.DataFrame = (
         w["well_surveys"].copy()
         if isinstance(w.get("well_surveys"), pd.DataFrame)
@@ -598,6 +671,9 @@ def _process_single_well_bundle(
     )
     core_data: Dict[str, Any] = dict(w.get("core_data") or {})
     scal_pc_list: List[Dict[str, Any]] = list(w.get("scal_pc") or [])
+    curve_units: Dict[str, str] = dict(w.get("curve_units") or {})
+    curve_descriptions: Dict[str, str] = dict(w.get("curve_descriptions") or {})
+    curve_metadata: Dict[str, Dict[str, Any]] = dict(w.get("curve_metadata") or {})
 
     safe_well = _sanitize_name(w_name)
     files_to_write: List[tuple[str, str]] = []
@@ -613,9 +689,7 @@ def _process_single_well_bundle(
         else {}
     )
     merged_hdr = {**parsed_meta, **ovr_meta}
-    datum_elev = extract_well_df_elevation(
-        w_hdr, w_cfg, target_depth_uom=w_uom
-    )
+    datum_elev = extract_well_df_elevation(w_hdr, w_cfg, target_depth_uom=w_uom)
     datum_elev_f = float(datum_elev) if datum_elev is not None else 0.0
     datum_type = (
         "DF"
@@ -648,9 +722,7 @@ def _process_single_well_bundle(
             and "md" in surveys_df.columns
         ):
             w_df["TVD"] = _interpolate_tvd(
-                pd.to_numeric(w_df["DEPTH"], errors="coerce").to_numpy(
-                    dtype=float
-                ),
+                pd.to_numeric(w_df["DEPTH"], errors="coerce").to_numpy(dtype=float),
                 None,
                 surveys_df,
             )
@@ -674,35 +746,38 @@ def _process_single_well_bundle(
         "UWI": w_uwi,
         "DEPTH_UOM": w_uom,
         "DATUM_TYPE": datum_type,
-        "DATUM_ELEVATION": round(datum_elev_f, 4)
-        if datum_elev is not None
-        else 0.0,
+        "DATUM_ELEVATION": round(datum_elev_f, 4) if datum_elev is not None else 0.0,
         "KB": merged_hdr.get("kb_elev") or merged_hdr.get("kb_elevation"),
         "DF": merged_hdr.get("df_elev") or merged_hdr.get("dfe_elevation"),
-        "GL": merged_hdr.get("gl_elev")
-        or merged_hdr.get("ground_elevation"),
+        "GL": merged_hdr.get("gl_elev") or merged_hdr.get("ground_elevation"),
         "WATER_DEPTH": merged_hdr.get("water_depth"),
+        "APD": merged_hdr.get("apd"),
+        "DATUM_UNIT": merged_hdr.get("datum_unit") or w_uom,
         "TOTAL_DEPTH": max_md_val,
         "X_COORD": merged_hdr.get("x_coord"),
         "Y_COORD": merged_hdr.get("y_coord"),
         "LAT": merged_hdr.get("latitude"),
         "LON": merged_hdr.get("longitude"),
         "CRS": merged_hdr.get("crs") or "",
-        "FIELD": merged_hdr.get("field")
-        or merged_hdr.get("field_name")
-        or "",
+        "FIELD": merged_hdr.get("field") or merged_hdr.get("field_name") or "",
         "COMPANY": merged_hdr.get("company") or "",
+        "SERVICE_COMPANY": merged_hdr.get("service_company") or "",
         "COUNTRY": merged_hdr.get("country") or "",
+        "STATE": merged_hdr.get("state") or "",
+        "COUNTY": merged_hdr.get("county") or "",
+        "PROVINCE": merged_hdr.get("province") or "",
         "LOCATION": merged_hdr.get("location") or "",
+        "API": merged_hdr.get("api") or "",
+        "LICENSE": merged_hdr.get("license") or "",
+        "SPUD_DATE": merged_hdr.get("spud_date") or "",
+        "LOG_DATE": merged_hdr.get("log_date") or "",
     }
 
     # Ensure ZONES column is populated on w_df if formation tops exist
     if not w_df.empty and "DEPTH" in w_df.columns and not tops_df.empty:
         if "ZONES" not in w_df.columns or w_df["ZONES"].isna().all():
             w_df["ZONES"] = _assign_zones_from_tops(
-                pd.to_numeric(w_df["DEPTH"], errors="coerce").to_numpy(
-                    dtype=float
-                ),
+                pd.to_numeric(w_df["DEPTH"], errors="coerce").to_numpy(dtype=float),
                 tops_df,
             )
 
@@ -712,6 +787,8 @@ def _process_single_well_bundle(
             las_str = export_to_las_string(
                 well_data=w_df,
                 well_name=w_name,
+                vars_units=curve_units or None,
+                vars_descr=curve_descriptions or None,
                 uwi=w_uwi,
                 depth_uom=w_uom,
                 parameters=w_cfg,
@@ -726,14 +803,10 @@ def _process_single_well_bundle(
     # 2. Collect Formation Tops (with interpolated TVD & TVDSS)
     tops_rows: List[Dict[str, Any]] = []
     if not tops_df.empty and "depth" in tops_df.columns:
-        mds = pd.to_numeric(tops_df["depth"], errors="coerce").to_numpy(
-            dtype=float
-        )
+        mds = pd.to_numeric(tops_df["depth"], errors="coerce").to_numpy(dtype=float)
         tvds = _interpolate_tvd(mds, w_df, surveys_df)
         for (_, row), tvd_val in zip(tops_df.iterrows(), tvds, strict=False):
-            tvd_clean = (
-                round(float(tvd_val), 4) if np.isfinite(tvd_val) else None
-            )
+            tvd_clean = round(float(tvd_val), 4) if np.isfinite(tvd_val) else None
             tops_rows.append(
                 {
                     "WELL_NAME": w_name,
@@ -746,25 +819,37 @@ def _process_single_well_bundle(
                 }
             )
 
-    # 3. Collect Fluid Contacts (with interpolated TVD & TVDSS)
+    # 3. Collect Fluid Contacts (with interpolated TVD & TVDSS + zone/fault-block/lineage attributes)
     contacts_rows: List[Dict[str, Any]] = []
     if not contacts_df.empty and "depth" in contacts_df.columns:
-        mds = pd.to_numeric(contacts_df["depth"], errors="coerce").to_numpy(
-            dtype=float
-        )
+        mds = pd.to_numeric(contacts_df["depth"], errors="coerce").to_numpy(dtype=float)
         tvds = _interpolate_tvd(mds, w_df, surveys_df)
         for (_, row), tvd_val in zip(contacts_df.iterrows(), tvds, strict=False):
-            tvd_clean = (
-                round(float(tvd_val), 4) if np.isfinite(tvd_val) else None
-            )
+            tvd_clean = round(float(tvd_val), 4) if np.isfinite(tvd_val) else None
+            c_name_val = str(row.get("name") or "")
             contacts_rows.append(
                 {
                     "WELL_NAME": w_name,
                     "UWI": w_uwi,
-                    "CONTACT_NAME": str(row.get("name") or ""),
+                    "CONTACT_NAME": c_name_val,
                     "MD": round(float(row["depth"]), 4),
                     "TVD": tvd_clean,
                     "TVDSS": _calc_tvdss(tvd_clean),
+                    "CONTACT_TYPE": str(row.get("contact_type") or c_name_val or "")
+                    if pd.notna(row.get("contact_type"))
+                    else c_name_val,
+                    "ZONE": str(row.get("zone") or "")
+                    if pd.notna(row.get("zone"))
+                    else "",
+                    "FAULT_BLOCK": str(row.get("fault_block") or "")
+                    if pd.notna(row.get("fault_block"))
+                    else "",
+                    "SOURCE": str(row.get("source") or "")
+                    if pd.notna(row.get("source"))
+                    else "",
+                    "REMARKS": str(row.get("remarks") or "")
+                    if pd.notna(row.get("remarks"))
+                    else "",
                     "DEPTH_UOM": w_uom,
                 }
             )
@@ -797,12 +882,8 @@ def _process_single_well_bundle(
         for (_, row), t_tvd, b_tvd in zip(
             perfs_df.iterrows(), top_tvds, bot_tvds, strict=False
         ):
-            t_tvd_clean = (
-                round(float(t_tvd), 4) if np.isfinite(t_tvd) else None
-            )
-            b_tvd_clean = (
-                round(float(b_tvd), 4) if np.isfinite(b_tvd) else None
-            )
+            t_tvd_clean = round(float(t_tvd), 4) if np.isfinite(t_tvd) else None
+            b_tvd_clean = round(float(b_tvd), 4) if np.isfinite(b_tvd) else None
             perfs_rows.append(
                 {
                     "WELL_NAME": w_name,
@@ -819,17 +900,78 @@ def _process_single_well_bundle(
                 }
             )
 
+    # 3c. Collect Hole Sections & Mud Program Intervals (with interpolated TOP/BOTTOM TVD & TVDSS)
+    hole_sections_rows: List[Dict[str, Any]] = []
+    hs_top_col = (
+        "top"
+        if "top" in hole_sections_df.columns
+        else "top_depth"
+        if "top_depth" in hole_sections_df.columns
+        else "top_md"
+        if "top_md" in hole_sections_df.columns
+        else None
+    )
+    hs_bot_col = (
+        "bottom"
+        if "bottom" in hole_sections_df.columns
+        else "bottom_depth"
+        if "bottom_depth" in hole_sections_df.columns
+        else "bottom_md"
+        if "bottom_md" in hole_sections_df.columns
+        else None
+    )
+    if not hole_sections_df.empty and hs_top_col and hs_bot_col:
+        hs_top_mds = pd.to_numeric(
+            hole_sections_df[hs_top_col], errors="coerce"
+        ).to_numpy(dtype=float)
+        hs_bot_mds = pd.to_numeric(
+            hole_sections_df[hs_bot_col], errors="coerce"
+        ).to_numpy(dtype=float)
+        hs_top_tvds = _interpolate_tvd(hs_top_mds, w_df, surveys_df)
+        hs_bot_tvds = _interpolate_tvd(hs_bot_mds, w_df, surveys_df)
+
+        def _opt_hs_float(v: Any, nd: int = 6) -> Optional[float]:
+            if v is None or pd.isna(v):
+                return None
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                return None
+            return round(f, nd) if np.isfinite(f) else None
+
+        for (_, row), t_tvd, b_tvd in zip(
+            hole_sections_df.iterrows(), hs_top_tvds, hs_bot_tvds, strict=False
+        ):
+            t_tvd_clean = round(float(t_tvd), 4) if np.isfinite(t_tvd) else None
+            b_tvd_clean = round(float(b_tvd), 4) if np.isfinite(b_tvd) else None
+            hole_sections_rows.append(
+                {
+                    "WELL_NAME": w_name,
+                    "UWI": w_uwi,
+                    "SECTION_NAME": str(row.get("name") or "Section"),
+                    "TOP_MD": round(float(row[hs_top_col]), 4),
+                    "BOTTOM_MD": round(float(row[hs_bot_col]), 4),
+                    "TOP_TVD": t_tvd_clean,
+                    "BOTTOM_TVD": b_tvd_clean,
+                    "TOP_TVDSS": _calc_tvdss(t_tvd_clean),
+                    "BOTTOM_TVDSS": _calc_tvdss(b_tvd_clean),
+                    "BIT_SIZE": _opt_hs_float(row.get("bit_size"), 4),
+                    "MUD_TYPE": str(row.get("mud_type") or "WBM").strip().upper(),
+                    "MUD_WEIGHT": _opt_hs_float(row.get("mud_weight"), 4),
+                    "MUD_SALINITY": _opt_hs_float(row.get("mud_salinity"), 2),
+                    "RMF": _opt_hs_float(row.get("rmf"), 6),
+                    "RMF_TEMP": _opt_hs_float(row.get("rmf_temp"), 2),
+                    "DEPTH_UOM": w_uom,
+                }
+            )
+
     # 4. Collect Well Surveys
     surveys_rows: List[Dict[str, Any]] = []
     if not surveys_df.empty and "md" in surveys_df.columns:
-        mds = pd.to_numeric(surveys_df["md"], errors="coerce").to_numpy(
-            dtype=float
-        )
+        mds = pd.to_numeric(surveys_df["md"], errors="coerce").to_numpy(dtype=float)
         tvds = _interpolate_tvd(mds, w_df, surveys_df)
         for (_, row), tvd_val in zip(surveys_df.iterrows(), tvds, strict=False):
-            tvd_clean = (
-                round(float(tvd_val), 4) if np.isfinite(tvd_val) else None
-            )
+            tvd_clean = round(float(tvd_val), 4) if np.isfinite(tvd_val) else None
             surveys_rows.append(
                 {
                     "WELL_NAME": w_name,
@@ -846,9 +988,7 @@ def _process_single_well_bundle(
     # 5. Collect Pressure Tests (MDT/RFT) & export discrete *_MDT.las point-set
     pressure_rows: List[Dict[str, Any]] = []
     if not pressure_df.empty and "depth" in pressure_df.columns:
-        mds = pd.to_numeric(pressure_df["depth"], errors="coerce").to_numpy(
-            dtype=float
-        )
+        mds = pd.to_numeric(pressure_df["depth"], errors="coerce").to_numpy(dtype=float)
         tvds = _interpolate_tvd(mds, w_df, surveys_df)
 
         def _opt_round(v: Any, nd: int = 4) -> Optional[float]:
@@ -859,9 +999,7 @@ def _process_single_well_bundle(
             return round(f, nd) if np.isfinite(f) else None
 
         for (_, row), tvd_val in zip(pressure_df.iterrows(), tvds, strict=False):
-            tvd_clean = (
-                round(float(tvd_val), 4) if np.isfinite(tvd_val) else None
-            )
+            tvd_clean = round(float(tvd_val), 4) if np.isfinite(tvd_val) else None
             explicit_tvdss = _opt_round(row.get("tvdss"))
             p_entry = {
                 "WELL_NAME": w_name,
@@ -871,6 +1009,7 @@ def _process_single_well_bundle(
                 "TVDSS": explicit_tvdss
                 if explicit_tvdss is not None
                 else _calc_tvdss(tvd_clean),
+                "TVDSS_OVERRIDE": explicit_tvdss,
                 "PRESSURE": round(float(row["pressure"]), 4)
                 if pd.notna(row.get("pressure"))
                 else None,
@@ -895,14 +1034,11 @@ def _process_single_well_bundle(
                     uwi=w_uwi,
                     depth_uom=w_uom,
                     vars_units={
-                        "PRESSURE": str(
-                            pressure_rows[0].get("PRESSURE_UOM") or "psi"
-                        ),
+                        "PRESSURE": str(pressure_rows[0].get("PRESSURE_UOM") or "psi"),
                         "MOBILITY": "mD/cP",
                         "PERMEABILITY": "mD",
                         "TEMPERATURE": str(
-                            pressure_rows[0].get("TEMPERATURE_UOM")
-                            or "degC"
+                            pressure_rows[0].get("TEMPERATURE_UOM") or "degC"
                         ),
                     },
                     parameters={"DATASET_TYPE": "DISCRETE_MDT_PRESSURE"},
@@ -934,7 +1070,9 @@ def _process_single_well_bundle(
         d_arr = np.array([v[2] for v in valid_samples], dtype=float)
         tvds_arr = _interpolate_tvd(d_arr, w_df, surveys_df)
         for (sname, _, _), tvd_v in zip(valid_samples, tvds_arr, strict=False):
-            s_depth_tvd_map[sname] = round(float(tvd_v), 4) if np.isfinite(tvd_v) else None
+            s_depth_tvd_map[sname] = (
+                round(float(tvd_v), 4) if np.isfinite(tvd_v) else None
+            )
 
     for sample_name, s_info in core_data.items():
         s_depth = s_info.get("depth")
@@ -963,11 +1101,11 @@ def _process_single_well_bundle(
         has_meas = False
         if isinstance(meas_df, pd.DataFrame) and not meas_df.empty:
             for _, m_row in meas_df.iterrows():
-                prop_name = str(
-                    m_row.get("property")
-                    or m_row.get("property_name")
-                    or ""
-                ).strip().upper()
+                prop_name = (
+                    str(m_row.get("property") or m_row.get("property_name") or "")
+                    .strip()
+                    .upper()
+                )
                 val = m_row.get("value")
                 unit = m_row.get("unit") or ""
                 if prop_name and pd.notna(val):
@@ -1094,9 +1232,7 @@ def _process_single_well_bundle(
                 )
             )
         except Exception as e:
-            logger.debug(
-                f"Could not write discrete RCA LAS for well '{w_name}': {e}"
-            )
+            logger.debug(f"Could not write discrete RCA LAS for well '{w_name}': {e}")
 
     # SCAL Pc rows
     scal_pc_rows: List[Dict[str, Any]] = []
@@ -1109,15 +1245,21 @@ def _process_single_well_bundle(
                 "DEPTH": round(float(pc_row["depth"]), 4)
                 if pc_row.get("depth") is not None
                 else None,
+                "POROSITY": round(float(pc_row["porosity"]), 6)
+                if pc_row.get("porosity") is not None
+                and pd.notna(pc_row.get("porosity"))
+                else None,
+                "PERMEABILITY": round(float(pc_row["permeability"]), 6)
+                if pc_row.get("permeability") is not None
+                and pd.notna(pc_row.get("permeability"))
+                else None,
                 "PC": round(float(pc_row["pc"]), 6)
                 if pc_row.get("pc") is not None
                 else None,
                 "SW": round(float(pc_row["sw"]), 6)
                 if pc_row.get("sw") is not None
                 else None,
-                "EXPERIMENT_TYPE": str(
-                    pc_row.get("experiment_type") or "micp"
-                ),
+                "EXPERIMENT_TYPE": str(pc_row.get("experiment_type") or "micp"),
                 "CYCLE": str(pc_row.get("cycle") or "drainage"),
             }
         )
@@ -1142,17 +1284,13 @@ def _process_single_well_bundle(
         else None
     )
     curve_list = [
-        str(c)
-        for c in w_df.columns
-        if str(c).upper() not in ("WELL_NAME", "UWI")
+        str(c) for c in w_df.columns if str(c).upper() not in ("WELL_NAME", "UWI")
     ]
     overview_row = {
         "WELL_NAME": w_name,
         "UWI": w_uwi,
         "DEPTH_UOM": w_uom,
-        "DATUM_ELEVATION": round(datum_elev_f, 4)
-        if datum_elev is not None
-        else 0.0,
+        "DATUM_ELEVATION": round(datum_elev_f, 4) if datum_elev is not None else 0.0,
         "MIN_DEPTH": min_d,
         "MAX_DEPTH": max_d,
         "ROW_COUNT": int(len(w_df)),
@@ -1160,24 +1298,26 @@ def _process_single_well_bundle(
         "FORMATION_TOPS_COUNT": int(len(tops_df)),
         "FLUID_CONTACTS_COUNT": int(len(contacts_df)),
         "PERFORATIONS_COUNT": int(len(perfs_df)),
+        "HOLE_SECTIONS_COUNT": int(len(hole_sections_df)),
         "SURVEY_POINTS_COUNT": int(len(surveys_df)),
         "PRESSURE_TESTS_COUNT": int(len(pressure_df)),
         "CORE_RCA_SAMPLES_COUNT": int(len(rca_wide_rows)),
         "SCAL_PC_POINTS_COUNT": int(len(scal_pc_list)),
+        "SCAL_RELPERM_POINTS_COUNT": int(len(scal_relperm_rows)),
         "CURVES": ", ".join(curve_list),
     }
     manifest_well = {
         "uwi": w_uwi,
         "depth_uom": w_uom,
-        "datum_elevation": round(datum_elev_f, 4)
-        if datum_elev is not None
-        else 0.0,
+        "datum_elevation": round(datum_elev_f, 4) if datum_elev is not None else 0.0,
         "min_depth": min_d,
         "max_depth": max_d,
         "row_count": int(len(w_df)),
         "curves": curve_list,
+        "curve_metadata": _sanitize_json_value(curve_metadata),
         "header": header_row,
-        "parameters": w_cfg,
+        "well_header_data": _sanitize_json_value(w_hdr),
+        "parameters": _sanitize_json_value(w_cfg),
     }
 
     return {
@@ -1187,6 +1327,7 @@ def _process_single_well_bundle(
         "tops_rows": tops_rows,
         "contacts_rows": contacts_rows,
         "perfs_rows": perfs_rows,
+        "hole_sections_rows": hole_sections_rows,
         "surveys_rows": surveys_rows,
         "pressure_rows": pressure_rows,
         "rca_wide_rows": rca_wide_rows,
@@ -1240,6 +1381,7 @@ def build_handover_archive_bytes(
     all_tops_rows: List[Dict[str, Any]] = []
     all_contacts_rows: List[Dict[str, Any]] = []
     all_perfs_rows: List[Dict[str, Any]] = []
+    all_hole_sections_rows: List[Dict[str, Any]] = []
     all_surveys_rows: List[Dict[str, Any]] = []
     all_pressure_rows: List[Dict[str, Any]] = []
     all_rca_wide_rows: List[Dict[str, Any]] = []
@@ -1260,7 +1402,9 @@ def build_handover_archive_bytes(
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as pool:
                 processed_wells = list(
                     pool.map(
-                        lambda b: _process_single_well_bundle(b, include_las, root_prefix),
+                        lambda b: _process_single_well_bundle(
+                            b, include_las, root_prefix
+                        ),
                         wells_bundle,
                     )
                 )
@@ -1280,6 +1424,7 @@ def build_handover_archive_bytes(
             all_tops_rows.extend(pw["tops_rows"])
             all_contacts_rows.extend(pw["contacts_rows"])
             all_perfs_rows.extend(pw["perfs_rows"])
+            all_hole_sections_rows.extend(pw["hole_sections_rows"])
             all_surveys_rows.extend(pw["surveys_rows"])
             all_pressure_rows.extend(pw["pressure_rows"])
             all_rca_wide_rows.extend(pw["rca_wide_rows"])
@@ -1345,6 +1490,11 @@ def build_handover_archive_bytes(
                     "MD",
                     "TVD",
                     "TVDSS",
+                    "CONTACT_TYPE",
+                    "ZONE",
+                    "FAULT_BLOCK",
+                    "SOURCE",
+                    "REMARKS",
                     "DEPTH_UOM",
                 ]
             )
@@ -1364,6 +1514,30 @@ def build_handover_archive_bytes(
                     "TOP_TVDSS",
                     "BOTTOM_TVDSS",
                     "DESCRIPTION",
+                    "DEPTH_UOM",
+                ]
+            )
+        )
+        hole_sections_out_df = (
+            pd.DataFrame(all_hole_sections_rows)
+            if all_hole_sections_rows
+            else pd.DataFrame(
+                columns=[
+                    "WELL_NAME",
+                    "UWI",
+                    "SECTION_NAME",
+                    "TOP_MD",
+                    "BOTTOM_MD",
+                    "TOP_TVD",
+                    "BOTTOM_TVD",
+                    "TOP_TVDSS",
+                    "BOTTOM_TVDSS",
+                    "BIT_SIZE",
+                    "MUD_TYPE",
+                    "MUD_WEIGHT",
+                    "MUD_SALINITY",
+                    "RMF",
+                    "RMF_TEMP",
                     "DEPTH_UOM",
                 ]
             )
@@ -1431,6 +1605,7 @@ def build_handover_archive_bytes(
                     "DEPTH",
                     "TVD",
                     "TVDSS",
+                    "TVDSS_OVERRIDE",
                     "PRESSURE",
                     "PRESSURE_UOM",
                     "MOBILITY",
@@ -1453,6 +1628,8 @@ def build_handover_archive_bytes(
                     "UWI",
                     "SAMPLE_NAME",
                     "DEPTH",
+                    "POROSITY",
+                    "PERMEABILITY",
                     "PC",
                     "SW",
                     "EXPERIMENT_TYPE",
@@ -1514,6 +1691,10 @@ def build_handover_archive_bytes(
         zf.writestr(
             f"{root_prefix}/02_tops_and_contacts/perforations.csv",
             perfs_out_df.to_csv(index=False),
+        )
+        zf.writestr(
+            f"{root_prefix}/02_tops_and_contacts/hole_sections.csv",
+            hole_sections_out_df.to_csv(index=False),
         )
         zf.writestr(
             f"{root_prefix}/03_surveys/well_headers_and_datum.csv",
@@ -1578,6 +1759,7 @@ def build_handover_archive_bytes(
                 "formation_tops": int(len(tops_out_df)),
                 "fluid_contacts": int(len(contacts_out_df)),
                 "perforations": int(len(perfs_out_df)),
+                "hole_sections": int(len(hole_sections_out_df)),
                 "well_surveys": int(len(surveys_out_df)),
                 "core_rca_samples": int(len(rca_wide_out_df)),
                 "core_measurements_long": int(len(rca_long_out_df)),
@@ -1586,7 +1768,7 @@ def build_handover_archive_bytes(
                 "scal_relperm_points": int(len(scal_rp_out_df)),
                 "reservoir_summary_rows": int(len(ressum_out_df)),
             },
-            "project_parameters": dict(project_config or {}),
+            "project_parameters": _sanitize_json_value(dict(project_config or {})),
             "wells": params_manifest_wells,
         }
         zf.writestr(
@@ -1600,10 +1782,16 @@ def build_handover_archive_bytes(
                 excel_buf = io.BytesIO()
                 params_rows = []
                 for wn, wmeta in params_manifest_wells.items():
-                    flat_p = {"WELL_NAME": wn, "UWI": wmeta["uwi"], "DEPTH_UOM": wmeta["depth_uom"]}
+                    flat_p = {
+                        "WELL_NAME": wn,
+                        "UWI": wmeta["uwi"],
+                        "DEPTH_UOM": wmeta["depth_uom"],
+                    }
                     for pk, pv in (wmeta.get("parameters") or {}).items():
                         flat_p[str(pk).upper()] = (
-                            json.dumps(pv) if isinstance(pv, (dict, list, tuple)) else pv
+                            json.dumps(pv)
+                            if isinstance(pv, (dict, list, tuple))
+                            else pv
                         )
                     params_rows.append(flat_p)
                 params_df = pd.DataFrame(params_rows)
@@ -1642,8 +1830,12 @@ def build_handover_archive_bytes(
                     perfs_out_df.to_excel(
                         writer, sheet_name="Perforations", index=False
                     )
-                    rca_wide_out_df.to_excel(
-                        writer, sheet_name="Core_RCA", index=False
+                    hole_sections_out_df.to_excel(
+                        writer, sheet_name="Hole_Sections", index=False
+                    )
+                    rca_wide_out_df.to_excel(writer, sheet_name="Core_RCA", index=False)
+                    rca_long_out_df.to_excel(
+                        writer, sheet_name="Core_Measurements_Long", index=False
                     )
                     scal_pc_out_df.to_excel(
                         writer, sheet_name="SCAL_Capillary_Pressure", index=False
@@ -1657,9 +1849,7 @@ def build_handover_archive_bytes(
                     surveys_out_df.to_excel(
                         writer, sheet_name="Well_Surveys", index=False
                     )
-                    params_df.to_excel(
-                        writer, sheet_name="CPI_Parameters", index=False
-                    )
+                    params_df.to_excel(writer, sheet_name="CPI_Parameters", index=False)
                     proj_params_df.to_excel(
                         writer, sheet_name="Project_Parameters", index=False
                     )
@@ -1732,8 +1922,45 @@ def collect_well_handover_dict(
     perfs_df = (
         well_obj.get_perforations()
         if hasattr(well_obj, "get_perforations")
-        else pd.DataFrame(columns=["name", "top_depth", "bottom_depth", "description"])
+        else pd.DataFrame(columns=["name", "top", "bottom", "description"])
     )
+    hole_sections_df = (
+        well_obj.get_hole_sections()
+        if hasattr(well_obj, "get_hole_sections")
+        else pd.DataFrame(
+            columns=[
+                "name",
+                "top",
+                "bottom",
+                "bit_size",
+                "mud_type",
+                "mud_weight",
+                "mud_salinity",
+                "rmf",
+                "rmf_temp",
+            ]
+        )
+    )
+
+    curve_units: Dict[str, str] = {}
+    curve_descriptions: Dict[str, str] = {}
+    curve_metadata: Dict[str, Dict[str, Any]] = {}
+    for orm_c in getattr(getattr(well_obj, "_orm_well", None), "curves", []) or []:
+        mnem = str(getattr(orm_c, "mnemonic", "") or "").strip().upper()
+        if not mnem:
+            continue
+        c_unit = getattr(orm_c, "unit", None)
+        c_desc = getattr(orm_c, "description", None)
+        c_dtype = getattr(orm_c, "data_type", "numeric")
+        if c_unit:
+            curve_units[mnem] = str(c_unit)
+        if c_desc:
+            curve_descriptions[mnem] = str(c_desc)
+        curve_metadata[mnem] = {
+            "unit": c_unit,
+            "description": c_desc,
+            "data_type": c_dtype,
+        }
 
     return {
         "name": well_obj.name,
@@ -1742,16 +1969,18 @@ def collect_well_handover_dict(
         "header": hdr_dict,
         "config": cfg_dict,
         "data": well_df,
+        "curve_units": curve_units,
+        "curve_descriptions": curve_descriptions,
+        "curve_metadata": curve_metadata,
         "formation_tops": well_obj.get_formation_tops(),
         "fluid_contacts": well_obj.get_fluid_contacts(),
         "perforations": perfs_df,
+        "hole_sections": hole_sections_df,
         "well_surveys": well_obj.get_well_surveys(),
         "pressure_tests": well_obj.get_pressure_tests(),
         "core_data": well_obj.get_core_data(),
         "scal_pc": well_obj.get_scal_pc_data(),
     }
-
-
 
 
 # ==============================================================================
@@ -1779,7 +2008,8 @@ def inspect_handover_archive(zip_source: Any) -> Dict[str, Any]:
             (
                 n
                 for n in namelist
-                if n.endswith("CPI_Parameters_Manifest.json") or n.endswith("manifest.json")
+                if n.endswith("CPI_Parameters_Manifest.json")
+                or n.endswith("manifest.json")
             ),
             None,
         )
@@ -1810,58 +2040,41 @@ def inspect_handover_archive(zip_source: Any) -> Dict[str, Any]:
             "formation_tops": inv.get("formation_tops", 0),
             "fluid_contacts": inv.get("fluid_contacts", 0),
             "perforations": inv.get("perforations", 0),
+            "hole_sections": inv.get("hole_sections", 0),
             "well_surveys": inv.get("well_surveys", 0),
             "core_rca_samples": inv.get("core_rca_samples", 0),
+            "core_measurements_long": inv.get("core_measurements_long", 0),
             "pressure_tests": inv.get("pressure_tests", 0),
+            "scal_pc_points": inv.get("scal_pc_points", 0),
+            "scal_relperm_points": inv.get("scal_relperm_points", 0),
+            "reservoir_summary_rows": inv.get("reservoir_summary_rows", 0),
         }
 
-        # If manifest was missing or counts are 0, check file presences directly
-        if counts["formation_tops"] == 0:
-            top_f = next((n for n in namelist if n.endswith("formation_tops.csv")), None)
-            if top_f:
-                try:
-                    df = pd.read_csv(io.BytesIO(zf.read(top_f)))
-                    counts["formation_tops"] = len(df)
-                except Exception:
-                    pass
+        def _csv_row_count(suffix: str) -> int:
+            entry = next((n for n in namelist if n.endswith(suffix)), None)
+            if not entry:
+                return 0
+            try:
+                return int(len(pd.read_csv(io.BytesIO(zf.read(entry)))))
+            except Exception:
+                return 0
 
-        if counts["fluid_contacts"] == 0:
-            c_f = next((n for n in namelist if n.endswith("fluid_contacts.csv")), None)
-            if c_f:
-                try:
-                    df = pd.read_csv(io.BytesIO(zf.read(c_f)))
-                    counts["fluid_contacts"] = len(df)
-                except Exception:
-                    pass
-
-        if counts["well_surveys"] == 0:
-            s_f = next((n for n in namelist if n.endswith("well_surveys.csv")), None)
-            if s_f:
-                try:
-                    df = pd.read_csv(io.BytesIO(zf.read(s_f)))
-                    counts["well_surveys"] = len(df)
-                except Exception:
-                    pass
-
-        if counts["pressure_tests"] == 0:
-            p_f = next(
-                (n for n in namelist if n.endswith("pressure_tests_mdt.csv")), None
-            )
-            if p_f:
-                try:
-                    df = pd.read_csv(io.BytesIO(zf.read(p_f)))
-                    counts["pressure_tests"] = len(df)
-                except Exception:
-                    pass
-
-        if counts["core_rca_samples"] == 0:
-            rca_f = next((n for n in namelist if n.endswith("core_rca_points.csv")), None)
-            if rca_f:
-                try:
-                    df = pd.read_csv(io.BytesIO(zf.read(rca_f)))
-                    counts["core_rca_samples"] = len(df)
-                except Exception:
-                    pass
+        # If manifest was missing or counts are 0, check CSV file presences directly
+        for key, csv_suffix in (
+            ("formation_tops", "formation_tops.csv"),
+            ("fluid_contacts", "fluid_contacts.csv"),
+            ("perforations", "perforations.csv"),
+            ("hole_sections", "hole_sections.csv"),
+            ("well_surveys", "well_surveys.csv"),
+            ("pressure_tests", "pressure_tests_mdt.csv"),
+            ("core_rca_samples", "core_rca_points.csv"),
+            ("core_measurements_long", "core_measurements_long.csv"),
+            ("scal_pc_points", "scal_capillary_pressure.csv"),
+            ("scal_relperm_points", "scal_relperm_tables.csv"),
+            ("reservoir_summary_rows", "reservoir_summary_by_zone.csv"),
+        ):
+            if counts[key] == 0:
+                counts[key] = _csv_row_count(csv_suffix)
 
         project_name = manifest_data.get("project_name") or "Imported_Project"
         project_description = manifest_data.get("project_description", "")
@@ -1870,13 +2083,26 @@ def inspect_handover_archive(zip_source: Any) -> Dict[str, Any]:
 
         return {
             "project_name": project_name,
+            "description": project_description,
             "project_description": project_description,
             "quick_pp_version": quick_pp_ver,
+            "export_timestamp": exported_at,
             "exported_at": exported_at,
             "has_manifest": bool(manifest_name),
             "wells_count": len(well_names),
             "well_names": well_names,
             "inventory_counts": counts,
+            "has_las_logs": bool(las_files),
+            "has_tops": counts["formation_tops"] > 0,
+            "has_contacts": counts["fluid_contacts"] > 0,
+            "has_perforations": counts["perforations"] > 0,
+            "has_hole_sections": counts["hole_sections"] > 0,
+            "has_surveys": counts["well_surveys"] > 0,
+            "has_core": counts["core_rca_samples"] > 0
+            or counts["core_measurements_long"] > 0,
+            "has_pressure": counts["pressure_tests"] > 0,
+            "has_scal": (counts["scal_pc_points"] + counts["scal_relperm_points"]) > 0,
+            "has_summaries": counts["reservoir_summary_rows"] > 0,
             "has_project_parameters": bool(manifest_data.get("project_parameters")),
         }
 
@@ -1902,6 +2128,9 @@ def import_handover_archive(
     Returns:
         Dict[str, Any]: Summary of imported project, wells, curves, and ancillary records.
     """
+    from sqlalchemy import func
+    from sqlalchemy.orm.attributes import flag_modified
+
     from quick_pp.app.backend.services.database import invalidate_well_cache
     from quick_pp.database import models as db_models
     from quick_pp.database import objects as db_objects
@@ -1909,13 +2138,16 @@ def import_handover_archive(
     if isinstance(zip_source, (bytes, bytearray)):
         zip_source = io.BytesIO(zip_source)
 
+    warnings: List[str] = []
+
     with zipfile.ZipFile(zip_source, "r") as zf:
         namelist = zf.namelist()
         manifest_name = next(
             (
                 n
                 for n in namelist
-                if n.endswith("CPI_Parameters_Manifest.json") or n.endswith("manifest.json")
+                if n.endswith("CPI_Parameters_Manifest.json")
+                or n.endswith("manifest.json")
             ),
             None,
         )
@@ -1925,22 +2157,42 @@ def import_handover_archive(
                 manifest_data = json.loads(zf.read(manifest_name).decode("utf-8"))
             except Exception as e:
                 logger.warning(f"Could not parse manifest: {e}")
+                warnings.append(f"Could not parse manifest: {e}")
 
         # 1. Resolve Target Project
         if target_project_id is not None:
             proj = db_objects.Project.load(db_session, project_id=target_project_id)
+            if target_project_name and str(target_project_name).strip():
+                desired_name = str(target_project_name).strip()
+                conflict = (
+                    db_session.query(db_models.Project)
+                    .filter(
+                        func.lower(db_models.Project.name) == desired_name.lower(),
+                        db_models.Project.project_id != proj.project_id,
+                    )
+                    .first()
+                )
+                if not conflict:
+                    proj._orm_project.name = desired_name
+                    db_session.add(proj._orm_project)
+                    db_session.flush()
         else:
-            p_name = str(
-                target_project_name
-                or manifest_data.get("project_name")
+            p_name = (
+                str(
+                    target_project_name
+                    or manifest_data.get("project_name")
+                    or "Imported_Project"
+                ).strip()
                 or "Imported_Project"
-            ).strip()
+            )
             p_desc = (
                 manifest_data.get("project_description")
                 or "Imported from handover package"
             )
             existing_proj_orm = (
-                db_session.query(db_models.Project).filter_by(name=p_name).first()
+                db_session.query(db_models.Project)
+                .filter(func.lower(db_models.Project.name) == p_name.lower())
+                .first()
             )
             if existing_proj_orm:
                 proj = db_objects.Project.load(
@@ -1954,26 +2206,33 @@ def import_handover_archive(
                     created_by_user_id=created_by_user_id,
                 )
                 proj.save()
-                if created_by_user_id is not None:
-                    if not db_session.get(
-                        db_models.ProjectMember,
-                        (proj.project_id, int(created_by_user_id)),
-                    ):
-                        db_session.add(
-                            db_models.ProjectMember(
-                                project_id=proj.project_id,
-                                user_id=int(created_by_user_id),
-                                role="admin",
-                            )
-                        )
-                        db_session.flush()
+                db_session.flush()
+
+        # Ensure the importing user always has admin membership on the target project
+        # (even when merging into an existing project or a project with created_by=NULL)
+        if created_by_user_id is not None and proj.project_id is not None:
+            uid = int(created_by_user_id)
+            existing_member = db_session.get(
+                db_models.ProjectMember,
+                (proj.project_id, uid),
+            )
+            if not existing_member:
+                db_session.add(
+                    db_models.ProjectMember(
+                        project_id=proj.project_id,
+                        user_id=uid,
+                        role="admin",
+                    )
+                )
+                db_session.flush()
 
         # Restore project parameters / config_data if present in manifest
         proj_cfg = manifest_data.get("project_parameters")
         if proj_cfg and isinstance(proj_cfg, dict):
             cur_cfg = dict(proj._orm_project.config_data or {})
-            cur_cfg.update(proj_cfg)
+            cur_cfg.update(_sanitize_json_value(proj_cfg))
             proj._orm_project.config_data = cur_cfg
+            flag_modified(proj._orm_project, "config_data")
             db_session.flush()
 
         # 2. Ingest Continuous Well Logs from LAS files
@@ -1987,61 +2246,116 @@ def import_handover_archive(
         imported_wells: Dict[str, Any] = {}
         for las_entry in las_entries:
             try:
-                las_bytes = zf.read(las_entry)
-                header_las, df = fast_read_las(
-                    io.BytesIO(las_bytes), filename=os.path.basename(las_entry)
-                )
-                meta = extract_las_metadata(header_las)
-                w_name = (
-                    meta.well_name
-                    or os.path.splitext(os.path.basename(las_entry))[0]
-                )
-                uwi = meta.uwi or w_name
-                depth_uom = meta.depth_unit or "m"
-
-                existing_names = set(proj.get_well_names())
-                if w_name in existing_names:
-                    well_obj = proj.get_well(w_name)
-                    if not well_obj.depth_uom:
-                        well_obj.depth_uom = depth_uom
-                else:
-                    well_obj = db_objects.Well(
-                        db_session,
-                        project_id=proj.project_id,
-                        name=w_name,
-                        uwi=uwi,
-                        depth_uom=depth_uom,
-                        header_data=meta.raw_well_header,
+                with db_session.begin_nested():
+                    las_bytes = zf.read(las_entry)
+                    header_las, df = fast_read_las(
+                        io.BytesIO(las_bytes), filename=os.path.basename(las_entry)
                     )
-                    db_session.add(well_obj._orm_well)
+                    meta = extract_las_metadata(header_las)
+                    w_name = (
+                        meta.well_name
+                        or os.path.splitext(os.path.basename(las_entry))[0]
+                    )
+                    uwi = meta.uwi or w_name
+                    depth_uom = meta.depth_unit or "m"
+
+                    existing_names = set(proj.get_well_names())
+                    if w_name in existing_names:
+                        well_obj = proj.get_well(w_name)
+                        if not overwrite_existing_wells:
+                            imported_wells[w_name] = well_obj
+                            continue
+                        if not well_obj.depth_uom:
+                            well_obj.depth_uom = depth_uom
+                    else:
+                        well_obj = db_objects.Well(
+                            db_session,
+                            project_id=proj.project_id,
+                            name=w_name,
+                            uwi=uwi,
+                            depth_uom=depth_uom,
+                            header_data=_sanitize_json_value(
+                                meta.raw_well_header or {}
+                            ),
+                        )
+                        db_session.add(well_obj._orm_well)
+                        db_session.flush()
+
+                    primary_header_df = _las_header_to_dataframe(header_las)
+                    # Reconstruct categorical ZONES column if ZONE_ID + ZONE_1..N exist in LAS ~Parameter
+                    if (
+                        "ZONE_ID" in df.columns
+                        and "ZONES" not in df.columns
+                        and meta.raw_parameters
+                    ):
+                        zone_id_map: Dict[int, str] = {}
+                        for pk, pv in meta.raw_parameters.items():
+                            m_z = re.match(
+                                r"^ZONE_(\d+)$", str(pk).strip(), re.IGNORECASE
+                            )
+                            if m_z and pv is not None:
+                                zone_id_map[int(m_z.group(1))] = str(pv).strip()
+                        if zone_id_map:
+                            df = df.copy()
+                            df["ZONES"] = (
+                                pd.to_numeric(df["ZONE_ID"], errors="coerce")
+                                .round()
+                                .map(zone_id_map)
+                            )
+
+                    well_obj.update_data_from_las_parse(
+                        df, primary_header_df, metadata_override=meta.raw_well_header
+                    )
+
+                    # Restore full well header metadata & curve units/descriptions from manifest when present
+                    w_manifest = manifest_data.get("wells", {}).get(w_name, {})
+                    manifest_hdr_full = w_manifest.get("well_header_data")
+                    if isinstance(manifest_hdr_full, dict) and manifest_hdr_full:
+                        merged_full_hdr = dict(well_obj.header_data or {})
+                        merged_full_hdr.update(_sanitize_json_value(manifest_hdr_full))
+                        well_obj.header_data = _sanitize_json_value(merged_full_hdr)
+                        flag_modified(well_obj._orm_well, "header_data")
+
+                    c_meta_map = w_manifest.get("curve_metadata")
+                    if isinstance(c_meta_map, dict) and c_meta_map:
+                        for orm_c in getattr(well_obj._orm_well, "curves", []) or []:
+                            c_info = c_meta_map.get(str(orm_c.mnemonic).upper())
+                            if isinstance(c_info, dict):
+                                if c_info.get("unit") and not orm_c.unit:
+                                    orm_c.unit = str(c_info["unit"])
+                                if c_info.get("description") and not orm_c.description:
+                                    orm_c.description = str(c_info["description"])
+
+                    # Check manifest for well CPI parameters and sync both _config_instance and config_data
+                    w_params = dict(w_manifest.get("parameters") or {})
+                    if meta.raw_parameters:
+                        for pk, pv in meta.raw_parameters.items():
+                            pk_low = str(pk).strip().lower()
+                            if (
+                                re.match(r"^zone_\d+$", pk_low)
+                                or pk_low == "dataset_type"
+                            ):
+                                continue
+                            if pk_low not in w_params:
+                                w_params[pk_low] = pv
+                    if w_params:
+                        sanitized_params = _sanitize_json_value(w_params)
+                        cur_w_cfg = dict(well_obj._orm_well.config_data or {})
+                        if isinstance(sanitized_params, dict):
+                            cur_w_cfg.update(sanitized_params)
+                        well_obj._config_instance.update(cur_w_cfg)
+                        well_obj._orm_well.config_data = dict(
+                            well_obj._config_instance.__dict__
+                        )
+                        flag_modified(well_obj._orm_well, "config_data")
+
                     db_session.flush()
-
-                primary_header_df = _las_header_to_dataframe(header_las)
-                well_obj.update_data_from_las_parse(
-                    df, primary_header_df, metadata_override=meta.raw_well_header
-                )
-
-                # Check manifest for well CPI parameters
-                w_manifest = manifest_data.get("wells", {}).get(w_name, {})
-                w_params = dict(w_manifest.get("parameters") or {})
-                if meta.raw_parameters:
-                    for pk, pv in meta.raw_parameters.items():
-                        if pk.lower() not in w_params:
-                            w_params[pk.lower()] = pv
-                if w_params:
-                    cur_w_cfg = dict(well_obj._orm_well.config_data or {})
-                    cur_w_cfg.update(w_params)
-                    well_obj._orm_well.config_data = cur_w_cfg
-
-                db_session.flush()
-                invalidate_well_cache(
-                    project_id=proj.project_id, well_name=w_name
-                )
-                imported_wells[w_name] = well_obj
+                    invalidate_well_cache(project_id=proj.project_id, well_name=w_name)
+                    imported_wells[w_name] = well_obj
             except Exception as e:
-                logger.warning(
-                    f"Failed to ingest LAS file '{las_entry}' from handover archive: {e}"
-                )
+                msg = f"Failed to ingest LAS file '{las_entry}': {e}"
+                logger.warning(msg)
+                warnings.append(msg)
 
         # 3. Ingest Well Headers & Datum
         headers_entry = next(
@@ -2049,34 +2363,56 @@ def import_handover_archive(
         )
         if headers_entry:
             try:
-                hdr_df = pd.read_csv(io.BytesIO(zf.read(headers_entry)))
-                for _, row in hdr_df.iterrows():
-                    wn = str(
-                        row.get("WELL_NAME") or row.get("well_name") or ""
-                    ).strip()
-                    w_obj = imported_wells.get(wn) or (
-                        proj.get_well(wn)
-                        if wn in set(proj.get_well_names())
-                        else None
-                    )
-                    if w_obj:
-                        cur_hdr = dict(w_obj.header_data or {})
-                        for col in hdr_df.columns:
-                            val = row[col]
-                            if (
-                                pd.notna(val)
-                                and col.upper()
-                                not in ("WELL_NAME", "PROJECT_NAME")
+                with db_session.begin_nested():
+                    hdr_df = pd.read_csv(io.BytesIO(zf.read(headers_entry)))
+                    hdr_alias_map = {
+                        "KB": "kb_elev",
+                        "DF": "df_elev",
+                        "GL": "gl_elev",
+                        "LAT": "latitude",
+                        "LON": "longitude",
+                    }
+                    for _, row in hdr_df.iterrows():
+                        wn = str(
+                            row.get("WELL_NAME") or row.get("well_name") or ""
+                        ).strip()
+                        w_obj = imported_wells.get(wn) or (
+                            proj.get_well(wn)
+                            if wn in set(proj.get_well_names())
+                            else None
+                        )
+                        if w_obj:
+                            preserved_cfg = dict(w_obj._orm_well.config_data or {})
+                            cur_hdr = dict(w_obj.header_data or {})
+                            for col in hdr_df.columns:
+                                val = row[col]
+                                col_up = str(col).strip().upper()
+                                if pd.notna(val) and col_up not in (
+                                    "WELL_NAME",
+                                    "PROJECT_NAME",
+                                ):
+                                    clean_v = _sanitize_json_value(val)
+                                    cur_hdr[col.lower()] = clean_v
+                                    canon_k = hdr_alias_map.get(col_up)
+                                    if canon_k and cur_hdr.get(canon_k) is None:
+                                        cur_hdr[canon_k] = clean_v
+                            w_obj.header_data = _sanitize_json_value(cur_hdr)
+                            if "UWI" in hdr_df.columns and pd.notna(row["UWI"]):
+                                w_obj.uwi = str(row["UWI"])
+                            if "DEPTH_UOM" in hdr_df.columns and pd.notna(
+                                row["DEPTH_UOM"]
                             ):
-                                cur_hdr[col.lower()] = val
-                        w_obj.header_data = cur_hdr
-                        if "UWI" in hdr_df.columns and pd.notna(row["UWI"]):
-                            w_obj.uwi = str(row["UWI"])
-                        w_obj.save()
+                                w_obj.depth_uom = str(row["DEPTH_UOM"]).strip()
+                            if preserved_cfg:
+                                w_obj._config_instance.update(preserved_cfg)
+                            w_obj.save()
+                            flag_modified(w_obj._orm_well, "header_data")
+                            flag_modified(w_obj._orm_well, "config_data")
+                            db_session.flush()
             except Exception as e:
-                logger.warning(
-                    f"Error importing well headers from handover archive: {e}"
-                )
+                msg = f"Error importing well headers: {e}"
+                logger.warning(msg)
+                warnings.append(msg)
 
         # 4. Ingest Well Surveys
         surveys_entry = next(
@@ -2085,49 +2421,53 @@ def import_handover_archive(
         total_surveys = 0
         if surveys_entry:
             try:
-                surv_df = pd.read_csv(io.BytesIO(zf.read(surveys_entry)))
-                wn_col = next(
-                    (c for c in surv_df.columns if c.upper() == "WELL_NAME"),
-                    "WELL_NAME",
-                )
-                md_col = next(
-                    (c for c in surv_df.columns if c.upper() == "MD"), "MD"
-                )
-                inc_col = next(
-                    (c for c in surv_df.columns if c.upper() == "INC"), "INC"
-                )
-                azim_col = next(
-                    (c for c in surv_df.columns if c.upper() == "AZIM"), "AZIM"
-                )
-                for wn, group in surv_df.groupby(wn_col):
-                    wn_str = str(wn).strip()
-                    w_obj = imported_wells.get(wn_str) or (
-                        proj.get_well(wn_str)
-                        if wn_str in set(proj.get_well_names())
-                        else None
+                with db_session.begin_nested():
+                    surv_df = pd.read_csv(io.BytesIO(zf.read(surveys_entry)))
+                    wn_col = next(
+                        (c for c in surv_df.columns if c.upper() == "WELL_NAME"),
+                        "WELL_NAME",
                     )
-                    if w_obj:
-                        s_list = []
-                        for _, r in group.iterrows():
-                            if (
-                                pd.notna(r[md_col])
-                                and pd.notna(r[inc_col])
-                                and pd.notna(r[azim_col])
-                            ):
-                                s_list.append(
-                                    {
-                                        "md": float(r[md_col]),
-                                        "inc": float(r[inc_col]),
-                                        "azim": float(r[azim_col]),
-                                    }
+                    md_col = next(
+                        (c for c in surv_df.columns if c.upper() == "MD"), "MD"
+                    )
+                    inc_col = next(
+                        (c for c in surv_df.columns if c.upper() == "INC"), "INC"
+                    )
+                    azim_col = next(
+                        (c for c in surv_df.columns if c.upper() == "AZIM"), "AZIM"
+                    )
+                    for wn, group in surv_df.groupby(wn_col):
+                        wn_str = str(wn).strip()
+                        w_obj = imported_wells.get(wn_str) or (
+                            proj.get_well(wn_str)
+                            if wn_str in set(proj.get_well_names())
+                            else None
+                        )
+                        if w_obj:
+                            s_list = []
+                            for _, r in group.iterrows():
+                                if (
+                                    pd.notna(r[md_col])
+                                    and pd.notna(r[inc_col])
+                                    and pd.notna(r[azim_col])
+                                ):
+                                    s_list.append(
+                                        {
+                                            "md": float(r[md_col]),
+                                            "inc": float(r[inc_col]),
+                                            "azim": float(r[azim_col]),
+                                        }
+                                    )
+                            if s_list:
+                                w_obj.add_well_surveys(
+                                    s_list, replace=overwrite_existing_wells
                                 )
-                        if s_list:
-                            w_obj.add_well_surveys(s_list)
-                            total_surveys += len(s_list)
+                                total_surveys += len(s_list)
+                    db_session.flush()
             except Exception as e:
-                logger.warning(
-                    f"Error importing surveys from handover archive: {e}"
-                )
+                msg = f"Error importing surveys: {e}"
+                logger.warning(msg)
+                warnings.append(msg)
 
         # 5. Ingest Formation Tops
         tops_entry = next(
@@ -2136,96 +2476,154 @@ def import_handover_archive(
         total_tops = 0
         if tops_entry:
             try:
-                tops_df = pd.read_csv(io.BytesIO(zf.read(tops_entry)))
-                wn_col = next(
-                    (c for c in tops_df.columns if c.upper() == "WELL_NAME"),
-                    "WELL_NAME",
-                )
-                top_col = next(
-                    (
-                        c
-                        for c in tops_df.columns
-                        if c.upper() in ("TOP_NAME", "NAME", "FORMATION")
-                    ),
-                    "TOP_NAME",
-                )
-                d_col = next(
-                    (c for c in tops_df.columns if c.upper() in ("MD", "DEPTH", "TOP_DEPTH")),
-                    tops_df.columns[3] if len(tops_df.columns) > 3 else "MD",
-                )
-                for wn, group in tops_df.groupby(wn_col):
-                    wn_str = str(wn).strip()
-                    w_obj = imported_wells.get(wn_str) or (
-                        proj.get_well(wn_str)
-                        if wn_str in set(proj.get_well_names())
-                        else None
+                with db_session.begin_nested():
+                    tops_df = pd.read_csv(io.BytesIO(zf.read(tops_entry)))
+                    wn_col = next(
+                        (c for c in tops_df.columns if c.upper() == "WELL_NAME"),
+                        "WELL_NAME",
                     )
-                    if w_obj:
-                        t_list = []
-                        for _, r in group.iterrows():
-                            if pd.notna(r[top_col]) and pd.notna(r[d_col]):
-                                t_list.append(
-                                    {
-                                        "name": str(r[top_col]).strip(),
-                                        "depth": float(r[d_col]),
-                                    }
+                    top_col = next(
+                        (
+                            c
+                            for c in tops_df.columns
+                            if c.upper() in ("TOP_NAME", "NAME", "FORMATION")
+                        ),
+                        "TOP_NAME",
+                    )
+                    d_col = next(
+                        (
+                            c
+                            for c in tops_df.columns
+                            if c.upper() in ("MD", "DEPTH", "TOP_DEPTH")
+                        ),
+                        tops_df.columns[3] if len(tops_df.columns) > 3 else "MD",
+                    )
+                    for wn, group in tops_df.groupby(wn_col):
+                        wn_str = str(wn).strip()
+                        w_obj = imported_wells.get(wn_str) or (
+                            proj.get_well(wn_str)
+                            if wn_str in set(proj.get_well_names())
+                            else None
+                        )
+                        if w_obj:
+                            t_list = []
+                            for _, r in group.iterrows():
+                                if pd.notna(r[top_col]) and pd.notna(r[d_col]):
+                                    t_list.append(
+                                        {
+                                            "name": str(r[top_col]).strip(),
+                                            "depth": float(r[d_col]),
+                                        }
+                                    )
+                            if t_list:
+                                w_obj.add_formation_tops(
+                                    t_list, replace=overwrite_existing_wells
                                 )
-                        if t_list:
-                            w_obj.add_formation_tops(t_list, replace=True)
-                            total_tops += len(t_list)
+                                total_tops += len(t_list)
+                    db_session.flush()
             except Exception as e:
-                logger.warning(
-                    f"Error importing tops from handover archive: {e}"
-                )
+                msg = f"Error importing tops: {e}"
+                logger.warning(msg)
+                warnings.append(msg)
 
-        # 6. Ingest Fluid Contacts
+        # 6. Ingest Fluid Contacts (including contact_type, zone, fault_block, source, remarks)
         contacts_entry = next(
             (n for n in namelist if n.endswith("fluid_contacts.csv")), None
         )
         total_contacts = 0
         if contacts_entry:
             try:
-                contacts_df = pd.read_csv(io.BytesIO(zf.read(contacts_entry)))
-                wn_col = next(
-                    (c for c in contacts_df.columns if c.upper() == "WELL_NAME"),
-                    "WELL_NAME",
-                )
-                c_col = next(
-                    (
-                        c
-                        for c in contacts_df.columns
-                        if c.upper() in ("CONTACT_NAME", "NAME", "CONTACT_TYPE")
-                    ),
-                    "CONTACT_NAME",
-                )
-                d_col = next(
-                    (c for c in contacts_df.columns if c.upper() in ("MD", "DEPTH", "CONTACT_DEPTH")),
-                    contacts_df.columns[3] if len(contacts_df.columns) > 3 else "MD",
-                )
-                for wn, group in contacts_df.groupby(wn_col):
-                    wn_str = str(wn).strip()
-                    w_obj = imported_wells.get(wn_str) or (
-                        proj.get_well(wn_str)
-                        if wn_str in set(proj.get_well_names())
-                        else None
+                with db_session.begin_nested():
+                    contacts_df = pd.read_csv(io.BytesIO(zf.read(contacts_entry)))
+                    wn_col = next(
+                        (c for c in contacts_df.columns if c.upper() == "WELL_NAME"),
+                        "WELL_NAME",
                     )
-                    if w_obj:
-                        c_list = []
-                        for _, r in group.iterrows():
-                            if pd.notna(r[c_col]) and pd.notna(r[d_col]):
-                                c_list.append(
-                                    {
+                    c_col = next(
+                        (
+                            c
+                            for c in contacts_df.columns
+                            if c.upper() in ("CONTACT_NAME", "NAME", "CONTACT_TYPE")
+                        ),
+                        "CONTACT_NAME",
+                    )
+                    d_col = next(
+                        (
+                            c
+                            for c in contacts_df.columns
+                            if c.upper() in ("MD", "DEPTH", "CONTACT_DEPTH")
+                        ),
+                        contacts_df.columns[3]
+                        if len(contacts_df.columns) > 3
+                        else "MD",
+                    )
+                    ct_col = next(
+                        (c for c in contacts_df.columns if c.upper() == "CONTACT_TYPE"),
+                        None,
+                    )
+                    z_col = next(
+                        (c for c in contacts_df.columns if c.upper() == "ZONE"), None
+                    )
+                    fb_col = next(
+                        (c for c in contacts_df.columns if c.upper() == "FAULT_BLOCK"),
+                        None,
+                    )
+                    src_col = next(
+                        (c for c in contacts_df.columns if c.upper() == "SOURCE"), None
+                    )
+                    rem_col = next(
+                        (
+                            c
+                            for c in contacts_df.columns
+                            if c.upper() in ("REMARKS", "REMARK")
+                        ),
+                        None,
+                    )
+
+                    def _opt_str(
+                        row_obj: Any, col_name: Optional[str]
+                    ) -> Optional[str]:
+                        if not col_name or pd.isna(row_obj.get(col_name)):
+                            return None
+                        s = str(row_obj.get(col_name)).strip()
+                        return s if s and s.lower() not in ("nan", "none") else None
+
+                    for wn, group in contacts_df.groupby(wn_col):
+                        wn_str = str(wn).strip()
+                        w_obj = imported_wells.get(wn_str) or (
+                            proj.get_well(wn_str)
+                            if wn_str in set(proj.get_well_names())
+                            else None
+                        )
+                        if w_obj:
+                            c_list = []
+                            for _, r in group.iterrows():
+                                if pd.notna(r[c_col]) and pd.notna(r[d_col]):
+                                    c_item: Dict[str, Any] = {
                                         "name": str(r[c_col]).strip(),
                                         "depth": float(r[d_col]),
                                     }
+                                    if _opt_str(r, ct_col):
+                                        c_item["contact_type"] = _opt_str(r, ct_col)
+                                    if _opt_str(r, z_col):
+                                        c_item["zone"] = _opt_str(r, z_col)
+                                    if _opt_str(r, fb_col):
+                                        c_item["fault_block"] = _opt_str(r, fb_col)
+                                    if _opt_str(r, src_col):
+                                        c_item["source"] = _opt_str(r, src_col)
+                                    if _opt_str(r, rem_col):
+                                        c_item["remarks"] = _opt_str(r, rem_col)
+                                    c_list.append(c_item)
+                            if c_list:
+                                w_obj.add_fluid_contacts(
+                                    c_list, replace=overwrite_existing_wells
                                 )
-                        if c_list:
-                            w_obj.add_fluid_contacts(c_list, replace=True)
-                            total_contacts += len(c_list)
+                                total_contacts += len(c_list)
+                    db_session.flush()
             except Exception as e:
-                logger.warning(
-                    f"Error importing contacts from handover archive: {e}"
-                )
+                msg = f"Error importing contacts: {e}"
+                logger.warning(msg)
+                warnings.append(msg)
 
         # 7. Ingest Perforations
         perfs_entry = next(
@@ -2234,65 +2632,203 @@ def import_handover_archive(
         total_perfs = 0
         if perfs_entry:
             try:
-                perfs_df = pd.read_csv(io.BytesIO(zf.read(perfs_entry)))
-                wn_col = next(
-                    (c for c in perfs_df.columns if c.upper() == "WELL_NAME"),
-                    "WELL_NAME",
-                )
-                name_col = next(
-                    (
-                        c
-                        for c in perfs_df.columns
-                        if c.upper() in ("PERF_NAME", "NAME")
-                    ),
-                    "PERF_NAME",
-                )
-                top_col = next(
-                    (
-                        c
-                        for c in perfs_df.columns
-                        if c.upper() in ("TOP_MD", "TOP_DEPTH", "MD_TOP", "DEPTH")
-                    ),
-                    "TOP_MD",
-                )
-                bot_col = next(
-                    (c for c in perfs_df.columns if c.upper() in ("BOTTOM_MD", "BOTTOM_DEPTH", "MD_BOTTOM")),
-                    "BOTTOM_MD",
-                )
-                for wn, group in perfs_df.groupby(wn_col):
-                    wn_str = str(wn).strip()
-                    w_obj = imported_wells.get(wn_str) or (
-                        proj.get_well(wn_str)
-                        if wn_str in set(proj.get_well_names())
-                        else None
+                with db_session.begin_nested():
+                    perfs_df = pd.read_csv(io.BytesIO(zf.read(perfs_entry)))
+                    wn_col = next(
+                        (c for c in perfs_df.columns if c.upper() == "WELL_NAME"),
+                        "WELL_NAME",
                     )
-                    if w_obj and hasattr(w_obj, "add_perforations"):
-                        p_list = []
-                        for _, r in group.iterrows():
-                            if (
-                                pd.notna(r[name_col])
-                                and pd.notna(r[top_col])
-                                and pd.notna(r[bot_col])
-                            ):
-                                p_list.append(
-                                    {
-                                        "name": str(r[name_col]).strip(),
-                                        "top_depth": float(r[top_col]),
-                                        "bottom_depth": float(r[bot_col]),
-                                        "description": str(
-                                            r.get("DESCRIPTION")
-                                            or r.get("description")
-                                            or ""
-                                        ),
-                                    }
+                    name_col = next(
+                        (
+                            c
+                            for c in perfs_df.columns
+                            if c.upper() in ("PERF_NAME", "NAME")
+                        ),
+                        "PERF_NAME",
+                    )
+                    top_col = next(
+                        (
+                            c
+                            for c in perfs_df.columns
+                            if c.upper()
+                            in ("TOP_MD", "TOP_DEPTH", "MD_TOP", "TOP", "DEPTH")
+                        ),
+                        "TOP_MD",
+                    )
+                    bot_col = next(
+                        (
+                            c
+                            for c in perfs_df.columns
+                            if c.upper()
+                            in ("BOTTOM_MD", "BOTTOM_DEPTH", "MD_BOTTOM", "BOTTOM")
+                        ),
+                        "BOTTOM_MD",
+                    )
+                    desc_col = next(
+                        (c for c in perfs_df.columns if c.upper() == "DESCRIPTION"),
+                        None,
+                    )
+                    for wn, group in perfs_df.groupby(wn_col):
+                        wn_str = str(wn).strip()
+                        w_obj = imported_wells.get(wn_str) or (
+                            proj.get_well(wn_str)
+                            if wn_str in set(proj.get_well_names())
+                            else None
+                        )
+                        if w_obj and hasattr(w_obj, "add_perforations"):
+                            p_list = []
+                            for _, r in group.iterrows():
+                                if (
+                                    pd.notna(r.get(name_col))
+                                    and pd.notna(r.get(top_col))
+                                    and pd.notna(r.get(bot_col))
+                                ):
+                                    desc_val = (
+                                        str(r[desc_col]).strip()
+                                        if desc_col and pd.notna(r.get(desc_col))
+                                        else ""
+                                    )
+                                    p_list.append(
+                                        {
+                                            "name": str(r[name_col]).strip(),
+                                            "top": float(r[top_col]),
+                                            "bottom": float(r[bot_col]),
+                                            "description": desc_val,
+                                        }
+                                    )
+                            if p_list:
+                                w_obj.add_perforations(
+                                    p_list, replace=overwrite_existing_wells
                                 )
-                        if p_list:
-                            w_obj.add_perforations(p_list)
-                            total_perfs += len(p_list)
+                                total_perfs += len(p_list)
+                    db_session.flush()
             except Exception as e:
-                logger.warning(
-                    f"Error importing perforations from handover archive: {e}"
-                )
+                msg = f"Error importing perforations: {e}"
+                logger.warning(msg)
+                warnings.append(msg)
+
+        # 7b. Ingest Hole Sections & Mud Program
+        hole_secs_entry = next(
+            (n for n in namelist if n.endswith("hole_sections.csv")), None
+        )
+        total_hole_sections = 0
+        if hole_secs_entry:
+            try:
+                with db_session.begin_nested():
+                    hs_df = pd.read_csv(io.BytesIO(zf.read(hole_secs_entry)))
+                    wn_col = next(
+                        (c for c in hs_df.columns if c.upper() == "WELL_NAME"),
+                        "WELL_NAME",
+                    )
+                    name_col = next(
+                        (
+                            c
+                            for c in hs_df.columns
+                            if c.upper() in ("SECTION_NAME", "NAME")
+                        ),
+                        None,
+                    )
+                    top_col = next(
+                        (
+                            c
+                            for c in hs_df.columns
+                            if c.upper()
+                            in ("TOP_MD", "TOP_DEPTH", "MD_TOP", "TOP", "DEPTH")
+                        ),
+                        "TOP_MD",
+                    )
+                    bot_col = next(
+                        (
+                            c
+                            for c in hs_df.columns
+                            if c.upper()
+                            in ("BOTTOM_MD", "BOTTOM_DEPTH", "MD_BOTTOM", "BOTTOM")
+                        ),
+                        "BOTTOM_MD",
+                    )
+                    bs_col = next(
+                        (
+                            c
+                            for c in hs_df.columns
+                            if c.upper() in ("BIT_SIZE", "BS", "BIT_SIZE_IN")
+                        ),
+                        None,
+                    )
+                    mt_col = next(
+                        (c for c in hs_df.columns if c.upper() == "MUD_TYPE"), None
+                    )
+                    mw_col = next(
+                        (
+                            c
+                            for c in hs_df.columns
+                            if c.upper() in ("MUD_WEIGHT", "MUD_WEIGHT_PPG")
+                        ),
+                        None,
+                    )
+                    sal_col = next(
+                        (
+                            c
+                            for c in hs_df.columns
+                            if c.upper() in ("MUD_SALINITY", "SALINITY_PPM", "SALINITY")
+                        ),
+                        None,
+                    )
+                    rmf_col = next(
+                        (c for c in hs_df.columns if c.upper() == "RMF"), None
+                    )
+                    rmft_col = next(
+                        (
+                            c
+                            for c in hs_df.columns
+                            if c.upper() in ("RMF_TEMP", "RMF_TEMP_C")
+                        ),
+                        None,
+                    )
+
+                    for wn, group in hs_df.groupby(wn_col):
+                        wn_str = str(wn).strip()
+                        w_obj = imported_wells.get(wn_str) or (
+                            proj.get_well(wn_str)
+                            if wn_str in set(proj.get_well_names())
+                            else None
+                        )
+                        if w_obj and hasattr(w_obj, "add_hole_sections"):
+                            hs_list = []
+                            for _, r in group.iterrows():
+                                if pd.notna(r.get(top_col)) and pd.notna(
+                                    r.get(bot_col)
+                                ):
+                                    sec_item: Dict[str, Any] = {
+                                        "top": float(r[top_col]),
+                                        "bottom": float(r[bot_col]),
+                                    }
+                                    if name_col and pd.notna(r.get(name_col)):
+                                        sec_item["name"] = str(r[name_col]).strip()
+                                    if bs_col and pd.notna(r.get(bs_col)):
+                                        sec_item["bit_size"] = float(r[bs_col])
+                                    if mt_col and pd.notna(r.get(mt_col)):
+                                        sec_item["mud_type"] = (
+                                            str(r[mt_col]).strip().upper()
+                                        )
+                                    if mw_col and pd.notna(r.get(mw_col)):
+                                        sec_item["mud_weight"] = float(r[mw_col])
+                                    if sal_col and pd.notna(r.get(sal_col)):
+                                        sec_item["mud_salinity"] = float(r[sal_col])
+                                    if rmf_col and pd.notna(r.get(rmf_col)):
+                                        sec_item["rmf"] = float(r[rmf_col])
+                                    if rmft_col and pd.notna(r.get(rmft_col)):
+                                        sec_item["rmf_temp"] = float(r[rmft_col])
+                                    hs_list.append(sec_item)
+                            if hs_list:
+                                w_obj.add_hole_sections(
+                                    hs_list, replace=overwrite_existing_wells
+                                )
+                                total_hole_sections += len(hs_list)
+                    db_session.flush()
+            except Exception as e:
+                msg = f"Error importing hole sections: {e}"
+                logger.warning(msg)
+                warnings.append(msg)
 
         # 8. Ingest Pressure Tests (MDT/RFT)
         mdt_entry = next(
@@ -2301,37 +2837,39 @@ def import_handover_archive(
         total_mdt = 0
         if mdt_entry:
             try:
-                mdt_df = pd.read_csv(io.BytesIO(zf.read(mdt_entry)))
-                wn_col = next(
-                    (c for c in mdt_df.columns if c.upper() == "WELL_NAME"),
-                    "WELL_NAME",
-                )
-                d_col = next(
-                    (c for c in mdt_df.columns if c.upper() == "DEPTH"), "DEPTH"
-                )
-                p_col = next(
-                    (c for c in mdt_df.columns if c.upper() == "PRESSURE"),
-                    "PRESSURE",
-                )
-                for wn, group in mdt_df.groupby(wn_col):
-                    wn_str = str(wn).strip()
-                    w_obj = imported_wells.get(wn_str) or (
-                        proj.get_well(wn_str)
-                        if wn_str in set(proj.get_well_names())
-                        else None
+                with db_session.begin_nested():
+                    mdt_df = pd.read_csv(io.BytesIO(zf.read(mdt_entry)))
+                    wn_col = next(
+                        (c for c in mdt_df.columns if c.upper() == "WELL_NAME"),
+                        "WELL_NAME",
                     )
-                    if w_obj:
-                        m_list = []
-                        for _, r in group.iterrows():
-                            if pd.notna(r[d_col]) and pd.notna(r[p_col]):
-                                m_list.append(
-                                    {
+                    d_col = next(
+                        (c for c in mdt_df.columns if c.upper() == "DEPTH"), "DEPTH"
+                    )
+                    p_col = next(
+                        (c for c in mdt_df.columns if c.upper() == "PRESSURE"),
+                        "PRESSURE",
+                    )
+                    for wn, group in mdt_df.groupby(wn_col):
+                        wn_str = str(wn).strip()
+                        w_obj = imported_wells.get(wn_str) or (
+                            proj.get_well(wn_str)
+                            if wn_str in set(proj.get_well_names())
+                            else None
+                        )
+                        if w_obj:
+                            m_list = []
+                            for _, r in group.iterrows():
+                                if pd.notna(r[d_col]) and pd.notna(r[p_col]):
+                                    p_item: Dict[str, Any] = {
                                         "depth": float(r[d_col]),
                                         "pressure": float(r[p_col]),
                                         "pressure_uom": str(
                                             r.get("PRESSURE_UOM")
-                                            or r.get("pressure_uom")
-                                            or "psi"
+                                            if pd.notna(r.get("PRESSURE_UOM"))
+                                            else r.get("pressure_uom")
+                                            if pd.notna(r.get("pressure_uom"))
+                                            else "psi"
                                         ),
                                         "mobility": (
                                             float(r["MOBILITY"])
@@ -2348,108 +2886,486 @@ def import_handover_archive(
                                             if pd.notna(r.get("TEMPERATURE"))
                                             else None
                                         ),
+                                        "temperature_uom": str(
+                                            r.get("TEMPERATURE_UOM")
+                                            if pd.notna(r.get("TEMPERATURE_UOM"))
+                                            else r.get("temperature_uom")
+                                            if pd.notna(r.get("temperature_uom"))
+                                            else "degC"
+                                        ),
                                         "fluid_type": str(
                                             r.get("FLUID_TYPE")
-                                            or r.get("fluid_type")
-                                            or "UNASSIGNED"
+                                            if pd.notna(r.get("FLUID_TYPE"))
+                                            else r.get("fluid_type")
+                                            if pd.notna(r.get("fluid_type"))
+                                            else "UNASSIGNED"
                                         ),
                                         "test_quality": str(
                                             r.get("TEST_QUALITY")
-                                            or r.get("test_quality")
-                                            or "VALID"
+                                            if pd.notna(r.get("TEST_QUALITY"))
+                                            else r.get("test_quality")
+                                            if pd.notna(r.get("test_quality"))
+                                            else "VALID"
                                         ),
                                         "zone": str(
                                             r.get("ZONE")
-                                            or r.get("zone")
-                                            or ""
+                                            if pd.notna(r.get("ZONE"))
+                                            else r.get("zone")
+                                            if pd.notna(r.get("zone"))
+                                            else ""
                                         ),
                                         "remarks": str(
                                             r.get("REMARKS")
-                                            or r.get("remarks")
-                                            or ""
+                                            if pd.notna(r.get("REMARKS"))
+                                            else r.get("remarks")
+                                            if pd.notna(r.get("remarks"))
+                                            else ""
                                         ),
                                     }
+                                    if pd.notna(r.get("TVDSS_OVERRIDE")):
+                                        p_item["tvdss"] = float(r["TVDSS_OVERRIDE"])
+                                    m_list.append(p_item)
+                            if m_list:
+                                w_obj.add_pressure_tests(
+                                    m_list, replace=overwrite_existing_wells
                                 )
-                        if m_list:
-                            w_obj.add_pressure_tests(m_list)
-                            total_mdt += len(m_list)
+                                total_mdt += len(m_list)
+                    db_session.flush()
             except Exception as e:
-                logger.warning(
-                    f"Error importing pressure tests from handover archive: {e}"
-                )
+                msg = f"Error importing pressure tests: {e}"
+                logger.warning(msg)
+                warnings.append(msg)
 
-        # 9. Ingest Core RCA Samples
+        # 9. Ingest Core RCA Samples & Full Point Measurements (wide + long tables)
         core_entry = next(
             (n for n in namelist if n.endswith("core_rca_points.csv")), None
         )
+        core_long_entry = next(
+            (n for n in namelist if n.endswith("core_measurements_long.csv")), None
+        )
         total_core = 0
-        if core_entry:
+        if core_entry or core_long_entry:
             try:
-                core_df = pd.read_csv(io.BytesIO(zf.read(core_entry)))
-                wn_col = next(
-                    (c for c in core_df.columns if c.upper() == "WELL_NAME"),
-                    "WELL_NAME",
-                )
-                d_col = next(
-                    (c for c in core_df.columns if c.upper() == "DEPTH"), "DEPTH"
-                )
-                for wn, group in core_df.groupby(wn_col):
-                    wn_str = str(wn).strip()
-                    w_obj = imported_wells.get(wn_str) or (
-                        proj.get_well(wn_str)
-                        if wn_str in set(proj.get_well_names())
-                        else None
-                    )
-                    if w_obj:
-                        samples_list = []
-                        for idx, r in group.iterrows():
-                            if pd.notna(r[d_col]):
-                                s_name = str(
-                                    r.get("SAMPLE_NAME")
-                                    or r.get("sample_name")
-                                    or f"RCA-{idx + 1}"
+                with db_session.begin_nested():
+                    long_by_well_sample: Dict[tuple, List[Dict[str, Any]]] = {}
+                    long_depth_by_well_sample: Dict[tuple, float] = {}
+                    if core_long_entry:
+                        long_df = pd.read_csv(io.BytesIO(zf.read(core_long_entry)))
+                        l_wn_col = next(
+                            (c for c in long_df.columns if c.upper() == "WELL_NAME"),
+                            "WELL_NAME",
+                        )
+                        l_sn_col = next(
+                            (c for c in long_df.columns if c.upper() == "SAMPLE_NAME"),
+                            "SAMPLE_NAME",
+                        )
+                        l_d_col = next(
+                            (c for c in long_df.columns if c.upper() == "DEPTH"),
+                            "DEPTH",
+                        )
+                        l_p_col = next(
+                            (
+                                c
+                                for c in long_df.columns
+                                if c.upper() == "PROPERTY_NAME"
+                            ),
+                            "PROPERTY_NAME",
+                        )
+                        l_v_col = next(
+                            (c for c in long_df.columns if c.upper() == "VALUE"),
+                            "VALUE",
+                        )
+                        l_u_col = next(
+                            (c for c in long_df.columns if c.upper() == "UNIT"), None
+                        )
+                        for _, lr in long_df.iterrows():
+                            if (
+                                pd.notna(lr.get(l_wn_col))
+                                and pd.notna(lr.get(l_sn_col))
+                                and pd.notna(lr.get(l_p_col))
+                                and pd.notna(lr.get(l_v_col))
+                            ):
+                                key_ws = (
+                                    str(lr[l_wn_col]).strip(),
+                                    str(lr[l_sn_col]).strip(),
                                 )
-                                s_entry: Dict[str, Any] = {
+                                if pd.notna(lr.get(l_d_col)):
+                                    long_depth_by_well_sample[key_ws] = float(
+                                        lr[l_d_col]
+                                    )
+                                long_by_well_sample.setdefault(key_ws, []).append(
+                                    {
+                                        "property_name": str(lr[l_p_col]).strip(),
+                                        "value": float(lr[l_v_col]),
+                                        "unit": str(lr[l_u_col]).strip()
+                                        if l_u_col and pd.notna(lr.get(l_u_col))
+                                        else None,
+                                    }
+                                )
+
+                    samples_by_well: Dict[str, List[Dict[str, Any]]] = {}
+                    seen_ws: set = set()
+                    if core_entry:
+                        core_df = pd.read_csv(io.BytesIO(zf.read(core_entry)))
+                        wn_col = next(
+                            (c for c in core_df.columns if c.upper() == "WELL_NAME"),
+                            "WELL_NAME",
+                        )
+                        d_col = next(
+                            (c for c in core_df.columns if c.upper() == "DEPTH"),
+                            "DEPTH",
+                        )
+                        reserved_wide_cols = {
+                            "WELL_NAME",
+                            "UWI",
+                            "SAMPLE_NAME",
+                            "DEPTH",
+                            "TVD",
+                            "TVDSS",
+                            "DESCRIPTION",
+                            "REMARK",
+                            "CPORE",
+                            "CPERM",
+                            "CPORE_AMB",
+                            "CPERM_AIR",
+                            "RAW_DEPTH",
+                            "SHIFT_M",
+                        }
+                        for wn, group in core_df.groupby(wn_col):
+                            wn_str = str(wn).strip()
+                            for idx, r in group.iterrows():
+                                if pd.notna(r.get(d_col)):
+                                    s_name = str(
+                                        r.get("SAMPLE_NAME")
+                                        if pd.notna(r.get("SAMPLE_NAME"))
+                                        else r.get("sample_name")
+                                        if pd.notna(r.get("sample_name"))
+                                        else f"RCA-{idx + 1}"
+                                    ).strip()
+                                    key_ws = (wn_str, s_name)
+                                    seen_ws.add(key_ws)
+                                    extra_meas = list(
+                                        long_by_well_sample.get(key_ws, [])
+                                    )
+                                    known_props = {
+                                        m["property_name"].upper() for m in extra_meas
+                                    }
+                                    for c_name in core_df.columns:
+                                        c_up = str(c_name).strip().upper()
+                                        if (
+                                            c_up not in reserved_wide_cols
+                                            and c_up not in known_props
+                                            and pd.notna(r.get(c_name))
+                                        ):
+                                            try:
+                                                extra_meas.append(
+                                                    {
+                                                        "property_name": c_up,
+                                                        "value": float(r[c_name]),
+                                                        "unit": None,
+                                                    }
+                                                )
+                                            except (TypeError, ValueError):
+                                                pass
+
+                                    s_entry: Dict[str, Any] = {
+                                        "sample_name": s_name,
+                                        "depth": float(r[d_col]),
+                                        "description": str(
+                                            r.get("DESCRIPTION")
+                                            if pd.notna(r.get("DESCRIPTION"))
+                                            else r.get("description")
+                                            if pd.notna(r.get("description"))
+                                            else ""
+                                        ),
+                                        "remark": str(
+                                            r.get("REMARK")
+                                            if pd.notna(r.get("REMARK"))
+                                            else r.get("remark")
+                                            if pd.notna(r.get("remark"))
+                                            else ""
+                                        ),
+                                        "measurements": extra_meas,
+                                    }
+                                    if pd.notna(r.get("CPORE")):
+                                        s_entry["porosity"] = float(r["CPORE"])
+                                    if pd.notna(r.get("CPERM")):
+                                        s_entry["permeability"] = float(r["CPERM"])
+                                    if pd.notna(r.get("CPORE_AMB")):
+                                        s_entry["porosity_amb"] = float(r["CPORE_AMB"])
+                                    if pd.notna(r.get("CPERM_AIR")):
+                                        s_entry["perm_air"] = float(r["CPERM_AIR"])
+                                    if pd.notna(r.get("RAW_DEPTH")):
+                                        s_entry["raw_depth"] = float(r["RAW_DEPTH"])
+                                    if pd.notna(r.get("SHIFT_M")):
+                                        s_entry["shift_m"] = float(r["SHIFT_M"])
+                                    samples_by_well.setdefault(wn_str, []).append(
+                                        s_entry
+                                    )
+
+                    for (wn_str, s_name), m_items in long_by_well_sample.items():
+                        if (wn_str, s_name) not in seen_ws and (
+                            wn_str,
+                            s_name,
+                        ) in long_depth_by_well_sample:
+                            samples_by_well.setdefault(wn_str, []).append(
+                                {
                                     "sample_name": s_name,
-                                    "depth": float(r[d_col]),
-                                    "description": str(
-                                        r.get("DESCRIPTION")
-                                        or r.get("description")
-                                        or ""
-                                    ),
-                                    "remark": str(
-                                        r.get("REMARK")
-                                        or r.get("remark")
-                                        or ""
-                                    ),
+                                    "depth": long_depth_by_well_sample[
+                                        (wn_str, s_name)
+                                    ],
+                                    "measurements": m_items,
                                 }
-                                if pd.notna(r.get("CPORE")):
-                                    s_entry["porosity"] = float(r["CPORE"])
-                                if pd.notna(r.get("CPERM")):
-                                    s_entry["permeability"] = float(r["CPERM"])
-                                if pd.notna(r.get("CPORE_AMB")):
-                                    s_entry["porosity_amb"] = float(r["CPORE_AMB"])
-                                if pd.notna(r.get("CPERM_AIR")):
-                                    s_entry["perm_air"] = float(r["CPERM_AIR"])
-                                if pd.notna(r.get("RAW_DEPTH")):
-                                    s_entry["raw_depth"] = float(r["RAW_DEPTH"])
-                                if pd.notna(r.get("SHIFT_M")):
-                                    s_entry["shift_m"] = float(r["SHIFT_M"])
-                                samples_list.append(s_entry)
-                        if samples_list:
-                            w_obj.replace_rca_samples(samples_list)
+                            )
+
+                    for wn_str, samples_list in samples_by_well.items():
+                        w_obj = imported_wells.get(wn_str) or (
+                            proj.get_well(wn_str)
+                            if wn_str in set(proj.get_well_names())
+                            else None
+                        )
+                        if w_obj and samples_list:
+                            w_obj.replace_rca_samples(
+                                samples_list, append=not overwrite_existing_wells
+                            )
                             total_core += len(samples_list)
+                    db_session.flush()
             except Exception as e:
-                logger.warning(
-                    f"Error importing core RCA samples from handover archive: {e}"
-                )
+                msg = f"Error importing core RCA samples: {e}"
+                logger.warning(msg)
+                warnings.append(msg)
+
+        # 10. Ingest SCAL Capillary Pressure Curves
+        scal_pc_entry = next(
+            (n for n in namelist if n.endswith("scal_capillary_pressure.csv")), None
+        )
+        total_scal_pc = 0
+        if scal_pc_entry:
+            try:
+                with db_session.begin_nested():
+                    pc_df = pd.read_csv(io.BytesIO(zf.read(scal_pc_entry)))
+                    if not pc_df.empty:
+                        wn_col = next(
+                            (c for c in pc_df.columns if c.upper() == "WELL_NAME"),
+                            "WELL_NAME",
+                        )
+                        sn_col = next(
+                            (c for c in pc_df.columns if c.upper() == "SAMPLE_NAME"),
+                            "SAMPLE_NAME",
+                        )
+                        d_col = next(
+                            (c for c in pc_df.columns if c.upper() == "DEPTH"), "DEPTH"
+                        )
+                        pc_col = next(
+                            (
+                                c
+                                for c in pc_df.columns
+                                if c.upper() in ("PC", "PRESSURE")
+                            ),
+                            "PC",
+                        )
+                        sw_col = next(
+                            (
+                                c
+                                for c in pc_df.columns
+                                if c.upper() in ("SW", "SATURATION")
+                            ),
+                            "SW",
+                        )
+                        exp_col = next(
+                            (
+                                c
+                                for c in pc_df.columns
+                                if c.upper() == "EXPERIMENT_TYPE"
+                            ),
+                            None,
+                        )
+                        cyc_col = next(
+                            (c for c in pc_df.columns if c.upper() == "CYCLE"), None
+                        )
+                        por_col = next(
+                            (
+                                c
+                                for c in pc_df.columns
+                                if c.upper() in ("POROSITY", "CPORE")
+                            ),
+                            None,
+                        )
+                        perm_col = next(
+                            (
+                                c
+                                for c in pc_df.columns
+                                if c.upper() in ("PERMEABILITY", "CPERM")
+                            ),
+                            None,
+                        )
+
+                        for wn, group in pc_df.groupby(wn_col):
+                            wn_str = str(wn).strip()
+                            w_obj = imported_wells.get(wn_str) or (
+                                proj.get_well(wn_str)
+                                if wn_str in set(proj.get_well_names())
+                                else None
+                            )
+                            if w_obj and hasattr(w_obj, "replace_scal_pc_data"):
+                                pc_rows_in = []
+                                for _, r in group.iterrows():
+                                    if pd.notna(r.get(pc_col)) and pd.notna(
+                                        r.get(sw_col)
+                                    ):
+                                        row_d: Dict[str, Any] = {
+                                            "sample_name": str(
+                                                r.get(sn_col) or ""
+                                            ).strip(),
+                                            "depth": float(r[d_col])
+                                            if pd.notna(r.get(d_col))
+                                            else 0.0,
+                                            "pc": float(r[pc_col]),
+                                            "sw": float(r[sw_col]),
+                                            "experiment_type": str(r[exp_col]).strip()
+                                            if exp_col and pd.notna(r.get(exp_col))
+                                            else "micp",
+                                            "cycle": str(r[cyc_col]).strip()
+                                            if cyc_col and pd.notna(r.get(cyc_col))
+                                            else "drainage",
+                                        }
+                                        if por_col and pd.notna(r.get(por_col)):
+                                            row_d["porosity"] = float(r[por_col])
+                                        if perm_col and pd.notna(r.get(perm_col)):
+                                            row_d["permeability"] = float(r[perm_col])
+                                        pc_rows_in.append(row_d)
+                                if pc_rows_in:
+                                    w_obj.replace_scal_pc_data(
+                                        pc_rows_in, append=not overwrite_existing_wells
+                                    )
+                                    total_scal_pc += len(pc_rows_in)
+                    db_session.flush()
+            except Exception as e:
+                msg = f"Error importing SCAL capillary pressure: {e}"
+                logger.warning(msg)
+                warnings.append(msg)
+
+        # 11. Ingest SCAL Relative Permeability Curves
+        scal_rp_entry = next(
+            (n for n in namelist if n.endswith("scal_relperm_tables.csv")), None
+        )
+        total_scal_rp = 0
+        if scal_rp_entry:
+            try:
+                with db_session.begin_nested():
+                    rp_df = pd.read_csv(io.BytesIO(zf.read(scal_rp_entry)))
+                    if not rp_df.empty:
+                        wn_col = next(
+                            (c for c in rp_df.columns if c.upper() == "WELL_NAME"),
+                            "WELL_NAME",
+                        )
+                        sn_col = next(
+                            (c for c in rp_df.columns if c.upper() == "SAMPLE_NAME"),
+                            "SAMPLE_NAME",
+                        )
+                        d_col = next(
+                            (c for c in rp_df.columns if c.upper() == "DEPTH"), "DEPTH"
+                        )
+                        sat_col = next(
+                            (
+                                c
+                                for c in rp_df.columns
+                                if c.upper() in ("SATURATION", "SW")
+                            ),
+                            "SATURATION",
+                        )
+                        kr_phase_cols = [
+                            (c, c[3:].strip().lower())
+                            for c in rp_df.columns
+                            if str(c).upper().startswith("KR_") and len(str(c)) > 3
+                        ]
+                        phase_col = next(
+                            (c for c in rp_df.columns if c.upper() == "PHASE"), None
+                        )
+                        kr_col = next(
+                            (c for c in rp_df.columns if c.upper() == "KR"), None
+                        )
+
+                        for wn, w_group in rp_df.groupby(wn_col):
+                            wn_str = str(wn).strip()
+                            w_obj = imported_wells.get(wn_str) or (
+                                proj.get_well(wn_str)
+                                if wn_str in set(proj.get_well_names())
+                                else None
+                            )
+                            if not w_obj:
+                                continue
+                            for sname, s_group in w_group.groupby(sn_col):
+                                sname_str = str(sname).strip()
+                                first_d = s_group[d_col].dropna()
+                                depth_v = (
+                                    float(first_d.iloc[0]) if not first_d.empty else 0.0
+                                )
+                                rp_points: List[Dict[str, Any]] = []
+                                for _, r in s_group.iterrows():
+                                    if pd.isna(r.get(sat_col)):
+                                        continue
+                                    sat_v = float(r[sat_col])
+                                    for col_k, ph_name in kr_phase_cols:
+                                        if pd.notna(r.get(col_k)):
+                                            rp_points.append(
+                                                {
+                                                    "saturation": sat_v,
+                                                    "kr": float(r[col_k]),
+                                                    "phase": ph_name,
+                                                }
+                                            )
+                                    if (
+                                        phase_col
+                                        and kr_col
+                                        and pd.notna(r.get(phase_col))
+                                        and pd.notna(r.get(kr_col))
+                                    ):
+                                        rp_points.append(
+                                            {
+                                                "saturation": sat_v,
+                                                "kr": float(r[kr_col]),
+                                                "phase": str(r[phase_col])
+                                                .strip()
+                                                .lower(),
+                                            }
+                                        )
+                                if rp_points:
+                                    w_obj.add_core_sample_with_measurements(
+                                        sample_name=sname_str,
+                                        depth=depth_v,
+                                        measurements=None,
+                                        relperm_data=rp_points,
+                                        pc_data=None,
+                                    )
+                                    total_scal_rp += len(s_group)
+                    db_session.flush()
+            except Exception as e:
+                msg = f"Error importing SCAL relative permeability: {e}"
+                logger.warning(msg)
+                warnings.append(msg)
 
         db_session.flush()
         db_session.commit()
 
-        # Invalidate caches
+        # Invalidate caches across project and imported wells
+        invalidate_well_cache(project_id=proj.project_id)
         for wn in imported_wells:
             invalidate_well_cache(project_id=proj.project_id, well_name=wn)
+
+        counts_dict = {
+            "wells": len(imported_wells),
+            "formation_tops": total_tops,
+            "fluid_contacts": total_contacts,
+            "perforations": total_perfs,
+            "hole_sections": total_hole_sections,
+            "well_surveys": total_surveys,
+            "pressure_tests": total_mdt,
+            "core_samples": total_core,
+            "core_rca_samples": total_core,
+            "scal_pc_points": total_scal_pc,
+            "scal_relperm_points": total_scal_rp,
+        }
 
         return {
             "success": True,
@@ -2457,13 +3373,7 @@ def import_handover_archive(
             "project_name": proj.name,
             "wells_imported": len(imported_wells),
             "well_names": list(imported_wells.keys()),
-            "summary": {
-                "wells": len(imported_wells),
-                "formation_tops": total_tops,
-                "fluid_contacts": total_contacts,
-                "perforations": total_perfs,
-                "well_surveys": total_surveys,
-                "pressure_tests": total_mdt,
-                "core_samples": total_core,
-            },
+            "counts": counts_dict,
+            "summary": counts_dict,
+            "warnings": warnings,
         }

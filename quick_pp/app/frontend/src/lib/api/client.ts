@@ -474,7 +474,7 @@ const inFlightRequests = new WeakMap<
 	{ taskId: string; desc: EndpointStatusDescriptor }
 >();
 
-export const api = createClient<paths>({ baseUrl: API_BASE });
+export const api = createClient<paths>({ baseUrl: API_BASE, credentials: 'include' });
 
 api.use({
 	async onRequest({ request }) {
@@ -931,8 +931,10 @@ export interface HandoverInventoryCounts {
 	formation_tops?: number;
 	fluid_contacts?: number;
 	perforations?: number;
+	hole_sections?: number;
 	well_surveys?: number;
 	core_rca_samples?: number;
+	core_measurements_long?: number;
 	pressure_tests?: number;
 	scal_pc_points?: number;
 	scal_relperm_points?: number;
@@ -952,6 +954,7 @@ export interface HandoverInspectionResult {
 	has_tops: boolean;
 	has_contacts: boolean;
 	has_perforations: boolean;
+	has_hole_sections?: boolean;
 	has_surveys: boolean;
 	has_core: boolean;
 	has_pressure: boolean;
@@ -968,7 +971,8 @@ export interface HandoverCommitResult {
 	project_name: string;
 	wells_imported: number;
 	well_names: string[];
-	counts: HandoverInventoryCounts;
+	counts?: HandoverInventoryCounts;
+	summary?: HandoverInventoryCounts;
 	warnings?: string[];
 }
 

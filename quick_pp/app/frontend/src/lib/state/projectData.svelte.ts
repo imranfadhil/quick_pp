@@ -2877,17 +2877,79 @@ class ProjectDataState {
 		}
 	}
 
+	upsertProject(item: ProjectListItem): ProjectListItem[] {
+		const pid = Number(item.project_id);
+		if (!Number.isFinite(pid) || pid <= 0) return this.projects;
+		const normalizedName = (item.name || '').trim() || `Project ${pid}`;
+		const existingIdx = this.projects.findIndex((p) => Number(p.project_id) === pid);
+		const nextList = [...this.projects];
+		if (existingIdx >= 0) {
+			nextList[existingIdx] = {
+				...nextList[existingIdx],
+				...item,
+				project_id: pid,
+				name: normalizedName
+			};
+		} else {
+			nextList.push({
+				...item,
+				project_id: pid,
+				name: normalizedName
+			});
+		}
+		this.projects = nextList.sort((a, b) =>
+			(a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })
+		);
+		return this.projects;
+	}
+
 	async loadProjects(): Promise<ProjectListItem[]> {
 		try {
-			const { data } = await api.GET('/quick_pp/database/projects');
-			const list = Array.isArray(data) ? data : [];
+			const { data, error } = await api.GET('/quick_pp/database/projects', {
+				cache: 'no-store'
+			});
+			if (error || !Array.isArray(data)) {
+				if (error) {
+					this.error = String((error as any)?.detail ?? 'Failed to load projects');
+				}
+				if (this.summary?.project_id != null) {
+					this.upsertProject({
+						project_id: Number(this.summary.project_id),
+						name: this.summary.name,
+						description: this.summary.description ?? undefined
+					});
+				}
+				return this.projects;
+			}
+			const list = data.map((p) => ({
+				...p,
+				project_id: Number(p.project_id)
+			}));
 			this.projects = [...list].sort((a, b) =>
 				(a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })
 			);
+			if (
+				this.summary?.project_id != null &&
+				workbench.projectId != null &&
+				String(this.summary.project_id) === String(workbench.projectId)
+			) {
+				this.upsertProject({
+					project_id: Number(this.summary.project_id),
+					name: this.summary.name,
+					description: this.summary.description ?? undefined
+				});
+			}
 			return this.projects;
 		} catch (e: any) {
 			this.error = e?.message || 'Failed to load projects';
-			return [];
+			if (this.summary?.project_id != null) {
+				this.upsertProject({
+					project_id: Number(this.summary.project_id),
+					name: this.summary.name,
+					description: this.summary.description ?? undefined
+				});
+			}
+			return this.projects;
 		}
 	}
 
@@ -2927,6 +2989,11 @@ class ProjectDataState {
 					(a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })
 				);
 				this.summary = { ...data, wells: sortedWells };
+				this.upsertProject({
+					project_id: Number(data.project_id),
+					name: data.name,
+					description: data.description ?? undefined
+				});
 			}
 		} catch {
 			// Ignore background summary refresh error
@@ -2965,6 +3032,11 @@ class ProjectDataState {
 				(a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })
 			);
 			this.summary = { ...data, wells: sortedAvailableWells };
+			this.upsertProject({
+				project_id: Number(data.project_id),
+				name: data.name,
+				description: data.description ?? undefined
+			});
 			this.selectedWellNames = sortedAvailableWells.map((w) => w.name);
 
 			const availableWells = sortedAvailableWells;
@@ -3023,7 +3095,17 @@ class ProjectDataState {
 		if (error || !data) {
 			throw new Error(String((error as any)?.detail ?? 'Failed to create project'));
 		}
+		this.upsertProject({
+			project_id: Number(data.project_id),
+			name: data.name || name.trim(),
+			description
+		});
 		await this.loadProjects();
+		this.upsertProject({
+			project_id: Number(data.project_id),
+			name: data.name || name.trim(),
+			description
+		});
 		await this.selectProject(data.project_id);
 		return data;
 	}
@@ -3037,7 +3119,17 @@ class ProjectDataState {
 			`/quick_pp/database/projects/${encodeURIComponent(String(projectId))}`,
 			payload
 		);
+		this.upsertProject({
+			project_id: Number(res.project_id ?? projectId),
+			name: res.name || trimmed,
+			description: res.description ?? description
+		});
 		await this.loadProjects();
+		this.upsertProject({
+			project_id: Number(res.project_id ?? projectId),
+			name: res.name || trimmed,
+			description: res.description ?? description
+		});
 		if (String(workbench.projectId) === String(projectId)) {
 			if (this.summary) {
 				this.summary = {

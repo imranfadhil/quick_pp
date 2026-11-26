@@ -175,7 +175,9 @@
 
 	function toggleWellFilter(wellName: string) {
 		if (projectData.selectedWellNames.includes(wellName)) {
-			projectData.selectedWellNames = projectData.selectedWellNames.filter((w) => w !== wellName);
+			projectData.selectedWellNames = projectData.selectedWellNames.filter(
+				(w) => w !== wellName
+			);
 		} else {
 			projectData.selectedWellNames = [...projectData.selectedWellNames, wellName];
 		}
@@ -199,7 +201,11 @@
 	function exportZonalSummaryCsv() {
 		if (!wellData.zonalSummary.length) return;
 		const headers = Object.keys(wellData.zonalSummary[0]);
-		downloadCsv(`${workbench.wellId || 'well'}_reservoir_summary.csv`, headers, wellData.zonalSummary);
+		downloadCsv(
+			`${workbench.wellId || 'well'}_reservoir_summary.csv`,
+			headers,
+			wellData.zonalSummary
+		);
 		showExportMenu = false;
 	}
 
@@ -244,25 +250,47 @@
 			parts.push(`Zones: ${workbench.selectedZones.join(', ')}`);
 		}
 		if (workbench.depthFilter) {
-			parts.push(`${fmtDepth(depthFromMeters(workbench.depthFilter.min, depthDisplay.unit), depthDisplay.unit)}–${fmtDepth(depthFromMeters(workbench.depthFilter.max, depthDisplay.unit), depthDisplay.unit)}`);
+			parts.push(
+				`${fmtDepth(depthFromMeters(workbench.depthFilter.min, depthDisplay.unit), depthDisplay.unit)}–${fmtDepth(depthFromMeters(workbench.depthFilter.max, depthDisplay.unit), depthDisplay.unit)}`
+			);
 		}
 		if (parts.length > 0) return parts.join(' | ');
-		return workbench.scope === 'multi-well' ? 'All Wells, Zones & Depths' : 'All Zones & Depths';
+		return workbench.scope === 'multi-well'
+			? 'All Wells, Zones & Depths'
+			: 'All Zones & Depths';
 	});
 
 	let hasActiveFilter = $derived(
 		hasWellFilter || workbench.selectedZones.length > 0 || workbench.depthFilter !== null
 	);
 
-	let sortedProjects = $derived(
-		[...projectData.projects].sort((a, b) =>
-			(a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })
-		)
-	);
+	let sortedProjects = $derived.by(() => {
+		const items = [...projectData.projects];
+		const summary = projectData.summary;
+		if (
+			summary?.project_id != null &&
+			!items.some((p) => String(p.project_id) === String(summary.project_id))
+		) {
+			items.push({
+				project_id: Number(summary.project_id),
+				name: summary.name,
+				description: summary.description ?? undefined
+			});
+		}
+		return items.sort((a, b) =>
+			(a.name || '').localeCompare(b.name || '', undefined, {
+				numeric: true,
+				sensitivity: 'base'
+			})
+		);
+	});
 
 	let sortedWells = $derived(
 		[...projectData.wells].sort((a, b) =>
-			(a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })
+			(a.name || '').localeCompare(b.name || '', undefined, {
+				numeric: true,
+				sensitivity: 'base'
+			})
 		)
 	);
 </script>
@@ -273,12 +301,9 @@
 	<!-- Left Group: Brand, Project Combobox, Scope Toggle, Well Switcher -->
 	<div class="flex items-center gap-2">
 		<div class="flex items-center gap-1.5 pr-1">
-			<img
-				src={logo}
-				alt="quick_pp logo"
-				class="h-6 w-6 shrink-0 object-contain"
-			/>
-			<span class="text-xs font-bold tracking-tight text-[var(--text-primary)]">quick_pp</span>
+			<img src={logo} alt="quick_pp logo" class="h-6 w-6 shrink-0 object-contain" />
+			<span class="text-xs font-bold tracking-tight text-[var(--text-primary)]">quick_pp</span
+			>
 			{#if authState.appVersion}
 				<span
 					title="quick_pp v{authState.appVersion}"
@@ -303,7 +328,7 @@
 		<div class="relative flex items-center gap-1">
 			<span class="text-[11px] font-medium text-[var(--text-muted)]">Project:</span>
 			<select
-				value={workbench.projectId ?? ''}
+				value={workbench.projectId != null ? String(workbench.projectId) : ''}
 				onchange={handleProjectChange}
 				class="h-7 min-w-[130px] rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 py-0 text-xs font-medium text-[var(--text-primary)] focus:border-[var(--border-focus)] focus:outline-none"
 			>
@@ -313,7 +338,12 @@
 					<option value="">— Select Project —</option>
 				{/if}
 				{#each sortedProjects as proj (proj.project_id)}
-					<option value={String(proj.project_id)}>{proj.name}</option>
+					<option
+						value={String(proj.project_id)}
+						selected={String(proj.project_id) === String(workbench.projectId)}
+					>
+						{proj.name}
+					</option>
 				{/each}
 			</select>
 			<button
@@ -401,7 +431,9 @@
 					</div>
 
 					<label class="mb-1.5 block">
-						<span class="mb-0.5 block text-[10px] text-[var(--text-muted)]">Project Name</span>
+						<span class="mb-0.5 block text-[10px] text-[var(--text-muted)]"
+							>Project Name</span
+						>
 						<input
 							type="text"
 							bind:value={editProjName}
@@ -411,7 +443,9 @@
 					</label>
 
 					<label class="mb-2 block">
-						<span class="mb-0.5 block text-[10px] text-[var(--text-muted)]">Description</span>
+						<span class="mb-0.5 block text-[10px] text-[var(--text-muted)]"
+							>Description</span
+						>
 						<input
 							type="text"
 							placeholder="Field / asset description"
@@ -422,12 +456,16 @@
 					</label>
 
 					{#if mgmtError}
-						<div class="mb-2 rounded-xs border border-red-200 bg-red-50 px-2 py-1 text-[10px] text-red-700">
+						<div
+							class="mb-2 rounded-xs border border-red-200 bg-red-50 px-2 py-1 text-[10px] text-red-700"
+						>
 							{mgmtError}
 						</div>
 					{/if}
 
-					<div class="flex items-center justify-between border-t border-[var(--border-hairline)] pt-2">
+					<div
+						class="flex items-center justify-between border-t border-[var(--border-hairline)] pt-2"
+					>
 						{#if !confirmDeleteProject}
 							<button
 								type="button"
@@ -488,7 +526,7 @@
 				onclick={() => (workbench.scope = 'single-well')}
 				class="h-6 rounded-xs px-2 text-[11px] font-medium transition-colors {workbench.scope ===
 				'single-well'
-					? 'bg-[var(--bg-surface)] text-[var(--accent-primary)] shadow-2xs font-semibold'
+					? 'bg-[var(--bg-surface)] font-semibold text-[var(--accent-primary)] shadow-2xs'
 					: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
 			>
 				Single Well
@@ -503,7 +541,7 @@
 				}}
 				class="h-6 rounded-xs px-2 text-[11px] font-medium transition-colors {workbench.scope ===
 				'multi-well'
-					? 'bg-[var(--bg-surface)] text-[var(--accent-primary)] shadow-2xs font-semibold'
+					? 'bg-[var(--bg-surface)] font-semibold text-[var(--accent-primary)] shadow-2xs'
 					: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
 			>
 				Multi-Well Field
@@ -560,13 +598,17 @@
 							<span class="text-xs font-semibold text-[var(--text-primary)]">
 								Manage Well
 							</span>
-							<span class="mono-num text-[10px] font-semibold text-[var(--accent-primary)]">
+							<span
+								class="mono-num text-[10px] font-semibold text-[var(--accent-primary)]"
+							>
 								{workbench.wellId}
 							</span>
 						</div>
 
 						<label class="mb-2 block">
-							<span class="mb-0.5 block text-[10px] text-[var(--text-muted)]">Well Name / UWI</span>
+							<span class="mb-0.5 block text-[10px] text-[var(--text-muted)]"
+								>Well Name / UWI</span
+							>
 							<input
 								type="text"
 								bind:value={editWellName}
@@ -576,12 +618,16 @@
 						</label>
 
 						{#if mgmtError}
-							<div class="mb-2 rounded-xs border border-red-200 bg-red-50 px-2 py-1 text-[10px] text-red-700">
+							<div
+								class="mb-2 rounded-xs border border-red-200 bg-red-50 px-2 py-1 text-[10px] text-red-700"
+							>
 								{mgmtError}
 							</div>
 						{/if}
 
-						<div class="flex items-center justify-between border-t border-[var(--border-hairline)] pt-2">
+						<div
+							class="flex items-center justify-between border-t border-[var(--border-hairline)] pt-2"
+						>
 							{#if !confirmDeleteWell}
 								<button
 									type="button"
@@ -619,7 +665,8 @@
 								</button>
 								<button
 									type="button"
-									disabled={!editWellName.trim() || editWellName.trim() === workbench.wellId}
+									disabled={!editWellName.trim() ||
+										editWellName.trim() === workbench.wellId}
 									onclick={handleSaveWellRename}
 									class="h-6 rounded-sm bg-[var(--accent-primary)] px-2.5 text-[11px] font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
 								>
@@ -638,15 +685,19 @@
 		<button
 			type="button"
 			onclick={() => {
-				minDepthInput = workbench.depthFilter ? String(depthFromMeters(workbench.depthFilter.min, depthDisplay.unit)) : '';
-				maxDepthInput = workbench.depthFilter ? String(depthFromMeters(workbench.depthFilter.max, depthDisplay.unit)) : '';
+				minDepthInput = workbench.depthFilter
+					? String(depthFromMeters(workbench.depthFilter.min, depthDisplay.unit))
+					: '';
+				maxDepthInput = workbench.depthFilter
+					? String(depthFromMeters(workbench.depthFilter.max, depthDisplay.unit))
+					: '';
 				showFilterPopover = !showFilterPopover;
 			}}
 			class="flex h-7 items-center gap-1.5 rounded-sm border px-2.5 text-xs transition-colors {hasActiveFilter
 				? 'border-blue-500 bg-blue-50 font-medium text-blue-800'
 				: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]'}"
 		>
-			<span class="text-[10px] uppercase text-[var(--text-muted)]">Filter:</span>
+			<span class="text-[10px] text-[var(--text-muted)] uppercase">Filter:</span>
 			<span class="mono-num max-w-[240px] truncate">{filterSummaryText}</span>
 		</button>
 
@@ -694,14 +745,19 @@
 				{#if (workbench.scope === 'multi-well' || hasWellFilter) && projectData.wells.length > 0}
 					<div class="mb-2.5">
 						<div class="mb-1 flex items-center justify-between">
-							<span class="text-[10px] font-semibold uppercase text-[var(--text-muted)]">
-								Wells ({projectData.selectedWellNames.length}/{projectData.wells.length})
+							<span
+								class="text-[10px] font-semibold text-[var(--text-muted)] uppercase"
+							>
+								Wells ({projectData.selectedWellNames.length}/{projectData.wells
+									.length})
 							</span>
 							<div class="flex items-center gap-1.5 text-[10px]">
 								<button
 									type="button"
 									onclick={() => {
-										projectData.selectedWellNames = projectData.wells.map((w) => w.name);
+										projectData.selectedWellNames = projectData.wells.map(
+											(w) => w.name
+										);
 									}}
 									class="font-medium text-blue-600 hover:underline"
 								>
@@ -719,20 +775,31 @@
 								</button>
 							</div>
 						</div>
-						<div class="max-h-32 space-y-1 overflow-y-auto rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
+						<div
+							class="max-h-32 space-y-1 overflow-y-auto rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5"
+						>
 							{#each sortedWells as w (w.name)}
-								<label class="flex cursor-pointer items-center justify-between gap-1.5 text-xs hover:bg-[var(--bg-subtle)] px-1 py-0.5 rounded-xs">
-									<span class="flex items-center gap-1.5 min-w-0">
+								<label
+									class="flex cursor-pointer items-center justify-between gap-1.5 rounded-xs px-1 py-0.5 text-xs hover:bg-[var(--bg-subtle)]"
+								>
+									<span class="flex min-w-0 items-center gap-1.5">
 										<input
 											type="checkbox"
 											checked={projectData.selectedWellNames.includes(w.name)}
 											onchange={() => toggleWellFilter(w.name)}
 											class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
 										/>
-										<span class="mono-num truncate font-medium text-[var(--text-primary)]">{w.name}</span>
+										<span
+											class="mono-num truncate font-medium text-[var(--text-primary)]"
+											>{w.name}</span
+										>
 									</span>
-									<span class="mono-num shrink-0 text-[10px] text-[var(--text-muted)]">
-										{(w.depth_count ?? (w as any).row_count)?.toLocaleString() ?? ''}
+									<span
+										class="mono-num shrink-0 text-[10px] text-[var(--text-muted)]"
+									>
+										{(
+											w.depth_count ?? (w as any).row_count
+										)?.toLocaleString() ?? ''}
 									</span>
 								</label>
 							{/each}
@@ -740,30 +807,55 @@
 					</div>
 				{/if}
 
-				<label class="mb-1.5 flex items-center justify-between text-[10px] text-[var(--text-muted)]">
+				<label
+					class="mb-1.5 flex items-center justify-between text-[10px] text-[var(--text-muted)]"
+				>
 					Log / interval / table unit (other plots and exports unchanged)
-					<select value={depthDisplay.unit} onchange={(e) => depthDisplay.setUnit(e.currentTarget.value === 'ft' ? 'ft' : 'm')} class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-[10px]">
+					<select
+						value={depthDisplay.unit}
+						onchange={(e) =>
+							depthDisplay.setUnit(e.currentTarget.value === 'ft' ? 'ft' : 'm')}
+						class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-[10px]"
+					>
 						<option value="m">m</option>
 						<option value="ft">ft</option>
 					</select>
 				</label>
 				<div class="mb-2.5 grid grid-cols-2 gap-2">
 					<label class="block">
-						<span class="mb-0.5 block text-[10px] text-[var(--text-muted)]">Min Depth ({depthDisplay.unit})</span>
+						<span class="mb-0.5 block text-[10px] text-[var(--text-muted)]"
+							>Min Depth ({depthDisplay.unit})</span
+						>
 						<input
 							type="number"
 							step="any"
-							placeholder={String(Number(depthFromMeters(wellData.depthRange.min, depthDisplay.unit).toFixed(4)))}
+							placeholder={String(
+								Number(
+									depthFromMeters(
+										wellData.depthRange.min,
+										depthDisplay.unit
+									).toFixed(4)
+								)
+							)}
 							bind:value={minDepthInput}
 							class="mono-num h-7 w-full rounded-sm border border-[var(--border-hairline)] px-2 text-xs"
 						/>
 					</label>
 					<label class="block">
-						<span class="mb-0.5 block text-[10px] text-[var(--text-muted)]">Max Depth ({depthDisplay.unit})</span>
+						<span class="mb-0.5 block text-[10px] text-[var(--text-muted)]"
+							>Max Depth ({depthDisplay.unit})</span
+						>
 						<input
 							type="number"
 							step="any"
-							placeholder={String(Number(depthFromMeters(wellData.depthRange.max, depthDisplay.unit).toFixed(4)))}
+							placeholder={String(
+								Number(
+									depthFromMeters(
+										wellData.depthRange.max,
+										depthDisplay.unit
+									).toFixed(4)
+								)
+							)}
 							bind:value={maxDepthInput}
 							class="mono-num h-7 w-full rounded-sm border border-[var(--border-hairline)] px-2 text-xs"
 						/>
@@ -772,12 +864,16 @@
 
 				{#if wellData.tops.length > 0 || projectData.allZones.length > 0}
 					<div class="mb-2">
-						<span class="mb-1 block text-[10px] font-semibold uppercase text-[var(--text-muted)]">
+						<span
+							class="mb-1 block text-[10px] font-semibold text-[var(--text-muted)] uppercase"
+						>
 							Formation Zones
 						</span>
-						<div class="max-h-32 space-y-1 overflow-y-auto border border-[var(--border-hairline)] p-1.5">
-							{#each Array.from(new Set([...wellData.tops.map((t) => t.name), ...projectData.allZones])) as z}
-								<label class="flex items-center gap-1.5 text-xs cursor-pointer">
+						<div
+							class="max-h-32 space-y-1 overflow-y-auto border border-[var(--border-hairline)] p-1.5"
+						>
+							{#each Array.from(new Set( [...wellData.tops.map((t) => t.name), ...projectData.allZones] )) as z}
+								<label class="flex cursor-pointer items-center gap-1.5 text-xs">
 									<input
 										type="checkbox"
 										checked={workbench.selectedZones.includes(z)}
@@ -844,7 +940,9 @@
 				<div
 					class="absolute top-8 right-0 z-50 w-64 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-1 shadow-lg"
 				>
-					<div class="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+					<div
+						class="px-3 py-1 text-[10px] font-semibold tracking-wider text-[var(--text-muted)] uppercase"
+					>
 						Handover Bundles & LAS
 					</div>
 					<button
@@ -890,7 +988,9 @@
 						Active Well Logs + Params (.las)
 					</button>
 					<div class="my-1 border-t border-[var(--border-hairline)]"></div>
-					<div class="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+					<div
+						class="px-3 py-1 text-[10px] font-semibold tracking-wider text-[var(--text-muted)] uppercase"
+					>
 						Quick Flat Tables
 					</div>
 					<button
@@ -955,7 +1055,9 @@
 					>
 						{authState.userInitials}
 					</span>
-					<span class="max-w-[96px] truncate font-semibold">{authState.user.username}</span>
+					<span class="max-w-[96px] truncate font-semibold"
+						>{authState.user.username}</span
+					>
 					<span class="text-[10px] text-[var(--text-muted)]">▾</span>
 				</button>
 
