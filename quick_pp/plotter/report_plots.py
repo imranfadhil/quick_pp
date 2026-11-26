@@ -1933,15 +1933,15 @@ def _render_cpi_with_plotly(
 
         cut = cutoffs or {}
         cut_txt = (
-            f"Net cut-offs: Vsh &le; {float(cut.get('vsh', 0.40)):.2f}, "
-            f"&phi;e &ge; {float(cut.get('phie', 0.08)):.2f}, "
-            f"Sw &le; {float(cut.get('sw', 0.65)):.2f}"
+            f"Net cut-offs: Vsh \u2264 {float(cut.get('vsh', 0.40)):.2f}, "
+            f"\u03c6e \u2265 {float(cut.get('phie', 0.08)):.2f}, "
+            f"Sw \u2264 {float(cut.get('sw', 0.65)):.2f}"
         )
         d = pd.to_numeric(df["DEPTH"], errors="coerce").dropna()
         zone_txt = f" | Target zones: {', '.join(zones)}" if zones else ""
         header = (
-            f"<b>{well_name} &mdash; Composite Petrophysical Evaluation (CPI)</b><br>"
-            f"<span style='font-size:11px'>{d.min():.1f}&ndash;{d.max():.1f} m MD"
+            f"<b>{well_name} \u2014 Composite Petrophysical Evaluation (CPI)</b><br>"
+            f"<span style='font-size:11px'>{d.min():.1f}\u2013{d.max():.1f} m MD"
             f"{zone_txt} | {cut_txt}</span>"
         )
         fig.update_layout(

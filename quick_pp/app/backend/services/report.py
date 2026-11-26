@@ -4919,7 +4919,7 @@ def synthesize_domain_ai_commentary(
                 f"**${mean_phie:.3f}\\text{{ v/v}}$** with a pore-volume weighted water saturation ($S_w$) of "
                 f"**${mean_sw:.3f}\\text{{ v/v}}$**. A well penetrating all **{n_eval_zones}** evaluated zones accumulates a "
                 f"Hydrocarbon Pore Thickness ($HCPT$) of **${total_hcpt:.2f}\\text{{ m}}$** "
-                f"(sum of per-zone means; average **${mean_zone_hcpt:.2f}\\text{{ m}}$ per zone). "
+                f"(sum of per-zone means; average ${mean_zone_hcpt:.2f}\\text{{ m}}$ per zone). "
                 + (
                     f"The primary pay container is **{top_zone.get('zone')}**, delivering a field-mean Net Pay of "
                     f"**${top_zone.get('net_pay', 0.0):.1f}\\text{{ m}}$** ($NTG_{{pay}} = {top_zone.get('ntg', 0.0):.2f}\\text{{ v/v}}$, "
@@ -6041,7 +6041,7 @@ def render_report_print_html(report_id: str, auto_print: bool = False) -> str:
             <a href="{html.escape(state.get("pdf_download_url", "#"))}" style="background:#334155;color:#fff;text-decoration:none;padding:5px 12px;border-radius:4px;font-weight:600;">Download Direct PDF</a>
         </div>
     </div>
-    <div style="max-width:210mm;margin:0 auto;padding:12mm;">
+    <div class="qpp-report-container" style="max-width:210mm;margin:0 auto;padding:12mm;">
         <div class="qpp-report-header-banner">
             <div class="qpp-report-brand-tagline">Prepared with <code>quick_pp</code> &mdash; Quantitative Petrophysics &amp; Reservoir Evaluation Suite</div>
             <h1>{html.escape(state.get("title", default_doc_title))}</h1>
@@ -6133,6 +6133,98 @@ def _strip_latex_for_pdf_text(text: str) -> str:
     return out
 
 
+def _localize_static_urls(html_str: str) -> str:
+    """Point `/static/...` asset URLs at local files so offline renderers can load them."""
+    static_uri = (BACKEND_DIR / "static").as_uri()
+    return html_str.replace('src="/static/', f'src="{static_uri}/')
+
+
+def _find_browser_executable() -> Optional[str]:
+    """Locate a Chromium-family browser (env override, PATH, then common install paths)."""
+    import shutil
+
+    candidates: List[str] = []
+    for env_key in ("BROWSER_PATH", "CHROME_PATH"):
+        if os.environ.get(env_key):
+            candidates.append(os.environ[env_key])
+    for name in (
+        "chromium",
+        "chromium-browser",
+        "google-chrome",
+        "google-chrome-stable",
+        "chrome",
+        "msedge",
+    ):
+        found = shutil.which(name)
+        if found:
+            candidates.append(found)
+    for base in (
+        os.environ.get("PROGRAMFILES"),
+        os.environ.get("PROGRAMFILES(X86)"),
+        os.environ.get("LOCALAPPDATA"),
+    ):
+        if base:
+            candidates.append(
+                str(Path(base) / "Google/Chrome/Application/chrome.exe")
+            )
+            candidates.append(
+                str(Path(base) / "Microsoft/Edge/Application/msedge.exe")
+            )
+    candidates += [
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/usr/bin/chromium",
+        "/usr/bin/google-chrome",
+    ]
+    for cand in candidates:
+        if cand and Path(cand).is_file():
+            return cand
+    return None
+
+
+def _render_pdf_with_browser(html_str: str, out_dir: Path, pdf_path: Path) -> bool:
+    """Print the report HTML to PDF with headless Chromium/Edge. Returns True on success."""
+    import shutil
+    import subprocess
+    import tempfile
+
+    browser = _find_browser_executable()
+    if not browser:
+        return False
+
+    src_html = out_dir / "_pdf_source.html"
+    profile_dir = Path(tempfile.mkdtemp(prefix="qpp_pdf_"))
+    tmp_pdf = out_dir / "_pdf_tmp.pdf"
+    try:
+        src_html.write_text(_localize_static_urls(html_str), encoding="utf-8")
+        tmp_pdf.unlink(missing_ok=True)
+        cmd = [
+            browser,
+            "--headless=new",
+            "--disable-gpu",
+            "--no-sandbox",
+            "--allow-file-access-from-files",
+            "--hide-scrollbars",
+            "--no-pdf-header-footer",
+            "--print-to-pdf-no-header",
+            f"--user-data-dir={profile_dir}",
+            "--virtual-time-budget=15000",
+            f"--print-to-pdf={tmp_pdf}",
+            src_html.as_uri(),
+        ]
+        subprocess.run(cmd, capture_output=True, timeout=180, check=False)
+        if tmp_pdf.exists() and tmp_pdf.stat().st_size > 1024:
+            tmp_pdf.replace(pdf_path)
+            return True
+        logger.warning(f"Headless browser produced no PDF using {browser}")
+    except Exception as exc:
+        logger.warning(f"Headless browser PDF export failed ({browser}): {exc}")
+    finally:
+        shutil.rmtree(profile_dir, ignore_errors=True)
+        src_html.unlink(missing_ok=True)
+        tmp_pdf.unlink(missing_ok=True)
+    return False
+
+
 def compile_report_to_pdf(report_id: str) -> Path:
     """Compile the report Markdown and high-DPI plot assets into a downloadable multi-page PDF file."""
     state = _load_report_state(report_id)
@@ -6144,17 +6236,28 @@ def compile_report_to_pdf(report_id: str) -> Path:
     html_str = render_report_print_html(report_id, auto_print=False)
     (out_dir / "report_print.html").write_text(html_str, encoding="utf-8")
 
-    # Option 1: Try WeasyPrint if installed
+    # Option 1: headless Chromium/Edge renders the same HTML as the print view,
+    # so tables, equations and figures paginate like the browser print preview.
+    if _render_pdf_with_browser(html_str, out_dir, pdf_path):
+        return pdf_path
+
+    # Option 2: WeasyPrint if installed
     try:
         import weasyprint  # type: ignore
 
-        weasyprint.HTML(string=html_str, base_url=str(BACKEND_DIR)).write_pdf(
-            str(pdf_path)
-        )
+        weasyprint.HTML(
+            string=_localize_static_urls(html_str), base_url=str(BACKEND_DIR)
+        ).write_pdf(str(pdf_path))
         if pdf_path.exists() and pdf_path.stat().st_size > 0:
             return pdf_path
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug(f"WeasyPrint PDF export unavailable: {exc}")
+
+    logger.warning(
+        "PDF export fell back to the basic matplotlib renderer (no Chromium/Edge or "
+        "WeasyPrint found). Tables and equations are simplified. Install Chromium or "
+        "set BROWSER_PATH for full-fidelity PDFs."
+    )
 
     # Option 2: Built-in Multi-Page Publication PDF Compiler via matplotlib PdfPages
     md_content = state.get("markdown_content", "")
