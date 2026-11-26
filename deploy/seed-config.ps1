@@ -61,7 +61,8 @@ $direct = @(
   'POSTGRES_DB',
   'POSTGRES_PASSWORD',
   'TAVILY_API_KEY',
-  'WEB_PORT'
+  'WEB_PORT',
+  'CF_TUNNEL_TOKEN'
 )
 
 $values = @{}

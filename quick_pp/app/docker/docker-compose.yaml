@@ -94,14 +94,19 @@ services:
     networks:
       - qpp-network
 
-  # Cloudflare Quick Tunnel — free random *.trycloudflare.com HTTPS URL.
-  # No Cloudflare account or token required. The URL changes on every restart.
+  # Cloudflare Tunnel — uses permanent Named Tunnel (e.g. https://app.example.com)
+  # when CF_TUNNEL_TOKEN is set in .env, or falls back to a free *.trycloudflare.com Quick Tunnel.
   quicktunnel:
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
     depends_on:
       - web
-    command: tunnel --no-autoupdate --url http://web:80
+    environment:
+      - TUNNEL_TOKEN=${CF_TUNNEL_TOKEN:-}
+    command:
+      - tunnel
+      - --no-autoupdate
+      - ${CF_TUNNEL_ARG:---url=http://web:80}
     networks:
       - qpp-network
 

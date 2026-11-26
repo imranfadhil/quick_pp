@@ -12,6 +12,7 @@
 #   $5  WEB_PORT
 #   $6  TAVILY_API_KEY
 #   $7  DOMAIN
+#   $8  CF_TUNNEL_TOKEN
 set -e
 
 REMOTE_DIR="$1"; shift
@@ -23,16 +24,17 @@ PG_PASS="$3"
 WEB_PORT="${4:-8080}"
 TAVILY_KEY="$5"
 DOMAIN="$6"
+CF_TOKEN="$7"
 
-# Helper to set or append a key=value in .env
+# Helper to set or append a key=value in .env safely (handles '/', '+', '=' in tokens)
 set_kv() {
   key="$1"
   val="$2"
-  if grep -q "^${key}=" .env; then
-    sed -i "s#^${key}=.*#${key}=${val}#" .env
-  else
-    echo "${key}=${val}" >> .env
+  if [ -f .env ]; then
+    grep -v "^${key}=" .env > .env.tmp || true
+    mv .env.tmp .env
   fi
+  printf '%s=%s\n' "$key" "$val" >> .env
 }
 
 set_kv POSTGRES_USER "$PG_USER"
@@ -70,5 +72,13 @@ if [ -n "$DOMAIN" ]; then
   set_kv PUBLIC_URL "https://$DOMAIN"
 fi
 
+if [ -n "$CF_TOKEN" ] && [ "$CF_TOKEN" != "xxx" ]; then
+  set_kv CF_TUNNEL_TOKEN "$CF_TOKEN"
+  set_kv CF_TUNNEL_ARG "run"
+else
+  set_kv CF_TUNNEL_TOKEN ""
+  set_kv CF_TUNNEL_ARG "--url=http://web:80"
+fi
+
 echo '--- applied ---'
-grep -E '^(POSTGRES_USER|POSTGRES_DB|WEB_PORT|FRONTEND_MODE|VITE_BACKEND_URL|PUBLIC_URL)=' .env || true
+grep -E '^(POSTGRES_USER|POSTGRES_DB|WEB_PORT|FRONTEND_MODE|VITE_BACKEND_URL|PUBLIC_URL|CF_TUNNEL_ARG)=' .env || true

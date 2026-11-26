@@ -29,9 +29,14 @@ set KEY_NAME=%PROJECT_NAME%-do-key
 set KEY_FILE=%USERPROFILE%\.ssh\%KEY_NAME%
 set PUB_FILE=%USERPROFILE%\.ssh\%KEY_NAME%.pub
 
-REM ---- App config ----
-REM Your public domain (e.g. qpp.example.com). Leave blank if using Quick Tunnel / IP.
+REM ---- App & Cloudflare Tunnel config ----
+REM Your custom domain in Cloudflare (e.g. app.example.com). Leave blank for Quick Tunnel.
 set DOMAIN=
+REM Cloudflare Zero Trust Named Tunnel token (Networks -> Tunnels -> <tunnel> -> Token).
+REM Leave blank to fall back to a random *.trycloudflare.com Quick Tunnel.
+set CF_TUNNEL_TOKEN=
+REM Optional email allowed by Cloudflare Zero Trust Access (used by setup-cloudflare.bat)
+set ALLOWED_EMAIL=
 
 REM Host port where Nginx unified reverse proxy listens on the droplet
 set WEB_PORT=8080

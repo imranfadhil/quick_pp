@@ -37,11 +37,17 @@ set KEY_NAME=quick-pp-do-key
 set KEY_FILE=%USERPROFILE%\.ssh\%KEY_NAME%
 set PUB_FILE=%USERPROFILE%\.ssh\%KEY_NAME%.pub
 
-REM ---- Demo Networking ----
+REM ---- Demo Networking, Resource Limits & Cloudflare Tunnel ----
 REM Host port on the droplet (7860 avoids colliding with 80, 443, or 8080)
 set DEMO_PORT=7860
-REM Bind to 127.0.0.1 when using Cloudflare Quick Tunnel or host Nginx reverse proxy.
+REM Bind to 127.0.0.1 when using Cloudflare Tunnel or host Nginx reverse proxy.
 REM Set to 0.0.0.0 if you want http://<PUBLIC_IP>:7860 accessible directly.
 set DEMO_BIND=127.0.0.1
+REM Hard container memory limit for qpp-demo-app (protects shared droplets from OOM)
+set DEMO_MEM_LIMIT=2g
+REM Custom domain for the public demo in Cloudflare (e.g. demo.example.com)
 set DOMAIN=
+REM Cloudflare Zero Trust Named Tunnel token (Networks -> Tunnels -> <tunnel> -> Token).
+REM Leave blank to fall back to a random *.trycloudflare.com Quick Tunnel.
+set CF_TUNNEL_TOKEN=
 

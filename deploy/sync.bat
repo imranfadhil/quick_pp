@@ -126,7 +126,7 @@ if not exist "%ENV_TMP%" (
     exit /b 1
 )
 
-call :ssh_pipe "%ENV_TMP%" "bash -s -- '%REMOTE_DIR%' '%POSTGRES_USER%' '%POSTGRES_DB%' '%POSTGRES_PASSWORD%' '%WEB_PORT%' '%TAVILY_API_KEY%' '%DOMAIN%'"
+call :ssh_pipe "%ENV_TMP%" "bash -s -- '%REMOTE_DIR%' '%POSTGRES_USER%' '%POSTGRES_DB%' '%POSTGRES_PASSWORD%' '%WEB_PORT%' '%TAVILY_API_KEY%' '%DOMAIN%' '%CF_TUNNEL_TOKEN%'"
 set ENV_RC=%ERRORLEVEL%
 if defined ENV_TMP if exist "%ENV_TMP%" del "%ENV_TMP%" 2>nul
 if not %ENV_RC% equ 0 (
@@ -146,13 +146,18 @@ if not "%1"=="--from-deploy" (
     call :ssh_run "!COMPOSE_CMD! stop qpp-frontend" >nul 2>&1
 )
 
-REM Keep `web` and `quicktunnel` running (--no-recreate --no-deps) so the *.trycloudflare.com URL never changes on sync/--restart.
+REM Keep `web` running (--no-recreate --no-deps). When using Quick Tunnel (no CF_TUNNEL_TOKEN),
+REM also keep `quicktunnel` --no-recreate so the *.trycloudflare.com URL never changes on sync.
+REM When CF_TUNNEL_TOKEN is set, allow `quicktunnel` to recreate automatically if the token changed.
+set "TUNNEL_UP_FLAGS=--no-recreate --no-deps"
+if defined CF_TUNNEL_TOKEN set "TUNNEL_UP_FLAGS=--no-deps"
+
 if "%1"=="--from-deploy" (
     set "REMOTE_CMD=!COMPOSE_CMD! up -d --build"
 ) else if %BUILD% equ 1 (
-    set "REMOTE_CMD=!COMPOSE_CMD! up -d --no-recreate --no-deps postgres && !COMPOSE_CMD! up -d --build --no-deps qpp-backend qpp-frontend && !COMPOSE_CMD! up -d --no-recreate --no-deps web quicktunnel"
+    set "REMOTE_CMD=!COMPOSE_CMD! up -d --no-recreate --no-deps postgres && !COMPOSE_CMD! up -d --build --no-deps qpp-backend qpp-frontend && !COMPOSE_CMD! up -d --no-recreate --no-deps web && !COMPOSE_CMD! up -d !TUNNEL_UP_FLAGS! quicktunnel"
 ) else (
-    set "REMOTE_CMD=!COMPOSE_CMD! up -d --no-recreate --no-deps postgres web quicktunnel qpp-backend qpp-frontend && !COMPOSE_CMD! restart qpp-backend"
+    set "REMOTE_CMD=!COMPOSE_CMD! up -d --no-recreate --no-deps postgres web qpp-backend qpp-frontend && !COMPOSE_CMD! up -d !TUNNEL_UP_FLAGS! quicktunnel && !COMPOSE_CMD! restart qpp-backend"
 )
 
 call :ssh_run "!REMOTE_CMD!"
@@ -190,7 +195,19 @@ echo.
 echo [INFO] Container status:
 call :ssh_run "!COMPOSE_CMD! ps"
 
-REM -- Quick tunnel URL (random *.trycloudflare.com) -------------------
+REM -- Tunnel URL (Named Cloudflare Tunnel or random *.trycloudflare.com) ---
+if defined CF_TUNNEL_TOKEN (
+    echo.
+    if not "%DOMAIN%"=="" (
+        echo ===============================================================
+        echo    PRIVATE APP URL ^(Cloudflare Tunnel^): https://%DOMAIN%
+        echo ===============================================================
+    ) else (
+        echo [OK] Cloudflare Named Tunnel active ^(CF_TUNNEL_TOKEN configured^).
+    )
+    goto :sync_end
+)
+
 set QUICK_URL=
 echo.
 echo [INFO] Waiting for the Cloudflare Quick Tunnel URL...

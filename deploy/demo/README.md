@@ -10,13 +10,13 @@ Because Hugging Face Spaces now requires a paid plan for Docker SDK Spaces, this
 
 Unlike the full production stack (which runs PostgreSQL 17, persistent volumes, and live `npm run build` on container start), the **Live Demo stack** ([`deploy/demo/docker-compose.yaml`](./docker-compose.yaml)) is self-contained and lightweight:
 - **No PostgreSQL or Celery containers**: Uses the pre-seeded read-only SQLite database (`quick_pp.db`, `chmod 444`) + pre-trained Conformal PIML bundle (`pretrained_models.joblib`).
-- **Single Application Container (`qpp-demo-app`)**: Bundles Nginx (`:7860`), FastAPI (`127.0.0.1:6312`), and the pre-built SvelteKit Node server (`127.0.0.1:5469`). Steady-state RAM usage is **~220–280 MB**.
+- **Single Application Container (`qpp-demo-app`)**: Bundles Nginx (`:7860`), FastAPI (`127.0.0.1:6312`), and the pre-built SvelteKit Node server (`127.0.0.1:5469`). Steady-state RAM usage is **~220–280 MB**, with a hard Docker memory ceiling (`DEMO_MEM_LIMIT=2g`) and built-in Nginx rate limiting (`60 req/min` per visitor IP via `CF-Connecting-IP`).
 - **Complete Isolation on Shared Droplets**:
   - Remote folder: `/opt/quick_pp_demo` (never touches `/opt/quick_pp`)
   - Compose project: `quick_pp_demo` (`qpp-demo-app` & `qpp-demo-tunnel`)
   - Host port: `127.0.0.1:7860` (never collides with `:80`, `:443`, or `:8080`)
   - Automatic 2 GB `/swapfile` provisioning so multi-stage Docker builds never hit OOM on 1 GB / 2 GB droplets.
-- **Instant HTTPS Public Link**: Includes `demo-quicktunnel` (`cloudflared`) which prints a live `https://<words>.trycloudflare.com` URL at the end of `deploy.bat` / `sync.bat`, or you can proxy your own subdomain (e.g. `demo.yourdomain.com`) to `127.0.0.1:7860`.
+- **Custom Domain or Instant HTTPS Public Link**: Includes `demo-quicktunnel` (`cloudflared`) which connects to your permanent Cloudflare Named Tunnel (`https://<DOMAIN>`) when `CF_TUNNEL_TOKEN` is set in `deploy\demo\config.bat`, or prints a free `https://<words>.trycloudflare.com` Quick Tunnel URL when left blank.
 
 ---
 
