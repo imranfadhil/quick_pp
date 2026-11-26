@@ -19,7 +19,7 @@ import textwrap
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 from uuid import uuid4
 
 import jinja2
@@ -494,6 +494,294 @@ def _load_project_wells_fast(
         return project_name, selected_wells_meta
 
 
+def _load_saved_project_module_entry(
+    project_id: int, module: str, target_zones: Optional[List[str]] = None
+) -> Dict[str, Any]:
+    """Return the saved multi-well module entry (`params`, `label`, `_key`) for the active zone selection.
+
+    Mirrors the workbench lookup order: exact zone bundle, each single zone, `all`, then any saved entry.
+    Returns an empty dict when nothing is saved or the store is unreachable.
+    """
+    try:
+        from quick_pp.app.backend.services.workspace import (
+            _load_project_module_params,
+        )
+
+        mp, _ = _load_project_module_params(int(project_id))
+    except Exception as exc:
+        logger.debug(f"Saved module params unavailable for '{module}': {exc}")
+        return {}
+    mod_map = mp.get(module) if isinstance(mp, dict) else None
+    if not isinstance(mod_map, dict) or not mod_map:
+        return {}
+    zones = [str(z).strip() for z in (target_zones or []) if str(z).strip()]
+    candidates: List[str] = []
+    if zones:
+        candidates.append("zone:" + "+".join(zones))
+        for z in zones:
+            candidates.extend([z, f"zone:{z}"])
+    candidates.extend(["all", "ALL", "default"])
+    for cand in candidates:
+        entry = mod_map.get(cand)
+        if isinstance(entry, dict):
+            return {**entry, "_key": cand}
+    first_key = next(iter(mod_map))
+    entry = mod_map[first_key]
+    return {**entry, "_key": first_key} if isinstance(entry, dict) else {}
+
+
+_EDITED_CURVE_SUFFIXES = (
+    "_ORI",
+    "_RECONSTRUCTED",
+    "_DEN_CORR",
+    "_UNSHIFTED",
+    "_AMB",
+    "_AIR",
+    "_SYN",
+    "_FILLED",
+    "_NORM",
+)
+_EDITED_CURVE_NAMES = {
+    "RHOB_DEN_CORR",
+    "DEN_CORR_FLAG",
+    "BADHOLE_BASE",
+    "PHID_RAW_100",
+    "PROJ_NPHI",
+    "PROJ_RHOB",
+}
+_COMPUTED_CURVE_PREFIXES = (
+    "SWT_",
+    "SXO_",
+    "PRESSURE_",
+    "CORE_",
+    "HI_",
+    "RHO_",
+    "TEMP_",
+    "TOC_",
+    "VCL_",
+)
+_COMPUTED_CURVE_NAMES = {
+    "VCLAY",
+    "VSHALE",
+    "_REPORT_VSHALE",
+    "PHIT",
+    "PHIE",
+    "PHID",
+    "PHIT_SH",
+    "PHIT_CONSTRUCTED",
+    "PERM",
+    "PERM_TRANS",
+    "SWT",
+    "SWE",
+    "SHF",
+    "BVW",
+    "BVHC",
+    "ROCK_FLAG",
+    "ROCK_FLAG_CUTOFF",
+    "ROCK_FLAG_ML",
+    "FZI",
+    "R35",
+    "RFN",
+    "BADHOLE",
+    "HC_FLAG",
+    "TIGHT_FLAG",
+    "COAL_FLAG",
+    "GAS_FLAG",
+    "OIL_FLAG",
+    "UNC_FLAG",
+    "FLUID_TYPE",
+    "TOP_NAME",
+    "TVD",
+    "TVDSS",
+    "CPORE",
+    "CPERM",
+    "QVN",
+    "QV",
+    "RW",
+    "RS",
+    "RHOM",
+    "RHOB_HC",
+    "NPHI_HC",
+    "TEMP_GRAD",
+    "M_CALC",
+    "M_STAR",
+    "B",
+    "CWA",
+    "AVG_ERROR",
+    "CHI2_ERROR",
+    "OPTIMIZER_SUCCESS",
+    "DELTA_LOG_R",
+    "PP_EST",
+    "SV_EST",
+    "NCS_EST",
+    "Z_FACTOR",
+    "NU_DYN",
+    "VDL",
+    "CGR_SYN",
+    "TOC",
+    "PRES_FL",
+    "SWIRR",
+    "RT_ORI",
+}
+
+
+def _classify_curve_provenance(curve_names: Sequence[str]) -> Dict[str, List[str]]:
+    """Split curve mnemonics into raw (as loaded), edited (conditioned versions of raw) and computed.
+
+    Rules are name-based because curves carry no provenance tag. Mineral/volume curves (`V*` such as
+    VSAND, VCALC) are computed. A curve is edited when it has a conditioning suffix (`_ORI`,
+    `_RECONSTRUCTED`, `_DEN_CORR`...); `*_ORI` columns hold the unedited copy and are reported with the edited
+    group so the original is not mistaken for a new measurement.
+    """
+    raw: List[str] = []
+    edited: List[str] = []
+    computed: List[str] = []
+    volume_like = {
+        "VSAND",
+        "VSILT",
+        "VCALC",
+        "VDOLO",
+        "VANHY",
+        "VCHLO",
+        "VILLI",
+        "VKAOL",
+        "VSMEC",
+        "VGLAUC",
+        "VGYPS",
+        "VHALI",
+        "VKERO",
+        "VKFELD",
+        "VMUSC",
+        "VPYRI",
+        "VSIDE",
+        "VBIOT",
+        "VFELD",
+        "VCOAL",
+        "VGAS",
+        "VOIL",
+        "VWATER",
+        "VUNC",
+        "VANKE",
+        "VSH_GR",
+        "VSH_DN",
+    }
+    for c in curve_names:
+        u = str(c).upper()
+        if u in _EDITED_CURVE_NAMES or u.endswith(_EDITED_CURVE_SUFFIXES):
+            edited.append(str(c))
+        elif (
+            u in _COMPUTED_CURVE_NAMES
+            or u in volume_like
+            or u.startswith(_COMPUTED_CURVE_PREFIXES)
+        ):
+            computed.append(str(c))
+        else:
+            raw.append(str(c))
+    return {"raw": raw, "edited": edited, "computed": computed}
+
+
+def _compute_field_summary(zonal_summary: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    """Single source for field-level pay metrics used by the executive summary and Section 8.4.
+
+    Definitions (each zone row already holds the per-well mean for that zone):
+    - `column_hcpt` / `column_net_pay`: sum of zone means, i.e. what a typical well penetrating every
+      evaluated zone would encounter.
+    - `mean_zone_hcpt` / `mean_zone_net_pay`: the same totals divided by the number of evaluated zones.
+    - `phie` / `sw`: net-pay-thickness weighted porosity and pore-volume weighted water saturation over the
+      zones that carry pay.
+    - `ntg_pay`: total net pay over total gross across zones.
+    """
+    zones = list(zonal_summary or [])
+    n_zones = len(zones)
+    column_hcpt = sum(float(z.get("hcpt", 0.0)) for z in zones)
+    column_net_pay = sum(float(z.get("net_pay", 0.0)) for z in zones)
+    column_gross = sum(float(z.get("gross", 0.0)) for z in zones)
+    pay_zones = [z for z in zones if float(z.get("net_pay", 0.0)) > 0]
+    phie = sw = None
+    if pay_zones:
+        h = np.array([max(float(z.get("net_pay", 0.0)), 1e-6) for z in pay_zones])
+        phi_z = np.array(
+            [float(z.get("phie_pay", z.get("phie", 0.0))) for z in pay_zones]
+        )
+        sw_z = np.array([float(z.get("sw_pay", z.get("sw", 0.0))) for z in pay_zones])
+        phie = float(np.sum(h * phi_z) / np.sum(h))
+        pv = np.maximum(h * phi_z, 1e-6)
+        sw = float(np.sum(pv * sw_z) / np.sum(pv))
+    return {
+        "n_zones": n_zones,
+        "n_pay_zones": len(pay_zones),
+        "column_hcpt": round(column_hcpt, 2),
+        "column_net_pay": round(column_net_pay, 1),
+        "mean_zone_hcpt": round(column_hcpt / max(n_zones, 1), 2),
+        "mean_zone_net_pay": round(column_net_pay / max(n_zones, 1), 1),
+        "ntg_pay": round(column_net_pay / column_gross, 3) if column_gross > 0 else 0.0,
+        "phie": round(phie, 3) if phie is not None else None,
+        "sw": round(sw, 3) if sw is not None else None,
+    }
+
+
+def _build_shf_reconciliation_sentence(shf_p: Dict[str, Any]) -> str:
+    """Describe the SHF vs log Sw agreement truthfully, including failure and missing-data cases."""
+    sc = shf_p.get("ift_cos_theta", 26.0)
+    src = shf_p.get("fit_source", "unspecified")
+    rmse = shf_p.get("reconciliation_rmse")
+    if rmse is None:
+        return (
+            f"The Leverett $J$-Function saturation-height model ($\\sigma\\cos\\theta = {sc}\\text{{ dynes/cm}}$, "
+            f"fit source: {src}) could not be reconciled with log $S_w$ because too few overlapping "
+            f"target-zone samples above the FWL were available. "
+        )
+    bias = shf_p.get("reconciliation_bias") or 0.0
+    text = (
+        f"The Leverett $J$-Function saturation-height model ($\\sigma\\cos\\theta = {sc}\\text{{ dynes/cm}}$, "
+        f"fit source: {src}) gives $\\text{{RMSE}} = {rmse:.3f}\\text{{ v/v}}$ and mean bias "
+        f"${bias:+.3f}\\text{{ v/v}}$ against wireline log $S_w$ (n={shf_p.get('reconciliation_n', 0)}). "
+    )
+    if rmse > 0.12:
+        text += (
+            "This exceeds the 0.12 v/v acceptance limit, so the saturation-height function does not yet reproduce "
+            "the log saturation and should not be used to initialise the static model until the rock-type fits, "
+            "FWL and fluid densities are revisited. "
+        )
+    if not shf_p.get("uses_saved_fit"):
+        text += (
+            "No saved per-rock-type SHF fit was applied, so the curve uses a generic fallback J-function. "
+        )
+    return text
+
+
+def _build_rock_typing_narrative(
+    rock_types: List[Dict[str, Any]],
+    rt_sum: Dict[str, Any],
+    cutoffs: List[float],
+) -> str:
+    """Narrative derived strictly from the fitted classes, cutoffs and their provenance."""
+    n_rt = len(rock_types)
+    cut_txt = ", ".join(f"{c:g}" for c in cutoffs) if cutoffs else "n/a"
+    src = rt_sum.get("cutoff_source", "unspecified source")
+    parts = [
+        f"Hydraulic Flow Unit partitioning on **{rt_sum.get('basis', 'Target-Zone Dataset')}** classified the "
+        f"reservoir into **{n_rt}** Discrete Rock Types using Flow Zone Indicator cut-offs of "
+        f"${cut_txt}\\text{{ }}\\mu\\text{{m}}$ (source: {src}). "
+    ]
+    dom = rt_sum.get("dominant_codes") or []
+    if dom and rt_sum.get("dominant_kh_pct") is not None:
+        parts.append(
+            f"Flow capacity is concentrated in **{', '.join(dom)}**, which together hold "
+            f"**{rt_sum['dominant_share_pct']:.1f}%** of samples and **{rt_sum['dominant_kh_pct']:.1f}%** of "
+            f"cumulative permeability-thickness ($\\sum K\\cdot h$). "
+        )
+    weak = [r["name"].split("—")[0].strip() for r in rock_types if r.get("fit_status") != "fitted"]
+    if weak:
+        parts.append(
+            f"No porosity-permeability regression is reported for {', '.join(weak)} because fewer than "
+            f"3 samples (or no porosity spread) fall in the class. "
+        )
+    if rt_sum.get("method_note"):
+        parts.append(str(rt_sum["method_note"]) + " ")
+    return "".join(parts).strip()
+
+
 def _gather_and_analyze_fpt_data(
     project_id: int,
     wells_inventory: List[Dict[str, Any]],
@@ -501,8 +789,14 @@ def _gather_and_analyze_fpt_data(
     fluid_contacts_rows: List[Dict[str, Any]],
     target_zones: List[str],
     fwl_val: Optional[float] = None,
+    fwl_is_committed: bool = False,
 ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
-    """Gather and analyze Formation Pressure Test (FPT) data for Section 6.3 (GAP-13)."""
+    """Gather and analyze Formation Pressure Test (FPT) data for Section 6.3 (GAP-13).
+
+    Points are restricted to the target zones, valid quality and plausible pressure. Gradient fits are
+    accepted only inside physical density ranges. Contact reconciliation is flagged INDICATIVE unless the
+    reference FWL comes from a committed contact or an explicit user override (`fwl_is_committed`).
+    """
     raw_points: List[Dict[str, Any]] = []
 
     # Priority 1: Direct injection in configs (e.g. tests or pre-calculated)
@@ -531,14 +825,44 @@ def _gather_and_analyze_fpt_data(
             "fwl": fwl_val,
         }, []
 
-    # Filter valid stations
-    valid_points = [
-        p
-        for p in raw_points
-        if str(p.get("test_quality", "VALID")).strip().upper() == "VALID"
-        and p.get("pressure") is not None
-        and float(p["pressure"]) > 0
-    ]
+    # Filter valid stations: quality, finite depth, plausible pressure, and active target zone.
+    tz_upper = {str(z).strip().upper() for z in (target_zones or []) if str(z).strip()}
+    any_zone_info = any(
+        str(p.get("zone") or "").strip() not in ("", "None", "nan") for p in raw_points
+    )
+    exclusions = {"quality": 0, "bad_pressure": 0, "no_depth": 0, "outside_target": 0}
+    valid_points = []
+    for p in raw_points:
+        if str(p.get("test_quality", "VALID")).strip().upper() != "VALID":
+            exclusions["quality"] += 1
+            continue
+        try:
+            pr = float(p.get("pressure"))
+            tv = p.get("tvdss")
+            tv = float(tv) if tv is not None else float("nan")
+        except (TypeError, ValueError):
+            exclusions["bad_pressure"] += 1
+            continue
+        if not np.isfinite(tv):
+            exclusions["no_depth"] += 1
+            continue
+        # Reject physically implausible points (< 0.2 or > 1.2 psi/ft equivalent over TVDSS).
+        grad_eq = pr / max(tv * 3.28084, 1.0)
+        if not np.isfinite(pr) or pr <= 0 or tv <= 0 or not (0.2 <= grad_eq <= 1.2):
+            exclusions["bad_pressure"] += 1
+            continue
+        if tz_upper and any_zone_info:
+            if str(p.get("zone") or "").strip().upper() not in tz_upper:
+                exclusions["outside_target"] += 1
+                continue
+        valid_points.append(p)
+    fpt_filter_note = (
+        f"{len(valid_points)} of {len(raw_points)} stations retained for gradient analysis "
+        f"(excluded: {exclusions['outside_target']} outside target zones, "
+        f"{exclusions['quality']} non-valid quality, "
+        f"{exclusions['bad_pressure']} implausible pressure, "
+        f"{exclusions['no_depth']} without TVDSS)."
+    )
 
     well_fpt_rows = []
     wells_with_pts = sorted({p["well_name"] for p in raw_points})
@@ -652,26 +976,74 @@ def _gather_and_analyze_fpt_data(
                     g_psi_m * ref_fwl + _safe_float(g_dict.get("intercept"), 0.0), 1
                 )
 
+                # Physical plausibility bounds on in-situ density (g/cc) by phase.
+                dens_bounds = {
+                    "GAS": (0.02, 0.45),
+                    "OIL": (0.40, 1.00),
+                    "WATER": (0.95, 1.25),
+                }.get(str(fl).upper())
+                n_fit = int(g_dict.get("n_points", 0))
+                reject_reason = ""
+                if dens_bounds and not (dens_bounds[0] <= rho_gcc <= dens_bounds[1]):
+                    reject_reason = (
+                        f"density {rho_gcc:.3f} g/cc outside physical range "
+                        f"{dens_bounds[0]:.2f}–{dens_bounds[1]:.2f}"
+                    )
+                elif n_fit < 3:
+                    reject_reason = f"only {n_fit} station(s)"
+                elif r2 < 0.80:
+                    reject_reason = f"poor fit (R²={r2:.2f})"
+
+                # Zone label from the stations that actually fall in this phase's depth range.
+                t_lo = t_range[0] if t_range and t_range[0] is not None else None
+                t_hi = t_range[1] if t_range and len(t_range) > 1 else None
+                if t_lo is not None and t_hi is not None:
+                    fit_zones = sorted(
+                        {
+                            str(p.get("zone")).strip()
+                            for p in valid_points
+                            if p.get("tvdss") is not None
+                            and t_lo - 0.5 <= float(p["tvdss"]) <= t_hi + 0.5
+                            and str(p.get("zone") or "").strip()
+                            not in ("", "None", "nan")
+                        }
+                    )
+                else:
+                    fit_zones = []
+                zone_label = (
+                    ", ".join(fit_zones)
+                    if fit_zones
+                    else (", ".join(target_zones) if target_zones else "Target Reservoir")
+                )
+
                 fpt_gradient_rows.append(
                     {
-                        "zone": target_zones[0] if target_zones else "Target Reservoir",
+                        "zone": zone_label,
                         "fluid_type": fl.title(),
                         "gradient_psi_ft": g_psi_ft,
                         "density_gcc": rho_gcc,
                         "datum_pressure": datum_p,
                         "r_squared": r2,
-                        "n_points": int(g_dict.get("n_points", 0)),
+                        "n_points": n_fit,
                         "tvdss_range": t_str,
+                        "accepted": not reject_reason,
+                        "reject_reason": reject_reason,
                     }
                 )
-                fitted_densities[fl.upper()] = {
-                    "density_gcc": rho_gcc,
-                    "r_squared": r2,
-                    "n_points": int(g_dict.get("n_points", 0)),
-                    "gradient_psi_ft": g_psi_ft,
-                    "fluid_type": fl,
-                }
+                if not reject_reason:
+                    fitted_densities[fl.upper()] = {
+                        "density_gcc": rho_gcc,
+                        "r_squared": r2,
+                        "n_points": n_fit,
+                        "gradient_psi_ft": g_psi_ft,
+                        "fluid_type": fl,
+                    }
 
+            # Contacts from intersecting gradients are only meaningful when the intersecting
+            # fits are physical; otherwise suppress them rather than present an arbitrary depth.
+            accepted_phases = set(fitted_densities.keys())
+            if len(accepted_phases) < 2:
+                contacts_res = {}
             for c_key, c_val in contacts_res.items():
                 c_dict = c_val.to_dict()
                 p50_tvdss = _safe_float(c_dict.get("tvdss_p50"))
@@ -679,11 +1051,12 @@ def _gather_and_analyze_fpt_data(
                 p90_tvdss = _safe_float(c_dict.get("tvdss_p90"), p50_tvdss)
                 p_contact = _safe_float(c_dict.get("pressure_at_contact"), 0.0)
                 delta_log = round(p50_tvdss - ref_fwl, 1)
-                status_str = (
-                    "✓ RECONCILED (< 2.0 m)"
-                    if abs(delta_log) <= 2.0
-                    else f"Δ = {delta_log:+.1f} m"
-                )
+                if not fwl_is_committed:
+                    status_str = "INDICATIVE (no committed contact to reconcile against)"
+                elif abs(delta_log) <= 2.0:
+                    status_str = "✓ RECONCILED (< 2.0 m)"
+                else:
+                    status_str = f"Δ = {delta_log:+.1f} m"
 
                 fpt_contacts.append(
                     {
@@ -702,7 +1075,7 @@ def _gather_and_analyze_fpt_data(
             logger.debug(f"Formation pressure gradient regression fallback: {exc}")
 
     fpt_summary = {
-        "has_data": len(valid_points) > 0,
+        "has_data": len(raw_points) > 0,
         "total_stations": len(raw_points),
         "valid_stations": len(valid_points),
         "well_fpt_rows": well_fpt_rows,
@@ -710,8 +1083,11 @@ def _gather_and_analyze_fpt_data(
         "fpt_contacts": fpt_contacts,
         "fitted_densities": fitted_densities,
         "fwl": fwl_val,
+        "filter_note": fpt_filter_note,
+        "fwl_is_committed": fwl_is_committed,
+        "rejected_fits": [r for r in fpt_gradient_rows if not r.get("accepted", True)],
     }
-    return fpt_summary, raw_points
+    return fpt_summary, valid_points
 
 
 # ---------------------------------------------------------------------------
@@ -973,13 +1349,27 @@ def build_report_context(
             "CPORE_ORI",
             "CPERM_ORI",
         }
-        raw_curves_only = [c for c in raw_curves if c.upper() not in eval_curve_names]
-        if not raw_curves_only:
-            raw_curves_only = [
-                c
-                for c in raw_curves
-                if c.upper() not in {"ROCK_FLAG", "PERM_TRANS", "SHF"}
-            ]
+        provenance = _classify_curve_provenance(raw_curves)
+        raw_curves_only = [
+            c for c in provenance["raw"] if c.upper() not in eval_curve_names
+        ]
+        edited_curves_found = provenance["edited"]
+        computed_curves_found = [
+            c for c in provenance["computed"] if c.upper() not in eval_curve_names
+        ]
+
+        # Coverage of each raw curve (% of the logged interval with a valid value), so the table can show
+        # only the primary measurements with their completeness instead of every column.
+        raw_coverage: Dict[str, float] = {}
+        n_rows_w = max(len(w_df), 1)
+        for c in raw_curves_only:
+            try:
+                raw_coverage[c] = round(
+                    100.0 * float(pd.to_numeric(w_df[c], errors="coerce").notna().sum()) / n_rows_w,
+                    0,
+                )
+            except Exception:
+                continue
 
         eval_curves_only = [
             c
@@ -1027,6 +1417,9 @@ def build_report_context(
                 "td": round(td, 1),
                 "curves": display_curves[:13],
                 "raw_curves": raw_curves_only,
+                "raw_coverage": raw_coverage,
+                "edited_curves": edited_curves_found,
+                "computed_curves": computed_curves_found,
                 "eval_curves": eval_curves_only,
                 "available_curves": raw_curves,
                 "core_sample_count": core_cnt,
@@ -1993,50 +2386,102 @@ def build_report_context(
         )
 
     # Spec 2.2: Dynamic Rock Typing & Permeability Regression via `scipy.stats.linregress`
-    cfg_fzi_cutoffs = (
-        (
-            (model_params.get("fzi_cutoffs") or model_params.get("fziCutoffs"))
-            if isinstance(model_params, dict)
-            else None
-        )
-        or merged_configs.get("fzi_cutoffs")
-        or merged_configs.get("fziCutoffs")
+    # Cutoff resolution order: explicit request > workbench-saved rock typing > well config > documented default.
+    saved_rt_entry = _load_saved_project_module_entry(
+        pid, "rock-typing", resolved_target_zones
     )
-    if cfg_fzi_cutoffs and isinstance(cfg_fzi_cutoffs, (list, tuple)):
-        resolved_fzi_cutoffs = sorted(
-            [float(c) for c in cfg_fzi_cutoffs if float(c) > 0]
-        )
+    saved_rt_params = (
+        saved_rt_entry.get("params") if isinstance(saved_rt_entry, dict) else None
+    ) or {}
+    saved_rt_method = str(saved_rt_params.get("drtMethod") or "fzi").strip().lower()
+    saved_fzi_cutoffs = saved_rt_params.get("fziCutoffs")
+
+    cfg_fzi_cutoffs = None
+    cutoff_source = ""
+    for src_label, cand in (
+        (
+            "request override",
+            (model_params or {}).get("fzi_cutoffs")
+            or (model_params or {}).get("fziCutoffs")
+            if isinstance(model_params, dict)
+            else None,
+        ),
+        (
+            f"saved workbench rock typing ({saved_rt_entry.get('label', 'project')})"
+            if saved_rt_entry
+            else "",
+            saved_fzi_cutoffs if saved_rt_method == "fzi" else None,
+        ),
+        (
+            "well configuration",
+            merged_configs.get("fzi_cutoffs") or merged_configs.get("fziCutoffs"),
+        ),
+    ):
+        if cand and isinstance(cand, (list, tuple)):
+            try:
+                vals = sorted(float(c) for c in cand if float(c) > 0)
+            except (TypeError, ValueError):
+                vals = []
+            if vals:
+                cfg_fzi_cutoffs, cutoff_source = vals, src_label
+                break
+    if cfg_fzi_cutoffs:
+        resolved_fzi_cutoffs = cfg_fzi_cutoffs
     else:
         resolved_fzi_cutoffs = [0.5, 1.5, 3.0]
+        cutoff_source = "generic default (no saved rock typing found; not calibrated to this project)"
+        anomaly_flags.append(
+            {
+                "category": "Rock Typing Cutoffs Not Calibrated",
+                "target": "Field Rock Typing (Section 5)",
+                "message": "No saved rock-typing cutoffs were found; generic FZI cutoffs [0.5, 1.5, 3.0] were applied.",
+                "mitigation": "Run and save Rock Typing in the multi-well workbench for the target zones, then regenerate the report.",
+            }
+        )
+    if saved_rt_method in ("winland", "lucia"):
+        anomaly_flags.append(
+            {
+                "category": "Rock Typing Method Mismatch",
+                "target": "Field Rock Typing (Section 5)",
+                "message": (
+                    f"Workbench rock typing used the '{saved_rt_method}' method, but Section 5 re-bins "
+                    "core plugs by FZI for the permeability regression table."
+                ),
+                "mitigation": "Compare Section 5 classes against the saved ROCK_FLAG curve before using them downstream.",
+            }
+        )
 
+    # Class labels are neutral and positional. Facies names (e.g. "shoreface") cannot be inferred from FZI
+    # alone, so none are invented; quality is described only by the FZI range.
     rt_Specs = []
     n_cuts = len(resolved_fzi_cutoffs)
     for i in range(n_cuts + 1):
         idx = i + 1
         if i == 0:
             c_high = resolved_fzi_cutoffs[0]
-            name = "RT1 — Nano/Micro-Porous Argillaceous"
+            quality = "Lowest flow quality"
             code = f"DRT 1 (FZI < {c_high:.2f})"
             fzi_str = f"< {c_high:.2f}"
-            def_m, def_c, def_r2 = 12.4, -1.85, 0.79
         elif i == n_cuts:
             c_low = resolved_fzi_cutoffs[-1]
-            name = f"RT{idx} — Mega-Porous Clean Channel Sand"
+            quality = "Highest flow quality"
             code = f"DRT {idx} (FZI ≥ {c_low:.2f})"
             fzi_str = f"≥ {c_low:.2f}"
-            def_m, def_c, def_r2 = 16.8, -0.45, 0.92
         else:
             c_low = resolved_fzi_cutoffs[i - 1]
             c_high = resolved_fzi_cutoffs[i]
-            name = f"RT{idx} — Meso/Macro-Porous Shoreface"
+            quality = "Intermediate flow quality"
             code = f"DRT {idx} ({c_low:.2f}–{c_high:.2f})"
             fzi_str = f"{c_low:.2f} – {c_high:.2f}"
-            def_m, def_c, def_r2 = 14.2 + (i - 1) * 1.4, -1.35 + (i - 1) * 0.43, 0.85
-        rt_Specs.append((idx, name, code, fzi_str, def_m, def_c, def_r2))
+        rt_Specs.append((idx, f"RT{idx} — {quality}", code, fzi_str))
 
     rock_types: List[Dict[str, Any]] = []
-    rt34_share_pct = 43.5
-    rt34_kh_pct = 82.0
+    saved_flag_rows: List[Dict[str, Any]] = []
+    rt34_share_pct: Optional[float] = None
+    rt34_kh_pct: Optional[float] = None
+    dominant_codes: List[str] = []
+    dominant_share_pct: Optional[float] = None
+    dominant_kh_pct: Optional[float] = None
     rt_basis_source = "Core Plugs (CPORE & CPERM)"
 
     if not full_df.empty:
@@ -2067,6 +2512,7 @@ def build_report_context(
             & (ck_rt > 1e-3)
         )
 
+        rt_sel_mask = core_rt_mask
         if core_rt_mask.sum() >= 12:
             p_arr = cp_rt[core_rt_mask].to_numpy(dtype=float)
             k_arr = ck_rt[core_rt_mask].to_numpy(dtype=float)
@@ -2086,6 +2532,74 @@ def build_report_context(
             p_arr = ph_rt[log_rt_mask].to_numpy(dtype=float)
             k_arr = pm_rt[log_rt_mask].to_numpy(dtype=float)
             rt_basis_source = f"Target-Zone Evaluated Logs (n={len(p_arr)})"
+            rt_sel_mask = log_rt_mask
+
+        # Saved workbench ROCK_FLAG classes on the same samples, fitted as K = a * phi^b (the workbench form).
+        if "ROCK_FLAG" in tz_sub_rt.columns and len(p_arr) >= 8:
+            rf_sel = pd.to_numeric(
+                tz_sub_rt.loc[rt_sel_mask, "ROCK_FLAG"], errors="coerce"
+            ).to_numpy(dtype=float)
+            ok_rf = np.isfinite(rf_sel) & (rf_sel >= 1)
+            if ok_rf.sum() >= 8:
+                n_rf_tot = int(ok_rf.sum())
+                saved_perm_entry = _load_saved_project_module_entry(
+                    pid, "perm-transform", resolved_target_zones
+                )
+                saved_perm_p = (
+                    saved_perm_entry.get("params")
+                    if isinstance(saved_perm_entry, dict)
+                    else None
+                ) or {}
+                manual_fits = (
+                    saved_perm_p.get("fits")
+                    if saved_perm_p.get("manualEdits")
+                    and isinstance(saved_perm_p.get("fits"), dict)
+                    else {}
+                )
+                kh_total = float(np.sum(k_arr[ok_rf])) or 1e-9
+                for rf_v in sorted({int(v) for v in rf_sel[ok_rf]}):
+                    m_f = ok_rf & (rf_sel == rf_v)
+                    n_f = int(m_f.sum())
+                    row_f: Dict[str, Any] = {
+                        "rock_flag": rf_v,
+                        "n_samples": n_f,
+                        "share_pct": round(100.0 * n_f / n_rf_tot, 1),
+                        "kh_pct": round(100.0 * float(np.sum(k_arr[m_f])) / kh_total, 1),
+                        "a": None,
+                        "b": None,
+                        "r2": None,
+                        "source": "insufficient data",
+                    }
+                    pf, kf = p_arr[m_f], k_arr[m_f]
+                    if str(rf_v) in manual_fits:
+                        try:
+                            row_f["a"] = float(manual_fits[str(rf_v)]["a"])
+                            row_f["b"] = float(manual_fits[str(rf_v)]["b"])
+                            row_f["source"] = "saved workbench fit (manual)"
+                        except (TypeError, ValueError, KeyError):
+                            pass
+                    if row_f["a"] is None and n_f >= 3 and float(np.std(np.log10(pf))) > 1e-3:
+                        b_fit, log_a = np.polyfit(
+                            np.log10(np.clip(pf, 1e-6, None)),
+                            np.log10(np.clip(kf, 1e-6, None)),
+                            1,
+                        )
+                        row_f["a"], row_f["b"] = float(10.0**log_a), float(b_fit)
+                        row_f["source"] = "fitted on report samples"
+                    if row_f["a"] is not None:
+                        pred = np.log10(
+                            np.clip(row_f["a"] * np.clip(pf, 1e-6, None) ** row_f["b"], 1e-6, None)
+                        )
+                        obs = np.log10(np.clip(kf, 1e-6, None))
+                        ss_t = float(np.sum((obs - obs.mean()) ** 2))
+                        row_f["r2"] = (
+                            round(1.0 - float(np.sum((obs - pred) ** 2)) / ss_t, 2)
+                            if ss_t > 1e-12
+                            else None
+                        )
+                        row_f["a"] = round(row_f["a"], 3)
+                        row_f["b"] = round(row_f["b"], 3)
+                    saved_flag_rows.append(row_f)
 
         if len(p_arr) >= 8:
             rqi = 0.0314 * np.sqrt(k_arr / np.clip(p_arr, 1e-4, 0.99))
@@ -2095,23 +2609,24 @@ def build_report_context(
             total_n = max(len(p_arr), 1)
             total_kh = max(float(np.sum(k_arr)), 1e-9)
 
-            for rt_idx, r_name, r_code, r_fzi, def_m, def_c, def_r2 in rt_Specs:
+            class_kh: Dict[int, float] = {}
+            for rt_idx, r_name, r_code, r_fzi in rt_Specs:
                 m_rt = rt_bins == rt_idx
                 cnt_rt = int(np.sum(m_rt))
                 share_v = round(100.0 * cnt_rt / total_n, 1)
+                class_kh[rt_idx] = float(np.sum(k_arr[m_rt])) if cnt_rt else 0.0
+                fit_status = "fitted"
                 if cnt_rt >= 3 and float(np.std(p_arr[m_rt])) > 1e-4:
                     reg = linregress(
                         p_arr[m_rt], np.log10(np.clip(k_arr[m_rt], 1e-4, 1e6))
                     )
                     slope_v = round(float(reg.slope), 2)
                     inter_v = round(float(reg.intercept), 2)
-                    r2_v = round(max(0.0, min(0.99, float(reg.rvalue**2))), 2)
+                    r2_v = round(max(0.0, min(1.0, float(reg.rvalue**2))), 2)
                 else:
-                    slope_v, inter_v, r2_v = (
-                        def_m,
-                        def_c,
-                        (def_r2 if cnt_rt > 0 else 0.0),
-                    )
+                    # No invented transform: report the absence of a fit instead of defaults.
+                    slope_v = inter_v = r2_v = None
+                    fit_status = "insufficient_data"
                 rock_types.append(
                     {
                         "name": r_name,
@@ -2122,28 +2637,48 @@ def build_report_context(
                         "slope": slope_v,
                         "intercept": inter_v,
                         "r2": r2_v,
+                        "fit_status": fit_status,
                         "basis": rt_basis_source,
                     }
                 )
-            m_34 = (rt_bins == 3) | (rt_bins == 4)
-            rt34_share_pct = round(100.0 * float(np.sum(m_34)) / total_n, 1)
-            rt34_kh_pct = round(100.0 * float(np.sum(k_arr[m_34])) / total_kh, 1)
+
+            # Flow-capacity concentration: the fewest top-FZI classes holding >= 70% of sum(K).
+            ranked = sorted(class_kh.items(), key=lambda kv: kv[1], reverse=True)
+            run_kh, picked = 0.0, []
+            for idx_c, kh_c in ranked:
+                if kh_c <= 0:
+                    break
+                picked.append(idx_c)
+                run_kh += kh_c
+                if run_kh / total_kh >= 0.70:
+                    break
+            if picked:
+                picked.sort()
+                dominant_codes = [f"RT{i}" for i in picked]
+                dominant_kh_pct = round(100.0 * run_kh / total_kh, 1)
+                dominant_share_pct = round(
+                    100.0 * float(np.sum(np.isin(rt_bins, picked))) / total_n, 1
+                )
+                rt34_share_pct, rt34_kh_pct = dominant_share_pct, dominant_kh_pct
 
     if not rock_types:
-        for _, r_name, r_code, r_fzi, def_m, def_c, def_r2 in rt_Specs:
+        # Insufficient data: list the configured classes without any fabricated statistics.
+        for _, r_name, r_code, r_fzi in rt_Specs:
             rock_types.append(
                 {
                     "name": r_name,
                     "code": r_code,
                     "fzi_range": r_fzi,
                     "n_samples": 0,
-                    "share_pct": 25.0,
-                    "slope": def_m,
-                    "intercept": def_c,
-                    "r2": def_r2,
-                    "basis": rt_basis_source,
+                    "share_pct": None,
+                    "slope": None,
+                    "intercept": None,
+                    "r2": None,
+                    "fit_status": "insufficient_data",
+                    "basis": "Insufficient core/log data for rock typing (< 8 valid samples)",
                 }
             )
+        rt_basis_source = "Insufficient core/log data for rock typing (< 8 valid samples)"
 
     if model_params and isinstance(model_params, dict):
         merged_configs.update({k: v for k, v in model_params.items() if v is not None})
@@ -2352,12 +2887,29 @@ def build_report_context(
             fwl_val = round(float(np.median(fwl_matches)), 1)
             fwl_basis_str = "Committed Fluid Contact / FWL Optimizer (Pc = 0 datum)"
 
-    # Tier 3: Project Configuration
+    # Saved workbench SHF snapshot (FWL, fluid system, per-rock-type J fits) for the active zone selection.
+    saved_shf_entry = _load_saved_project_module_entry(
+        pid, "shf", resolved_target_zones
+    )
+    saved_shf_params = (
+        saved_shf_entry.get("params") if isinstance(saved_shf_entry, dict) else None
+    ) or {}
+    saved_shf_inner = (
+        saved_shf_params.get("shfParams")
+        if isinstance(saved_shf_params.get("shfParams"), dict)
+        else {}
+    )
+
+    # Tier 3: Project Configuration (workbench-saved SHF FWL takes precedence over well config)
     if fwl_val is None:
-        cfg_fwl = merged_configs.get("fwl") or (
-            merged_configs.get("shf_params", {}).get("fwl")
-            if isinstance(merged_configs.get("shf_params"), dict)
-            else None
+        cfg_fwl = (
+            saved_shf_inner.get("fwl")
+            or merged_configs.get("fwl")
+            or (
+                merged_configs.get("shf_params", {}).get("fwl")
+                if isinstance(merged_configs.get("shf_params"), dict)
+                else None
+            )
         )
         if cfg_fwl is not None:
             cand_fwl = _safe_float(cfg_fwl, None)
@@ -2550,6 +3102,8 @@ def build_report_context(
                         "p50": f"{hcpt_p50:.2f} m",
                         "p10": f"{hcpt_p10:.2f} m",
                         "spread": f"{spread_ratio:.2f}×" if hcpt_p90 > 0.005 else "—",
+                        # Numeric twin of `spread` so narratives quote the table value, not a default.
+                        "spread_ratio": spread_ratio if hcpt_p90 > 0.005 else None,
                     },
                 ]
             )
@@ -2646,6 +3200,7 @@ def build_report_context(
         fluid_contacts_rows=fluid_contacts_rows,
         target_zones=resolved_target_zones,
         fwl_val=fwl_val,
+        fwl_is_committed=not str(fwl_basis_str).startswith("Inferred"),
     )
     fitted_dens = fpt_summary.get("fitted_densities", {})
     water_fit = fitted_dens.get("WATER")
@@ -2731,9 +3286,35 @@ def build_report_context(
             ghc_basis = "Configured Oil Density"
     delta_rho = round(gw_val - ghc_val, 3)
 
-    # Re-evaluate SHF curve using resolved FWL and phase-aware delta_rho (GAP-07)
-    shf_rmse = 0.042
-    shf_bias = -0.008
+    # Re-evaluate SHF curve using resolved FWL, phase-aware delta_rho (GAP-07) and the workbench-saved
+    # per-rock-type Leverett-J fits. No reconciliation statistic is reported unless it is actually computed.
+    shf_rmse: Optional[float] = None
+    shf_bias: Optional[float] = None
+    shf_fit_rows: List[Dict[str, Any]] = []
+    shf_fit_source = ""
+    shf_n_compared = 0
+    saved_fits_blob = saved_shf_params.get("fits")
+    saved_fits: Dict[str, Dict[str, Any]] = {}
+    saved_fit_model = "leverett_j"
+    if isinstance(saved_fits_blob, dict):
+        saved_fit_model = str(saved_fits_blob.get("model") or "leverett_j")
+        inner = saved_fits_blob.get("fits")
+        if isinstance(inner, dict):
+            for k, v in inner.items():
+                if isinstance(v, dict) and v.get("a") is not None and v.get("b") is not None:
+                    saved_fits[str(k)] = v
+    use_saved_fits = bool(saved_fits) and saved_fit_model == "leverett_j"
+    if use_saved_fits:
+        shf_fit_source = (
+            f"saved workbench SHF fit ({saved_shf_entry.get('label', 'project')})"
+        )
+    elif saved_fits:
+        shf_fit_source = (
+            f"generic fallback J-function (saved fit uses '{saved_fit_model}', "
+            "which the report does not evaluate)"
+        )
+    else:
+        shf_fit_source = "generic fallback J-function (no saved SHF fit found)"
     if not full_df.empty:
         d_col = (
             "TVDSS"
@@ -2770,6 +3351,29 @@ def build_report_context(
                 theta_val = _safe_float(
                     merged_configs.get("theta_res", shf_cfg.get("theta", 30.0)), 30.0
                 )
+                # Per-row a/b: saved fit for the row's ROCK_FLAG, else the generic fallback pair.
+                a_arr = np.full(len(full_df), 0.22, dtype=float)
+                b_arr = np.full(len(full_df), -0.50, dtype=float)
+                if use_saved_fits and "ROCK_FLAG" in full_df.columns:
+                    rf_arr = pd.to_numeric(full_df["ROCK_FLAG"], errors="coerce").to_numpy(
+                        dtype=float
+                    )
+                    for rf_key, fit in saved_fits.items():
+                        try:
+                            rf_int = int(rf_key)
+                            a_fit, b_fit = float(fit["a"]), float(fit["b"])
+                        except (TypeError, ValueError, KeyError):
+                            continue
+                        m_rf = np.isfinite(rf_arr) & (rf_arr == rf_int)
+                        a_arr[m_rf] = a_fit
+                        b_arr[m_rf] = b_fit
+                elif use_saved_fits:
+                    # No ROCK_FLAG on the data: use the first saved fit as a single global pair.
+                    first_fit = next(iter(saved_fits.values()))
+                    a_arr[:] = float(first_fit["a"])
+                    b_arr[:] = float(first_fit["b"])
+                    shf_fit_source += " (single global pair; no ROCK_FLAG curve on data)"
+
                 shf_calc = sw_shf_leverett_j(
                     perm=k_arr,
                     phit=phi_arr,
@@ -2779,23 +3383,99 @@ def build_report_context(
                     theta=theta_val,
                     gw=gw_val,
                     ghc=ghc_val,
-                    a=0.22,
-                    b=-0.50,
+                    a=a_arr,
+                    b=b_arr,
                     unit="metric" if d_col in ("TVDSS", "TVD", "DEPTH") else "imperial",
                     clip=True,
                 )
                 full_df["SHF"] = shf_calc
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(f"SHF recomputation skipped: {exc}")
 
+        # Reconcile only inside the active target zones and above the FWL, on rows where both curves exist.
         if "SHF" in full_df.columns and "SWT" in full_df.columns:
-            diff = (
-                pd.to_numeric(full_df["SWT"], errors="coerce")
-                - pd.to_numeric(full_df["SHF"], errors="coerce")
-            ).dropna()
-            if not diff.empty:
+            rec_df = full_df
+            if "ZONES" in full_df.columns and target_zones_upper:
+                rec_mask_z = (
+                    full_df["ZONES"]
+                    .astype(str)
+                    .str.strip()
+                    .str.upper()
+                    .isin(target_zones_upper)
+                )
+                if rec_mask_z.any():
+                    rec_df = full_df[rec_mask_z]
+            rec_depth = pd.to_numeric(
+                rec_df[d_col] if d_col in rec_df.columns else rec_df["DEPTH"],
+                errors="coerce",
+            )
+            sw_log = pd.to_numeric(rec_df["SWT"], errors="coerce")
+            sw_cap = pd.to_numeric(rec_df["SHF"], errors="coerce")
+            rec_ok = (
+                sw_log.notna()
+                & sw_cap.notna()
+                & rec_depth.notna()
+                & (rec_depth < fwl_val)
+            )
+            diff = (sw_log[rec_ok] - sw_cap[rec_ok]).dropna()
+            shf_n_compared = int(len(diff))
+            if shf_n_compared >= 20:
                 shf_rmse = round(float(np.sqrt(np.mean(diff**2))), 4)
                 shf_bias = round(float(diff.mean()), 4)
+
+        # Per-rock-type fit table: saved parameters plus the log-vs-capillary agreement in each class.
+        if use_saved_fits:
+            rf_series = (
+                pd.to_numeric(full_df["ROCK_FLAG"], errors="coerce")
+                if "ROCK_FLAG" in full_df.columns
+                else None
+            )
+            for rf_key in sorted(saved_fits, key=lambda k: (not str(k).isdigit(), str(k))):
+                fit = saved_fits[rf_key]
+                row = {
+                    "rock_flag": rf_key,
+                    "a": round(float(fit["a"]), 4),
+                    "b": round(float(fit["b"]), 4),
+                    "r2": fit.get("r2"),
+                    "rmse": fit.get("rmse"),
+                    "n_scal": int(fit.get("count", 0) or 0),
+                    "n_log": None,
+                    "log_rmse": None,
+                }
+                if (
+                    rf_series is not None
+                    and "SHF" in full_df.columns
+                    and "SWT" in full_df.columns
+                    and str(rf_key).isdigit()
+                ):
+                    m_c = (
+                        (rf_series == int(rf_key))
+                        & pd.to_numeric(full_df["SWT"], errors="coerce").notna()
+                        & pd.to_numeric(full_df["SHF"], errors="coerce").notna()
+                    )
+                    if "ZONES" in full_df.columns and target_zones_upper:
+                        m_c &= (
+                            full_df["ZONES"]
+                            .astype(str)
+                            .str.strip()
+                            .str.upper()
+                            .isin(target_zones_upper)
+                        )
+                    d_c = (
+                        pd.to_numeric(full_df[d_col], errors="coerce")
+                        if d_col in full_df.columns
+                        else None
+                    )
+                    if d_c is not None:
+                        m_c &= d_c < fwl_val
+                    if int(m_c.sum()) >= 10:
+                        dd = (
+                            pd.to_numeric(full_df.loc[m_c, "SWT"], errors="coerce")
+                            - pd.to_numeric(full_df.loc[m_c, "SHF"], errors="coerce")
+                        ).dropna()
+                        row["n_log"] = int(len(dd))
+                        row["log_rmse"] = round(float(np.sqrt(np.mean(dd**2))), 3)
+                shf_fit_rows.append(row)
 
     # Resolve active Lithology, Porosity, and Saturation models from config or evaluated curves
     raw_litho_key = (
@@ -3285,6 +3965,10 @@ def build_report_context(
         "reservoir_fluid": res_fluid,
         "reconciliation_rmse": shf_rmse,
         "reconciliation_bias": shf_bias,
+        "reconciliation_n": shf_n_compared,
+        "fit_source": shf_fit_source,
+        "uses_saved_fit": use_saved_fits,
+        "fit_rows": shf_fit_rows,
     }
     scal_model_key = (
         str(scal_cfg.get("model") or merged_configs.get("scal_model") or "let")
@@ -3578,36 +4262,20 @@ def build_report_context(
         volumetric_readiness = None
     else:
         volumetric_summary = None
-        tot_hcpt = sum(float(z.get("hcpt", 0.0)) for z in zonal_summary)
-        tot_net_pay = sum(float(z.get("net_pay", 0.0)) for z in zonal_summary)
-        tot_gross = sum(float(z.get("gross", 0.0)) for z in zonal_summary)
-        mean_hcpt = round(tot_hcpt / max(len(zonal_summary), 1), 2)
-        mean_net_pay = round(tot_net_pay / max(len(zonal_summary), 1), 1)
-        mean_ntg = (
-            round(tot_net_pay / max(tot_gross, 1e-6), 3) if tot_gross > 0 else 0.0
-        )
-        valid_phie = [
-            float(z.get("phie_pay", z.get("phie", 0.0)))
-            for z in zonal_summary
-            if float(z.get("net_pay", 0.0)) > 0
-        ]
-        valid_sw = [
-            float(z.get("sw_pay", z.get("sw", 0.0)))
-            for z in zonal_summary
-            if float(z.get("net_pay", 0.0)) > 0
-        ]
-        mean_phie = round(float(np.mean(valid_phie)), 3) if valid_phie else 0.0
-        mean_sw = round(float(np.mean(valid_sw)), 3) if valid_sw else 0.0
-
+        fs = _compute_field_summary(zonal_summary)
         volumetric_readiness = {
             "status": "AWAITING_RESERVOIR_AREA",
-            "mean_hcpt": mean_hcpt,
-            "mean_net_pay": mean_net_pay,
-            "mean_ntg": mean_ntg,
-            "mean_phie": mean_phie,
-            "mean_sw": mean_sw,
-            "total_hcpt": round(tot_hcpt, 2),
-            "evaluated_zones": len(zonal_summary),
+            # `mean_*` keys are per-zone means; `column_*` are sums across zones (a well through every zone).
+            "mean_hcpt": fs["mean_zone_hcpt"],
+            "mean_net_pay": fs["mean_zone_net_pay"],
+            "mean_ntg": fs["ntg_pay"],
+            "mean_phie": fs["phie"] if fs["phie"] is not None else 0.0,
+            "mean_sw": fs["sw"] if fs["sw"] is not None else 0.0,
+            "total_hcpt": fs["column_hcpt"],
+            "column_hcpt": fs["column_hcpt"],
+            "column_net_pay": fs["column_net_pay"],
+            "evaluated_zones": fs["n_zones"],
+            "pay_zones": fs["n_pay_zones"],
         }
 
     ctx_payload: Dict[str, Any] = {
@@ -3624,9 +4292,15 @@ def build_report_context(
         "litho_params": litho_params,
         "poro_params": poro_params,
         "rock_types": rock_types,
+        "saved_flag_rows": saved_flag_rows,
         "fzi_cutoffs": resolved_fzi_cutoffs,
         "rt_summary": {
             "basis": rt_basis_source,
+            "cutoff_source": cutoff_source,
+            "method": saved_rt_method,
+            "dominant_codes": dominant_codes,
+            "dominant_share_pct": dominant_share_pct,
+            "dominant_kh_pct": dominant_kh_pct,
             "rt34_share_pct": rt34_share_pct,
             "rt34_kh_pct": rt34_kh_pct,
         },
@@ -3653,6 +4327,7 @@ def build_report_context(
         "_full_df": full_df,
     }
     ctx_payload["gate_checks"] = validate_fdp_report_payload(ctx_payload)
+    ctx_payload["gate_summary"] = summarize_gate_checks(ctx_payload["gate_checks"])
     return ctx_payload
 
 
@@ -3852,34 +4527,25 @@ def validate_fdp_report_payload(context: Dict[str, Any]) -> List[Dict[str, str]]
     )
 
     # CHK-08: Saturation-Height Reconciliation (SHF RMSE <= 0.12)
-    shf_rmse = _safe_float(shf_p.get("shf_rmse"), 0.0)
-    if (
-        shf_rmse == 0.0
-        and not full_df.empty
-        and "SHF" in full_df.columns
-        and "SWT" in full_df.columns
-    ):
-        s_shf = _col_series(full_df, "SHF", np.nan)
-        s_swt = _col_series(full_df, "SWT", np.nan)
-        vmask = s_shf.notna() & s_swt.notna() & (s_shf >= 0.0) & (s_swt >= 0.0)
-        if vmask.sum() >= 5:
-            shf_rmse = round(
-                float(np.sqrt(np.mean((s_shf[vmask] - s_swt[vmask]) ** 2))), 3
-            )
-    if shf_rmse > 0.0:
+    shf_rmse_val = shf_p.get("reconciliation_rmse")
+    shf_rmse = _safe_float(shf_rmse_val, None) if shf_rmse_val is not None else None
+    if shf_rmse is not None:
         chk08_ok = shf_rmse <= 0.12
         chk08_status = "PASS" if chk08_ok else "QA ALERT"
-        chk08_measured = f"SHF vs Log SWT RMSE = {shf_rmse:.3f} v/v"
+        chk08_measured = (
+            f"SHF vs Log SWT RMSE = {shf_rmse:.3f} v/v "
+            f"(n={shf_p.get('reconciliation_n', 0)}; {shf_p.get('fit_source', 'unspecified fit')})"
+        )
         chk08_note = (
             "Saturation-height model consistent with active log saturation."
             if chk08_ok
-            else "Capillary equilibrium deviation exceeds 0.12 v/v; inspect transition zone."
+            else "Capillary equilibrium deviation exceeds 0.12 v/v; inspect transition zone, FWL and rock-type fits."
         )
     else:
-        chk08_status = "PASS"
-        chk08_measured = "SHF consistent with capillary equilibrium (RMSE ≤ 0.080 v/v)"
+        chk08_status = "QA ALERT"
+        chk08_measured = "SHF vs log Sw reconciliation could not be computed (insufficient overlapping samples)"
         chk08_note = (
-            "Leverett J-function capillary model calibrated to reservoir contacts."
+            "No SHF reconciliation statistic is reported; run the SHF module for the target zones."
         )
 
     checks.append(
@@ -3895,7 +4561,136 @@ def validate_fdp_report_payload(context: Dict[str, Any]) -> List[Dict[str, str]]
         }
     )
 
+    # CHK-09: Core-to-log permeability parity
+    k_cnt = int(poro_p.get("core_perm_count", 0) or 0)
+    k_r2 = _safe_float(poro_p.get("core_perm_r2"), 0.0)
+    k_factor = _safe_float(poro_p.get("core_perm_factor_err"), 1.0)
+    if k_cnt >= 3 and k_r2 >= 0.40 and k_factor <= 5.0:
+        chk09_status = "PASS"
+        chk09_measured = f"Valid perm plugs = {k_cnt} (R² = {k_r2:.2f}, factor error = {k_factor:.1f}×)."
+        chk09_note = "Log permeability transform reproduces core permeability."
+    elif k_cnt == 0:
+        chk09_status = "N/A (Log-Only)"
+        chk09_measured = "No overlapping core permeability plugs in the target zones."
+        chk09_note = "Permeability is uncalibrated against core."
+    else:
+        chk09_status = "QA ALERT"
+        chk09_measured = (
+            f"Valid perm plugs = {k_cnt} (R² = {k_r2:.2f}, factor error = {k_factor:.1f}×); "
+            "log permeability does not reproduce core."
+        )
+        chk09_note = "Rock-type permeability transforms are not validated; do not use PERM for static-model handover."
+    checks.append(
+        {
+            "id": "CHK-09",
+            "rule": "Core-to-Log Permeability Parity (R² ≥ 0.40, factor error ≤ 5×)",
+            "category": "Permeability",
+            "criterion": "Target RCA permeability R² ≥ 0.40 and multiplicative error ≤ 5×",
+            "measured": chk09_measured,
+            "status": chk09_status,
+            "action_note": chk09_note,
+            "detail": chk09_measured,
+        }
+    )
+
+    # CHK-10: Rock typing calibrated to project (saved cutoffs, fitted classes)
+    rt_sum = context.get("rt_summary", {}) or {}
+    rts = context.get("rock_types", []) or []
+    n_unfit = sum(1 for r in rts if r.get("fit_status") != "fitted")
+    generic_cut = str(rt_sum.get("cutoff_source", "")).startswith("generic default")
+    if generic_cut or (rts and n_unfit == len(rts)):
+        chk10_status = "QA ALERT"
+        chk10_measured = (
+            "Generic FZI cutoffs applied; no saved rock typing for the target zones."
+            if generic_cut
+            else "No rock-type class has enough samples for a porosity-permeability fit."
+        )
+        chk10_note = "Run and save Rock Typing in the workbench, then regenerate."
+    elif n_unfit > 0:
+        chk10_status = "REVIEW"
+        chk10_measured = f"{len(rts) - n_unfit} of {len(rts)} classes fitted; cutoffs: {rt_sum.get('cutoff_source', 'n/a')}."
+        chk10_note = "Classes without a fit carry no permeability transform."
+    else:
+        chk10_status = "PASS"
+        chk10_measured = f"All {len(rts)} classes fitted; cutoffs: {rt_sum.get('cutoff_source', 'n/a')}."
+        chk10_note = "Rock typing cutoffs and class regressions are project-calibrated."
+    checks.append(
+        {
+            "id": "CHK-10",
+            "rule": "Rock Typing Calibrated to Project Data",
+            "category": "Rock Typing",
+            "criterion": "Saved project cutoffs and a regression for every class",
+            "measured": chk10_measured,
+            "status": chk10_status,
+            "action_note": chk10_note,
+            "detail": chk10_measured,
+        }
+    )
+
+    # CHK-11: Formation pressure gradients physical and contacts committed
+    fpt_s = context.get("fpt_summary", {}) or {}
+    if fpt_s.get("has_data"):
+        rejected = fpt_s.get("rejected_fits", []) or []
+        committed = bool(fpt_s.get("fwl_is_committed"))
+        if rejected:
+            chk11_status = "QA ALERT"
+            chk11_measured = (
+                f"{len(rejected)} fitted gradient(s) rejected as unphysical or poorly constrained "
+                f"({', '.join(str(r.get('fluid_type')) for r in rejected)})."
+            )
+            chk11_note = "Review pressure picks, fluid assignment and depth reference before using gradients."
+        elif not committed:
+            chk11_status = "REVIEW"
+            chk11_measured = "Gradients are physical, but no committed fluid contact exists to reconcile against."
+            chk11_note = "Contacts derived from pressure are indicative only."
+        else:
+            chk11_status = "PASS"
+            chk11_measured = "Gradients physical and reconciled against committed contact."
+            chk11_note = "Pressure regime consistent with the fluid model."
+        checks.append(
+            {
+                "id": "CHK-11",
+                "rule": "Formation Pressure Gradients Physical and Contacts Committed",
+                "category": "Formation Pressure",
+                "criterion": "Gradient densities within phase bounds; reference contact committed",
+                "measured": chk11_measured,
+                "status": chk11_status,
+                "action_note": chk11_note,
+                "detail": chk11_measured,
+            }
+        )
+
     return checks
+
+
+_GATE_BLOCKING_STATUSES = {"QA ALERT", "FLAGGED", "FAIL", "FAILED"}
+_GATE_REVIEW_STATUSES = {"REVIEW"}
+
+
+def summarize_gate_checks(checks: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    """Collapse the gate list into counts and the items that must be visible in the executive summary."""
+    blocking = [c for c in checks if str(c.get("status", "")).upper() in _GATE_BLOCKING_STATUSES]
+    review = [c for c in checks if str(c.get("status", "")).upper() in _GATE_REVIEW_STATUSES]
+    if blocking:
+        overall = "NOT READY"
+    elif review:
+        overall = "CONDITIONAL"
+    else:
+        overall = "READY"
+    return {
+        "overall": overall,
+        "n_total": len(checks),
+        "n_blocking": len(blocking),
+        "n_review": len(review),
+        "blocking": [
+            {"id": c.get("id"), "rule": c.get("rule"), "measured": c.get("measured"), "action": c.get("action_note")}
+            for c in blocking
+        ],
+        "review": [
+            {"id": c.get("id"), "rule": c.get("rule"), "measured": c.get("measured"), "action": c.get("action_note")}
+            for c in review
+        ],
+    }
 
 
 def get_compact_report_context(
@@ -3955,20 +4750,11 @@ def synthesize_domain_ai_commentary(
     ref_zones = pay_zones if pay_zones else zonal
     top_zone = max(ref_zones, key=lambda z: z.get("hcpt", 0.0)) if ref_zones else {}
 
-    # Thickness/Pore-volume weighted field summary numbers
-    if pay_zones:
-        w_h = np.array([max(float(z.get("net_pay", 0.0)), 1e-6) for z in pay_zones])
-        mean_phie = float(
-            np.sum(w_h * np.array([float(z.get("phie", 0.16)) for z in pay_zones]))
-            / np.sum(w_h)
-        )
-        w_pv = np.maximum(
-            w_h * np.array([float(z.get("phie", 0.16)) for z in pay_zones]), 1e-6
-        )
-        mean_sw = float(
-            np.sum(w_pv * np.array([float(z.get("sw", 0.38)) for z in pay_zones]))
-            / np.sum(w_pv)
-        )
+    # Field summary numbers come from the same helper as Section 8.4 so both always agree.
+    field_sum = _compute_field_summary(zonal)
+    if field_sum["phie"] is not None:
+        mean_phie = field_sum["phie"]
+        mean_sw = field_sum["sw"]
     else:
         mean_phie = (
             float(np.mean([z.get("phie_res", 0.0) for z in ref_zones]))
@@ -3977,7 +4763,9 @@ def synthesize_domain_ai_commentary(
         )
         mean_sw = 1.0
 
-    total_hcpt = sum(float(z.get("hcpt", 0.0)) for z in zonal)
+    total_hcpt = field_sum["column_hcpt"]
+    mean_zone_hcpt = field_sum["mean_zone_hcpt"]
+    n_eval_zones = field_sum["n_zones"]
     max_bh = max((q.get("badhole_pct", 0.0) for q in qaqc_tbl), default=0.0)
 
     # Spec 4.1: Threshold-driven calibration parity prose (never claim "strong parity" when R² is low)
@@ -4000,9 +4788,10 @@ def synthesize_domain_ai_commentary(
 
     # Empirical P10/P90 ratio from Monte Carlo uncertainty table
     valid_spreads = [
-        float(u.get("spread_ratio", 1.0))
+        float(u["spread_ratio"])
         for u in unc_list
-        if float(u.get("p90_hcpt", 0.0)) > 0.005
+        if u.get("spread_ratio") is not None
+        and str(u.get("metric", "")).startswith("Hydrocarbon Pore Thickness")
     ]
     median_spread_str = (
         f"{float(np.median(valid_spreads)):.2f}×"
@@ -4043,8 +4832,8 @@ def synthesize_domain_ai_commentary(
                 f"light-hydrocarbon corrected effective porosity ($\\phi_e$), and shaly-sand water saturation ($S_w$), "
                 f"{core_clause}. Across the evaluated target reservoir succession in **`{focal_well}`**, net-thickness-weighted mean "
                 f"effective porosity ($\\phi_e$) is **${mean_phie:.3f}\\text{{ v/v}}$** with a pore-volume weighted water "
-                f"saturation ($S_w$) of **${mean_sw:.3f}\\text{{ v/v}}$** and cumulative zonal Hydrocarbon Pore Thickness "
-                f"($HCPT$) of **${total_hcpt:.2f}\\text{{ m}}$**. "
+                f"saturation ($S_w$) of **${mean_sw:.3f}\\text{{ v/v}}$** and cumulative Hydrocarbon Pore Thickness "
+                f"($HCPT$) across the **{n_eval_zones}** evaluated zones of **${total_hcpt:.2f}\\text{{ m}}$**. "
                 + (
                     f"The primary pay interval is **{top_zone.get('zone')}**, delivering "
                     f"**${top_zone.get('net_pay', 0.0):.1f}\\text{{ m}}$** of Net Pay ($NTG_{{pay}} = {top_zone.get('ntg', 0.0):.2f}\\text{{ v/v}}$, "
@@ -4128,8 +4917,9 @@ def synthesize_domain_ai_commentary(
                 f"target reservoir succession (`{', '.join(context.get('target_zones', []))}`). "
                 f"Across the evaluated target zones, net-thickness-weighted mean effective porosity ($\\phi_e$) is "
                 f"**${mean_phie:.3f}\\text{{ v/v}}$** with a pore-volume weighted water saturation ($S_w$) of "
-                f"**${mean_sw:.3f}\\text{{ v/v}}$** and cumulative zonal mean Hydrocarbon Pore Thickness ($HCPT$) of "
-                f"**${total_hcpt:.2f}\\text{{ m}}$**. "
+                f"**${mean_sw:.3f}\\text{{ v/v}}$**. A well penetrating all **{n_eval_zones}** evaluated zones accumulates a "
+                f"Hydrocarbon Pore Thickness ($HCPT$) of **${total_hcpt:.2f}\\text{{ m}}$** "
+                f"(sum of per-zone means; average **${mean_zone_hcpt:.2f}\\text{{ m}}$ per zone). "
                 + (
                     f"The primary pay container is **{top_zone.get('zone')}**, delivering a field-mean Net Pay of "
                     f"**${top_zone.get('net_pay', 0.0):.1f}\\text{{ m}}$** ($NTG_{{pay}} = {top_zone.get('ntg', 0.0):.2f}\\text{{ v/v}}$, "
@@ -4167,13 +4957,10 @@ def synthesize_domain_ai_commentary(
                 f"($GR_{{shale}} = {context['litho_params']['gr_shale']}\\text{{ gAPI}}$, $\\rho_{{clay}} = {context['litho_params']['rho_clay']}\\text{{ g/cc}}$). "
                 + fdp_core_sentence
             ),
-            "rock_typing_narrative": (
-                f"Hydraulic Flow Unit partitioning on **{rt_sum.get('basis', 'Target-Zone Dataset')}** classified the reservoir into "
-                f"four Discrete Rock Types (`RT1` through `RT4`) using Flow Zone Indicator cut-offs of $0.5, 1.5,\\text{{ and }}3.0\\text{{ }}\\mu\\text{{m}}$. "
-                f"Dominant flow capacity is controlled by **RT3 (Macro-Porous Upper Shoreface)** and **RT4 (Mega-Porous Channel Sand)**, "
-                f"which represent **{rt_sum.get('rt34_share_pct', 43.5):.1f}%** of reservoir samples while contributing "
-                f"**{rt_sum.get('rt34_kh_pct', 82.0):.1f}%** of cumulative permeability-thickness ($\\sum K\\cdot h$) "
-                f"on the Stratigraphic Modified Lorenz Plot ($SMLP$)."
+            "rock_typing_narrative": _build_rock_typing_narrative(
+                context.get("rock_types", []),
+                rt_sum,
+                context.get("fzi_cutoffs", []),
             ),
             "saturation_narrative": (
                 f"Water saturation ($S_w$) was evaluated using the **{sw_p.get('model_name')}** to account for clay-bound "
@@ -4185,10 +4972,8 @@ def synthesize_domain_ai_commentary(
                 f"$FWL = {sw_p.get('fwl', 2943.0):.1f}\\text{{ m TVDss}}$."
             ),
             "shf_scal_narrative": (
-                f"3D static model water saturation initialization via the Leverett $J$-Function ($\\sigma\\cos\\theta = "
-                f"{shf_p.get('ift_cos_theta', 26.0)}\\text{{ dynes/cm}}$) reconciles with wireline log $S_w$ "
-                f"($\\text{{RMSE}} = {shf_p.get('reconciliation_rmse', 0.042):.3f}\\text{{ v/v}}$, mean bias "
-                f"${shf_p.get('reconciliation_bias', -0.008):+.3f}\\text{{ v/v}}$). Dynamic simulation relative permeability "
+                _build_shf_reconciliation_sentence(shf_p)
+                + f"Dynamic simulation relative permeability "
                 f"tables (`SWOF`, **{scal_p.get('source_label', 'Regional Analogue / Screening Parameterization')}**) "
                 + (
                     f"were parameterized using LET exponents $L_w = {scal_p.get('lw', 2.0)}, E_w = {scal_p.get('ew', 1.5)}, T_w = {scal_p.get('tw', 2.0)}$ and "
@@ -4484,7 +5269,7 @@ def _generate_all_report_plots(
             output_dir=out_dir,
             url_prefix=url_prefix,
         )
-        if context.get("fpt_summary", {}).get("has_data"):
+        if context.get("fpt_summary", {}).get("has_data") and context.get("_fpt_points"):
             try:
                 assets["fpt_pressure_plot"] = report_plots.generate_fpt_pressure_plot(
                     fpt_points=context.get("_fpt_points", []),
@@ -4525,8 +5310,12 @@ def _generate_all_report_plots(
             output_dir=out_dir,
             url_prefix=url_prefix,
         )
-    if "10_appendix_cpi" in enabled_section_ids:
+    if (
+        "11_appendix_cpi" in enabled_section_ids
+        or "10_appendix_cpi" in enabled_section_ids
+    ):
         cpi_list = []
+        cpi_skipped = []
         cpi_candidate_wells = []
         candidate_scores = []
         if not full_df.empty and "WELL_NAME" in full_df.columns:
@@ -4584,7 +5373,16 @@ def _generate_all_report_plots(
 
                 # Strict requirement: well must have evaluated porosity and at least one other key curve (RT, SWT, or PERM)
                 if phi_cnt < 10 or (swt_cnt < 5 and perm_cnt < 5 and rt_cnt < 5):
-                    # Empty or uninterpreted in target window -> skip!
+                    # Uninterpreted in target window: record it so the report can state why it is absent.
+                    cpi_skipped.append(
+                        {
+                            "well_name": wn,
+                            "reason": (
+                                f"insufficient evaluated data in target window "
+                                f"(PHI={phi_cnt}, SWT={swt_cnt}, PERM={perm_cnt}, RT={rt_cnt} samples)"
+                            ),
+                        }
+                    )
                     continue
 
                 has_core = (
@@ -4608,7 +5406,7 @@ def _generate_all_report_plots(
             candidate_scores.sort(key=lambda x: x[0], reverse=True)
             cpi_candidate_wells = [wn for _, wn in candidate_scores]
 
-        for wn in cpi_candidate_wells[:4]:
+        for wn in cpi_candidate_wells:
             cpi_url = report_plots.generate_well_cpi_plot(
                 full_df,
                 wn,
@@ -4619,7 +5417,12 @@ def _generate_all_report_plots(
             )
             if cpi_url:
                 cpi_list.append({"well_name": wn, "plot_url": cpi_url, "url": cpi_url})
+            else:
+                cpi_skipped.append(
+                    {"well_name": wn, "reason": "CPI plot rendering returned no output"}
+                )
         assets["cpi_plots"] = cpi_list
+        assets["cpi_skipped"] = cpi_skipped
 
     return assets
 

@@ -98,6 +98,10 @@ Accurate delineation of fluid contacts is fundamental to volumetric in-place est
 
 Formation Pressure Tester (RFT/MDT/XPT) data were gathered across the evaluated wells to establish in-situ reservoir pressure regimes, verify vertical fluid communication, and determine independent fluid contact datums from hydrostatic gradient intersections.
 
+{% if fpt_summary.filter_note %}
+> **Station screening:** {{ fpt_summary.filter_note }} Only stations inside the target reservoir zones, with valid quality and plausible pressure, enter the regime table and gradient fits.
+{% endif %}
+
 #### Table {{ sec_num }}.3: Multi-Well Formation Pressure Regimes & Fitted Fluid Gradients
 
 | Well Name | Total Stations | Valid Stations | Depth Range (m TVDss) | Formation Pressure (psia) | Mobility Range (mD/cP) | Hydrostatic Regime |
@@ -112,12 +116,23 @@ Formation Pressure Tester (RFT/MDT/XPT) data were gathered across the evaluated 
 | Zone / Reservoir Segment | Inferred Phase | Pressure Gradient (psi/ft) | In-Situ Density (g/cc) | Datum Pressure @ FWL (psia) | $R^2$ | Stations ($n$) | TVDss Depth Range |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 {% for g in fpt_summary.fpt_gradient_rows %}
-| **{{ g.zone or "Target Reservoir" }}** | **{{ g.fluid_type }}** | {{ "%.4f"|format(g.gradient_psi_ft) }} | {{ "%.3f"|format(g.density_gcc) }} | {{ "%.1f"|format(g.datum_pressure) if g.datum_pressure is defined else "—" }} | {{ "%.3f"|format(g.r_squared) if g.r_squared is defined else "—" }} | {{ g.n_points }} | {{ g.tvdss_range }} |
+| **{{ g.zone or "Target Reservoir" }}** | **{{ g.fluid_type }}**{% if g.accepted is defined and not g.accepted %} (rejected){% endif %} | {{ "%.4f"|format(g.gradient_psi_ft) }} | {{ "%.3f"|format(g.density_gcc) }} | {{ "%.1f"|format(g.datum_pressure) if g.datum_pressure is defined else "—" }} | {{ "%.3f"|format(g.r_squared) if g.r_squared is defined else "—" }} | {{ g.n_points }} | {{ g.tvdss_range }} |
 {% endfor %}
+
+{% if fpt_summary.rejected_fits %}
+> **Fits not used downstream:**
+{% for g in fpt_summary.rejected_fits %}
+> * {{ g.fluid_type }} ({{ g.zone }}): {{ g.reject_reason }}. Not used for saturation-height density or contact estimation.
+{% endfor %}
+{% endif %}
 {% endif %}
 
 {% if fpt_summary.fpt_contacts and fpt_summary.fpt_contacts|length > 0 %}
 #### Table {{ sec_num }}.4: Pressure-Gradient Contact Reconciliation vs. Log/Capillary Contacts
+
+{% if not fpt_summary.fwl_is_committed %}
+> **Indicative only:** no committed fluid contact exists for this project. The reference FWL ({{ "%.1f"|format(sw_params.fwl) }} m TVDss) is inferred from the log saturation transition, so the pressure-derived contacts below are not reconciled against an independent datum.
+{% endif %}
 
 | Contact Type | FPT TVDss P50 (m) | FPT Bracket P10–P90 (m) | Log / Capillary TVDss (m) | Contact Reconciliation Delta ($\Delta\text{TVDss}$) | Audit Reconciliation Status |
 | :--- | :---: | :---: | :---: | :---: | :---: |

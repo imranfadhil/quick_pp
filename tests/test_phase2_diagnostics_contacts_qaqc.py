@@ -465,5 +465,6 @@ def test_phase2_raw_eval_curves_and_core_status():
     # Render Section 02 template
     t2 = jinja_env.get_template(SECTION_TEMPLATE_MAP["02_data_inventory"])
     rend2 = t2.render(**ctx, assets={})
-    assert "RCA: 50 pts | SCAL: 10 pts" in rend2
+    # The pipe separator is rendered as "/" so it does not split the markdown table cell.
+    assert "RCA: 50 pts / SCAL: 10 pts" in rend2
     assert "DT" in rend2

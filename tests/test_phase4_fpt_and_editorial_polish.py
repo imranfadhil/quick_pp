@@ -251,7 +251,9 @@ def test_phase4_fpt_gathering_and_gradient_analysis():
     assert len(contacts) > 0
     c0 = contacts[0]
     assert 3680.0 <= c0["tvdss_p50"] <= 3715.0
-    assert "RECONCILED" in c0["status"] or "Δ =" in c0["status"]
+    # No committed contact in this fixture, so the FWL is inferred and the status must be INDICATIVE.
+    assert fpt_sum["fwl_is_committed"] is False
+    assert "INDICATIVE" in c0["status"]
 
     # Measured fluid densities feedback into SHF params (REG-02)
     shf_p = ctx.get("shf_params", {})

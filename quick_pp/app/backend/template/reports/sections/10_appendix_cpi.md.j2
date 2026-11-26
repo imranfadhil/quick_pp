@@ -21,3 +21,10 @@ Composite 6-track Computer-Processed Interpretation (CPI) log plot displaying ga
 
 {% endif %}
 {% endfor %}
+
+{% if assets.cpi_skipped %}
+> **Wells without a CPI log:**
+{% for s in assets.cpi_skipped %}
+> * `{{ s.well_name }}`: {{ s.reason }}
+{% endfor %}
+{% endif %}

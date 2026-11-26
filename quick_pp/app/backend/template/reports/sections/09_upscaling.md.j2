@@ -8,7 +8,7 @@ Fine-scale evaluated CPI logs ($0.1524\text{ m}$ sampling) were upscaled onto ce
 * **Water Saturation ($S_w$):** Pore-volume weighted average: $\bar{S}_{w,cell} = \frac{\sum h_i \phi_i S_{w,i}}{\sum h_i \phi_i}$.
 * **Horizontal Permeability Proxy ($K_h$):** Arithmetic mean: $K_{arith} = \frac{\sum h_i K_i}{\sum h_i}$.
 * **Effective Heterogeneous Permeability ($K_{eff}$):** Geometric mean ($\omega \to 0$): $K_{geom} = \exp\left(\frac{\sum h_i \ln K_i}{\sum h_i}\right)$.
-* **Vertical Permeability Proxy ($K_v$):** Harmonic mean ($\omega = -1$): $K_{harm} = \frac{\sum h_i}{\sum (h_i / K_i)}$, yielding vertical anisotropy ratio $K_v / K_h = K_{harm} / K_{arith}${% if upscaling_summary and upscaling_summary.mean_kv_kh is defined %} (Field-mean $K_v / K_h = {{ "%.3f"|format(upscaling_summary.mean_kv_kh) }}$){% endif %}.
+* **Vertical Permeability Proxy ($K_v$):** Harmonic mean ($\omega = -1$): $K_{harm} = \frac{\sum h_i}{\sum (h_i / K_i)}$, yielding vertical anisotropy ratio $K_v / K_h = K_{harm} / K_{arith}${% if upscaling_summary and upscaling_summary.mean_kv_kh is defined %}{% endif %}.
 
 #### Table 9.1: All-Cell Blocked Cellular Grid Architecture & Permeability Anisotropy
 
@@ -29,10 +29,6 @@ Cardwell-Parsons directional permeability bounds yield a field-mean vertical-to-
 {% for up in upscaling_table %}
 | **{{ up.well_name }}** | {{ up.n_res_cells if up.n_res_cells is defined else up.n_cells }} | {{ "%.3f"|format(up.ntg_res_up if up.ntg_res_up is defined else 1.0) }} | {{ "%.3f"|format(up.phie_res_up if up.phie_res_up is defined else up.phit_up) }} | {{ "%.3f"|format(up.phie_res_fine if up.phie_res_fine is defined else up.phit_up) }} | {{ "%.3f"|format(up.swt_res_up if up.swt_res_up is defined else up.swt_up) }} | {{ "%.3f"|format(up.swt_res_fine if up.swt_res_fine is defined else up.swt_up) }} | {{ "%+.4f"|format(up.delta_phi_res if up.delta_phi_res is defined else 0.0) }} | **{{ up.conservation_status if up.conservation_status is defined else "✓ CONSERVED" }}** |
 {% endfor %}
-
-{% if include_ai_commentary and ai_commentary.upscaling_narrative %}
-{{ ai_commentary.upscaling_narrative }}
-{% endif %}
 
 {% if custom_notes %}
 > **Petrophysicist Note:** {{ custom_notes }}

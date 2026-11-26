@@ -1,6 +1,6 @@
 # 10. Petrophysical QA/QC Gate-Check & Peer-Review Audit Log
 
-Automated subsurface verification rules (`CHK-01` through `CHK-08`) evaluate data conditioning integrity, depth matching, core calibration, saturation-height reconciliation, and uncertainty propagation before static geomodel and dynamic simulation handover.
+Automated subsurface verification rules (`CHK-01` through `CHK-{{ "%02d"|format(gate_checks|length) if gate_checks else "00" }}`) evaluate data conditioning integrity, depth matching, core porosity and permeability calibration, rock typing, saturation-height reconciliation, formation pressure and uncertainty propagation before static geomodel and dynamic simulation handover.{% if gate_summary %} Overall status: **{{ gate_summary.overall }}** ({{ gate_summary.n_blocking }} blocking, {{ gate_summary.n_review }} review).{% endif %}
 
 ### 10.1 Automated Subsurface Gate-Check Matrix
 

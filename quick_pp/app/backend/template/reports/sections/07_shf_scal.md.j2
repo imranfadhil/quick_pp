@@ -14,7 +14,30 @@ $$P_{c,res} = P_{c,lab} \cdot \frac{(\sigma \cos\theta)_{res}}{(\sigma \cos\thet
 * **Core Overburden & Klinkenberg Stress Lineage:** $\sigma_{eff} = {{ "%.0f"|format(poro_params.net_confining_stress) }}\text{ psi}$ ({{ poro_params.core_lithology }}, $c_\phi = {{ "%.1e"|format(poro_params.compaction_coeff) }}\text{ psi}^{-1}$, $c_k = {{ "%.1e"|format(poro_params.perm_compaction_coeff) }}\text{ psi}^{-1}$), $P_m = {{ "%.1f"|format(poro_params.mean_pore_pressure) }}\text{ psi}$ ({{ poro_params.klinkenberg_method }}); baseline preserved in `CPORE_AMB` / `CPORE_ORI` and `CPERM_AIR` / `CPERM_ORI`, active curves updated in `CPORE` and `CPERM`.
 {% endif %}
 * **Fluid Density Gradient:** $\rho_w = {{ shf_params.gw }}\text{ g/cc}$, $\rho_{hc} = {{ shf_params.ghc }}\text{ g/cc}$ ($\Delta\rho = {{ "%.2f"|format(shf_params.gw - shf_params.ghc) }}\text{ g/cc}$, {{ shf_params.ghc_basis if shf_params.ghc_basis else 'Formation Fluid System' }}).
-* **Log $S_w$ vs. $SHF$ Reconciliation:** Mean RMSE $= {{ "%.3f"|format(shf_params.reconciliation_rmse) }}\text{ v/v}$, Mean Bias ($S_w - SHF$) $= {{ "%+.3f"|format(shf_params.reconciliation_bias) }}\text{ v/v}$.
+* **$J$-Function Fit Source:** {{ shf_params.fit_source if shf_params.fit_source else 'unspecified' }}.
+{% if shf_params.reconciliation_rmse is not none %}
+* **Log $S_w$ vs. $SHF$ Reconciliation:** RMSE $= {{ "%.3f"|format(shf_params.reconciliation_rmse) }}\text{ v/v}$, Mean Bias ($S_w - SHF$) $= {{ "%+.3f"|format(shf_params.reconciliation_bias) }}\text{ v/v}$ ($n = {{ shf_params.reconciliation_n }}$ target-zone samples above the FWL).
+{% else %}
+* **Log $S_w$ vs. $SHF$ Reconciliation:** not computed (fewer than 20 overlapping target-zone samples above the FWL).
+{% endif %}
+{% if shf_params.reconciliation_rmse is not none and shf_params.reconciliation_rmse > 0.12 %}
+
+> **QA ALERT:** SHF vs log $S_w$ RMSE exceeds the 0.12 v/v acceptance limit. The saturation-height function does not reproduce the log saturation and should not initialise the static model until the rock-type fits, FWL and fluid densities are reviewed.
+{% endif %}
+
+{% if shf_params.fit_rows %}
+#### Table {{ sec_num }}.1: Saved Leverett $J$-Function Fit by Rock Type
+
+| ROCK_FLAG | $a$ | $b$ | Fit $R^2$ | Fit RMSE | SCAL Points | Log vs SHF RMSE | Log Samples |
+| :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+{% for f in shf_params.fit_rows %}
+| **{{ f.rock_flag }}** | {{ f.a }} | {{ f.b }} | {{ ("%.2f"|format(f.r2)) if f.r2 is not none else "—" }} | {{ ("%.3f"|format(f.rmse)) if f.rmse is not none else "—" }} | {{ f.n_scal }} | {{ ("%.3f"|format(f.log_rmse)) if f.log_rmse is not none else "—" }} | {{ f.n_log if f.n_log is not none else "—" }} |
+{% endfor %}
+
+{% if shf_params.fit_rows|selectattr('n_scal', 'equalto', 0)|list|length > 0 %}
+> Rock types with 0 SCAL points carry parameters borrowed from the nearest calibrated class; they are not independently constrained.
+{% endif %}
+{% endif %}
 
 ### {{ sec_num }}.2 Dynamic Simulation Relative Permeability ($K_{rw}, K_{ro}$) — {{ scal_params.source_label if scal_params.source_label else 'Regional Analogue / Screening Parameterization' }}
 

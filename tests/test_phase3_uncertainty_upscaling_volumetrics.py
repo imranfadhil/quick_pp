@@ -328,5 +328,9 @@ def test_phase3_volumetrics_fallback_and_readiness_note():
 
     rend8_readiness = t8.render(**ctx_readiness, assets={})
     assert "Volumetric Resource In-Place Readiness Note" in rend8_readiness
-    assert "Field-Mean Hydrocarbon Pore Thickness (HCPT)" in rend8_readiness
+    assert "Cumulative Hydrocarbon Pore Thickness (HCPT)" in rend8_readiness
+    assert "Mean HCPT per Evaluated Zone" in rend8_readiness
     assert f"{readiness['mean_hcpt']:.2f}" in rend8_readiness
+    # Section 8.4 and the Executive Summary must quote the same cumulative HCPT.
+    assert readiness["column_hcpt"] == readiness["total_hcpt"]
+    assert f"{readiness['column_hcpt']:.2f}" in rend8_readiness

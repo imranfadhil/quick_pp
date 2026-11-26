@@ -40,6 +40,16 @@ This technical petrophysical evaluation report documents the deterministic and p
 > **Petrophysicist Note:** {{ custom_notes }}
 {% endif %}
 
+{% if gate_summary and (gate_summary.n_blocking > 0 or gate_summary.n_review > 0) %}
+> **Handover status: {{ gate_summary.overall }}.** {{ gate_summary.n_blocking }} blocking and {{ gate_summary.n_review }} review item(s) were raised by the automated gate checks (Section 10).
+{% for g in gate_summary.blocking %}
+> * **{{ g.id }} (blocking):** {{ g.measured }} {{ g.action }}
+{% endfor %}
+{% for g in gate_summary.review %}
+> * **{{ g.id }} (review):** {{ g.measured }} {{ g.action }}
+{% endfor %}
+{% endif %}
+
 ### Table 1.1: Field-Wide Zonal Net Reservoir & Net Pay Summary (Thickness & Pore-Volume Weighted)
 
 | Zone | Wells | Mean Gross (m) | Mean Net Res (m) | $NTG_{res}$ | $\bar{V}_{sh,res}$ | $\bar{\phi}_{e,res}$ | $K_{geom,res}$ (mD) | Mean Net Pay (m) | $NTG_{pay}$ | $\bar{\phi}_{e,pay}$ | $\bar{S}_{w,pay}$ | Mean $HCPT$ (m) |

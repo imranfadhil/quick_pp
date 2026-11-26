@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import matplotlib
+import matplotlib.lines
 import numpy as np
 import pandas as pd
 from matplotlib.backends.backend_agg import FigureCanvasAgg
@@ -59,6 +60,38 @@ def _format_return_path(file_path: Path, url_prefix: Optional[str] = None) -> st
     return str(file_path)
 
 
+# Workbench look: Inter on a slate palette with the app's blue accent (see frontend layout.css).
+_FRONTEND_RC = {
+    "font.family": ["Inter", "Segoe UI", "DejaVu Sans"],
+    "axes.edgecolor": "#94a3b8",
+    "axes.labelcolor": "#0f172a",
+    "axes.titlecolor": "#0f172a",
+    "xtick.color": "#334155",
+    "ytick.color": "#334155",
+    "text.color": "#0f172a",
+    "grid.color": "#cbd5e1",
+    "axes.spines.top": False,
+    "axes.spines.right": False,
+    "legend.frameon": True,
+    "legend.framealpha": 0.9,
+    "legend.edgecolor": "#cbd5e1",
+}
+
+# Figure titles keyed by output filename; used for the standard header band.
+_FIGURE_TITLES = {
+    "fig_2_1_inventory_heatmap.png": "Figure 2.1 · Multi-Well Data Inventory Matrix",
+    "fig_3_1_qaqc_norm_plot.png": "Figure 3.1 · QA/QC and Normalization Audit",
+    "fig_4_1_nd_crossplot.png": "Figure 4.1 · Neutron-Density Crossplot and Core-to-Log Calibration",
+    "fig_4_2_core_calibration.png": "Figure 4.2 · Core Overburden Calibration",
+    "fig_5_1_perm_crossplot.png": "Figure 5.1 · Porosity-Permeability by Rock Type and Lorenz Plot",
+    "fig_6_1_pickett_shf_plot.png": "Figure 6.1 · Pickett Plot and Saturation Profile",
+    "fig_6_2_fpt_pressure_plot.png": "Figure 6.2 · Formation Pressure and Fluid Gradients",
+    "fig_7_1_shf_scal_plot.png": "Figure 7.1 · Leverett J-Function and Relative Permeability",
+    "fig_8_1_uncertainty_plot.png": "Figure 8.1 · Cut-off Sensitivity and HCPT Distribution",
+    "fig_9_1_upscaling_plot.png": "Figure 9.1 · Fine-Scale vs Blocked Logs",
+}
+
+
 def _save_fig(
     fig: Figure,
     filename: str,
@@ -68,14 +101,38 @@ def _save_fig(
 ) -> str:
     out_dir = _resolve_output_dir(output_dir)
     out_path = out_dir / filename
+    header = _FIGURE_TITLES.get(filename)
+    if header:
+        # Standard header band shared by all report figures (same wording style as the plotly CPI header).
+        fig.text(
+            0.01,
+            1.0,
+            header,
+            ha="left",
+            va="bottom",
+            fontsize=10.5,
+            fontweight="bold",
+            color="#0f172a",
+        )
+        fig.add_artist(
+            matplotlib.lines.Line2D(
+                [0.01, 0.99],
+                [0.995, 0.995],
+                transform=fig.transFigure,
+                color="#2563eb",
+                lw=1.6,
+                solid_capstyle="butt",
+            )
+        )
     canvas = FigureCanvasAgg(fig)
-    canvas.print_figure(
-        str(out_path),
-        dpi=dpi,
-        bbox_inches="tight",
-        facecolor="white",
-        edgecolor="none",
-    )
+    with matplotlib.rc_context(_FRONTEND_RC):
+        canvas.print_figure(
+            str(out_path),
+            dpi=dpi,
+            bbox_inches="tight",
+            facecolor="white",
+            edgecolor="none",
+        )
     return _format_return_path(out_path, url_prefix=url_prefix)
 
 
@@ -1324,24 +1381,22 @@ def generate_shf_j_function_plot(
 
     # Panel 1: Leverett J-Function vs Sw by Rock Type
     j_grid = np.linspace(0.05, 8.0, 80)
-    rt_fits = [
-        ("RT1 (Tight / Nano)", 0.65, -0.32, PALETTE[0]),
-        ("RT2 (Meso-Porous)", 0.38, -0.42, PALETTE[1]),
-        ("RT3 (Macro-Porous)", 0.22, -0.50, PALETTE[2]),
-        ("RT4 (Mega-Porous Sand)", 0.12, -0.60, PALETTE[3]),
-    ]
-    if rock_types and len(rock_types) >= 2:
-        new_fits = []
-        for i, rt in enumerate(rock_types):
-            r_name = rt.get("name", f"RT{i + 1}")
-            # Use specific J-fit coefficients if present
-            a_p = float(rt.get("j_a", rt_fits[i % len(rt_fits)][1]))
-            b_p = float(rt.get("j_b", rt_fits[i % len(rt_fits)][2]))
-            new_fits.append(
-                (r_name.split("—")[0].strip(), a_p, b_p, PALETTE[i % len(PALETTE)])
-            )
-        if new_fits:
-            rt_fits = new_fits
+    # Only curves backed by a saved per-rock-type fit are drawn. Each entry is
+    # (label, a, b, colour); `shf_params["fit_rows"]` carries the saved workbench parameters.
+    rt_fits: List[Tuple[str, float, float, str]] = []
+    fit_rows = (shf_params or {}).get("fit_rows") or []
+    for i, fr in enumerate(fit_rows):
+        try:
+            a_p, b_p = float(fr["a"]), float(fr["b"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        n_sc = int(fr.get("n_scal") or 0)
+        suffix = f", n={n_sc}" if n_sc else ", borrowed"
+        rt_fits.append((f"RT{fr.get('rock_flag')}{suffix}", a_p, b_p, PALETTE[i % len(PALETTE)]))
+    fits_are_saved = bool(rt_fits)
+    if not rt_fits:
+        # No saved fit: a single clearly labelled generic curve so the panel is never silently invented.
+        rt_fits = [("Generic fallback (uncalibrated)", 0.22, -0.50, "#94a3b8")]
 
     # Plot actual project data points if Sw, Phi, Perm, and Depth exist
     sw_s = _get_numeric_series(sub, "SWT", "SW")
@@ -1411,7 +1466,9 @@ def generate_shf_j_function_plot(
         "Leverett J-Function J(Sw) [dimensionless]", fontsize=9, fontweight="bold"
     )
     ax1.set_title(
-        "Capillary Pressure Leverett J-Function by Rock Type",
+        "Capillary Pressure Leverett J-Function by Rock Type"
+        if fits_are_saved
+        else "Leverett J-Function (no saved rock-type fit; generic curve)",
         fontsize=9.0,
         fontweight="bold",
     )
@@ -1845,6 +1902,66 @@ def generate_upscaling_comparison_plot(
     return _save_fig(fig, "fig_9_1_upscaling_plot.png", output_dir, url_prefix)
 
 
+def _render_cpi_with_plotly(
+    df: pd.DataFrame,
+    well_name: str,
+    filename: str,
+    zones: Optional[List[str]] = None,
+    cutoffs: Optional[Dict[str, float]] = None,
+    output_dir: Optional[Union[str, Path]] = None,
+    url_prefix: Optional[str] = None,
+    width: int = 1500,
+    height: int = 1100,
+    scale: float = 2.0,
+) -> Optional[str]:
+    """Render the frontend `plotly_log` composite to PNG via kaleido.
+
+    Returns None on any failure (missing kaleido/Chrome, bad data) so callers can fall back to matplotlib.
+    """
+    try:
+        from quick_pp.plotter.well_log import plotly_log
+
+        fig = plotly_log(df, well_name=str(well_name), depth_uom="m")
+
+        cut = cutoffs or {}
+        cut_txt = (
+            f"Net cut-offs: Vsh &le; {float(cut.get('vsh', 0.40)):.2f}, "
+            f"&phi;e &ge; {float(cut.get('phie', 0.08)):.2f}, "
+            f"Sw &le; {float(cut.get('sw', 0.65)):.2f}"
+        )
+        d = pd.to_numeric(df["DEPTH"], errors="coerce").dropna()
+        zone_txt = f" | Target zones: {', '.join(zones)}" if zones else ""
+        header = (
+            f"<b>{well_name} &mdash; Composite Petrophysical Evaluation (CPI)</b><br>"
+            f"<span style='font-size:11px'>{d.min():.1f}&ndash;{d.max():.1f} m MD"
+            f"{zone_txt} | {cut_txt}</span>"
+        )
+        fig.update_layout(
+            width=width,
+            height=height,
+            autosize=False,
+            title={
+                "text": header,
+                "x": 0.5,
+                "xanchor": "center",
+                "y": 0.985,
+                "yanchor": "top",
+                "font": {"size": 15},
+            },
+            margin={"l": 70, "r": 10, "t": 70, "b": 20},
+            paper_bgcolor="white",
+        )
+
+        out_path = _resolve_output_dir(output_dir) / filename
+        fig.write_image(str(out_path), format="png", width=width, height=height, scale=scale)
+        if not out_path.exists():
+            return None
+        return _format_return_path(out_path, url_prefix=url_prefix)
+    except Exception as exc:
+        logger.warning(f"Plotly CPI export failed for {well_name}; falling back to matplotlib: {exc}")
+        return None
+
+
 def generate_well_cpi_plot(
     df: pd.DataFrame,
     well_name: str,
@@ -1911,6 +2028,19 @@ def generate_well_cpi_plot(
             valid_curves += 1
     if valid_curves < 2:
         return None
+
+    # Preferred renderer: the same Plotly multi-track log used by the frontend workbench.
+    plotly_result = _render_cpi_with_plotly(
+        sub_full,
+        well_name,
+        filename,
+        zones=zones,
+        cutoffs=cutoffs,
+        output_dir=output_dir,
+        url_prefix=url_prefix,
+    )
+    if plotly_result:
+        return plotly_result
 
     d_full = pd.to_numeric(sub_full["DEPTH"], errors="coerce").to_numpy(dtype=float)
 
