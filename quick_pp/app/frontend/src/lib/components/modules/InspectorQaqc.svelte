@@ -3548,10 +3548,23 @@
 							workbench.rightPaneTab = 'split';
 						}
 					}}
-					title="Open the 6-track Borehole Env Correction QC plot in the right pane"
+					title="Open the Borehole Env Correction & Invasion QC plot in the right pane"
 					class="h-6 rounded-sm border border-blue-200 bg-blue-50 px-2 text-[11px] font-semibold text-blue-700 hover:bg-blue-100"
 				>
 					QC Plot →
+				</button>
+				<button
+					type="button"
+					onclick={() => {
+						workbench.crossplotTemplateOverride = 'temp-pressure';
+						if (workbench.rightPaneTab === 'grid' || workbench.rightPaneTab === 'missing') {
+							workbench.rightPaneTab = 'split';
+						}
+					}}
+					title="Open the 2-track Temperature & Pressure Modelling Profile in the right pane"
+					class="h-6 rounded-sm border border-teal-200 bg-teal-50 px-1.5 text-[11px] font-semibold text-teal-800 hover:bg-teal-100"
+				>
+					T–P →
 				</button>
 			</div>
 

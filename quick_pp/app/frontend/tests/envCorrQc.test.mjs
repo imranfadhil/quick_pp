@@ -177,6 +177,71 @@ test('computeEnvCorrQcSummary aggregates hole flags and per-curve QC metrics', (
 	assert.equal(summary.rows.length, 5);
 	const rhobRow = summary.rows.find((r) => r.CURVE === 'RHOB');
 	assert.equal(rhobRow?.UNRELIABLE_PCT, 25);
+	assert.equal(summary.invasion.hcLikePct, 100);
+	assert.equal(summary.invasion.medianDiIn, 30);
+});
+
+test('buildEnvCorrQcPlot supports 3-track invasion profile mode with di, resistivity array, and Rxo/Rt ratio', () => {
+	const curves = sampleCurves();
+	const depths = [2000, 2000.5, 2001, 2001.5];
+	const invPlot = buildEnvCorrQcPlot({
+		curves,
+		depthsMeters: depths,
+		indices: [0, 1, 2, 3],
+		depthUnit: 'm',
+		viewMode: 'invasion',
+		trackFilter: 'all',
+		showSigma: true,
+		showFluidRes: false,
+		envParams: baseParams
+	});
+
+	assert.equal(invPlot.trackCount, 3);
+	assert.ok(invPlot.layout.xaxis && invPlot.layout.xaxis2 && invPlot.layout.xaxis3);
+	assert.equal(invPlot.layout.xaxis2.type, 'log');
+	const names = invPlot.traces.map((t) => t.name).filter(Boolean);
+	for (const expected of [
+		'DI_EST (di)',
+		'Rxo–Rt Separation',
+		'RT_ENV_CORR',
+		'RXO_EST',
+		'log₁₀(Rmf/Rw)',
+		'log₁₀(Rxo/Rt)'
+	]) {
+		assert.ok(names.includes(expected), `Missing invasion trace ${expected}`);
+	}
+	const sepFill = invPlot.traces.find((t) => t.name === 'Rxo–Rt Separation');
+	assert.equal(sepFill.fillcolor, 'rgba(13, 148, 136, 0.18)');
+	for (const ft of invPlot.traces.filter((t) => t.fill && t.fill !== 'none')) {
+		assert.equal(ft.fill, 'toself');
+	}
+});
+
+test('ENV_BS resolves auto-detected bit size when raw BS curve is absent', () => {
+	const curves = sampleCurves();
+	delete curves.BS;
+	curves.ENV_BS = [8.5, 8.5, 8.5, 8.5];
+	curves.CALI = [8.65, 8.7, 8.68, 8.72];
+
+	// Even if UI scrubber has bitsizeDefault = 6.0, ENV_BS (8.5") prevents false washout
+	const paramsWith6InDefault = { ...baseParams, bitsizeDefault: 6.0, washoutThold: 2.0 };
+	const summary = computeEnvCorrQcSummary(curves, [0, 1, 2, 3], paramsWith6InDefault);
+	assert.equal(summary.washoutPct, 0);
+
+	const plot = buildEnvCorrQcPlot({
+		curves,
+		depthsMeters: [2000, 2000.5, 2001, 2001.5],
+		indices: [0, 1, 2, 3],
+		depthUnit: 'm',
+		viewMode: 'overlay',
+		trackFilter: 'all',
+		showSigma: false,
+		showFluidRes: false,
+		envParams: paramsWith6InDefault
+	});
+	const bsTrace = plot.traces.find((t) => t.name === 'BS (8.5")');
+	assert.ok(bsTrace, 'Expected BS (8.5") legend label from ENV_BS');
+	assert.deepEqual(bsTrace.x, [8.5, 8.5, 8.5, 8.5]);
 });
 
 test('all shaded fills use closed toself polygons split cleanly across null gaps without tonextx/tozerox wedges', () => {

@@ -12702,6 +12702,7 @@ ENV_QC_SHARED_COLS = (
     "ENV_QC_REASON",
     "HOLE_SEVERITY",
     "ENV_TEMP_C",
+    "ENV_BS",
     "ENV_RM",
     "ENV_RMF",
     "ENV_RW",

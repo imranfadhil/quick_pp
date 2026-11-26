@@ -79,6 +79,7 @@ export const CALCULATED_CURVE_GROUPS: Record<
 			'ENV_QC_REASON',
 			'HOLE_SEVERITY',
 			'ENV_TEMP_C',
+			'ENV_BS',
 			'ENV_RM',
 			'ENV_RMF',
 			'ENV_RW',

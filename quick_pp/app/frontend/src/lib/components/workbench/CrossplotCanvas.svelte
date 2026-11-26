@@ -27,6 +27,7 @@
 		computeEnvCorrQcSummary,
 		ENV_QC_TRACK_FILTERS
 	} from '$lib/utils/envCorrQc';
+	import { buildTempPressurePlot } from '$lib/utils/tempPressureProfile';
 	import { gammaEndpoints, gammaLabel } from '$lib/utils/lithology';
 	import { normalizedScalSaturation, poreThroatDistribution } from '$lib/utils/poreThroat';
 	import {
@@ -123,6 +124,10 @@
 				return traces.length > 0
 					? null
 					: 'No borehole or sensor log curves available in the current depth and zone selection.';
+			case 'temp-pressure':
+				return traces.length > 0
+					? null
+					: 'No depth or well log interval available in the current selection.';
 			case 'enhanced-vs-raw':
 				return traces.some((trace) =>
 					trace.x?.some((value: number | null) => value !== null)
@@ -679,6 +684,25 @@
 			};
 			baseLayout.yaxis.title = { text: 'Grain / Matrix Density (g/cc)' };
 			return { traces, layout: baseLayout };
+		}
+
+		if (effectiveMode === 'temp-pressure') {
+			const tpPlot = buildTempPressurePlot({
+				curves: wellData.curves,
+				depthsMeters: deptAll,
+				indices,
+				depthUnit: depthDisplay.unit,
+				tempUnit: workbench.tempPlotUnit,
+				presUnit: workbench.presPlotUnit,
+				envParams: workbench.envCorrParams,
+				header: wellData.header,
+				config: wellData.config,
+				survey: wellData.survey,
+				pressureTests: wellData.pressureTests,
+				tops: wellData.tops
+			});
+			tpPlot.layout.uirevision = `temp-pressure-${workbench.projectId}-${workbench.wellId}-${depthDisplay.unit}-${workbench.tempPlotUnit}-${workbench.presPlotUnit}-${workbench.selectedZones.join(',')}-${workbench.depthFilter?.min ?? ''}_${workbench.depthFilter?.max ?? ''}`;
+			return { traces: tpPlot.traces, layout: tpPlot.layout };
 		}
 
 		if (effectiveMode === 'env-corr-qc') {
@@ -6950,6 +6974,23 @@
 			void wellData.curves[cName];
 			void wellData.curves[`${cName}_ORI`];
 			void wellData.stats[cName];
+		} else if (mode === 'temp-pressure') {
+			void wellData.curves;
+			void wellData.header;
+			void wellData.pressureTests;
+			void wellData.tops;
+			void depthDisplay.unit;
+			void workbench.tempPlotUnit;
+			void workbench.presPlotUnit;
+			void workbench.envCorrParams.mudWeight;
+			void workbench.envCorrParams.surfaceTemp;
+			void workbench.envCorrParams.tempGrad;
+			void workbench.envCorrParams.offshore;
+			void workbench.envCorrParams.waterDepth;
+			void workbench.envCorrParams.seabedTempC;
+			void workbench.projectId;
+			void workbench.wellId;
+			void wellData.wellLoadGeneration;
 		} else if (mode === 'env-corr-qc') {
 			void wellData.curves;
 			void depthDisplay.unit;
@@ -7212,6 +7253,7 @@
 			layout.autosize = true;
 			const depthPlot =
 				mode === 'env-corr-qc' ||
+				mode === 'temp-pressure' ||
 				mode === 'curve-depth' ||
 				mode === 'sw-comparison' ||
 				mode === 'toc-tracks' ||
@@ -7223,7 +7265,7 @@
 			const visibleLegendTraces = traces.filter(
 				(t: any) => t.showlegend !== false && t.name
 			).length;
-			if (visibleLegendTraces > 5 && mode !== 'env-corr-qc') {
+			if (visibleLegendTraces > 5 && mode !== 'env-corr-qc' && mode !== 'temp-pressure') {
 				layout.legend = {
 					orientation: 'v',
 					x: 1.01,
@@ -7345,7 +7387,8 @@
 							if (
 								(effectiveMode === 'core-qc' ||
 									effectiveMode === 'vsh-qc' ||
-									effectiveMode === 'env-corr-qc') &&
+									effectiveMode === 'env-corr-qc' ||
+									effectiveMode === 'temp-pressure') &&
 								typeof pt?.customdata === 'number'
 							) {
 								const dept =
@@ -7420,6 +7463,25 @@
 					wellData.visibleIndices,
 					workbench.envCorrParams
 				)
+			: null
+	);
+
+	let tempPresSummary = $derived.by(() =>
+		effectiveMode === 'temp-pressure'
+			? buildTempPressurePlot({
+					curves: wellData.curves,
+					depthsMeters: wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [],
+					indices: wellData.visibleIndices,
+					depthUnit: depthDisplay.unit,
+					tempUnit: workbench.tempPlotUnit,
+					presUnit: workbench.presPlotUnit,
+					envParams: workbench.envCorrParams,
+					header: wellData.header,
+					config: wellData.config,
+					survey: wellData.survey,
+					pressureTests: wellData.pressureTests,
+					tops: wellData.tops
+				}).summary
 			: null
 	);
 
@@ -7586,24 +7648,27 @@
 
 		{#if effectiveMode === 'env-corr-qc'}
 			<div class="flex flex-wrap items-center gap-1">
-				<select
-					bind:value={workbench.envQcTrackFilter}
-					title="Focus a sensor family alongside the Hole Condition (CALI/BS + DRHO) track, or show all 6 tracks"
-					class="h-5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-[10.5px] font-medium text-[var(--text-primary)] focus:outline-none"
-				>
-					{#each ENV_QC_TRACK_FILTERS as opt (opt.id)}
-						<option value={opt.id}>{opt.label}</option>
-					{/each}
-				</select>
+				{#if workbench.envQcViewMode !== 'invasion'}
+					<select
+						bind:value={workbench.envQcTrackFilter}
+						title="Focus a sensor family alongside the Hole Condition (CALI/BS + DRHO) track, or show all 6 tracks"
+						class="h-5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-[10.5px] font-medium text-[var(--text-primary)] focus:outline-none"
+					>
+						{#each ENV_QC_TRACK_FILTERS as opt (opt.id)}
+							<option value={opt.id}>{opt.label}</option>
+						{/each}
+					</select>
+				{/if}
 				<div
 					class="inline-flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]"
 				>
-					{#each [['overlay', 'Overlay', 'Raw vs. *_ENV_CORR overlays with differential shading and ±1σ uncertainty band'], ['delta', 'Δ Shift', 'Correction residuals (*_CORR_DELTA) centered at 0 against tool tolerance limits']] as [mKey, mLbl, mTip]}
+					{#each [['overlay', 'Overlay', 'Raw vs. *_ENV_CORR overlays with differential shading and ±1σ uncertainty band'], ['delta', 'Δ Shift', 'Correction residuals (*_CORR_DELTA) centered at 0 against tool tolerance limits'], ['invasion', 'Invasion', '3-track radial invasion profile: Borehole & di vs. tool investigation (10"/30"/80"), Rw/Rmf/Rxo/Rt, and log10(Rxo/Rt) movable-HC ratio']] as [mKey, mLbl, mTip]}
 						<button
 							type="button"
 							title={mTip}
-							onclick={() => (workbench.envQcViewMode = mKey as 'overlay' | 'delta')}
-							class="h-5 px-1.5 text-[10px] font-medium whitespace-nowrap transition-colors first:border-r first:border-[var(--border-hairline)] {workbench.envQcViewMode ===
+							onclick={() =>
+								(workbench.envQcViewMode = mKey as 'overlay' | 'delta' | 'invasion')}
+							class="h-5 border-r border-[var(--border-hairline)] px-1.5 text-[10px] font-medium whitespace-nowrap transition-colors last:border-r-0 {workbench.envQcViewMode ===
 							mKey
 								? 'bg-blue-600 font-semibold text-white'
 								: 'text-[var(--text-secondary)] hover:bg-slate-100'}"
@@ -7612,16 +7677,18 @@
 						</button>
 					{/each}
 				</div>
-				<button
-					type="button"
-					title="Show or hide ±1σ per-sample uncertainty band (*_SIGMA) from hole quality, assumed inputs, and model error"
-					onclick={() => (workbench.envQcShowSigma = !workbench.envQcShowSigma)}
-					class="h-5 rounded-xs border px-1.5 text-[10px] font-medium whitespace-nowrap transition-colors {workbench.envQcShowSigma
-						? 'border-blue-600 bg-blue-50 font-semibold text-blue-700'
-						: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
-				>
-					±1σ
-				</button>
+				{#if workbench.envQcViewMode !== 'invasion'}
+					<button
+						type="button"
+						title="Show or hide ±1σ per-sample uncertainty band (*_SIGMA) from hole quality, assumed inputs, and model error"
+						onclick={() => (workbench.envQcShowSigma = !workbench.envQcShowSigma)}
+						class="h-5 rounded-xs border px-1.5 text-[10px] font-medium whitespace-nowrap transition-colors {workbench.envQcShowSigma
+							? 'border-blue-600 bg-blue-50 font-semibold text-blue-700'
+							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+					>
+						±1σ
+					</button>
+				{/if}
 				{#if workbench.envQcViewMode === 'overlay' && (workbench.envQcTrackFilter === 'all' || workbench.envQcTrackFilter === 'RT')}
 					<button
 						type="button"
@@ -7634,6 +7701,43 @@
 						Rw · Rmf · Rm
 					</button>
 				{/if}
+			</div>
+		{/if}
+
+		{#if effectiveMode === 'temp-pressure'}
+			<div class="flex flex-wrap items-center gap-1">
+				<div
+					class="inline-flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]"
+				>
+					{#each [['degC', '°C'], ['degF', '°F']] as [tKey, tLbl]}
+						<button
+							type="button"
+							onclick={() => (workbench.tempPlotUnit = tKey as 'degC' | 'degF')}
+							class="h-5 px-1.5 text-[10px] font-medium transition-colors first:border-r first:border-[var(--border-hairline)] {workbench.tempPlotUnit ===
+							tKey
+								? 'bg-blue-600 font-semibold text-white'
+								: 'text-[var(--text-secondary)] hover:bg-slate-100'}"
+						>
+							{tLbl}
+						</button>
+					{/each}
+				</div>
+				<div
+					class="inline-flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]"
+				>
+					{#each [['psi', 'psi'], ['MPa', 'MPa']] as [pKey, pLbl]}
+						<button
+							type="button"
+							onclick={() => (workbench.presPlotUnit = pKey as 'psi' | 'MPa')}
+							class="h-5 px-1.5 text-[10px] font-medium transition-colors first:border-r first:border-[var(--border-hairline)] {workbench.presPlotUnit ===
+							pKey
+								? 'bg-teal-700 font-semibold text-white'
+								: 'text-[var(--text-secondary)] hover:bg-slate-100'}"
+						>
+							{pLbl}
+						</button>
+					{/each}
+				</div>
 			</div>
 		{/if}
 
@@ -7918,53 +8022,126 @@
 		<div
 			class="mono-num flex shrink-0 flex-wrap items-center justify-between gap-x-2.5 gap-y-1 border-b border-[var(--border-hairline)] bg-slate-50/90 px-2.5 py-1 text-[10px]"
 		>
-			<div class="flex flex-wrap items-center gap-x-2 text-slate-700">
-				<span>
-					Washout: <strong
-						class={envQcSummary.washoutPct > 10 ? 'text-amber-700' : 'text-slate-900'}
-						>{envQcSummary.washoutPct}%</strong
-					>
-				</span>
-				<span>
-					|DRHO|&gt;0.15: <strong
-						class={envQcSummary.drhoHighPct > 5 ? 'text-red-700' : 'text-slate-900'}
-						>{envQcSummary.drhoHighPct}%</strong
-					>
-				</span>
-				{#if envQcSummary.invadedPct > 0}
+			{#if workbench.envQcViewMode === 'invasion'}
+				<div class="flex flex-wrap items-center gap-x-2.5 text-slate-700">
 					<span>Invaded: <strong>{envQcSummary.invadedPct}%</strong></span>
+					<span class="text-emerald-800">
+						HC-like: <strong>{envQcSummary.invasion.hcLikePct}%</strong>
+					</span>
+					<span class="text-blue-800">
+						Water-like: <strong>{envQcSummary.invasion.waterLikePct}%</strong>
+					</span>
+					<span>Tight: <strong>{envQcSummary.invasion.tightPct}%</strong></span>
+					{#if envQcSummary.invasion.anomalousPct > 0}
+						<span class="text-amber-800">
+							Anomalous: <strong>{envQcSummary.invasion.anomalousPct}%</strong>
+						</span>
+					{/if}
+				</div>
+				<div class="flex flex-wrap items-center gap-x-2 text-[9.5px] text-slate-600">
+					<span>
+						Median di: <strong>{envQcSummary.invasion.medianDiIn !== null ? `${envQcSummary.invasion.medianDiIn}"` : '—'}</strong>
+					</span>
+					<span>
+						P90 di: <strong>{envQcSummary.invasion.p90DiIn !== null ? `${envQcSummary.invasion.p90DiIn}"` : '—'}</strong>
+					</span>
+				</div>
+			{:else}
+				<div class="flex flex-wrap items-center gap-x-2 text-slate-700">
+					<span>
+						Washout: <strong
+							class={envQcSummary.washoutPct > 10 ? 'text-amber-700' : 'text-slate-900'}
+							>{envQcSummary.washoutPct}%</strong
+						>
+					</span>
+					<span>
+						|DRHO|&gt;0.15: <strong
+							class={envQcSummary.drhoHighPct > 5 ? 'text-red-700' : 'text-slate-900'}
+							>{envQcSummary.drhoHighPct}%</strong
+						>
+					</span>
+					{#if envQcSummary.invadedPct > 0}
+						<span>Invaded: <strong>{envQcSummary.invadedPct}%</strong></span>
+					{/if}
+					{#if envQcSummary.cycleSkipCount > 0}
+						<span class="text-red-700">
+							Cycle Skips: <strong>{envQcSummary.cycleSkipCount}</strong>
+						</span>
+					{/if}
+				</div>
+				{#if !envQcSummary.hasEnvCorr}
+					<span
+						class="rounded-xs border border-amber-200 bg-amber-50 px-1.5 py-0.5 font-sans text-[9.5px] font-medium text-amber-900"
+					>
+						Raw preview — click Apply Env Corrections in Data &amp; QAQC for *_ENV_CORR
+						&amp; ±1σ
+					</span>
+				{:else}
+					<div class="flex flex-wrap items-center gap-x-2 text-[9.5px] text-slate-600">
+						{#each envQcSummary.rows as r (r.CURVE)}
+							<span
+								title={`${r.CURVE}: Good ${r.GOOD_PCT}%, Corrected ${r.CORRECTED_PCT}%, Unreliable ${r.UNRELIABLE_PCT}%`}
+							>
+								<strong>{r.CURVE}</strong>:
+								<span
+									class={r.UNRELIABLE_PCT > 10
+										? 'font-bold text-red-700'
+										: 'text-emerald-700'}
+								>
+									{r.MEAN_CONF !== null ? r.MEAN_CONF.toFixed(2) : '—'}
+								</span>
+							</span>
+						{/each}
+					</div>
 				{/if}
-				{#if envQcSummary.cycleSkipCount > 0}
-					<span class="text-red-700">
-						Cycle Skips: <strong>{envQcSummary.cycleSkipCount}</strong>
+			{/if}
+		</div>
+	{/if}
+
+	{#if effectiveMode === 'temp-pressure' && tempPresSummary}
+		<div
+			class="mono-num flex shrink-0 flex-wrap items-center justify-between gap-x-2.5 gap-y-1 border-b border-[var(--border-hairline)] bg-slate-50/90 px-2.5 py-1 text-[10px]"
+		>
+			<div class="flex flex-wrap items-center gap-x-2 text-slate-700">
+				<span
+					title={tempPresSummary.depthBasisLabel}
+					class="rounded-xs border px-1.5 py-0.5 font-sans text-[9.5px] font-semibold {tempPresSummary.hasTrueTvdss
+						? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+						: 'border-amber-200 bg-amber-50 text-amber-900'}"
+				>
+					Y-Axis: {tempPresSummary.depthBasisLabel}
+				</span>
+				<span class="font-semibold text-slate-800">
+					{tempPresSummary.offshore ? 'Offshore' : 'Onshore'}
+				</span>
+				<span>
+					T₀: <strong>{tempPresSummary.topTempDisplay}{tempPresSummary.tempUnitLabel}</strong>
+				</span>
+				<span>
+					Grad: <strong>{tempPresSummary.gradientCPerKm} °C/km</strong>
+					<span class="text-[var(--text-muted)]">({tempPresSummary.gradientFPer100Ft} °F/100ft)</span>
+				</span>
+				{#if tempPresSummary.bhtDisplay !== null}
+					<span class="text-red-800">
+						BHT: <strong>{tempPresSummary.bhtDisplay}{tempPresSummary.tempUnitLabel}</strong>
 					</span>
 				{/if}
 			</div>
-			{#if !envQcSummary.hasEnvCorr}
-				<span
-					class="rounded-xs border border-amber-200 bg-amber-50 px-1.5 py-0.5 font-sans text-[9.5px] font-medium text-amber-900"
-				>
-					Raw preview — click Apply Env Corrections in Data &amp; QAQC for *_ENV_CORR
-					&amp; ±1σ
+			<div class="flex flex-wrap items-center gap-x-2.5 text-slate-700">
+				<span>
+					MW: <strong>{tempPresSummary.mudWeightPpg} ppg</strong>
 				</span>
-			{:else}
-				<div class="flex flex-wrap items-center gap-x-2 text-[9.5px] text-slate-600">
-					{#each envQcSummary.rows as r (r.CURVE)}
-						<span
-							title={`${r.CURVE}: Good ${r.GOOD_PCT}%, Corrected ${r.CORRECTED_PCT}%, Unreliable ${r.UNRELIABLE_PCT}%`}
-						>
-							<strong>{r.CURVE}</strong>:
-							<span
-								class={r.UNRELIABLE_PCT > 10
-									? 'font-bold text-red-700'
-									: 'text-emerald-700'}
-							>
-								{r.MEAN_CONF !== null ? r.MEAN_CONF.toFixed(2) : '—'}
-							</span>
-						</span>
-					{/each}
-				</div>
-			{/if}
+				{#if tempPresSummary.meanOverbalanceDisplay !== null}
+					<span class={tempPresSummary.underbalancedCount > 0 ? 'font-bold text-red-700' : 'text-teal-800'}>
+						ΔP_mud: <strong>{tempPresSummary.meanOverbalanceDisplay >= 0 ? '+' : ''}{tempPresSummary.meanOverbalanceDisplay} {tempPresSummary.presUnitLabel}</strong>
+					</span>
+				{/if}
+				{#if tempPresSummary.mdtCount > 0}
+					<span class="text-blue-800">
+						MDT/RFT: <strong>{tempPresSummary.mdtCount} pts</strong>
+					</span>
+				{/if}
+			</div>
 		</div>
 	{/if}
 

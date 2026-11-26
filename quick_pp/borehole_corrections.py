@@ -96,11 +96,11 @@ TOOL_PROFILES: Dict[str, ToolProfile] = {
 }
 _TOOL_ALIASES = {"WL": "WL", "WIRELINE": "WL", "LWD": "LWD", "MWD": "LWD"}
 
-# Generic hole geometric factors (conductivity-space) at an 8.5 in hole.
+# Generic excess-hole geometric factors (conductivity-space per unit (d^2-ref^2)/ref^2).
 _RES_HOLE_G0 = {
-    "induction": {"deep": 0.015, "medium": 0.03, "shallow": 0.03},
-    "laterolog": {"deep": 0.002, "medium": 0.004, "shallow": 0.01},
-    "propagation": {"deep": 0.004, "medium": 0.006, "shallow": 0.01},
+    "induction": {"deep": 0.0012, "medium": 0.0025, "shallow": 0.0050},
+    "laterolog": {"deep": 0.0008, "medium": 0.0018, "shallow": 0.0040},
+    "propagation": {"deep": 0.0010, "medium": 0.0020, "shallow": 0.0045},
 }
 # Generic radial characteristic radii (in) of the step-profile response.
 _RES_RADIUS_IN = {"shallow": 10.0, "medium": 30.0, "deep": 80.0}
@@ -274,29 +274,28 @@ def density_mudcake_correction(
 
 
 def resistivity_borehole_correction(
-    r, cali, rm, g0: float, mud_is_oil=False, ref_hole_in: float = 8.5
+    r, cali, rm, g0: float, mud_is_oil=False, ref_hole_in=8.5
 ):
-    """Remove the borehole (mud) contribution from an apparent resistivity.
+    """Remove excess borehole (washout mud) contribution from apparent resistivity.
 
-    Conductivity-space mixing: ``Ca = (1-g) Ct + g Cm`` with ``g = g0 (d/ref)^2``
-    (clipped to 0.2). Oil/synthetic mud (no conductive mud, ``rm`` NaN) returns the
-    input unchanged. ``g0`` is a generic geometric factor from the tool profile.
+    Conductivity-space mixing over the washout annulus above ``ref_hole_in`` (bit size):
+    ``Ca = (1-g) Ct + g Cm`` with ``g = g0 * max((d^2 - ref^2) / ref^2, 0)``
+    (clipped to 0.15). In-gauge holes (``d <= ref``) and oil/synthetic mud (no
+    conductive mud, ``rm`` NaN) return the input unchanged.
     """
     r_arr = np.clip(np.asarray(r, dtype=float), 1e-3, 1e5)
     cali_arr = np.asarray(cali, dtype=float)
     rm_arr = np.asarray(rm, dtype=float)
+    ref_arr = np.maximum(np.asarray(ref_hole_in, dtype=float), 1.0)
     oil = np.asarray(mud_is_oil, dtype=bool)
     ok = np.isfinite(rm_arr) & (rm_arr > 0) & np.isfinite(cali_arr) & ~oil
-    g = np.clip(
-        g0
-        * (np.where(np.isfinite(cali_arr), cali_arr, ref_hole_in) / ref_hole_in) ** 2,
-        0.0,
-        0.2,
-    )
+    d_arr = np.where(np.isfinite(cali_arr), cali_arr, ref_arr)
+    excess_area = np.clip((d_arr**2 - ref_arr**2) / (ref_arr**2), 0.0, 4.0)
+    g = np.clip(g0 * excess_area, 0.0, 0.15)
     ca = 1.0 / r_arr
     cm = 1.0 / np.where(ok, rm_arr, 1.0)
     ct = (ca - g * cm) / (1.0 - g)
-    ct = np.maximum(ct, 0.2 * ca)
+    ct = np.maximum(ct, 0.65 * ca)
     out = np.where(ok, 1.0 / ct, r_arr)
     return np.where(np.isfinite(np.asarray(r, dtype=float)), out, np.nan)
 
@@ -387,20 +386,42 @@ def invert_invasion_profile(rt, rm=None, rxo=None) -> Dict[str, np.ndarray]:
             idx = np.flatnonzero(sel_cnt & np.all(avail.T == np.array(pat), axis=1))
             if idx.size == 0:
                 continue
-            cond = {
+            cond_all = {
                 nm: 1.0 / curves[nm][idx]
                 for nm, p in zip(names, pat, strict=False)
                 if p
             }
+            cd_all = cond_all["deep"]
+            max_sep = np.zeros(idx.size, dtype=float)
+            for nm, c_arr in cond_all.items():
+                if nm != "deep":
+                    max_sep = np.maximum(max_sep, np.abs(np.log10(c_arr / cd_all)))
+            # Skip step-profile inversion when curves agree within tool precision (~7%)
+            need_inv = max_sep >= 0.03
+            if not need_inv.any():
+                continue
+            sub_idx = idx[need_inv]
+            cond = {nm: c_arr[need_inv] for nm, c_arr in cond_all.items()}
             ct, cxo, di, mis = _solve_step_profile(cond, grid)
             cd = cond["deep"]
-            plausible = np.isfinite(ct) & (np.abs(np.log10(ct / cd)) <= 1.0)
-            out["rt"][idx[plausible]] = 1.0 / ct[plausible]
-            out["rxo"][idx[plausible]] = 1.0 / cxo[plausible]
-            out["di_in"][idx[plausible]] = di[plausible]
-            out["misfit"][idx[plausible]] = mis[plausible]
-            out["state"][idx[plausible]] = ok_state
-            out["state"][idx[~plausible]] = 3
+            c_shal = cond["shallow"] if "shallow" in cond else cond["medium"]
+            max_ct_dec = 0.75 if cnt == 3 else 0.35
+            max_cxo_dec = 0.85 if cnt == 3 else 0.50
+            with np.errstate(divide="ignore", invalid="ignore"):
+                plausible = (
+                    np.isfinite(ct)
+                    & np.isfinite(cxo)
+                    & (ct > 0)
+                    & (cxo > 0)
+                    & (np.abs(np.log10(ct / cd)) <= max_ct_dec)
+                    & (np.abs(np.log10(cxo / c_shal)) <= max_cxo_dec)
+                )
+            out["rt"][sub_idx[plausible]] = 1.0 / ct[plausible]
+            out["rxo"][sub_idx[plausible]] = 1.0 / cxo[plausible]
+            out["di_in"][sub_idx[plausible]] = di[plausible]
+            out["misfit"][sub_idx[plausible]] = mis[plausible]
+            out["state"][sub_idx[plausible]] = ok_state
+            out["state"][sub_idx[~plausible]] = 3
     out["rt"] = np.where(np.isfinite(np.asarray(rt, dtype=float)), out["rt"], np.nan)
     return out
 
@@ -948,6 +969,7 @@ def apply_environmental_corrections(
                 rm_t,
                 g0[key],
                 is_oil,
+                ref_hole_in=bs.to_numpy(),
             )
 
         deep_bh = _bh(deep_col, "deep")
@@ -956,25 +978,30 @@ def apply_environmental_corrections(
         inv = invert_invasion_profile(deep_bh, rm=med_bh, rxo=sha_bh)
         flag_arr = np.zeros(n, dtype=int)
         done = np.isin(inv["state"], (1, 2))
-        ratio = np.log10(inv["rxo"] / inv["rt"])
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ratio = np.log10(inv["rxo"] / inv["rt"])
         flag_arr[done & (ratio < -0.06)] = 1
         flag_arr[done & (ratio > 0.06)] = 2
         inv_flag = flag_arr
-        prof = classify_invasion_profile(inv["rt"], inv["rxo"], mud["rmf"], rw_t)
+        rt_solved = np.where((inv["state"] == 2) & (inv_flag == 0), deep_bh, inv["rt"])
+        rxo_fallback = sha_bh if sha_bh is not None else np.full(n, np.nan)
+        rxo_clean = np.where(inv_flag > 0, inv["rxo"], rxo_fallback)
+        di_clean = np.where(inv_flag > 0, inv["di_in"], np.nan)
+        prof = classify_invasion_profile(rt_solved, rxo_clean, mud["rmf"], rw_t)
         inv_profile = prof["code"]
-        rt_corr = pd.Series(inv["rt"], index=idx)
+        rt_corr = pd.Series(rt_solved, index=idx)
         # sigma in log10 decades: misfit + assumed-di + failed-inversion terms + unknown Rm
         sig_inv = np.zeros(n)
         sig_inv += np.nan_to_num(inv["misfit"], nan=0.0) / np.log(10.0)
         sig_inv = np.sqrt(
             sig_inv**2
-            + np.where(inv["state"] == 2, 0.08, 0.0) ** 2
+            + np.where((inv["state"] == 2) & (inv_flag > 0), 0.08, 0.0) ** 2
             + np.where(inv["state"] == 3, 0.15, 0.0) ** 2
             + np.where(~mud["rm_known"] & ~is_oil, 0.02, 0.0) ** 2
         )
         results["RT"] = _CurveResult(rt_corr, pd.Series(sig_inv, index=idx))
-        out_df["RXO_EST"] = inv["rxo"]
-        out_df["DI_EST"] = inv["di_in"]
+        out_df["RXO_EST"] = rxo_clean
+        out_df["DI_EST"] = di_clean
         out_df["INVASION_FLAG"] = inv_flag
         out_df["INVASION_PROFILE"] = inv_profile
         if bool(is_oil.any()):
@@ -1080,6 +1107,7 @@ def apply_environmental_corrections(
         out_df["ENV_QC_REASON"] = reason.astype(int)
         out_df["HOLE_SEVERITY"] = severity.astype(int)
         out_df["ENV_TEMP_C"] = np.round(temp_c, 2)
+        out_df["ENV_BS"] = pd.Series(bs, index=idx).round(3)
         out_df["ENV_RM"] = pd.Series(mud["rm"], index=idx).round(5)
         out_df["ENV_RMF"] = pd.Series(mud["rmf"], index=idx).round(5)
         out_df["ENV_RW"] = pd.Series(rw_t, index=idx).round(5)

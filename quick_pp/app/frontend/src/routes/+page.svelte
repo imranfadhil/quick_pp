@@ -49,9 +49,11 @@
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { currentSelection, moduleParams, selectionKey } from '$lib/state/moduleParams.svelte';
 	import { projectParams, zoneSelectionKey } from '$lib/state/projectParams.svelte';
+	import { depthDisplay } from '$lib/state/depthDisplay.svelte';
 	import { isCrossplotAvailable } from '$lib/utils/crossplots';
 	import { computeEnvCorrQcSummary } from '$lib/utils/envCorrQc';
 	import { gammaLabel } from '$lib/utils/lithology';
+	import { buildTempPressurePlot } from '$lib/utils/tempPressureProfile';
 
 	$effect(() => {
 		const selected = workbench.crossplotTemplateOverride;
@@ -830,12 +832,201 @@
 				};
 			}
 
+			if (workbench.effectiveCrossplot === 'temp-pressure') {
+				const tp = buildTempPressurePlot({
+					curves: wellData.curves,
+					depthsMeters: wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [],
+					indices: wellData.visibleIndices,
+					depthUnit: depthDisplay.unit,
+					tempUnit: workbench.tempPlotUnit,
+					presUnit: workbench.presPlotUnit,
+					envParams: workbench.envCorrParams,
+					header: wellData.header,
+					config: wellData.config,
+					survey: wellData.survey,
+					pressureTests: wellData.pressureTests,
+					tops: wellData.tops
+				}).summary;
+				if (tp.tableKind === 'mdt') {
+					const pDec = workbench.presPlotUnit === 'MPa' ? 2 : 1;
+					return {
+						title: tp.tableTitle,
+						columns: [
+							{
+								key: 'TVDSS',
+								label: 'TVDSS',
+								unit: depthDisplay.unit,
+								numeric: true,
+								decimals: 1
+							},
+							{
+								key: 'MD',
+								label: 'MD',
+								unit: depthDisplay.unit,
+								numeric: true,
+								decimals: 1
+							},
+							{
+								key: 'P_TEST',
+								label: 'P_test',
+								unit: tp.presUnitLabel,
+								numeric: true,
+								decimals: pDec
+							},
+							{
+								key: 'P_HYDRO',
+								label: 'P_hydro',
+								unit: tp.presUnitLabel,
+								numeric: true,
+								decimals: pDec
+							},
+							{
+								key: 'EXCESS_DP',
+								label: 'Excess ΔP',
+								unit: tp.presUnitLabel,
+								numeric: true,
+								decimals: pDec
+							},
+							{
+								key: 'MUD_OB',
+								label: 'Mud ΔP',
+								unit: tp.presUnitLabel,
+								numeric: true,
+								decimals: pDec
+							},
+							{ key: 'EMW_PPG', label: 'EMW', unit: 'ppg', numeric: true, decimals: 2 },
+							{
+								key: 'MOBILITY',
+								label: 'Mobility',
+								unit: 'mD/cP',
+								numeric: true,
+								decimals: 1
+							},
+							{
+								key: 'TEMP',
+								label: 'Temp',
+								unit: tp.tempUnitLabel,
+								numeric: true,
+								decimals: 1
+							},
+							{ key: 'FLUID', label: 'Fluid' },
+							{ key: 'QC', label: 'QC' },
+							{ key: 'REMARKS', label: 'Remarks' }
+						],
+						rows: tp.tableRows
+					};
+				}
+				if (tp.tableRows.length > 0) {
+					const pDec = workbench.presPlotUnit === 'MPa' ? 2 : 0;
+					return {
+						title: tp.tableTitle,
+						columns: [
+							{ key: 'HORIZON', label: 'Horizon / Zone' },
+							{
+								key: 'TVDSS',
+								label: 'TVDSS',
+								unit: depthDisplay.unit,
+								numeric: true,
+								decimals: 1
+							},
+							{
+								key: 'MD',
+								label: 'MD',
+								unit: depthDisplay.unit,
+								numeric: true,
+								decimals: 1
+							},
+							{
+								key: 'TEMP',
+								label: 'Modeled T',
+								unit: tp.tempUnitLabel,
+								numeric: true,
+								decimals: 1
+							},
+							{
+								key: 'P_HYDRO',
+								label: 'Hydrostatic P',
+								unit: tp.presUnitLabel,
+								numeric: true,
+								decimals: pDec
+							},
+							{
+								key: 'P_MUD',
+								label: 'Mud Column P',
+								unit: tp.presUnitLabel,
+								numeric: true,
+								decimals: pDec
+							},
+							{
+								key: 'OVERBALANCE',
+								label: 'Overbalance ΔP',
+								unit: tp.presUnitLabel,
+								numeric: true,
+								decimals: pDec
+							}
+						],
+						rows: tp.tableRows
+					};
+				}
+			}
+
 			if (workbench.effectiveCrossplot === 'env-corr-qc') {
 				const eq = computeEnvCorrQcSummary(
 					wellData.curves,
 					wellData.visibleIndices,
 					workbench.envCorrParams
 				);
+				if (workbench.envQcViewMode === 'invasion' && eq.totalSamples > 0) {
+					const n = eq.totalSamples;
+					const inv = eq.invasion;
+					const unclassPct = Math.max(
+						0,
+						Number(
+							(100 - inv.hcLikePct - inv.waterLikePct - inv.tightPct - inv.anomalousPct).toFixed(1)
+						)
+					);
+					return {
+						title: `Invasion Profile Classification (n=${n} | Invaded ${eq.invadedPct}%, Median di=${inv.medianDiIn ?? '—'} in)`,
+						columns: [
+							{ key: 'REGIME', label: 'Invasion Regime' },
+							{ key: 'SHARE_PCT', label: 'Share', unit: '%', numeric: true, decimals: 1 },
+							{ key: 'SAMPLES', label: 'Samples', numeric: true, decimals: 0 },
+							{ key: 'INTERPRETATION', label: 'Petrophysical Meaning' }
+						],
+						rows: [
+							{
+								REGIME: 'HC-like (Code 2)',
+								SHARE_PCT: inv.hcLikePct,
+								SAMPLES: Math.round((inv.hcLikePct * n) / 100),
+								INTERPRETATION: 'Observed Rxo/Rt < Rmf/Rw — movable hydrocarbon flushed by mud filtrate'
+							},
+							{
+								REGIME: 'Water-like (Code 1)',
+								SHARE_PCT: inv.waterLikePct,
+								SAMPLES: Math.round((inv.waterLikePct * n) / 100),
+								INTERPRETATION: 'Observed Rxo/Rt ≈ Rmf/Rw — 100% water-bearing permeable zone'
+							},
+							{
+								REGIME: 'Tight / No Invasion (Code 4)',
+								SHARE_PCT: inv.tightPct,
+								SAMPLES: Math.round((inv.tightPct * n) / 100),
+								INTERPRETATION: 'Rxo ≈ Rt despite Rmf/Rw contrast — tight or impermeable interval'
+							},
+							{
+								REGIME: 'Anomalous Contrast (Code 3)',
+								SHARE_PCT: inv.anomalousPct,
+								SAMPLES: Math.round((inv.anomalousPct * n) / 100),
+								INTERPRETATION: 'Rxo/Rt exceeds Rmf/Rw — check run depth alignment or shoulder beds'
+							},
+							{
+								REGIME: 'Uninformative / OBM (Code 0)',
+								SHARE_PCT: unclassPct,
+								SAMPLES: Math.round((unclassPct * n) / 100),
+								INTERPRETATION: 'Negligible Rmf/Rw contrast, OBM/SBM mud, or non-invertible curve set'
+							}
+						]
+					};
+				}
 				if (eq.rows.length > 0) {
 					return {
 						title: `Borehole Env Correction QC Summary (n=${eq.totalSamples} | Washout ${eq.washoutPct}%, |DRHO|>0.15 ${eq.drhoHighPct}%)`,

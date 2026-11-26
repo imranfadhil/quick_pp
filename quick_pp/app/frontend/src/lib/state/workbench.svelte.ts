@@ -1,5 +1,6 @@
 import { resolveCrossplot, type CrossplotContext, type CrossplotId } from '../utils/crossplots';
 import type { EnvQcTrackFilter, EnvQcViewMode } from '../utils/envCorrQc';
+import type { PressureDisplayUnit, TempDisplayUnit } from '../utils/tempPressureProfile';
 
 export type SingleWellStep =
 	| 'qaqc'
@@ -804,6 +805,10 @@ class WorkbenchState {
 	envQcTrackFilter = $state<EnvQcTrackFilter>('all');
 	envQcShowSigma = $state<boolean>(true);
 	envQcShowFluidRes = $state<boolean>(false);
+
+	/** Display units for the 'temp-pressure' Temperature & Pressure Profile plot. */
+	tempPlotUnit = $state<TempDisplayUnit>('degC');
+	presPlotUnit = $state<PressureDisplayUnit>('psi');
 
 	get crossplotContext(): CrossplotContext {
 		return this.scope === 'single-well'

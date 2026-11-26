@@ -212,6 +212,7 @@ def test_environment_object_and_resistivity_outputs():
         "INVASION_PROFILE",
         "RT_SIGMA",
         "ENV_TEMP_C",
+        "ENV_BS",
         "ENV_RM",
         "ENV_RMF",
         "ENV_RW",
@@ -255,3 +256,25 @@ def test_confidence_weighted_curve():
         v, np.where(conf < 1, 0.5, 1.0), depth=np.arange(50.0)
     )
     assert 2.0 < mid[22] < 2.4
+
+
+def test_in_gauge_two_curve_wbm_does_not_inflate_rt_or_invent_invasion():
+    """Regression test for well 44-22-1: in-gauge WBM hole with matching RT & RM."""
+    df = _well(n=40, cali=8.69).drop(columns=["BS"])
+    df["RT"] = 11.0
+    df["RM"] = 11.1  # agrees within ~0.9% (< 0.03 decades)
+    out = apply_environmental_corrections(
+        df,
+        depth_unit="m",
+        mud_type="WBM",
+        mud_weight=9.5,
+        salinity_ppm=20000.0,
+        formation_salinity_ppm=35000.0,
+    )
+    # Auto-detected bit size from CALI P10 (~8.69") snaps to 8.5"
+    assert np.allclose(out["ENV_BS"], 8.5)
+    # In-gauge WBM hole with matching RT/RM must NOT shift RT by 5x or flag invasion
+    assert np.allclose(out["RT_ENV_CORR"], 11.0, rtol=0.02)
+    assert (out["INVASION_FLAG"] == 0).all()
+    assert out["DI_EST"].isna().all()
+    assert out["RXO_EST"].isna().all()

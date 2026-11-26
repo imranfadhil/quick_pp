@@ -15,6 +15,7 @@ export type CrossplotId =
 	| 'histogram'
 	| 'curve-depth'
 	| 'env-corr-qc'
+	| 'temp-pressure'
 	| 'enhanced-vs-raw'
 	| 'mw-distribution'
 	| 'swirr-fit'
@@ -69,6 +70,11 @@ export const CROSSPLOTS: readonly CrossplotDefinition[] = [
 		id: 'env-corr-qc',
 		label: 'Borehole Env Correction QC',
 		single: { group: 'Step 1 · Data & QAQC', steps: ['qaqc'] }
+	},
+	{
+		id: 'temp-pressure',
+		label: 'Temperature & Pressure Profile',
+		single: { group: 'Step 1 · Data & QAQC', steps: ['qaqc', 'ancillary', 'litho-poro'] }
 	},
 	{
 		id: 'enhanced-vs-raw',

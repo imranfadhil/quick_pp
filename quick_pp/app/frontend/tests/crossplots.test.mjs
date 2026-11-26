@@ -93,9 +93,13 @@ test('manual plots survive step changes but incompatible scopes resolve to auto'
 	assert.equal(resolveCrossplot({ scope: 'single-well', step: 'perm' }, 'porosity-comparison'), 'porosity-comparison');
 	assert.equal(resolveCrossplot({ scope: 'single-well', step: 'litho-poro' }, 'permeability-comparison'), 'permeability-comparison');
 	assert.equal(resolveCrossplot({ scope: 'single-well', step: 'qaqc' }, 'env-corr-qc'), 'env-corr-qc');
+	assert.equal(resolveCrossplot({ scope: 'single-well', step: 'ancillary' }, 'temp-pressure'), 'temp-pressure');
 	assert.equal(isCrossplotAvailable('env-corr-qc', 'single-well'), true);
 	assert.equal(isCrossplotAvailable('env-corr-qc', 'multi-well'), false);
+	assert.equal(isCrossplotAvailable('temp-pressure', 'single-well'), true);
+	assert.equal(isCrossplotAvailable('temp-pressure', 'multi-well'), false);
 	assert.ok(crossplotGroups({ scope: 'single-well', step: 'qaqc' })[0].plots.some((plot) => plot.id === 'env-corr-qc'));
+	assert.ok(crossplotGroups({ scope: 'single-well', step: 'ancillary' })[0].plots.some((plot) => plot.id === 'temp-pressure'));
 	assert.equal(isCrossplotAvailable('porosity-comparison', 'multi-well'), false);
 	assert.equal(isCrossplotAvailable('permeability-comparison', 'multi-well'), false);
 	assert.ok(crossplotGroups({ scope: 'single-well', step: 'litho-poro' })[0].plots.some((plot) => plot.id === 'porosity-comparison'));

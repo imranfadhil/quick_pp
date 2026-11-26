@@ -6,7 +6,7 @@
  * NPHI, RHOB, and DTC cycle-skip removal), supporting both Overlay (±1σ band) and Δ Shift modes.
  */
 
-export type EnvQcViewMode = 'overlay' | 'delta';
+export type EnvQcViewMode = 'overlay' | 'delta' | 'invasion';
 export type EnvQcTrackFilter = 'all' | 'GR' | 'RT' | 'NPHI_RHOB' | 'DT';
 
 export interface EnvQcParamsInput {
@@ -226,6 +226,17 @@ export interface EnvQcCurveRow {
 	DOMINANT_REASON: string;
 }
 
+export interface EnvQcInvasionSummary {
+	invadedSamples: number;
+	totalSamples: number;
+	waterLikePct: number;
+	hcLikePct: number;
+	anomalousPct: number;
+	tightPct: number;
+	medianDiIn: number | null;
+	p90DiIn: number | null;
+}
+
 export interface EnvQcSummary {
 	hasEnvCorr: boolean;
 	totalSamples: number;
@@ -234,6 +245,7 @@ export interface EnvQcSummary {
 	badholePct: number;
 	invadedPct: number;
 	cycleSkipCount: number;
+	invasion: EnvQcInvasionSummary;
 	rows: EnvQcCurveRow[];
 }
 
@@ -243,10 +255,12 @@ export function computeEnvCorrQcSummary(
 	envParams: EnvQcParamsInput
 ): EnvQcSummary {
 	const cali = firstCurve(curves, ['CALI', 'CAL', 'HCAL'])?.values;
-	const bsArr = firstCurve(curves, ['BS', 'BIT', 'BITSIZE'])?.values;
+	const bsArr = firstCurve(curves, ['BS', 'ENV_BS', 'BIT', 'BITSIZE'])?.values;
 	const drho = firstCurve(curves, ['DRHO', 'HDRA', 'DCOR'])?.values;
 	const badhole = firstCurve(curves, ['BADHOLE', 'BAD_HOLE', 'BAD_HOLE_FLAG'])?.values;
 	const invFlag = curves['INVASION_FLAG'];
+	const invProfile = curves['INVASION_PROFILE'];
+	const diEst = curves['DI_EST'];
 	const reasonArr = curves['ENV_QC_REASON'];
 	const dtRaw = firstCurve(curves, ['DTC', 'DT'])?.values;
 	const dtCorr = curves['DT_ENV_CORR'];
@@ -263,6 +277,11 @@ export function computeEnvCorrQcSummary(
 	let badholeCount = 0;
 	let invadedCount = 0;
 	let cycleSkipCount = 0;
+	let waterLikeCnt = 0;
+	let hcLikeCnt = 0;
+	let anomalousCnt = 0;
+	let tightCnt = 0;
+	const diValues: number[] = [];
 	const n = indices.length;
 
 	for (const idx of indices) {
@@ -275,6 +294,13 @@ export function computeEnvCorrQcSummary(
 		if (isFiniteNum(bh) && bh >= 0.5) badholeCount++;
 		const inv = invFlag?.[idx];
 		if (isFiniteNum(inv) && inv > 0) invadedCount++;
+		const ip = invProfile?.[idx];
+		if (ip === 1) waterLikeCnt++;
+		else if (ip === 2) hcLikeCnt++;
+		else if (ip === 3) anomalousCnt++;
+		else if (ip === 4) tightCnt++;
+		const di = diEst?.[idx];
+		if (isFiniteNum(di) && di > 0) diValues.push(di);
 
 		const rMask = reasonArr?.[idx];
 		const dtVal = dtRaw?.[idx];
@@ -416,6 +442,12 @@ export function computeEnvCorrQcSummary(
 		});
 	}
 
+	diValues.sort((a, b) => a - b);
+	const medianDiIn =
+		diValues.length > 0 ? Number(diValues[Math.floor(0.5 * (diValues.length - 1))].toFixed(1)) : null;
+	const p90DiIn =
+		diValues.length > 0 ? Number(diValues[Math.floor(0.9 * (diValues.length - 1))].toFixed(1)) : null;
+
 	return {
 		hasEnvCorr,
 		totalSamples: n,
@@ -424,6 +456,16 @@ export function computeEnvCorrQcSummary(
 		badholePct: n > 0 ? Number(((badholeCount * 100) / n).toFixed(1)) : 0,
 		invadedPct: n > 0 ? Number(((invadedCount * 100) / n).toFixed(1)) : 0,
 		cycleSkipCount,
+		invasion: {
+			invadedSamples: invadedCount,
+			totalSamples: n,
+			waterLikePct: n > 0 ? Number(((waterLikeCnt * 100) / n).toFixed(1)) : 0,
+			hcLikePct: n > 0 ? Number(((hcLikeCnt * 100) / n).toFixed(1)) : 0,
+			anomalousPct: n > 0 ? Number(((anomalousCnt * 100) / n).toFixed(1)) : 0,
+			tightPct: n > 0 ? Number(((tightCnt * 100) / n).toFixed(1)) : 0,
+			medianDiIn,
+			p90DiIn
+		},
 		rows
 	};
 }
@@ -495,7 +537,7 @@ export function buildEnvCorrQcPlot(opts: BuildEnvCorrQcPlotOptions): {
 
 	// Discover available curves
 	const caliHit = firstCurve(curves, ['CALI', 'CAL', 'HCAL']);
-	const bsHit = firstCurve(curves, ['BS', 'BIT', 'BITSIZE']);
+	const bsHit = firstCurve(curves, ['BS', 'ENV_BS', 'BIT', 'BITSIZE']);
 	const drhoHit = firstCurve(curves, ['DRHO', 'HDRA', 'DCOR']);
 	const grRawHit = firstCurve(curves, ['GR']);
 	const rtRawHit = firstCurve(curves, ['RT', 'RD', 'RDEP', 'LLD']);
@@ -517,7 +559,7 @@ export function buildEnvCorrQcPlot(opts: BuildEnvCorrQcPlotOptions): {
 		Boolean(caliHit || bsHit || drhoHit || grRawHit || rtRawHit || nphiRawHit || rhobRawHit || dtRawHit) ||
 		hasEnvCorr;
 
-	if (hasAnyData && hasDepthSpan) {
+	if (hasAnyData && hasDepthSpan && viewMode !== 'invasion') {
 		activeTracks.push({ key: 'hole', weight: trackFilter === 'all' ? 0.95 : 0.72 });
 
 		const wantTrack = (k: Exclude<TrackKey, 'hole'>) => {
@@ -568,21 +610,27 @@ export function buildEnvCorrQcPlot(opts: BuildEnvCorrQcPlotOptions): {
 		shapes: [] as Record<string, any>[]
 	};
 
-	if (activeTracks.length === 0) {
+	if (activeTracks.length === 0 && !(viewMode === 'invasion' && hasAnyData && hasDepthSpan)) {
 		return { traces, layout, trackCount: 0, hasEnvCorr };
 	}
 
-	const trackCount = activeTracks.length;
-	const gap = trackCount <= 2 ? 0.04 : trackCount <= 3 ? 0.03 : 0.02;
+	const trackCount = viewMode === 'invasion' ? 3 : activeTracks.length;
+	const gap = trackCount <= 2 ? 0.04 : trackCount <= 3 ? 0.032 : 0.02;
 	const usableWidth = Math.max(0.2, 1 - gap * (trackCount - 1));
-	const totalWeight = activeTracks.reduce((acc, t) => acc + t.weight, 0);
+	const invasionWeights = [1.05, 1.25, 1.0];
+	const totalWeight =
+		viewMode === 'invasion'
+			? invasionWeights.reduce((a, b) => a + b, 0)
+			: activeTracks.reduce((acc, t) => acc + t.weight, 0);
 
 	const xRefFor = (ti: number) => (ti === 0 ? 'x' : `x${ti + 1}`);
 	const xLayoutFor = (ti: number) => (ti === 0 ? 'xaxis' : `xaxis${ti + 1}`);
 
 	let cursor = 0;
-	const domains: Array<[number, number]> = activeTracks.map((t, i) => {
-		const w = (usableWidth * t.weight) / totalWeight;
+	const domains: Array<[number, number]> = (
+		viewMode === 'invasion' ? invasionWeights : activeTracks.map((t) => t.weight)
+	).map((weight, i) => {
+		const w = (usableWidth * weight) / totalWeight;
 		const start = Number(cursor.toFixed(4));
 		const end = i === trackCount - 1 ? 1.0 : Number(Math.min(1, cursor + w).toFixed(4));
 		cursor += w + gap;
@@ -595,6 +643,12 @@ export function buildEnvCorrQcPlot(opts: BuildEnvCorrQcPlotOptions): {
 		isFiniteNum(envParams.bitsizeDefault) && envParams.bitsizeDefault > 0
 			? envParams.bitsizeDefault
 			: 8.5;
+	const resolvedBsSample = bsHit?.values.find((v): v is number => isFiniteNum(v) && v > 0);
+	const bsLegendName = bsHit
+		? bsHit.name === 'ENV_BS' && resolvedBsSample !== undefined
+			? `BS (${Number(resolvedBsSample.toFixed(2))}")`
+			: bsHit.name
+		: `BS (${bsDefault}")`;
 	const washThold =
 		isFiniteNum(envParams.washoutThold) && envParams.washoutThold > 0
 			? envParams.washoutThold
@@ -1060,6 +1114,388 @@ export function buildEnvCorrQcPlot(opts: BuildEnvCorrQcPlotOptions): {
 		};
 	};
 
+	// Dedicated 3-Track Invasion Profile Mode:
+	// Track 1: Borehole & Invasion Diameter (BS, CALI, DI_EST + 10"/30"/80" tool investigation zones)
+	// Track 2: Radial Resistivity Array (Rw, Rmf, Rxo/RXO_EST, Rmed, Rt/RT_ENV_CORR)
+	// Track 3: Log10(Rxo/Rt) vs Expected Log10(Rmf/Rw) Contrast (Movable HC & Anomaly Quick-Look)
+	if (viewMode === 'invasion') {
+		layout.margin = { l: 54, r: 12, t: 46, b: 40 };
+		layout.legend.y = -0.07;
+
+		const diEstArr = curves['DI_EST'];
+		const rxoEstArr = curves['RXO_EST'];
+		const rtCorrArr = curves['RT_ENV_CORR'];
+		const invProfArr = curves['INVASION_PROFILE'];
+
+		const bsSeries = mapSlots((idx) => {
+			const b = bsHit?.values[idx];
+			return isFiniteNum(b) && b > 0 ? b : bsDefault;
+		});
+		const caliSeries = mapSlots((idx) => {
+			const c = caliHit?.values[idx];
+			return isFiniteNum(c) && c > 0 ? c : bsSeries[0] ?? bsDefault;
+		});
+		const wallSeries = slotIndices.map((idx, i) => {
+			if (idx === null) return null;
+			const c = caliHit?.values[idx];
+			return isFiniteNum(c) && c > 0 ? c : bsSeries[i];
+		});
+		const diSeries = mapSlots((idx) => {
+			const v = diEstArr?.[idx];
+			return isFiniteNum(v) && v > 0 ? v : null;
+		});
+
+		// --- TRACK 1: Borehole & Invasion Diameter (in) ---
+		const zeroWall = wallSeries.map((w) => (w !== null ? 0 : null));
+		addRibbon('x', zeroWall, wallSeries, 'rgba(148, 163, 184, 0.20)', 'Borehole');
+
+		// Shade invaded annulus (wall -> DI_EST) by INVASION_PROFILE regime
+		const regimeSpecs: ReadonlyArray<{
+			codes: readonly number[];
+			fill: string;
+			label: string;
+		}> = [
+			{ codes: [2], fill: 'rgba(22, 163, 74, 0.34)', label: 'HC-like Invasion' },
+			{ codes: [1], fill: 'rgba(37, 99, 235, 0.28)', label: 'Water-like Invasion' },
+			{ codes: [3], fill: 'rgba(217, 119, 6, 0.36)', label: 'Anomalous Contrast' },
+			{ codes: [0, 4], fill: 'rgba(100, 116, 139, 0.22)', label: 'Tight / Unclassified' }
+		];
+
+		for (const reg of regimeSpecs) {
+			const regHigh = slotIndices.map((idx, i) => {
+				if (idx === null) return null;
+				const w = wallSeries[i];
+				const di = diSeries[i];
+				if (w === null || di === null) return null;
+				const code = isFiniteNum(invProfArr?.[idx]) ? Math.trunc(invProfArr![idx] as number) : 0;
+				return reg.codes.includes(code) ? Math.max(w, di) : w;
+			});
+			addRibbon('x', wallSeries, regHigh, reg.fill, reg.label);
+		}
+
+		// Tool radial characteristic diameters (Shallow 10", Medium 30", Deep 80")
+		for (const [dTool, dColor] of [
+			[10, '#0D9488'],
+			[30, '#2563EB'],
+			[80, '#DC2626']
+		] as const) {
+			addRefLine('x', dTool, dColor, 'dot', 1.0);
+		}
+
+		traces.push({
+			type: 'scatter',
+			mode: 'lines',
+			name: bsLegendName,
+			x: bsSeries,
+			y: yDisplay,
+			xaxis: 'x',
+			yaxis: 'y',
+			connectgaps: false,
+			line: { color: '#475569', width: 1.1, dash: 'dash' },
+			showlegend: false,
+			hovertemplate: `Bit Size: %{x:.2f} in<br>Depth: %{y:.2f} ${depthUnit}<extra></extra>`
+		});
+
+		if (caliHit) {
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: caliHit.name,
+				x: caliSeries,
+				y: yDisplay,
+				customdata: customIdx,
+				xaxis: 'x',
+				yaxis: 'y',
+				connectgaps: false,
+				line: { color: '#0F172A', width: 1.4 },
+				showlegend: false,
+				hovertemplate: `${caliHit.name}: %{x:.2f} in<br>Depth: %{y:.2f} ${depthUnit}<extra></extra>`
+			});
+		}
+
+		if (diSeries.some((v) => v !== null)) {
+			const diHover = slotIndices.map((idx, i) => {
+				if (idx === null) return '';
+				const di = diSeries[i];
+				const w = wallSeries[i];
+				const dr = di !== null && w !== null ? Math.max(0, (di - w) / 2.0) : null;
+				const ip = invProfArr?.[idx];
+				const parts: string[] = [];
+				if (dr !== null) parts.push(`Radial depth: ${dr.toFixed(1)} in`);
+				parts.push(decodeInvasionProfile(ip));
+				return parts.join(' · ');
+			});
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'DI_EST (di)',
+				x: diSeries,
+				y: yDisplay,
+				customdata: customIdx,
+				text: diHover,
+				xaxis: 'x',
+				yaxis: 'y',
+				connectgaps: false,
+				line: { color: '#7C3AED', width: 1.75 },
+				showlegend: true,
+				hovertemplate: `Invasion di: %{x:.1f} in<br>Depth: %{y:.2f} ${depthUnit}<br>%{text}<extra></extra>`
+			});
+		}
+
+		let maxDiPlot = 90;
+		for (const v of [...diSeries, ...wallSeries]) {
+			if (v !== null && v + 5 > maxDiPlot) maxDiPlot = Math.min(130, v + 5);
+		}
+		layout.xaxis = {
+			domain: domains[0],
+			anchor: 'y',
+			side: 'top',
+			range: [0, maxDiPlot],
+			showgrid: true,
+			gridcolor: '#E2E8F0',
+			zeroline: false,
+			fixedrange: true,
+			title: {
+				text: 'Hole & Invasion di (in)',
+				font: { family: 'Inter', size: 10, color: '#7C3AED' }
+			},
+			tickfont: { family: 'JetBrains Mono', size: 8.5, color: '#475569' },
+			linecolor: '#7C3AED',
+			tickcolor: '#7C3AED'
+		};
+
+		// --- TRACK 2: Radial Resistivities + Fluid Rw/Rmf (log10 Ω·m) ---
+		const fluids = resolveFluidResistivities(curves, depthsMeters, envParams);
+		const rwSeries = mapSlots((idx) => fluids.rw[idx]);
+		const rmfSeries = mapSlots((idx) => fluids.rmf[idx]);
+		const rtRawSeries = mapSlots((idx) => {
+			const v = rtRawHit?.values[idx];
+			return isFiniteNum(v) && v > 0 ? v : null;
+		});
+		const rtBestSeries = mapSlots((idx) => {
+			const c = rtCorrArr?.[idx];
+			if (isFiniteNum(c) && c > 0) return c;
+			const r = rtRawHit?.values[idx];
+			return isFiniteNum(r) && r > 0 ? r : null;
+		});
+		const rxoBestSeries = mapSlots((idx) => {
+			const e = rxoEstArr?.[idx];
+			if (isFiniteNum(e) && e > 0) return e;
+			const r = rxoHit?.values[idx];
+			return isFiniteNum(r) && r > 0 ? r : null;
+		});
+
+		addRibbon('x2', rxoBestSeries, rtBestSeries, 'rgba(13, 148, 136, 0.18)', 'Rxo–Rt Separation');
+		if (rtRawHit && rtCorrArr?.some(isFiniteNum)) {
+			addRibbon('x2', rtRawSeries, rtBestSeries, 'rgba(220, 38, 38, 0.18)');
+		}
+
+		let minR = 0.05;
+		let maxR = 200.0;
+		const trackRTraces: Array<{
+			arr: Array<number | null>;
+			name: string;
+			color: string;
+			dash: string;
+			width: number;
+			withCustom?: boolean;
+		}> = [
+			{ arr: rwSeries, name: 'Rw (T)', color: '#1D4ED8', dash: 'longdash', width: 1.2 },
+			{ arr: rmfSeries, name: 'Rmf (T)', color: '#7C3AED', dash: 'dash', width: 1.2 }
+		];
+		if (rmedHit) {
+			trackRTraces.push({
+				arr: mapSlots((idx) => {
+					const v = rmedHit.values[idx];
+					return isFiniteNum(v) && v > 0 ? v : null;
+				}),
+				name: `${rmedHit.name} (med)`,
+				color: '#2563EB',
+				dash: 'dashdot',
+				width: 1.05
+			});
+		}
+		if (rxoBestSeries.some((v) => v !== null)) {
+			trackRTraces.push({
+				arr: rxoBestSeries,
+				name: rxoEstArr?.some(isFiniteNum) ? 'RXO_EST' : (rxoHit?.name ?? 'RXO'),
+				color: '#0F766E',
+				dash: 'dot',
+				width: 1.35
+			});
+		}
+		if (rtRawHit && rtCorrArr?.some(isFiniteNum)) {
+			trackRTraces.push({
+				arr: rtRawSeries,
+				name: `${rtRawHit.name} (raw)`,
+				color: '#334155',
+				dash: 'dot',
+				width: 1.25
+			});
+		}
+		if (rtBestSeries.some((v) => v !== null)) {
+			trackRTraces.push({
+				arr: rtBestSeries,
+				name: rtCorrArr?.some(isFiniteNum) ? 'RT_ENV_CORR' : (rtRawHit?.name ?? 'RT'),
+				color: '#DC2626',
+				dash: 'solid',
+				width: 1.75,
+				withCustom: true
+			});
+		}
+
+		for (const tr of trackRTraces) {
+			if (!tr.arr.some((v) => v !== null)) continue;
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: tr.name,
+				x: tr.arr,
+				y: yDisplay,
+				...(tr.withCustom ? { customdata: customIdx } : {}),
+				xaxis: 'x2',
+				yaxis: 'y',
+				connectgaps: false,
+				line: { color: tr.color, width: tr.width, dash: tr.dash },
+				showlegend: true,
+				hovertemplate: `${tr.name}: %{x:.4g} Ω·m<br>Depth: %{y:.2f} ${depthUnit}<extra></extra>`
+			});
+			for (const v of tr.arr) {
+				if (v !== null && v > 0) {
+					if (v < minR) minR = v;
+					if (v > maxR) maxR = v;
+				}
+			}
+		}
+
+		layout.xaxis2 = {
+			domain: domains[1],
+			anchor: 'y',
+			side: 'top',
+			type: 'log',
+			range: [
+				Math.floor(Math.log10(Math.max(1e-3, minR * 0.85))),
+				Math.ceil(Math.log10(Math.max(10, maxR * 1.15)))
+			],
+			showgrid: true,
+			gridcolor: '#E2E8F0',
+			zeroline: false,
+			fixedrange: true,
+			title: {
+				text: 'Rw · Rmf · Rxo · Rt (Ω·m)',
+				font: { family: 'Inter', size: 10, color: '#DC2626' }
+			},
+			tickfont: { family: 'JetBrains Mono', size: 8.5, color: '#DC2626' },
+			linecolor: '#DC2626',
+			tickcolor: '#DC2626'
+		};
+
+		// --- TRACK 3: Log10(Rxo/Rt) vs Expected Log10(Rmf/Rw) Ratio Track ---
+		const obsRatio = slotIndices.map((idx, i) => {
+			if (idx === null) return null;
+			const rxoV = rxoBestSeries[i];
+			const rtV = rtBestSeries[i];
+			return rxoV !== null && rtV !== null && rxoV > 0 && rtV > 0
+				? Math.log10(rxoV / rtV)
+				: null;
+		});
+		const expRatio = slotIndices.map((idx, i) => {
+			if (idx === null) return null;
+			const rmfV = rmfSeries[i];
+			const rwV = rwSeries[i];
+			return rmfV !== null && rwV !== null && rmfV > 0 && rwV > 0
+				? Math.log10(rmfV / rwV)
+				: null;
+		});
+
+		const expLowBand = expRatio.map((e) => (e !== null ? e - 0.15 : null));
+		const expHighBand = expRatio.map((e) => (e !== null ? e + 0.18 : null));
+		addRibbon('x3', expLowBand, expHighBand, 'rgba(37, 99, 235, 0.12)');
+		addThresholdRibbon(
+			'x3',
+			obsRatio,
+			expLowBand,
+			'below',
+			'rgba(22, 163, 74, 0.34)',
+			'Movable HC (Rxo/Rt < Rmf/Rw)'
+		);
+		addThresholdRibbon(
+			'x3',
+			obsRatio,
+			expHighBand,
+			'above',
+			'rgba(217, 119, 6, 0.32)'
+		);
+
+		addRefLine('x3', 0, '#94A3B8', 'dot', 1.0);
+
+		if (expRatio.some((v) => v !== null)) {
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'log₁₀(Rmf/Rw)',
+				x: expRatio,
+				y: yDisplay,
+				xaxis: 'x3',
+				yaxis: 'y',
+				connectgaps: false,
+				line: { color: '#1D4ED8', width: 1.3, dash: 'dash' },
+				showlegend: true,
+				hovertemplate: `Expected log₁₀(Rmf/Rw): %{x:+.2f} dec<br>Depth: %{y:.2f} ${depthUnit}<extra></extra>`
+			});
+		}
+
+		if (obsRatio.some((v) => v !== null)) {
+			const ratioHover = slotIndices.map((idx) =>
+				idx === null ? '' : decodeInvasionProfile(invProfArr?.[idx])
+			);
+			traces.push({
+				type: 'scatter',
+				mode: 'lines',
+				name: 'log₁₀(Rxo/Rt)',
+				x: obsRatio,
+				y: yDisplay,
+				customdata: customIdx,
+				text: ratioHover,
+				xaxis: 'x3',
+				yaxis: 'y',
+				connectgaps: false,
+				line: { color: '#0F172A', width: 1.65 },
+				showlegend: true,
+				hovertemplate: `Observed log₁₀(Rxo/Rt): %{x:+.2f} dec<br>Depth: %{y:.2f} ${depthUnit}<br>%{text}<extra></extra>`
+			});
+		}
+
+		let minRat = -1.5;
+		let maxRat = 1.5;
+		for (const v of [...obsRatio, ...expLowBand, ...expHighBand]) {
+			if (v !== null) {
+				if (v - 0.15 < minRat) minRat = v - 0.15;
+				if (v + 0.15 > maxRat) maxRat = v + 0.15;
+			}
+		}
+
+		layout.xaxis3 = {
+			domain: domains[2],
+			anchor: 'y',
+			side: 'top',
+			range: [minRat, maxRat],
+			showgrid: true,
+			gridcolor: '#E2E8F0',
+			zeroline: false,
+			fixedrange: true,
+			title: {
+				text: 'log₁₀(Rxo/Rt) (dec)',
+				font: { family: 'Inter', size: 10, color: '#0F172A' }
+			},
+			tickfont: { family: 'JetBrains Mono', size: 8.5, color: '#334155' },
+			linecolor: '#475569',
+			tickcolor: '#475569'
+		};
+
+		return { traces, layout, trackCount: 3, hasEnvCorr };
+	}
+
 	activeTracks.forEach((track, ti) => {
 		const xref = xRefFor(ti);
 		const xLayoutKey = xLayoutFor(ti);
@@ -1104,7 +1540,7 @@ export function buildEnvCorrQcPlot(opts: BuildEnvCorrQcPlotOptions): {
 			traces.push({
 				type: 'scatter',
 				mode: 'lines',
-				name: bsHit ? bsHit.name : `BS (${bsDefault}")`,
+				name: bsLegendName,
 				x: bsSeries,
 				y: yDisplay,
 				xaxis: xref,
