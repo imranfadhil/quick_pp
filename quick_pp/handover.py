@@ -35,6 +35,7 @@ from quick_pp.las_handler import (
 )
 from quick_pp.ressum import calc_reservoir_summary
 from quick_pp.scal import generate_swof_table
+from quick_pp.utils import interpolate_tvd_on_md, survey_tvd_stations
 
 
 def _sanitize_name(name: str) -> str:
@@ -59,17 +60,20 @@ def _interpolate_tvd(
         and "DEPTH" in well_df.columns
         and "TVD" in well_df.columns
     ):
-        sub = well_df[["DEPTH", "TVD"]].dropna()
+        sub = (
+            well_df[["DEPTH", "TVD"]]
+            .dropna()
+            .sort_values("DEPTH")
+            .drop_duplicates(subset=["DEPTH"], keep="last")
+        )
         if len(sub) >= 2:
-            d_arr = sub["DEPTH"].to_numpy(dtype=float)
-            t_arr = sub["TVD"].to_numpy(dtype=float)
-            if not np.all(d_arr[:-1] <= d_arr[1:]):
-                sort_idx = np.argsort(d_arr)
-                d_arr = d_arr[sort_idx]
-                t_arr = t_arr[sort_idx]
-            return np.interp(md_values, d_arr, t_arr)
+            return interpolate_tvd_on_md(
+                md_values,
+                sub["DEPTH"].to_numpy(dtype=float),
+                sub["TVD"].to_numpy(dtype=float),
+            )
 
-    # 2. Try wellpathpy minimum curvature on surveys_df if available
+    # 2. Minimum curvature on the survey table (shared rules in quick_pp.utils)
     if (
         surveys_df is not None
         and not surveys_df.empty
@@ -77,21 +81,11 @@ def _interpolate_tvd(
         and len(surveys_df) >= 2
     ):
         try:
-            import wellpathpy as wpp
-
-            s_sorted = surveys_df.dropna(subset=["md", "inc", "azim"]).sort_values("md")
-            if len(s_sorted) >= 2:
-                dev = wpp.deviation(
-                    s_sorted["md"].to_numpy(dtype=float),
-                    s_sorted["inc"].to_numpy(dtype=float),
-                    s_sorted["azim"].to_numpy(dtype=float),
-                )
-                pos = dev.minimum_curvature()
-                return np.interp(
-                    md_values,
-                    np.asarray(pos.md, dtype=float),
-                    np.asarray(pos.depth, dtype=float),
-                )
+            mds, tvds, incs = survey_tvd_stations(
+                surveys_df["md"], surveys_df["inc"], surveys_df["azim"]
+            )
+            if len(mds) >= 2:
+                return interpolate_tvd_on_md(md_values, mds, tvds, incs)
         except Exception:
             pass
 

@@ -1,5 +1,5 @@
 import type { LithoEndpointParams } from '../state/workbench.svelte';
-import { salinityFromRmf } from './fluidUnits';
+import { salinityFromRmf } from './fluidUnits.ts';
 
 type GammaParams = Pick<LithoEndpointParams,
 	'model' | 'gammaSource' | 'gammaCurve' | 'thoriumCurve' | 'potassiumCurve' |

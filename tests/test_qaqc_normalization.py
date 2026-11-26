@@ -438,3 +438,48 @@ def test_badhole_flagging_multi_criteria_and_coal_protection():
     assert summary["drho_flagged"] == 1
     assert summary["rhob_nphi_flagged"] == 1
     assert summary["rugosity_flagged"] >= 1
+
+
+def test_environmental_corrections_qc_columns_and_mud_type():
+    """Per-curve confidence/status, reason bits, explicit depth unit and OBM salinity handling."""
+    df = pd.DataFrame(
+        {
+            "DEPTH": [2000.0, 2001.0, 2002.0, 2003.0],
+            "BS": [8.5] * 4,
+            "CALI": [8.5, 8.6, 12.0, 16.0],
+            "GR": [60.0] * 4,
+            "NPHI": [0.20] * 4,
+            "RHOB": [2.35, 2.35, 2.20, 2.00],
+            "DRHO": [0.01, 0.02, 0.22, 0.40],
+        }
+    )
+    out = apply_environmental_corrections(df, mud_weight=10.0, depth_unit="m")
+    for log in ("GR", "NPHI", "RHOB"):
+        for suf in ("_CORR_DELTA", "_QC_CONF", "_QC_STATUS"):
+            assert f"{log}{suf}" in out.columns
+    assert "ENV_QC_REASON" in out.columns
+
+    # Gauge hole is good with high confidence; severe washout is unreliable.
+    assert out.loc[0, "RHOB_QC_STATUS"] == 0
+    assert out.loc[0, "RHOB_QC_CONF"] > 0.8
+    assert out.loc[3, "RHOB_QC_STATUS"] == 2
+    assert out.loc[3, "RHOB_QC_CONF"] < out.loc[2, "RHOB_QC_CONF"] < out.loc[0, "RHOB_QC_CONF"]
+    assert out.loc[2, "ENV_QC_REASON"] & 1 and out.loc[2, "ENV_QC_REASON"] & 2
+    assert out.loc[0, "ENV_QC_REASON"] == 0
+    # GR is less hole-sensitive than density at the same washout.
+    assert out.loc[2, "GR_QC_CONF"] > out.loc[2, "RHOB_QC_CONF"]
+    # Raw curves untouched when inplace=False.
+    assert (out["RHOB"] == df["RHOB"]).all()
+
+    # Explicit depth unit changes temperature/pressure; OBM removes the salinity term.
+    n_m = apply_environmental_corrections(df, depth_unit="m")
+    n_ft = apply_environmental_corrections(df, depth_unit="ft")
+    assert not np.allclose(n_m["NPHI_ENV_CORR"], n_ft["NPHI_ENV_CORR"])
+    wbm = apply_environmental_corrections(df, salinity_ppm=200_000.0, mud_type="WBM")
+    obm = apply_environmental_corrections(df, salinity_ppm=200_000.0, mud_type="OBM")
+    assert (wbm["NPHI_ENV_CORR"] > obm["NPHI_ENV_CORR"]).all()
+
+    with pytest.raises(ValueError, match="mud_type"):
+        apply_environmental_corrections(df, mud_type="XYZ")
+    with pytest.raises(ValueError, match="depth_unit"):
+        apply_environmental_corrections(df, depth_unit="km")

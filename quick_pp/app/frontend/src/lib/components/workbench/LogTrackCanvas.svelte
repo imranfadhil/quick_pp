@@ -238,6 +238,10 @@
 	let showInspectionLine = $state(false);
 	let isInspectionLocked = $state(false);
 	let lockedDepth = $state<number | null>(null);
+	// Declared before its first use (currentDepthOverride) so SSR does not hit the TDZ
+	let activeInspectionDepth = $derived(
+		isInspectionLocked && lockedDepth !== null ? lockedDepth : workbench.cursorDepth
+	);
 	let isPointerOverPlot = $state(false);
 
 	function toggleInspectionLock() {
@@ -3693,10 +3697,6 @@
 			PlotlyLib.relayout(plotContainer, { 'yaxis.range': [maxD, minD] });
 		}
 	}
-
-	let activeInspectionDepth = $derived(
-		isInspectionLocked && lockedDepth !== null ? lockedDepth : workbench.cursorDepth
-	);
 
 	let readout = $derived(wellData.getReadoutAtDepth(activeInspectionDepth));
 

@@ -11,6 +11,7 @@
 	import { calculateWaterLegCalibration } from '$lib/utils/waterLegCalibration';
 	import {
 		fillMissingCurve,
+		estimateTempAndRw,
 		estimateBqvReferenceRw,
 		fitBqvCrossplot,
 		fitBqvCrossplotLine,
@@ -44,19 +45,7 @@
 	]);
 
 	function estimateTempAndRwAtDepth(depthM: number) {
-		const sp = workbench.saturationParams;
-		const d = Number.isFinite(depthM) ? depthM : 0;
-		let tempC: number;
-		if (sp.measSystem === 'imperial') {
-			const tvdKft = (d * 3.28084) / 1000.0;
-			const tempF = sp.surfaceTemp + sp.tempGradient * tvdKft;
-			tempC = Math.max(5, Math.min(250, ((tempF - 32.0) * 5.0) / 9.0));
-		} else {
-			tempC = Math.max(5, Math.min(250, sp.surfaceTemp + sp.tempGradient * (d / 1000.0)));
-		}
-		const tempF = (tempC * 9.0) / 5.0 + 32.0;
-		const sal = Math.max(100, sp.waterSalinity);
-		const rw = Math.pow(400000.0 / (sal * tempF), 0.88);
+		const { tempC, rw } = estimateTempAndRw(depthM, workbench.saturationParams);
 		return {
 			tempC: Number(tempC.toFixed(1)),
 			rw: Number(rw.toFixed(4)),

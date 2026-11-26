@@ -1678,6 +1678,113 @@ def resistivity_invasion_correction(
     return rt_corr, inv_flag
 
 
+ENV_QC_STATUS = {-1: "NO_DATA", 0: "GOOD", 1: "CORRECTED", 2: "UNRELIABLE"}
+ENV_QC_REASON_BITS = {
+    "WASHOUT": 1,  # CALI - BS >= washout_thold
+    "DRHO_HIGH": 2,  # |DRHO| > 0.15 g/cc
+    "BADHOLE": 4,  # upstream BADHOLE flag
+    "INVASION": 8,  # INVASION_FLAG > 0
+    "NO_CALIPER": 16,  # no caliper, hole size assumed = bit size
+}
+# Largest correction (same units as the curve; RT in log10 decades) still trusted
+# as a generic, tool-independent adjustment. Larger -> confidence falls to zero.
+_ENV_MAX_TRUSTED_DELTA = {"GR": 25.0, "NPHI": 0.06, "RHOB": 0.12, "RT": 0.30}
+# Which hole-quality penalties apply to each curve (density is pad-contact, GR is
+# the least hole-sensitive, RT mainly suffers from invasion not hole size).
+_ENV_HOLE_WEIGHT = {"GR": 0.5, "NPHI": 0.9, "RHOB": 1.0, "RT": 0.2}
+
+
+def _add_env_qc_columns(
+    out_df: pd.DataFrame,
+    raw_df: pd.DataFrame,
+    cali: pd.Series,
+    bs: pd.Series,
+    suffix: str,
+    washout_thold: float,
+    good_conf: float,
+    unreliable_conf: float,
+) -> None:
+    """Add ``<LOG>_CORR_DELTA``, ``<LOG>_QC_CONF``, ``<LOG>_QC_STATUS`` and ``ENV_QC_REASON``.
+
+    Confidence is generic and tool-independent: 1 minus the larger of (a) the
+    correction size relative to the largest trusted correction for that curve and
+    (b) a curve-weighted hole-quality penalty (washout severity, DRHO, upstream
+    BADHOLE flag, invasion). The raw curve is never modified here.
+    """
+    idx = out_df.index
+    excess = (
+        (pd.to_numeric(cali, errors="coerce") - pd.to_numeric(bs, errors="coerce"))
+        .clip(lower=0.0)
+        .fillna(0.0)
+    )
+    washout = excess >= washout_thold
+    drho_high = pd.Series(False, index=idx)
+    drho_pen = pd.Series(0.0, index=idx)
+    if "DRHO" in raw_df.columns:
+        a = pd.to_numeric(raw_df["DRHO"], errors="coerce").abs()
+        drho_high = (a > 0.15).fillna(False)
+        drho_pen = ((a - 0.15) / 0.20).clip(lower=0.0, upper=1.0).fillna(0.0)
+    badhole = (
+        pd.to_numeric(raw_df["BADHOLE"], errors="coerce").fillna(0).ge(1)
+        if "BADHOLE" in raw_df.columns
+        else pd.Series(False, index=idx)
+    )
+    invaded = (
+        out_df["INVASION_FLAG"].fillna(0).gt(0)
+        if "INVASION_FLAG" in out_df.columns
+        else pd.Series(False, index=idx)
+    )
+    no_cali = (
+        raw_df["CALI"].isna()
+        if "CALI" in raw_df.columns
+        else pd.Series(True, index=idx)
+    )
+
+    reason = (
+        washout.astype(int) * ENV_QC_REASON_BITS["WASHOUT"]
+        + drho_high.astype(int) * ENV_QC_REASON_BITS["DRHO_HIGH"]
+        + badhole.astype(int) * ENV_QC_REASON_BITS["BADHOLE"]
+        + invaded.astype(int) * ENV_QC_REASON_BITS["INVASION"]
+        + no_cali.astype(int) * ENV_QC_REASON_BITS["NO_CALIPER"]
+    )
+    out_df["ENV_QC_REASON"] = reason.astype(int)
+
+    # Hole-quality penalty: excess reaches 1.0 at 3x the washout threshold.
+    hole_pen = (excess / max(3.0 * washout_thold, 1e-6)).clip(upper=1.0)
+    hole_pen = np.maximum(hole_pen, drho_pen)
+    hole_pen = np.where(badhole, np.maximum(hole_pen, 0.7), hole_pen)
+    hole_pen = pd.Series(hole_pen, index=idx)
+
+    for log, max_delta in _ENV_MAX_TRUSTED_DELTA.items():
+        if log not in raw_df.columns:
+            continue
+        corr_col = f"{log}{suffix}" if suffix else log
+        if corr_col not in out_df.columns:
+            continue
+        raw = pd.to_numeric(raw_df[log], errors="coerce")
+        corr = pd.to_numeric(out_df[corr_col], errors="coerce")
+        if log == "RT":
+            delta = np.log10(corr.clip(lower=1e-3)) - np.log10(raw.clip(lower=1e-3))
+        else:
+            delta = corr - raw
+        pen_delta = (delta.abs() / max_delta).clip(upper=1.0)
+        pen_hole = hole_pen * _ENV_HOLE_WEIGHT[log]
+        if log == "RT":
+            pen_hole = np.maximum(pen_hole, np.where(invaded, 0.3, 0.0))
+        conf = (1.0 - np.maximum(pen_delta, pen_hole)).clip(0.0, 1.0)
+        conf = pd.Series(conf, index=idx).where(raw.notna() & corr.notna(), 0.0)
+
+        status = pd.Series(1, index=idx, dtype=int)
+        changed = (delta.abs() / max_delta) > 0.05
+        status[(conf >= good_conf) & ~changed.fillna(False)] = 0
+        status[conf < unreliable_conf] = 2
+        status[raw.isna()] = -1
+
+        out_df[f"{log}_CORR_DELTA"] = delta
+        out_df[f"{log}_QC_CONF"] = conf.round(3)
+        out_df[f"{log}_QC_STATUS"] = status.astype(int)
+
+
 def apply_environmental_corrections(
     df: pd.DataFrame,
     bitsize_default: float = 8.5,
@@ -1688,8 +1795,31 @@ def apply_environmental_corrections(
     rho_mudcake: float = 1.5,
     inplace: bool = False,
     suffix: str = "_ENV_CORR",
+    depth_unit: str = "auto",
+    mud_type: str = "WBM",
+    washout_thold: float = 2.0,
+    good_conf: float = 0.8,
+    unreliable_conf: float = 0.4,
+    qc_columns: bool = True,
 ) -> pd.DataFrame:
     """Apply automated borehole environmental and invasion corrections to a well log DataFrame.
+
+    Beyond the corrected curves, ``qc_columns=True`` adds per-curve provenance and
+    reliability outputs (generic, tool-independent):
+    - ``<LOG>_CORR_DELTA``: corrected minus raw (RT in log10 decades).
+    - ``<LOG>_QC_CONF``: 0-1 confidence that the corrected value is reliable.
+    - ``<LOG>_QC_STATUS``: -1 no data, 0 good, 1 corrected, 2 unreliable
+      (candidate for ML / synthetic reconstruction). See ``ENV_QC_STATUS``.
+    - ``ENV_QC_REASON``: bit mask of causes, see ``ENV_QC_REASON_BITS``.
+
+    Extra args:
+        depth_unit (str): ``'m'``, ``'ft'`` or ``'auto'`` (legacy heuristic: max depth
+            < 6000 means metres). Prefer an explicit unit.
+        mud_type (str): ``'WBM'`` (default), ``'OBM'`` or ``'SBM'``. Oil/synthetic
+            muds carry no brine salinity, so the NPHI salinity term is zeroed.
+        washout_thold (float): Caliper excess over bit size (in) flagged as washout.
+        good_conf / unreliable_conf (float): Confidence thresholds for status 0 and 2.
+        qc_columns (bool): Write the QC/provenance columns.
 
     Orchestrates borehole/washout, temperature/pressure, mudcake, and filtrate invasion
     corrections across standard petrophysical curves (`GR`, `NPHI`, `RHOB`, and `RT`):
@@ -1743,6 +1873,12 @@ def apply_environmental_corrections(
         if isinstance(salinity_ppm, str) and salinity_ppm in out_df.columns
         else salinity_ppm
     )
+    mud_type = str(mud_type).upper()
+    if mud_type not in ("WBM", "OBM", "SBM"):
+        raise ValueError("mud_type must be one of 'WBM', 'OBM', 'SBM'.")
+    if mud_type != "WBM":
+        # Non-aqueous filtrate carries no brine: no chlorine capture term.
+        sal = 0.0
 
     # Resolve temperature (°F) and hydrostatic pressure (psi)
     depth_col = (
@@ -1750,21 +1886,27 @@ def apply_environmental_corrections(
         if "TVD" in out_df.columns
         else ("DEPTH" if "DEPTH" in out_df.columns else None)
     )
+    depth_unit = str(depth_unit).lower()
+    if depth_unit not in ("auto", "m", "ft"):
+        raise ValueError("depth_unit must be one of 'auto', 'm', 'ft'.")
+    depth_ft = None
+    if depth_col is not None:
+        d_vals = pd.to_numeric(out_df[depth_col], errors="coerce").fillna(0.0)
+        is_metres = (
+            d_vals.max() < 6000 if depth_unit == "auto" else depth_unit == "m"
+        )
+        depth_ft = d_vals * 3.28084 if is_metres else d_vals
+
     if "TEMP" in out_df.columns:
         temp = out_df["TEMP"]
-    elif depth_col is not None:
-        # Assume depth in meters if max depth < 6000, convert to 100 ft units for °F gradient
-        d_vals = pd.to_numeric(out_df[depth_col], errors="coerce").fillna(0.0)
-        depth_ft = d_vals * 3.28084 if d_vals.max() < 6000 else d_vals
+    elif depth_ft is not None:
         temp = surface_temp + temp_grad * (depth_ft / 100.0)
     else:
         temp = surface_temp
 
     if "PRESSURE" in out_df.columns:
         pressure = out_df["PRESSURE"]
-    elif depth_col is not None:
-        d_vals = pd.to_numeric(out_df[depth_col], errors="coerce").fillna(0.0)
-        depth_ft = d_vals * 3.28084 if d_vals.max() < 6000 else d_vals
+    elif depth_ft is not None:
         mw_val = mw if not isinstance(mw, pd.Series) else mw.fillna(9.0)
         mw_ppg = np.where(
             np.asarray(mw_val) <= 3.0, np.asarray(mw_val) * 8.3454, np.asarray(mw_val)
@@ -1829,5 +1971,17 @@ def apply_environmental_corrections(
         if inplace:
             out_df["RT"] = rt_corr
         out_df["INVASION_FLAG"] = inv_flag
+
+    if qc_columns:
+        _add_env_qc_columns(
+            out_df,
+            df,
+            cali=cali,
+            bs=bs,
+            suffix=suffix,
+            washout_thold=washout_thold,
+            good_conf=good_conf,
+            unreliable_conf=unreliable_conf,
+        )
 
     return out_df

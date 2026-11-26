@@ -580,6 +580,121 @@ def remove_straights(log, window: int = 30, threshold: float = 0.001):
     return np.where(rolling_std < threshold, np.nan, log_series.values)
 
 
+def survey_tvd_stations(md, inc, azim):
+    """Minimum-curvature TVD at survey stations, with a surface tie-in.
+
+    Single source of the station calculation used by the backend and handover.
+    Stations are sorted by MD and de-duplicated (last wins). When the first
+    station is below surface, a vertical tie-in station (MD=0, inc=0, azim of
+    the first station) is used for the calculation and then dropped from the
+    output. Uses wellpathpy, with a pure-numpy minimum-curvature fallback.
+
+    Args:
+        md (array-like): Measured depth of each station.
+        inc (array-like): Inclination in degrees.
+        azim (array-like): Azimuth in degrees.
+
+    Returns:
+        tuple[np.ndarray, np.ndarray, np.ndarray]: ``(md, tvd, inc)`` per station,
+        sorted by MD. Empty arrays when no valid station exists.
+    """
+    df = pd.DataFrame(
+        {
+            "md": pd.to_numeric(pd.Series(md), errors="coerce"),
+            "inc": pd.to_numeric(pd.Series(inc), errors="coerce"),
+            "azim": pd.to_numeric(pd.Series(azim), errors="coerce"),
+        }
+    ).dropna()
+    df = df.sort_values("md").drop_duplicates(subset=["md"], keep="last")
+    if df.empty:
+        empty = np.array([], dtype=float)
+        return empty, empty, empty
+
+    mds = df["md"].to_numpy(dtype=float)
+    incs = df["inc"].to_numpy(dtype=float)
+    azis = df["azim"].to_numpy(dtype=float)
+    tie_in = mds[0] > 0.0
+    if tie_in:
+        mds_c = np.insert(mds, 0, 0.0)
+        incs_c = np.insert(incs, 0, 0.0)
+        azis_c = np.insert(azis, 0, azis[0])
+    else:
+        mds_c, incs_c, azis_c = mds, incs, azis
+
+    try:
+        import wellpathpy as wpp
+
+        tvd = np.asarray(
+            wpp.deviation(mds_c, incs_c, azis_c).minimum_curvature().depth,
+            dtype=float,
+        )
+        if len(tvd) != len(mds_c):
+            raise ValueError("wellpathpy returned an unexpected station count")
+    except Exception:
+        i_rad, a_rad = np.deg2rad(incs_c), np.deg2rad(azis_c)
+        i1, i2, a1, a2 = i_rad[:-1], i_rad[1:], a_rad[:-1], a_rad[1:]
+        cos_dl = np.clip(
+            np.cos(i2 - i1) - np.sin(i1) * np.sin(i2) * (1.0 - np.cos(a2 - a1)),
+            -1.0,
+            1.0,
+        )
+        dl = np.arccos(cos_dl)
+        rf = np.where(dl > 1e-6, (2.0 / np.where(dl > 1e-6, dl, 1.0)) * np.tan(dl / 2.0), 1.0)
+        dz = 0.5 * np.diff(mds_c) * (np.cos(i1) + np.cos(i2)) * rf
+        tvd = np.concatenate([[0.0], np.cumsum(dz)])
+
+    if tie_in:
+        tvd = tvd[1:]
+    return mds, tvd, incs
+
+
+def interpolate_tvd_on_md(md_grid, station_md, station_tvd, station_inc=None):
+    """Interpolate TVD onto an MD grid from station MD/TVD pairs.
+
+    Single rule set, mirrored by the frontend ``interpolateTrajectoryOnGrid``:
+      - Above the first station: linear from the surface (MD=0, TVD=0).
+      - Between stations: linear in MD.
+      - Below the last station: extrapolate with the last segment's dTVD/dMD
+        (``cos(inc)`` of the last station when only one station exists, or 1.0
+        when no inclination is given), so logs past the final survey point
+        still get a TVD.
+    Non-finite MD values return NaN.
+
+    Args:
+        md_grid (array-like): Target measured depths.
+        station_md (array-like): Station MD, ascending.
+        station_tvd (array-like): Station TVD.
+        station_inc (array-like, optional): Station inclination in degrees.
+
+    Returns:
+        np.ndarray: TVD at each ``md_grid`` value.
+    """
+    md_grid = np.asarray(md_grid, dtype=float)
+    mds = np.asarray(station_md, dtype=float)
+    tvds = np.asarray(station_tvd, dtype=float)
+    if len(mds) == 0:
+        return np.full(md_grid.shape, np.nan)
+    last_inc = (
+        float(np.asarray(station_inc, dtype=float)[-1])
+        if station_inc is not None and len(station_inc) > 0
+        else None
+    )
+    if mds[0] > 0:
+        mds = np.insert(mds, 0, 0.0)
+        tvds = np.insert(tvds, 0, 0.0)
+
+    out = np.interp(md_grid, mds, tvds)
+    if len(mds) > 1 and mds[-1] > mds[-2]:
+        slope = (tvds[-1] - tvds[-2]) / (mds[-1] - mds[-2])
+    elif last_inc is not None and np.isfinite(last_inc):
+        slope = float(np.cos(np.deg2rad(last_inc)))
+    else:
+        slope = 1.0
+    below = md_grid > mds[-1]
+    out = np.where(below, tvds[-1] + (md_grid - mds[-1]) * slope, out)
+    return np.where(np.isfinite(md_grid), out, np.nan)
+
+
 def get_tvd(df, well_coords):
     """Calculate true vertical depth (TVD) given well survey data.
 

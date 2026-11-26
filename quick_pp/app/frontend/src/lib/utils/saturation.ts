@@ -37,6 +37,37 @@ export function fillMissingCurve(primary: number[] | undefined, fallback: number
 	);
 }
 
+/**
+ * Single frontend implementation of formation temperature and Rw at depth.
+ * Mirrors quick_pp.saturation.formation_temperature_c / estimate_rw_at_depth
+ * (backend endpoint: POST /saturation/rw_at_depth). Keep the two in sync.
+ */
+export function estimateTempAndRw(
+	depthM: number,
+	settings: Pick<
+		BqvRwSettings,
+		'measSystem' | 'surfaceTemp' | 'tempGradient' | 'waterSalinity'
+	>
+): { tempC: number; rw: number } {
+	const depth = Number.isFinite(depthM) ? depthM : 0;
+	const surface = Number.isFinite(settings.surfaceTemp) ? settings.surfaceTemp : 25;
+	const gradient = Number.isFinite(settings.tempGradient) ? settings.tempGradient : 30;
+	let tempC: number;
+	if (settings.measSystem === 'imperial') {
+		const tempF = surface + gradient * ((depth * 3.28084) / 1000);
+		tempC = ((tempF - 32) * 5) / 9;
+	} else {
+		tempC = surface + gradient * (depth / 1000);
+	}
+	tempC = Math.max(5, Math.min(250, tempC));
+	const salinity = Math.max(
+		100,
+		Number.isFinite(settings.waterSalinity) ? settings.waterSalinity : 35000
+	);
+	const rw = Math.pow(400000 / (salinity * ((tempC * 9) / 5 + 32)), 0.88);
+	return { tempC, rw };
+}
+
 export function estimateBqvReferenceRw(
 	settings: BqvRwSettings,
 	measuredDepths: number[],
@@ -64,23 +95,9 @@ export function estimateBqvReferenceRw(
 				? tvdDepths[closestIndex]
 				: (fallbackDepths[closestIndex] ?? referenceDepth)
 			: referenceDepth;
-	let tempC: number;
-	if (settings.measSystem === 'imperial') {
-		const tvdKft = (temperatureDepth * 3.28084) / 1000;
-		const tempF = settings.surfaceTemp + settings.tempGradient * tvdKft;
-		tempC = Math.max(5, Math.min(250, ((tempF - 32) * 5) / 9));
-	} else {
-		tempC = Math.max(
-			5,
-			Math.min(250, settings.surfaceTemp + settings.tempGradient * (temperatureDepth / 1000))
-		);
-	}
-
-	const rw =
-		settings.rwMode === 'pickett'
-			? settings.rwPickett
-			: Math.pow(400000 / (Math.max(100, settings.waterSalinity) * (tempC * 9 / 5 + 32)), 0.88);
-	return { rw, tempC };
+	const est = estimateTempAndRw(temperatureDepth, settings);
+	const rw = settings.rwMode === 'pickett' ? settings.rwPickett : est.rw;
+	return { rw, tempC: est.tempC };
 }
 
 export function fitBqvCrossplotLine(

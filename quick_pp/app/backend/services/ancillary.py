@@ -932,6 +932,25 @@ def compute_survey_minimum_curvature(
     return df
 
 
+def interpolate_tvd_on_md(
+    md_grid: np.ndarray,
+    traj_df: pd.DataFrame,
+) -> np.ndarray:
+    """Interpolate TVD onto an MD grid from a ``compute_survey_minimum_curvature`` result.
+
+    Thin wrapper over :func:`quick_pp.utils.interpolate_tvd_on_md`, which holds the
+    shared surface tie-in / linear / extrapolate-below-last-station rules.
+    """
+    from quick_pp.utils import interpolate_tvd_on_md as _interp
+
+    return _interp(
+        md_grid,
+        traj_df["md"].to_numpy(dtype=np.float64),
+        traj_df["tvd"].to_numpy(dtype=np.float64),
+        traj_df["inc"].to_numpy(dtype=np.float64),
+    )
+
+
 def _apply_survey_minimum_curvature_to_well(
     well: Any,
     surveys: List[Dict[str, float]],
@@ -967,18 +986,12 @@ def _apply_survey_minimum_curvature_to_well(
     mds = traj_df["md"].to_numpy(dtype=np.float64)
     tvds = traj_df["tvd"].to_numpy(dtype=np.float64)
 
-    # Prepend 0,0 for interpolation from surface
-    if mds[0] > 0:
-        mds_interp = np.insert(mds, 0, 0.0)
-        tvds_interp = np.insert(tvds, 0, 0.0)
-    else:
-        mds_interp, tvds_interp = mds, tvds
-
     if len(well_depth) > 0:
-        valid_mask = (well_depth >= mds_interp.min()) & (well_depth <= mds_interp.max())
-        target_depths = well_depth[valid_mask]
+        # Keep every finite log depth at or above 0; depths below the last station
+        # are extrapolated (see interpolate_tvd_on_md).
+        target_depths = well_depth[np.isfinite(well_depth) & (well_depth >= 0.0)]
         if len(target_depths) > 0:
-            interp_tvd = np.interp(target_depths, mds_interp, tvds_interp)
+            interp_tvd = interpolate_tvd_on_md(target_depths, traj_df)
             interp_tvdss = interp_tvd - df_elev
             tvd_dict = dict(
                 zip(target_depths.tolist(), interp_tvd.tolist(), strict=False)

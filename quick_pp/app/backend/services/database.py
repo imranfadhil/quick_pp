@@ -35,6 +35,7 @@ from quick_pp.app.backend.utils.utils import natural_sort_key, sanitize_filename
 from quick_pp.config import Config
 from quick_pp.database import models as db_models
 from quick_pp.database import objects as db_objects
+from quick_pp.utils import interpolate_tvd_on_md, survey_tvd_stations
 
 logger = logging.getLogger(__name__)
 
@@ -1745,60 +1746,19 @@ def _compute_tvd_from_survey(
             .drop_duplicates(subset=["md"], keep="last")
         )
         if len(s_sub) >= 2:
-            mds = s_sub["md"].to_numpy(dtype=float)
-            tvds = s_sub["tvd"].to_numpy(dtype=float)
-            if mds[0] > 1.0:
-                mds = np.insert(mds, 0, 0.0)
-                tvds = np.insert(tvds, 0, 0.0)
-            return np.interp(md_values, mds, tvds)
+            # Shared rules: surface tie-in, linear, extrapolate below last station
+            return interpolate_tvd_on_md(
+                md_values,
+                s_sub["md"].to_numpy(dtype=float),
+                s_sub["tvd"].to_numpy(dtype=float),
+            )
 
     if md_c and inc_c and azi_c:
-        s_sorted = (
-            pd.DataFrame(
-                {
-                    "md": pd.to_numeric(surveys_df[md_c], errors="coerce"),
-                    "inc": pd.to_numeric(surveys_df[inc_c], errors="coerce"),
-                    "azim": pd.to_numeric(surveys_df[azi_c], errors="coerce"),
-                }
-            )
-            .dropna()
-            .sort_values("md")
-            .drop_duplicates(subset=["md"], keep="last")
+        mds, tvds, incs = survey_tvd_stations(
+            surveys_df[md_c], surveys_df[inc_c], surveys_df[azi_c]
         )
-        if len(s_sorted) >= 2:
-            mds = s_sorted["md"].to_numpy(dtype=float)
-            incs = s_sorted["inc"].to_numpy(dtype=float)
-            azis = s_sorted["azim"].to_numpy(dtype=float)
-            if mds[0] > 1.0:
-                mds = np.insert(mds, 0, 0.0)
-                incs = np.insert(incs, 0, 0.0)
-                azis = np.insert(azis, 0, azis[0] if len(azis) > 0 else 0.0)
-            try:
-                import wellpathpy as wpp
-
-                dev = wpp.deviation(mds, incs, azis)
-                pos = dev.minimum_curvature()
-                return np.interp(
-                    md_values,
-                    np.asarray(pos.md, dtype=float),
-                    np.asarray(pos.depth, dtype=float),
-                )
-            except Exception:
-                inc_rad = np.deg2rad(incs)
-                azi_rad = np.deg2rad(azis)
-                dmd = np.diff(mds)
-                i1, i2 = inc_rad[:-1], inc_rad[1:]
-                a1, a2 = azi_rad[:-1], azi_rad[1:]
-                cos_dl = np.clip(
-                    np.cos(i2 - i1) - np.sin(i1) * np.sin(i2) * (1.0 - np.cos(a2 - a1)),
-                    -1.0,
-                    1.0,
-                )
-                dl = np.arccos(cos_dl)
-                rf = np.where(dl > 1e-6, (2.0 / dl) * np.tan(dl / 2.0), 1.0)
-                dz = 0.5 * dmd * (np.cos(i1) + np.cos(i2)) * rf
-                tvd_calc = np.concatenate([[0.0], np.cumsum(dz)])
-                return np.interp(md_values, mds, tvd_calc)
+        if len(mds) >= 2:
+            return interpolate_tvd_on_md(md_values, mds, tvds, incs)
 
     return None
 

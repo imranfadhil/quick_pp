@@ -63,6 +63,11 @@ export function computeMinimumCurvature<T extends Record<string, any>>(
 			prevMd = curMd;
 			prevInc = curInc;
 			prevAzim = curAzim;
+		} else if (i === 0) {
+			// First station at MD<=0: start from its real inclination/azimuth
+			prevMd = curMd;
+			prevInc = curInc;
+			prevAzim = curAzim;
 		} else if (i > 0) {
 			const dMd = curMd - prevMd;
 			if (dMd > 0) {
@@ -81,11 +86,9 @@ export function computeMinimumCurvature<T extends Record<string, any>>(
 			}
 		}
 
-		const tvd = Number(prevTvd.toFixed(2));
-		const tvdss =
-			datumElevationMeters > 0
-				? Number((prevTvd - datumElevationMeters).toFixed(2))
-				: tvd;
+		// No rounding here: matches the backend (compute_survey_minimum_curvature)
+		const tvd = prevTvd;
+		const tvdss = datumElevationMeters > 0 ? prevTvd - datumElevationMeters : tvd;
 
 		return {
 			origIdx: st.origIdx,

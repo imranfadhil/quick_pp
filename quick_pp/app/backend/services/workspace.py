@@ -151,7 +151,7 @@ from quick_pp.uncertainty import (
     sample_lhs_parameters,
 )
 from quick_pp.upscaling import expand_blocked_logs, upscale_logs
-from quick_pp.utils import nd_triangle_coords
+from quick_pp.utils import nd_triangle_coords, survey_tvd_stations
 
 DRY_SILT_RHOB = float(Config.SSC_ENDPOINTS["DRY_SILT_POINT"][1])
 
@@ -11753,43 +11753,15 @@ def _resolve_well_tvd_array(
                 .drop_duplicates(subset=["md"])
             )
             if len(s_sorted) >= 2:
-                mds = s_sorted["md"].to_numpy(dtype=float)
-                incs = s_sorted["inc"].to_numpy(dtype=float)
-                azis = s_sorted["azim"].to_numpy(dtype=float)
-                if mds[0] > 1.0:
+                # Station TVD from the shared minimum-curvature helper; the
+                # existing unit-reconciling interpolation is kept for MD grids.
+                mds, tvds, _ = survey_tvd_stations(
+                    s_sorted["md"], s_sorted["inc"], s_sorted["azim"]
+                )
+                if mds[0] > 0.0:
                     mds = np.insert(mds, 0, 0.0)
-                    incs = np.insert(incs, 0, 0.0)
-                    azis = np.insert(azis, 0, azis[0] if len(azis) > 0 else 0.0)
-                try:
-                    import wellpathpy as wpp
-
-                    dev = wpp.deviation(mds, incs, azis)
-                    pos = dev.minimum_curvature()
-                    return (
-                        _align_and_interp_depth(
-                            md_values,
-                            np.asarray(pos.md, dtype=float),
-                            np.asarray(pos.depth, dtype=float),
-                        )
-                        - elev
-                    )
-                except Exception:
-                    inc_rad = np.deg2rad(incs)
-                    azi_rad = np.deg2rad(azis)
-                    dmd = np.diff(mds)
-                    i1, i2 = inc_rad[:-1], inc_rad[1:]
-                    a1, a2 = azi_rad[:-1], azi_rad[1:]
-                    cos_dl = np.clip(
-                        np.cos(i2 - i1)
-                        - np.sin(i1) * np.sin(i2) * (1.0 - np.cos(a2 - a1)),
-                        -1.0,
-                        1.0,
-                    )
-                    dl = np.arccos(cos_dl)
-                    rf = np.where(dl > 1e-6, (2.0 / dl) * np.tan(dl / 2.0), 1.0)
-                    dz = 0.5 * dmd * (np.cos(i1) + np.cos(i2)) * rf
-                    tvd_calc = np.concatenate([[0.0], np.cumsum(dz)])
-                    return _interp_or_extrapolate_depth(md_values, mds, tvd_calc) - elev
+                    tvds = np.insert(tvds, 0, 0.0)
+                return _align_and_interp_depth(md_values, mds, tvds) - elev
 
     # 3. No TVDSS/TVD curve and no valid directional survey -> do NOT assume TVDSS == MD
     return np.full(len(md_values), np.nan, dtype=float)
