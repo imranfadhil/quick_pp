@@ -182,6 +182,25 @@ CREATE TABLE IF NOT EXISTS "perforations" (
 );
 
 -- -----------------------------------------------------------------------------
+-- TABLE: hole_sections
+-- Stores wellbore hole sections & mud program intervals.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS "hole_sections" (
+    "section_id" SERIAL PRIMARY KEY,
+    "well_id" INTEGER NOT NULL REFERENCES "wells"("well_id") ON DELETE CASCADE,
+    "name" VARCHAR(255) NOT NULL,
+    "top" REAL NOT NULL,
+    "bottom" REAL NOT NULL,
+    "bit_size" REAL,
+    "mud_type" VARCHAR(20) DEFAULT 'WBM',
+    "mud_weight" REAL,
+    "mud_salinity" REAL,
+    "rmf" REAL,
+    "rmf_temp" REAL,
+    UNIQUE("well_id", "name", "top", "bottom")
+);
+
+-- -----------------------------------------------------------------------------
 -- TABLE: core_samples
 -- Represents a physical core plug taken from a well.
 -- -----------------------------------------------------------------------------
@@ -263,6 +282,7 @@ CREATE INDEX IF NOT EXISTS "idx_fluid_contacts_well_id" ON "fluid_contacts" ("we
 CREATE INDEX IF NOT EXISTS "idx_pressure_tests_well_id" ON "pressure_tests" ("well_id");
 CREATE INDEX IF NOT EXISTS "idx_well_surveys_well_id" ON "well_surveys" ("well_id");
 CREATE INDEX IF NOT EXISTS "idx_perforations_well_id" ON "perforations" ("well_id");
+CREATE INDEX IF NOT EXISTS "idx_hole_sections_well_id" ON "hole_sections" ("well_id");
 CREATE INDEX IF NOT EXISTS "idx_core_samples_well_id" ON "core_samples" ("well_id");
 CREATE INDEX IF NOT EXISTS "idx_core_measurements_sample_id" ON "core_measurements" ("sample_id");
 CREATE INDEX IF NOT EXISTS "idx_relative_permeability_sample_id" ON "relative_permeability" ("sample_id");

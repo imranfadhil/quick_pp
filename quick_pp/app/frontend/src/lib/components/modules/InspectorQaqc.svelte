@@ -809,72 +809,55 @@
 	// switches and are restored per zone / depth interval from saved well config.
 	const ep = workbench.envCorrParams;
 
-	// Well Header & Metadata Editor state
-	let editingWellHeader = $state(false);
-	let savingWellHeader = $state(false);
-	let headerDraft = $state<Record<string, any>>({});
-
-	const derivedFiltrateSalinity = $derived.by(() => {
-		const r = Number(headerDraft.rmf);
-		if (!Number.isFinite(r) || r <= 0) return null;
-		const t = Number(headerDraft.rmf_temp);
-		return salinityFromRmf(r, Number.isFinite(t) ? t : 20);
-	});
-
-	const filtrateQcWarning = $derived.by(() => {
-		const r = Number(headerDraft.rmf);
-		const t = Number(headerDraft.rmf_temp);
-		const s = Number(headerDraft.mud_filtrate_salinity);
-
-		if (Number.isFinite(r)) {
-			if (r <= 0) return 'Rmf must be greater than 0.';
-			if (r > 15)
-				return `Rmf (${r} Ωm) is unusually high for mud filtrate (typically 0.02 – 5 Ωm).`;
-		}
-		if (Number.isFinite(t)) {
-			if (t < 0 || t > 70)
-				return `Rmf measurement temperature (${t}°C) is outside typical surface pit range (10 – 40°C).`;
-		}
-		if (Number.isFinite(s) && s > 350000) {
-			return `Mud filtrate salinity (${s.toLocaleString()} ppm) exceeds NaCl saturation limit (~350,000 ppm).`;
+	function seedManualFromHoleSections() {
+		const sections = wellData.holeSections;
+		if (!sections || sections.length === 0) return;
+		const deepest = [...sections].sort((a, b) => b.bottom - a.bottom)[0];
+		if (!deepest) return;
+		if (deepest.bit_size != null && Number.isFinite(deepest.bit_size) && deepest.bit_size > 0) {
+			ep.bitsizeDefault = deepest.bit_size;
+			workbench.badholeParams.bitsizeDefault = deepest.bit_size;
 		}
 		if (
-			Number.isFinite(r) &&
-			r > 0 &&
-			Number.isFinite(s) &&
-			s > 0 &&
-			derivedFiltrateSalinity != null
+			deepest.mud_type === 'WBM' ||
+			deepest.mud_type === 'OBM' ||
+			deepest.mud_type === 'SBM'
 		) {
-			const ratio = s / derivedFiltrateSalinity;
-			if (ratio > 1.4 || ratio < 0.6) {
-				const tempStr = Number.isFinite(t) ? `${t}°C` : '20°C';
-				return `Input salinity (${s.toLocaleString()} ppm) differs from Rmf-derived NaCl equivalent (~${derivedFiltrateSalinity.toLocaleString()} ppm @ ${tempStr}). Verify if mud contains non-NaCl salts or check units.`;
-			}
+			ep.mudType = deepest.mud_type;
 		}
-		return null;
-	});
-
-	function handleRmfInput() {
-		const derived = derivedFiltrateSalinity;
 		if (
-			derived != null &&
-			(headerDraft.mud_filtrate_salinity == null || headerDraft.mud_filtrate_salinity === '')
+			deepest.mud_weight != null &&
+			Number.isFinite(deepest.mud_weight) &&
+			deepest.mud_weight > 0
 		) {
-			headerDraft.mud_filtrate_salinity = derived;
+			ep.mudWeight = deepest.mud_weight;
+		}
+		if (
+			deepest.mud_salinity != null &&
+			Number.isFinite(deepest.mud_salinity) &&
+			deepest.mud_salinity >= 0
+		) {
+			ep.salinityPpm = deepest.mud_salinity;
+		}
+		if (deepest.rmf != null && Number.isFinite(deepest.rmf) && deepest.rmf > 0) {
+			ep.rmf = deepest.rmf;
+		}
+		if (deepest.rmf_temp != null && Number.isFinite(deepest.rmf_temp) && deepest.rmf_temp > 0) {
+			ep.rmfTempC = deepest.rmf_temp;
 		}
 	}
 
-	let lastSyncedWellGen = -1;
+	function jumpToHoleSections() {
+		workbench.ancillarySubTab = 'hole_sections';
+		workbench.singleWellStep = 'ancillary';
+	}
+
 	$effect(() => {
 		const gen = wellData.wellLoadGeneration;
 		const hdr = wellData.header || {};
-		if (gen !== lastSyncedWellGen && Object.keys(hdr).length > 0) {
-			lastSyncedWellGen = gen;
-			editingWellHeader = false;
-		}
-		// Seed env-correction defaults from the well header once per well load, unless saved
+		// Seed env-correction defaults from the well header / hole sections once per well load, unless saved
 		// parameters were restored for the active zone / depth selection.
-		if (gen !== lastEnvHeaderSyncGen && Object.keys(hdr).length > 0) {
+		if (gen !== lastEnvHeaderSyncGen && (Object.keys(hdr).length > 0 || wellData.holeSections.length > 0)) {
 			lastEnvHeaderSyncGen = gen;
 			if (untrack(() => moduleParams.status['qaqc-env']?.matched)) return;
 			if (
@@ -883,6 +866,7 @@
 				hdr.bit_size > 0
 			) {
 				ep.bitsizeDefault = hdr.bit_size;
+				workbench.badholeParams.bitsizeDefault = hdr.bit_size;
 			}
 			if (
 				typeof hdr.mud_density === 'number' &&
@@ -898,56 +882,11 @@
 			) {
 				ep.surfaceTemp = hdr.surface_temp;
 			}
+			if (wellData.holeSections.length > 0) {
+				seedManualFromHoleSections();
+			}
 		}
 	});
-
-	function openHeaderEditor() {
-		const h = wellData.header || {};
-		headerDraft = {
-			uwi: h.uwi ?? workbench.wellId ?? '',
-			company: h.company ?? '',
-			field: h.field ?? '',
-			country: h.country ?? '',
-			location: h.location ?? '',
-			province: h.province ?? '',
-			service_company: h.service_company ?? '',
-			log_date: h.log_date ?? '',
-			spud_date: h.spud_date ?? '',
-			latitude: h.latitude ?? null,
-			longitude: h.longitude ?? null,
-			x_coord: h.x_coord ?? null,
-			y_coord: h.y_coord ?? null,
-			crs: h.crs ?? '',
-			datum_unit: h.datum_unit || 'm',
-			kb_elev: h.kb_elev ?? null,
-			df_elev: h.df_elev ?? null,
-			gl_elev: h.gl_elev ?? null,
-			water_depth: h.water_depth ?? null,
-			bht: h.bht ?? null,
-			bht_unit: h.bht_unit || 'degC',
-			bit_size: h.bit_size ?? null,
-			rmf: h.rmf ?? null,
-			rmf_temp: h.rmf_temp ?? h.surface_temp ?? null,
-			mud_density: h.mud_density ?? null,
-			mud_filtrate_salinity: h.mud_filtrate_salinity ?? null,
-			mud_filtrate_density: h.mud_filtrate_density ?? null,
-			mud_type: h.mud_type ?? '',
-			obm_base_density: h.obm_base_density ?? null
-		};
-		editingWellHeader = true;
-	}
-
-	async function saveHeaderDraft() {
-		savingWellHeader = true;
-		try {
-			await wellData.saveWellHeader(headerDraft, true);
-			editingWellHeader = false;
-		} catch (e: any) {
-			wellData.lastError = e?.message || 'Failed to save well header';
-		} finally {
-			savingWellHeader = false;
-		}
-	}
 
 	// Environmental correction QC outputs (per-curve reliability, assumed inputs, resolved environment)
 	type EnvQcCurveSummary = {
@@ -1027,6 +966,7 @@
 				{
 					use_cali: bp.useCali,
 					cali_threshold: bp.caliThreshold,
+					use_hole_sections: bp.useHoleSections && wellData.holeSections.length > 0,
 					auto_bitsize: bp.autoBitsize,
 					bitsize_default: bp.bitsizeDefault,
 					use_drho: bp.useDrho,
@@ -1100,6 +1040,7 @@
 			const res = await postJson<any>(
 				`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/wells/${encodeURIComponent(workbench.wellId)}/environmental_corrections`,
 				{
+					use_hole_sections: ep.useHoleSections && wellData.holeSections.length > 0,
 					bitsize_default: ep.bitsizeDefault,
 					mud_weight: ep.mudWeight,
 					surface_temp: ep.offshore ? null : ep.surfaceTemp,
@@ -1151,567 +1092,6 @@
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
 	<div class="flex-1 overflow-y-auto">
 		<SavedParamsIndicator modules={['qaqc-badhole', 'qaqc-env', 'qaqc-enhance']} />
-		<ParameterSection
-			title="Well Header & Metadata"
-			badge={wellData.header?.uwi ? `UWI: ${wellData.header.uwi}` : (workbench.wellId ?? '')}
-		>
-			{@const hdr = wellData.header || {}}
-			{@const dUnit = hdr.datum_unit || 'm'}
-			<div class="mb-1.5 flex flex-wrap items-center justify-between gap-1">
-				<div class="flex flex-wrap items-center gap-1 text-[10px]">
-					{#if hdr.company}
-						<span
-							class="rounded-xs bg-blue-50 px-1.5 py-0.5 font-semibold text-blue-800"
-						>
-							{hdr.company}
-						</span>
-					{/if}
-					{#if hdr.field}
-						<span
-							class="rounded-xs bg-indigo-50 px-1.5 py-0.5 font-semibold text-indigo-800"
-						>
-							{hdr.field}
-						</span>
-					{/if}
-					{#if hdr.country}
-						<span
-							class="rounded-xs bg-emerald-50 px-1.5 py-0.5 font-semibold text-emerald-800"
-						>
-							{hdr.country}
-						</span>
-					{/if}
-					{#if hdr.crs}
-						<span
-							class="rounded-xs bg-slate-100 px-1.5 py-0.5 font-mono text-[9.5px] text-[var(--text-secondary)]"
-						>
-							CRS: {hdr.crs}
-						</span>
-					{/if}
-				</div>
-				<button
-					type="button"
-					onclick={() =>
-						editingWellHeader ? (editingWellHeader = false) : openHeaderEditor()}
-					class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--text-secondary)] hover:bg-slate-200 hover:text-[var(--text-primary)]"
-				>
-					{editingWellHeader ? 'Cancel' : 'Edit Header'}
-				</button>
-			</div>
-
-			{#if !editingWellHeader}
-				<div class="grid grid-cols-2 gap-1.5 text-[10.5px]">
-					<div
-						class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1"
-					>
-						<div class="text-[9.5px] text-[var(--text-muted)]">Well Name / UWI</div>
-						<div
-							class="truncate font-semibold text-[var(--text-primary)]"
-							title={`${hdr.well_name || workbench.wellId || '—'} (${hdr.uwi || '—'})`}
-						>
-							{hdr.well_name || workbench.wellId || '—'}
-							<span
-								class="font-mono text-[10px] font-normal text-[var(--text-secondary)]"
-							>
-								({hdr.uwi || hdr.api || '—'})
-							</span>
-						</div>
-					</div>
-					<div
-						class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1"
-					>
-						<div class="text-[9.5px] text-[var(--text-muted)]">Company / Operator</div>
-						<div
-							class="truncate font-semibold text-[var(--text-primary)]"
-							title={hdr.company || '—'}
-						>
-							{hdr.company || '—'}
-						</div>
-					</div>
-					<div
-						class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1"
-					>
-						<div class="text-[9.5px] text-[var(--text-muted)]">Field / Block</div>
-						<div
-							class="truncate font-semibold text-[var(--text-primary)]"
-							title={`${hdr.field || '—'}${hdr.location ? ` • ${hdr.location}` : ''}`}
-						>
-							{hdr.field || '—'}{hdr.location ? ` • ${hdr.location}` : ''}
-						</div>
-					</div>
-					<div
-						class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1"
-					>
-						<div class="text-[9.5px] text-[var(--text-muted)]">Country / Province</div>
-						<div
-							class="truncate font-semibold text-[var(--text-primary)]"
-							title={`${hdr.country || '—'}${hdr.province ? ` (${hdr.province})` : ''}`}
-						>
-							{hdr.country || '—'}{hdr.province ? ` (${hdr.province})` : ''}
-						</div>
-					</div>
-					<div
-						class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1"
-					>
-						<div class="text-[9.5px] text-[var(--text-muted)]">Latitude</div>
-						<div
-							class="mono-num truncate font-semibold text-[var(--text-primary)]"
-							title={hdr.latitude_raw || String(hdr.latitude ?? '—')}
-						>
-							{hdr.latitude != null ? `${Number(hdr.latitude).toFixed(6)}°` : '—'}
-							{#if hdr.latitude_raw && hdr.latitude_raw !== String(hdr.latitude)}
-								<span class="text-[9.5px] font-normal text-[var(--text-muted)]"
-									>({hdr.latitude_raw})</span
-								>
-							{/if}
-						</div>
-					</div>
-					<div
-						class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1"
-					>
-						<div class="text-[9.5px] text-[var(--text-muted)]">Longitude</div>
-						<div
-							class="mono-num truncate font-semibold text-[var(--text-primary)]"
-							title={hdr.longitude_raw || String(hdr.longitude ?? '—')}
-						>
-							{hdr.longitude != null ? `${Number(hdr.longitude).toFixed(6)}°` : '—'}
-							{#if hdr.longitude_raw && hdr.longitude_raw !== String(hdr.longitude)}
-								<span class="text-[9.5px] font-normal text-[var(--text-muted)]"
-									>({hdr.longitude_raw})</span
-								>
-							{/if}
-						</div>
-					</div>
-					{#if hdr.x_coord != null || hdr.y_coord != null}
-						<div
-							class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1"
-						>
-							<div class="text-[9.5px] text-[var(--text-muted)]">X / Easting</div>
-							<div class="mono-num truncate font-semibold text-[var(--text-primary)]">
-								{hdr.x_coord != null ? fmtNum(hdr.x_coord, 2) : '—'}
-							</div>
-						</div>
-						<div
-							class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1"
-						>
-							<div class="text-[9.5px] text-[var(--text-muted)]">Y / Northing</div>
-							<div class="mono-num truncate font-semibold text-[var(--text-primary)]">
-								{hdr.y_coord != null ? fmtNum(hdr.y_coord, 2) : '—'}
-							</div>
-						</div>
-					{/if}
-					<div
-						class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1"
-					>
-						<div class="text-[9.5px] text-[var(--text-muted)]">KB / DF Elevation</div>
-						<div class="mono-num truncate font-semibold text-[var(--text-primary)]">
-							KB: {hdr.kb_elev != null ? `${hdr.kb_elev} ${dUnit}` : '—'}
-							{#if hdr.df_elev != null}
-								• DF: {hdr.df_elev} {dUnit}
-							{/if}
-						</div>
-					</div>
-					<div
-						class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1"
-					>
-						<div class="text-[9.5px] text-[var(--text-muted)]">GL / Water Depth</div>
-						<div class="mono-num truncate font-semibold text-[var(--text-primary)]">
-							GL: {hdr.gl_elev != null ? `${hdr.gl_elev} ${dUnit}` : '—'}
-							{#if hdr.water_depth != null}
-								• WD: {hdr.water_depth} {dUnit}
-							{/if}
-						</div>
-					</div>
-					<div
-						class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1"
-					>
-						<div class="text-[9.5px] text-[var(--text-muted)]">Service Co. / Date</div>
-						<div
-							class="truncate font-semibold text-[var(--text-primary)]"
-							title={`${hdr.service_company || '—'} • ${hdr.log_date || hdr.spud_date || '—'}`}
-						>
-							{hdr.service_company || '—'}
-							{#if hdr.log_date || hdr.spud_date}
-								<span class="font-normal text-[var(--text-secondary)]"
-									>• {hdr.log_date || hdr.spud_date}</span
-								>
-							{/if}
-						</div>
-					</div>
-					<div
-						class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1"
-					>
-						<div class="text-[9.5px] text-[var(--text-muted)]">
-							BHT / Bit Size / Rmf
-						</div>
-						<div class="mono-num truncate font-semibold text-[var(--text-primary)]">
-							{hdr.bht != null ? `${hdr.bht}°` : '—'} • {hdr.bit_size != null
-								? `${hdr.bit_size}"`
-								: '—'} • {hdr.rmf != null
-								? `${hdr.rmf} Ωm${hdr.rmf_temp != null ? ` @ ${hdr.rmf_temp}°C` : ''}`
-								: '—'}
-						</div>
-					</div>
-					<div
-						class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1"
-					>
-						<div class="text-[9.5px] text-[var(--text-muted)]">
-							Mud Filtrate Density / Salinity
-						</div>
-						<div class="mono-num truncate font-semibold text-[var(--text-primary)]">
-							{hdr.mud_filtrate_density != null
-								? `${fmtNum(hdr.mud_filtrate_density, 3)} g/cc`
-								: '—'} • {hdr.mud_filtrate_salinity != null
-								? `${fmtNum(hdr.mud_filtrate_salinity, 0)} ppm`
-								: '—'} • {hdr.mud_type ? hdr.mud_type : '—'}
-						</div>
-					</div>
-				</div>
-
-				{#if Array.isArray(hdr.curve_lineage) && hdr.curve_lineage.length > 0}
-					<details class="mt-1.5 text-[10px] text-[var(--text-secondary)]">
-						<summary
-							class="cursor-pointer font-semibold hover:text-[var(--text-primary)]"
-						>
-							Imported LAS curve lineage ({hdr.curve_lineage.length})
-						</summary>
-						<div
-							class="mt-1 max-h-40 space-y-0.5 overflow-y-auto rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5"
-						>
-							{#each hdr.curve_lineage as entry}
-								<div>
-									{entry.filename}: {entry.source_mnemonic}{entry.source_unit
-										? ` (${entry.source_unit})`
-										: ''}
-									→ {entry.stored_curve}{entry.raw_curve
-										? ` (raw: ${entry.raw_curve})`
-										: ''}
-								</div>
-							{/each}
-						</div>
-					</details>
-				{/if}
-				{#if (hdr.raw_well_header && Object.keys(hdr.raw_well_header).length > 0) || (hdr.raw_parameters && Object.keys(hdr.raw_parameters).length > 0)}
-					<details class="mt-1.5 text-[10px] text-[var(--text-secondary)]">
-						<summary
-							class="cursor-pointer font-semibold hover:text-[var(--text-primary)]"
-						>
-							Raw LAS/DLIS Header Tags ({Object.keys(hdr.raw_well_header || {})
-								.length} ~Well, {Object.keys(hdr.raw_parameters || {}).length} ~Parameter)
-						</summary>
-						<div
-							class="mt-1 grid max-h-40 grid-cols-2 gap-x-2 gap-y-0.5 overflow-y-auto rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 font-mono text-[9.5px]"
-						>
-							{#each Object.entries( { ...(hdr.raw_well_header || {}), ...(hdr.raw_parameters || {}) } ) as [rk, rv]}
-								<div class="truncate" title={`${rk}: ${rv}`}>
-									<span class="font-semibold text-[var(--text-secondary)]"
-										>{rk}:</span
-									>
-									<span class="text-[var(--text-primary)]">{rv ?? '—'}</span>
-								</div>
-							{/each}
-						</div>
-					</details>
-				{/if}
-			{:else}
-				<div
-					class="space-y-1.5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-2 text-[10.5px]"
-				>
-					<div class="grid grid-cols-2 gap-1.5">
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
-								>UWI / API</span
-							>
-							<input
-								type="text"
-								bind:value={headerDraft.uwi}
-								class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
-								>Company / Operator</span
-							>
-							<input
-								type="text"
-								bind:value={headerDraft.company}
-								class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
-								>Field</span
-							>
-							<input
-								type="text"
-								bind:value={headerDraft.field}
-								class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
-								>Country</span
-							>
-							<input
-								type="text"
-								bind:value={headerDraft.country}
-								class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
-								>Location / Block</span
-							>
-							<input
-								type="text"
-								bind:value={headerDraft.location}
-								class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
-								>Province / State</span
-							>
-							<input
-								type="text"
-								bind:value={headerDraft.province}
-								class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
-								>Latitude (°)</span
-							>
-							<input
-								type="number"
-								step="0.000001"
-								bind:value={headerDraft.latitude}
-								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
-								>Longitude (°)</span
-							>
-							<input
-								type="number"
-								step="0.000001"
-								bind:value={headerDraft.longitude}
-								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
-								>KB Elevation ({headerDraft.datum_unit || 'm'})</span
-							>
-							<input
-								type="number"
-								step="0.1"
-								bind:value={headerDraft.kb_elev}
-								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
-								>DF Elevation ({headerDraft.datum_unit || 'm'})</span
-							>
-							<input
-								type="number"
-								step="0.1"
-								bind:value={headerDraft.df_elev}
-								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
-								>GL / Seabed Elev ({headerDraft.datum_unit || 'm'})</span
-							>
-							<input
-								type="number"
-								step="0.1"
-								bind:value={headerDraft.gl_elev}
-								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
-								>Service Company</span
-							>
-							<input
-								type="text"
-								bind:value={headerDraft.service_company}
-								class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
-								>Log Date</span
-							>
-							<input
-								type="text"
-								bind:value={headerDraft.log_date}
-								class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
-								>BHT ({headerDraft.bht_unit || 'degC'})</span
-							>
-							<input
-								type="number"
-								step="0.1"
-								bind:value={headerDraft.bht}
-								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
-								>Bit Size (in)</span
-							>
-							<input
-								type="number"
-								step="0.125"
-								bind:value={headerDraft.bit_size}
-								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
-								>Rmf (ohm.m)</span
-							>
-							<input
-								type="number"
-								step="0.001"
-								min="0.001"
-								bind:value={headerDraft.rmf}
-								oninput={handleRmfInput}
-								placeholder="e.g. 0.5"
-								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
-								>Rmf Meas Temp (°C)</span
-							>
-							<input
-								type="number"
-								step="0.5"
-								bind:value={headerDraft.rmf_temp}
-								oninput={handleRmfInput}
-								placeholder="e.g. 20"
-								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<div class="flex items-center justify-between">
-								<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
-									>Mud Filtrate Salinity (ppm)</span
-								>
-								{#if derivedFiltrateSalinity != null}
-									<button
-										type="button"
-										onclick={() => {
-											headerDraft.mud_filtrate_salinity =
-												derivedFiltrateSalinity;
-										}}
-										class="cursor-pointer text-[9px] font-semibold text-blue-600 hover:text-blue-800 hover:underline"
-										title="Set salinity to Bateman-Konen equivalent from Rmf"
-									>
-										⚡ Calc from Rmf ({derivedFiltrateSalinity.toLocaleString()} ppm)
-									</button>
-								{/if}
-							</div>
-							<input
-								type="number"
-								min="0"
-								step="1000"
-								bind:value={headerDraft.mud_filtrate_salinity}
-								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
-								>Mud Filtrate Density (g/cc)</span
-							>
-							<input
-								type="number"
-								min="0.1"
-								max="2"
-								step="0.01"
-								bind:value={headerDraft.mud_filtrate_density}
-								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
-								>Mud Type</span
-							>
-							<select
-								bind:value={headerDraft.mud_type}
-								class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							>
-								<option value="">—</option>
-								<option value="WBM">WBM (Water-Based)</option>
-								<option value="OBM">OBM (Oil-Based)</option>
-								<option value="SBM">SBM (Synthetic-Based)</option>
-							</select>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
-								>OBM Base Oil Density (g/cc)</span
-							>
-							<input
-								type="number"
-								min="0.65"
-								max="0.95"
-								step="0.01"
-								bind:value={headerDraft.obm_base_density}
-								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-						{#if filtrateQcWarning}
-							<div
-								class="col-span-2 flex items-start justify-between gap-1.5 rounded-xs border border-amber-300 bg-amber-50 px-2 py-1 text-[10px] text-amber-900"
-							>
-								<div class="flex items-start gap-1">
-									<span class="font-bold">⚠️ QC:</span>
-									<span>{filtrateQcWarning}</span>
-								</div>
-								{#if derivedFiltrateSalinity != null && Number(headerDraft.mud_filtrate_salinity) !== derivedFiltrateSalinity}
-									<button
-										type="button"
-										onclick={() => {
-											headerDraft.mud_filtrate_salinity =
-												derivedFiltrateSalinity;
-										}}
-										class="shrink-0 cursor-pointer font-semibold text-blue-700 underline hover:text-blue-900"
-									>
-										Use {derivedFiltrateSalinity.toLocaleString()} ppm
-									</button>
-								{/if}
-							</div>
-						{/if}
-					</div>
-					<div class="flex justify-end gap-1.5 pt-1">
-						<button
-							type="button"
-							onclick={() => (editingWellHeader = false)}
-							class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-[10.5px] font-medium text-[var(--text-secondary)]"
-						>
-							Cancel
-						</button>
-						<button
-							type="button"
-							disabled={savingWellHeader}
-							onclick={saveHeaderDraft}
-							class="h-6 rounded-xs bg-[var(--accent-primary)] px-2.5 text-[10.5px] font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
-						>
-							{savingWellHeader ? 'Saving...' : 'Save Header'}
-						</button>
-					</div>
-				</div>
-			{/if}
-		</ParameterSection>
-
 		<ParameterSection
 			title="Working Depth Interval (Well Focus)"
 			badge={`${wellData.visibleIndices.length} / ${wellData.totalDepthRows} rows`}
@@ -3076,41 +2456,111 @@
 				</div>
 
 				{#if workbench.badholeParams.useCali}
-					<div class="mt-1 space-y-1 pl-1">
-						<label
-							class="flex cursor-pointer items-center gap-1.5 text-[11px] text-[var(--text-secondary)]"
-						>
-							<input
-								type="checkbox"
-								bind:checked={workbench.badholeParams.autoBitsize}
-								class="h-3 w-3 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
-							/>
-							<span>Auto-Detect Casing Sections & Bit Size (BS)</span>
-						</label>
-						<div class="grid grid-cols-2 gap-x-2">
-							<NumericScrubber
-								label="Washout ΔCALI"
-								bind:value={workbench.badholeParams.caliThreshold}
-								unit="in"
-								min={0.5}
-								max={8.0}
-								step={0.25}
-								decimals={2}
-								onrun={() => runBadholeFlagging(false)}
-							/>
-							<NumericScrubber
-								label={workbench.badholeParams.autoBitsize
-									? 'Fallback BS'
-									: 'Bit Size (BS)'}
-								bind:value={workbench.badholeParams.bitsizeDefault}
-								unit="in"
-								min={4.5}
-								max={26.0}
-								step={0.25}
-								decimals={2}
-								onrun={() => runBadholeFlagging(false)}
-							/>
+					<div class="mt-1.5 space-y-1.5 pl-1">
+						<div class="flex items-center justify-between gap-1.5 text-[10px]">
+							<span class="font-semibold text-[var(--text-secondary)]">Bit Size Source:</span>
+							<button
+								type="button"
+								onclick={jumpToHoleSections}
+								class="font-semibold text-blue-700 hover:underline"
+							>
+								Edit Hole Sections ({wellData.holeSections.length}) →
+							</button>
 						</div>
+						{#if wellData.holeSections.length > 0}
+							<div
+								class="grid grid-cols-2 gap-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-0.5 text-[10px]"
+							>
+								<button
+									type="button"
+									onclick={() => (workbench.badholeParams.useHoleSections = true)}
+									class="h-5.5 rounded-xs font-medium transition-colors {workbench.badholeParams.useHoleSections
+										? 'bg-[var(--bg-surface)] font-semibold text-[var(--accent-primary)] shadow-2xs'
+										: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+								>
+									Hole Sections ({wellData.holeSections.length})
+								</button>
+								<button
+									type="button"
+									onclick={() => {
+										seedManualFromHoleSections();
+										workbench.badholeParams.useHoleSections = false;
+									}}
+									class="h-5.5 rounded-xs font-medium transition-colors {!workbench.badholeParams.useHoleSections
+										? 'bg-[var(--bg-surface)] font-semibold text-[var(--accent-primary)] shadow-2xs'
+										: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+								>
+									Manual / Auto BS
+								</button>
+							</div>
+						{/if}
+
+						{#if wellData.holeSections.length > 0 && workbench.badholeParams.useHoleSections}
+							<div
+								class="rounded-xs border border-blue-200 bg-blue-50/60 px-2 py-1 text-[10px] text-blue-950"
+							>
+								Using bit sizes from <strong>Hole Sections</strong> ({wellData.holeSections
+									.map((s) => (s.bit_size != null ? `${s.bit_size}"` : s.name))
+									.join(' → ')}). Switch to <strong>Manual / Auto BS</strong> above to test custom numbers.
+							</div>
+							<div class="grid grid-cols-2 gap-x-2">
+								<NumericScrubber
+									label="Washout ΔCALI"
+									bind:value={workbench.badholeParams.caliThreshold}
+									unit="in"
+									min={0.5}
+									max={8.0}
+									step={0.25}
+									decimals={2}
+									onrun={() => runBadholeFlagging(false)}
+								/>
+								<NumericScrubber
+									label="Uncovered BS"
+									bind:value={workbench.badholeParams.bitsizeDefault}
+									unit="in"
+									min={4.5}
+									max={26.0}
+									step={0.25}
+									decimals={2}
+									onrun={() => runBadholeFlagging(false)}
+								/>
+							</div>
+						{:else}
+							<label
+								class="flex cursor-pointer items-center gap-1.5 text-[11px] text-[var(--text-secondary)]"
+							>
+								<input
+									type="checkbox"
+									bind:checked={workbench.badholeParams.autoBitsize}
+									class="h-3 w-3 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+								/>
+								<span>Auto-Detect Casing Sections &amp; Bit Size (BS)</span>
+							</label>
+							<div class="grid grid-cols-2 gap-x-2">
+								<NumericScrubber
+									label="Washout ΔCALI"
+									bind:value={workbench.badholeParams.caliThreshold}
+									unit="in"
+									min={0.5}
+									max={8.0}
+									step={0.25}
+									decimals={2}
+									onrun={() => runBadholeFlagging(false)}
+								/>
+								<NumericScrubber
+									label={workbench.badholeParams.autoBitsize
+										? 'Fallback BS'
+										: 'Bit Size (BS)'}
+									bind:value={workbench.badholeParams.bitsizeDefault}
+									unit="in"
+									min={4.5}
+									max={26.0}
+									step={0.25}
+									decimals={2}
+									onrun={() => runBadholeFlagging(false)}
+								/>
+							</div>
+						{/if}
 					</div>
 				{/if}
 			</div>
@@ -3351,10 +2801,96 @@
 					>*_ENV_CORR</span
 				>, <span class="mono-num">*_SIGMA</span>, <span class="mono-num">*_QC_CONF</span>
 				and <span class="mono-num">*_QC_STATUS</span>. Lithology, porosity and saturation
-				use the corrected curves, weighted by confidence. Inputs left blank come from the
-				well header, otherwise a default is used and listed below.
+				use the corrected curves, weighted by confidence.
 			</div>
-			{#each [{ label: 'Tool Conveyance', key: 'toolType', options: [['WL', 'Wireline'], ['LWD', 'LWD']] }, { label: 'Mud Type', key: 'mudType', options: [['WBM', 'Water-based (WBM)'], ['OBM', 'Oil-based (OBM)'], ['SBM', 'Synthetic (SBM)']] }, { label: 'Resistivity Tool', key: 'resTool', options: [['auto', 'Auto (from conveyance)'], ['induction', 'Induction'], ['laterolog', 'Laterolog'], ['propagation', 'Propagation (LWD)']] }, { label: 'Depth Unit', key: 'depthUnit', options: [['auto', 'Well header'], ['m', 'm'], ['ft', 'ft']] }] as sel (sel.key)}
+
+			<!-- Mud & Bit Source Selector (Hole Sections vs Manual Override) -->
+			<div class="mb-2 space-y-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
+				<div class="flex items-center justify-between text-[10px]">
+					<span class="font-semibold text-[var(--text-primary)]">Mud &amp; Bit Program Source</span>
+					<button
+						type="button"
+						onclick={jumpToHoleSections}
+						class="font-semibold text-blue-700 hover:underline"
+					>
+						{wellData.holeSections.length > 0
+							? `Edit Hole Sections (${wellData.holeSections.length}) →`
+							: '+ Add Hole Sections →'}
+					</button>
+				</div>
+				{#if wellData.holeSections.length > 0}
+					<div
+						class="grid grid-cols-2 gap-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-0.5 text-[10.5px]"
+					>
+						<button
+							type="button"
+							onclick={() => (ep.useHoleSections = true)}
+							class="h-6 rounded-xs font-medium transition-colors {ep.useHoleSections
+								? 'bg-[var(--bg-surface)] font-semibold text-[var(--accent-primary)] shadow-2xs'
+								: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+						>
+							Hole Sections ({wellData.holeSections.length})
+						</button>
+						<button
+							type="button"
+							onclick={() => {
+								seedManualFromHoleSections();
+								ep.useHoleSections = false;
+							}}
+							class="h-6 rounded-xs font-medium transition-colors {!ep.useHoleSections
+								? 'bg-[var(--bg-surface)] font-semibold text-[var(--accent-primary)] shadow-2xs'
+								: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+						>
+							Manual Override
+						</button>
+					</div>
+					{#if ep.useHoleSections}
+						<div class="max-h-28 overflow-y-auto rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]">
+							<table class="w-full border-collapse text-left text-[9.5px]">
+								<thead class="bg-[var(--bg-subtle)] text-[var(--text-muted)]">
+									<tr>
+										<th class="px-1.5 py-0.5 font-medium">Section</th>
+										<th class="px-1 py-0.5 text-right font-medium">MD ({depthDisplay.unit})</th>
+										<th class="px-1 py-0.5 text-right font-medium">BS</th>
+										<th class="px-1 py-0.5 font-medium">Mud</th>
+										<th class="px-1.5 py-0.5 text-right font-medium">MW</th>
+									</tr>
+								</thead>
+								<tbody class="divide-y divide-[var(--border-hairline)]">
+									{#each wellData.holeSections as hs (hs.id)}
+										<tr>
+											<td class="truncate px-1.5 py-0.5 font-semibold text-[var(--text-primary)]">{hs.name}</td>
+											<td class="mono-num px-1 py-0.5 text-right text-[var(--text-secondary)]">
+												{fmtNum(depthFromMeters(hs.top, depthDisplay.unit), 0)}–{fmtNum(depthFromMeters(hs.bottom, depthDisplay.unit), 0)}
+											</td>
+											<td class="mono-num px-1 py-0.5 text-right">{hs.bit_size != null ? `${hs.bit_size}"` : '—'}</td>
+											<td class="px-1 py-0.5">{hs.mud_type || '—'}</td>
+											<td class="mono-num px-1.5 py-0.5 text-right">{hs.mud_weight != null ? `${hs.mud_weight}` : '—'}</td>
+										</tr>
+									{/each}
+								</tbody>
+							</table>
+						</div>
+					{:else}
+						<div class="flex items-center justify-between text-[9.5px] text-amber-800">
+							<span>Manual override active (Hole Sections bypassed for quick testing).</span>
+							<button
+								type="button"
+								onclick={seedManualFromHoleSections}
+								class="shrink-0 font-semibold text-blue-700 hover:underline"
+							>
+								↺ Reset from Hole
+							</button>
+						</div>
+					{/if}
+				{:else}
+					<div class="text-[10px] text-[var(--text-muted)]">
+						No Hole Sections defined yet — using manual mud &amp; bit parameters below.
+					</div>
+				{/if}
+			</div>
+
+			{#each [{ label: 'Tool Conveyance', key: 'toolType', options: [['WL', 'Wireline'], ['LWD', 'LWD']] }, ...(wellData.holeSections.length > 0 && ep.useHoleSections ? [] : [{ label: 'Mud Type', key: 'mudType', options: [['WBM', 'Water-based (WBM)'], ['OBM', 'Oil-based (OBM)'], ['SBM', 'Synthetic (SBM)']] }]), { label: 'Resistivity Tool', key: 'resTool', options: [['auto', 'Auto (from conveyance)'], ['induction', 'Induction'], ['laterolog', 'Laterolog'], ['propagation', 'Propagation (LWD)']] }, { label: 'Depth Unit', key: 'depthUnit', options: [['auto', 'Well header'], ['m', 'm'], ['ft', 'ft']] }] as sel (sel.key)}
 				<div class="grid grid-cols-[1fr_148px] items-center gap-x-2 py-0.5">
 					<span class="text-xs font-medium text-[var(--text-primary)]">{sel.label}</span>
 					<select
@@ -3412,24 +2948,26 @@
 			{/if}
 
 			<div class="grid grid-cols-2 gap-x-2">
-				<NumericScrubber
-					label="Bit Size"
-					bind:value={ep.bitsizeDefault}
-					unit="in"
-					min={3.5}
-					max={26.0}
-					step={0.125}
-					onrun={() => runEnvCorrections(false)}
-				/>
-				<NumericScrubber
-					label="Mud Weight"
-					bind:value={ep.mudWeight}
-					unit="ppg"
-					min={8.0}
-					max={18.0}
-					step={0.2}
-					onrun={() => runEnvCorrections(false)}
-				/>
+				{#if !(wellData.holeSections.length > 0 && ep.useHoleSections)}
+					<NumericScrubber
+						label="Bit Size"
+						bind:value={ep.bitsizeDefault}
+						unit="in"
+						min={3.5}
+						max={26.0}
+						step={0.125}
+						onrun={() => runEnvCorrections(false)}
+					/>
+					<NumericScrubber
+						label="Mud Weight"
+						bind:value={ep.mudWeight}
+						unit="ppg"
+						min={8.0}
+						max={18.0}
+						step={0.2}
+						onrun={() => runEnvCorrections(false)}
+					/>
+				{/if}
 				{#if !ep.offshore}
 					<NumericScrubber
 						label="Surface Temp"
@@ -3479,7 +3017,7 @@
 					onrun={() => runEnvCorrections(false)}
 				/>
 			</div>
-			{#if ep.mudType === 'WBM'}
+			{#if !(wellData.holeSections.length > 0 && ep.useHoleSections) && ep.mudType === 'WBM'}
 				<div class="grid grid-cols-3 gap-x-1.5">
 					<NumericScrubber
 						label="Mud Salinity"
@@ -3511,6 +3049,52 @@
 						onrun={() => runEnvCorrections(false)}
 					/>
 				</div>
+			{:else if wellData.holeSections.length > 0 && ep.useHoleSections}
+				<details class="mt-1 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1 text-[10px]">
+					<summary class="cursor-pointer font-semibold text-[var(--text-secondary)] hover:text-[var(--text-primary)]">
+						Fallback defaults for depths outside Hole Sections
+					</summary>
+					<div class="mt-1 grid grid-cols-2 gap-x-2">
+						<NumericScrubber
+							label="Fallback BS"
+							bind:value={ep.bitsizeDefault}
+							unit="in"
+							min={3.5}
+							max={26.0}
+							step={0.125}
+							onrun={() => runEnvCorrections(false)}
+						/>
+						<NumericScrubber
+							label="Fallback MW"
+							bind:value={ep.mudWeight}
+							unit="ppg"
+							min={8.0}
+							max={18.0}
+							step={0.2}
+							onrun={() => runEnvCorrections(false)}
+						/>
+						<NumericScrubber
+							label="Fallback Salinity"
+							bind:value={ep.salinityPpm}
+							unit="ppm"
+							min={0}
+							max={250000}
+							step={2000}
+							decimals={0}
+							onrun={() => runEnvCorrections(false)}
+						/>
+						<NumericScrubber
+							label="Fallback Rmf"
+							bind:value={ep.rmf}
+							unit="Ω·m"
+							min={0}
+							max={20}
+							step={0.01}
+							decimals={3}
+							onrun={() => runEnvCorrections(false)}
+						/>
+					</div>
+				</details>
 			{/if}
 			<div class="mt-1 flex gap-1.5">
 				<button

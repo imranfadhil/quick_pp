@@ -23,6 +23,10 @@ class FluidDensityConfig(BaseModel):
     static_rho_fl: float = Field(
         default=1.0, ge=0.1, le=1.35, description="Static fluid density (g/cc)."
     )
+    use_hole_sections: bool = Field(
+        default=True,
+        description="Use per-interval mud type, salinity, and Rmf from Hole Sections table when available (False = manual override).",
+    )
     mud_type: Literal["WBM", "OBM", "SBM"] = Field(
         default="WBM", description="Mud system driving the filtrate density."
     )

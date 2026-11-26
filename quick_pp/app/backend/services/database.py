@@ -581,6 +581,12 @@ def delete_well(project_id: int, well_name: str, request: Request):
             else:
                 if target_orm_well is not None:
                     wid = target_orm_well.well_id
+                    try:
+                        db_models.HoleSection.__table__.create(
+                            bind=session.get_bind(), checkfirst=True
+                        )
+                    except Exception:
+                        pass
                     session.expunge_all()
                     for statement in (
                         "DELETE FROM curve_data WHERE curve_id IN "
@@ -595,6 +601,7 @@ def delete_well(project_id: int, well_name: str, request: Request):
                         "DELETE FROM fluid_contacts WHERE well_id = :wid",
                         "DELETE FROM pressure_tests WHERE well_id = :wid",
                         "DELETE FROM perforations WHERE well_id = :wid",
+                        "DELETE FROM hole_sections WHERE well_id = :wid",
                         "DELETE FROM well_surveys WHERE well_id = :wid",
                         "DELETE FROM core_samples WHERE well_id = :wid",
                         "DELETE FROM curves WHERE well_id = :wid",
@@ -924,6 +931,63 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                 except Exception:
                     pass
 
+            hole_sec_counts: Dict[int, int] = dict.fromkeys(well_ids, 0)
+            hole_secs_list_by_well: Dict[int, List[Dict[str, Any]]] = {
+                wid: [] for wid in well_ids
+            }
+            try:
+                db_models.HoleSection.__table__.create(
+                    bind=session.get_bind(), checkfirst=True
+                )
+            except Exception:
+                pass
+            try:
+                hs_stmt = text(
+                    "SELECT well_id, name, top, bottom, bit_size, mud_type, mud_weight, mud_salinity, rmf, rmf_temp "
+                    "FROM hole_sections WHERE well_id IN :well_ids ORDER BY top, bottom"
+                ).bindparams(bindparam("well_ids", expanding=True))
+                for (
+                    wid,
+                    sname,
+                    stop,
+                    sbot,
+                    sbs,
+                    smt,
+                    smw,
+                    ssal,
+                    srmf,
+                    srmft,
+                ) in session.execute(hs_stmt, {"well_ids": well_ids}).fetchall():
+                    hole_sec_counts[wid] = hole_sec_counts.get(wid, 0) + 1
+                    hole_secs_list_by_well.setdefault(wid, []).append(
+                        {
+                            "name": str(sname or "Section"),
+                            "top": round(float(stop), 2) if stop is not None else None,
+                            "bottom": round(float(sbot), 2)
+                            if sbot is not None
+                            else None,
+                            "bit_size": round(float(sbs), 3)
+                            if sbs is not None
+                            else None,
+                            "mud_type": str(smt or "WBM").upper(),
+                            "mud_weight": round(float(smw), 3)
+                            if smw is not None
+                            else None,
+                            "mud_salinity": round(float(ssal), 1)
+                            if ssal is not None
+                            else None,
+                            "rmf": round(float(srmf), 4) if srmf is not None else None,
+                            "rmf_temp": round(float(srmft), 2)
+                            if srmft is not None
+                            else None,
+                        }
+                    )
+            except Exception:
+                try:
+                    session.rollback()
+                except Exception:
+                    pass
+
             from quick_pp.las_handler import (
                 extract_las_metadata,
                 extract_well_df_elevation,
@@ -1227,6 +1291,8 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                         "survey_count": survey_counts.get(wid, 0),
                         "perforation_count": perf_counts.get(wid, 0),
                         "perforations": perfs_list_by_well.get(wid, []),
+                        "hole_section_count": hole_sec_counts.get(wid, 0),
+                        "hole_sections": hole_secs_list_by_well.get(wid, []),
                     }
                 )
 
@@ -1620,6 +1686,11 @@ def get_well_data(
                     "perforations": (
                         well.get_perforations().to_dict(orient="records")
                         if not well.get_perforations().empty
+                        else []
+                    ),
+                    "hole_sections": (
+                        well.get_hole_sections().to_dict(orient="records")
+                        if not well.get_hole_sections().empty
                         else []
                     ),
                     "core_samples": core_samples,

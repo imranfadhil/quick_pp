@@ -3,8 +3,8 @@ import type { EnvQcTrackFilter, EnvQcViewMode } from '../utils/envCorrQc';
 import type { PressureDisplayUnit, TempDisplayUnit } from '../utils/tempPressureProfile';
 
 export type SingleWellStep =
-	| 'qaqc'
 	| 'ancillary'
+	| 'qaqc'
 	| 'litho-poro'
 	| 'perm'
 	| 'saturation'
@@ -79,6 +79,7 @@ export type BadholeTreatmentMode = 'none' | 'vsh_gr' | 'interpolate' | 'ignore';
 export interface BadholeFlaggingParams {
 	useCali: boolean;
 	caliThreshold: number;
+	useHoleSections: boolean;
 	autoBitsize: boolean;
 	bitsizeDefault: number;
 	useDrho: boolean;
@@ -168,6 +169,7 @@ export interface LithoEndpointParams {
 	badholeTreatment: BadholeTreatmentMode;
 	/** Continuous apparent fluid density (RHO_FL) engine mode. */
 	fluidDensityMode: 'static' | 'zonal_coupled' | 'iterative_sxo';
+	fluidDensityUseHoleSections: boolean;
 	fluidDensityMudType: 'WBM' | 'OBM' | 'SBM';
 	fluidDensitySalinityPpm: number;
 	fluidDensityRmf: number;
@@ -381,6 +383,7 @@ export interface ScalComputedResult {
 }
 
 export interface EnvCorrectionParams {
+	useHoleSections: boolean;
 	bitsizeDefault: number;
 	mudWeight: number;
 	surfaceTemp: number;
@@ -769,7 +772,10 @@ class WorkbenchState {
 	projectId = $state<string | null>(null);
 	wellId = $state<string | null>(null);
 	scope = $state<'single-well' | 'multi-well'>('single-well');
-	singleWellStep = $state<SingleWellStep>('qaqc');
+	singleWellStep = $state<SingleWellStep>('ancillary');
+	ancillarySubTab = $state<
+		'hole_sections' | 'tops' | 'contacts' | 'perfs' | 'core' | 'scal' | 'pressure' | 'survey'
+	>('hole_sections');
 	multiWellStep = $state<MultiWellStep>('inventory');
 	batchEvaluationAffectedProjects = $state<string[]>([]);
 
@@ -867,6 +873,7 @@ class WorkbenchState {
 	importerOpen = $state<boolean>(false);
 	importerTab = $state<
 		| 'las'
+		| 'hole_sections'
 		| 'formation_tops'
 		| 'fluid_contacts'
 		| 'perforations'
@@ -895,6 +902,7 @@ class WorkbenchState {
 	openImporter(
 		tab?:
 			| 'las'
+			| 'hole_sections'
 			| 'formation_tops'
 			| 'fluid_contacts'
 			| 'perforations'
@@ -989,6 +997,7 @@ class WorkbenchState {
 		coalAdaptiveShoulder: true,
 		badholeTreatment: 'vsh_gr',
 		fluidDensityMode: 'static',
+		fluidDensityUseHoleSections: true,
 		fluidDensityMudType: 'WBM',
 		fluidDensitySalinityPpm: 30000,
 		fluidDensityRmf: 0.5,
@@ -1030,6 +1039,7 @@ class WorkbenchState {
 	badholeParams = $state<BadholeFlaggingParams>({
 		useCali: true,
 		caliThreshold: 2.0,
+		useHoleSections: true,
 		autoBitsize: true,
 		bitsizeDefault: 8.5,
 		useDrho: true,
@@ -1172,6 +1182,7 @@ class WorkbenchState {
 	scalResult = $state<ScalComputedResult | null>(null);
 
 	envCorrParams = $state<EnvCorrectionParams>({
+		useHoleSections: true,
 		bitsizeDefault: 8.5,
 		mudWeight: 9.5,
 		surfaceTemp: 75.0,

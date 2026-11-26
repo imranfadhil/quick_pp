@@ -262,6 +262,98 @@ ANCILLARY_TARGET_SCHEMAS: Dict[str, Dict[str, List[str]]] = {
             "type",
         ],
     },
+    "hole_sections": {
+        "WELL_NAME": ["well", "well_name", "wellname", "uwi", "wellbore", "well_id"],
+        "SECTION_NAME": [
+            "name",
+            "section",
+            "section_name",
+            "hole_section",
+            "casing",
+            "casing_section",
+            "run",
+            "interval",
+        ],
+        "TOP": [
+            "top",
+            "top_md",
+            "depth_top",
+            "top_depth",
+            "md_top",
+            "from",
+            "start_depth",
+            "start",
+            "top_m",
+            "top_ft",
+        ],
+        "BOTTOM": [
+            "bottom",
+            "base",
+            "bot",
+            "bottom_md",
+            "base_md",
+            "depth_bottom",
+            "depth_base",
+            "bottom_depth",
+            "base_depth",
+            "md_bottom",
+            "to",
+            "end_depth",
+            "end",
+            "bottom_m",
+            "bottom_ft",
+            "td",
+            "shoe_depth",
+        ],
+        "BIT_SIZE": [
+            "bit_size",
+            "bitsize",
+            "bs",
+            "bit_size_in",
+            "hole_size",
+            "diameter",
+            "bit_diam",
+            "bit",
+        ],
+        "MUD_TYPE": [
+            "mud_type",
+            "mud",
+            "mud_system",
+            "fluid_system",
+            "drilling_fluid",
+            "type",
+        ],
+        "MUD_WEIGHT": [
+            "mud_weight",
+            "mw",
+            "mud_density",
+            "mud_weight_ppg",
+            "mud_wt",
+            "density_mud",
+            "rho_mud",
+        ],
+        "MUD_SALINITY": [
+            "mud_salinity",
+            "salinity",
+            "salinity_ppm",
+            "mud_filtrate_salinity",
+            "nacl_ppm",
+            "chlorides",
+        ],
+        "RMF": [
+            "rmf",
+            "r_mf",
+            "mud_filtrate_resistivity",
+            "filtrate_resistivity",
+        ],
+        "RMF_TEMP": [
+            "rmf_temp",
+            "rmf_temp_c",
+            "rmf_temperature",
+            "meas_temp",
+            "temp_rmf",
+        ],
+    },
     "rca": {
         "WELL_NAME": ["well", "well_name", "wellname", "uwi", "wellbore", "well_id"],
         "SAMPLE_NAME": [
@@ -2338,6 +2430,173 @@ def delete_perforation_project(
 
 
 # ==============================================================================
+# Hole Sections (Mud Program) Endpoints
+# ==============================================================================
+
+
+@router.get(
+    "/hole_sections",
+    summary="List wellbore hole sections for a project (optional well_name)",
+    tags=["Hole Sections"],
+)
+@router.get(
+    "/wells/{well_name}/hole_sections",
+    include_in_schema=False,
+)
+def list_hole_sections_project(project_id: int, well_name: Optional[str] = None):
+    from quick_pp.app.backend.services.workspace import _ephemeral_well_configs
+    from quick_pp.app.backend.utils.auth import is_demo_mode
+
+    def _clean_records(df: pd.DataFrame) -> List[Dict[str, Any]]:
+        if df is None or df.empty:
+            return []
+        return [
+            {
+                k: (None if isinstance(v, float) and not np.isfinite(v) else v)
+                for k, v in rec.items()
+            }
+            for rec in df.to_dict(orient="records")
+        ]
+
+    try:
+        with get_db() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            if well_name:
+                if is_demo_mode():
+                    eph = _ephemeral_well_configs.get((project_id, well_name))
+                    if isinstance(eph, dict) and "hole_sections" in eph:
+                        return {"hole_sections": list(eph["hole_sections"])}
+                well = proj.get_well(well_name)
+                df = well.get_hole_sections()
+                return {"hole_sections": _clean_records(df)}
+            all_rows = []
+            for wn in proj.get_well_names():
+                try:
+                    if is_demo_mode():
+                        eph = _ephemeral_well_configs.get((project_id, wn))
+                        if isinstance(eph, dict) and "hole_sections" in eph:
+                            for r in eph["hole_sections"]:
+                                all_rows.append({**r, "well_name": wn})
+                            continue
+                    well = proj.get_well(wn)
+                    df = well.get_hole_sections()
+                    for r in _clean_records(df):
+                        r["well_name"] = wn
+                        all_rows.append(r)
+                except Exception:
+                    continue
+            return {"hole_sections": all_rows}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to list hole sections: {e}"
+        ) from e
+
+
+@router.post(
+    "/hole_sections",
+    summary="Add or update wellbore hole sections for a project (requires well_name)",
+    tags=["Hole Sections"],
+)
+@router.post(
+    "/wells/{well_name}/hole_sections",
+    include_in_schema=False,
+)
+def add_hole_sections_project(
+    project_id: int,
+    well_name: Optional[str] = None,
+    payload: Dict[str, Any] = Body(...),
+):
+    from quick_pp.app.backend.services.workspace import _ephemeral_well_configs
+    from quick_pp.app.backend.utils.auth import is_demo_mode
+
+    if not isinstance(payload, dict) or (
+        "hole_sections" not in payload and "sections" not in payload
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Payload must be a dict with key 'hole_sections' (or 'sections').",
+        )
+    sections = (
+        payload.get("hole_sections")
+        if "hole_sections" in payload
+        else payload.get("sections")
+    ) or []
+    replace_mode = bool(payload.get("replace", False))
+    target_well = well_name or payload.get("well_name")
+    if not target_well:
+        raise HTTPException(
+            status_code=400,
+            detail="well_name must be provided as query parameter or in payload",
+        )
+    try:
+        if is_demo_mode():
+            key = (project_id, str(target_well))
+            eph = dict(_ephemeral_well_configs.get(key) or {})
+            prev = [] if replace_mode else list(eph.get("hole_sections") or [])
+            merged = prev + list(sections)
+            eph["hole_sections"] = merged
+            _ephemeral_well_configs[key] = eph
+            return {"created": sections}
+        with get_db() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            well = proj.get_well(target_well)
+            well.add_hole_sections(sections, replace=replace_mode)
+        invalidate_well_cache(project_id=project_id, well_name=str(target_well))
+        return {"created": sections}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to add hole sections: {e}"
+        ) from e
+
+
+@router.delete(
+    "/hole_sections/{section_name}",
+    summary="Delete a hole section by name (requires well_name)",
+    tags=["Hole Sections"],
+)
+@router.delete(
+    "/wells/{well_name}/hole_sections/{section_name}",
+    include_in_schema=False,
+)
+def delete_hole_section_project(
+    project_id: int, section_name: str, well_name: Optional[str] = None
+):
+    target_well = well_name
+    if not target_well:
+        raise HTTPException(
+            status_code=400,
+            detail="well_name query parameter is required to delete a hole section",
+        )
+    try:
+        with get_db() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            well = proj.get_well(target_well)
+            orm_secs = list(
+                session.scalars(
+                    select(db_objects.ORMHoleSection).filter_by(
+                        well_id=well.well_id, name=section_name
+                    )
+                ).all()
+            )
+            if not orm_secs:
+                raise ValueError(f"Hole section '{section_name}' not found")
+            for s in orm_secs:
+                session.delete(s)
+        invalidate_well_cache(project_id=project_id, well_name=str(target_well))
+        return {"deleted": section_name}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Failed to delete hole section: {e}"
+        ) from e
+
+
+# ==============================================================================
 # Phase 2 & 3: Unified Interactive Ancillary Preview & Commit Endpoints
 # ==============================================================================
 
@@ -2448,11 +2707,20 @@ def _convert_ancillary_numeric(
             return num * 0.145038
         if u in ("mpa",):
             return num * 145.038
-    if t == "TEMPERATURE":
+    if t in ("TEMPERATURE", "RMF_TEMP"):
         if u in ("degf", "f", "°f", "deg f", "fahrenheit"):
             return (num - 32.0) * 5.0 / 9.0
         if u in ("k", "kelvin"):
             return num - 273.15
+    if t == "BIT_SIZE" and u in ("mm", "millimeter", "millimetre"):
+        return num / 25.4
+    if t == "MUD_WEIGHT":
+        if u in ("g/cc", "g/cm3", "g/cm^3", "sg", "s.g.") or (not u and 0 < num <= 3.0):
+            return num * 8.3454
+        if u in ("kg/m3", "kg/m^3") or (not u and num > 500):
+            return (num / 1000.0) * 8.3454
+    if t == "MUD_SALINITY" and u in ("kppm", "g/l", "kg/m3"):
+        return num * 1000.0
     return num
 
 
@@ -2828,6 +3096,99 @@ def commit_ancillary_data(
                     if perfs_payload:
                         well.add_perforations(perfs_payload, replace=should_replace)
                         summary_by_well[wn] = len(perfs_payload)
+
+                elif dtype in ("hole_sections", "mud_program"):
+                    name_col, _ = col_map.get("SECTION_NAME", ("name", None))
+                    top_col, top_unit = col_map.get("TOP", ("top", None))
+                    bot_col, bot_unit = col_map.get("BOTTOM", ("bottom", None))
+                    bs_col, bs_unit = col_map.get("BIT_SIZE", ("bit_size", None))
+                    mt_col, _ = col_map.get("MUD_TYPE", ("mud_type", None))
+                    mw_col, mw_unit = col_map.get("MUD_WEIGHT", ("mud_weight", None))
+                    sal_col, sal_unit = col_map.get(
+                        "MUD_SALINITY", ("mud_salinity", None)
+                    )
+                    rmf_col, rmf_unit = col_map.get("RMF", ("rmf", None))
+                    rmft_col, rmft_unit = col_map.get("RMF_TEMP", ("rmf_temp", None))
+                    secs_payload = []
+                    for idx, r in enumerate(w_rows):
+                        top_v = _convert_ancillary_numeric(
+                            r.get(top_col), top_unit, "TOP"
+                        )
+                        bot_v = _convert_ancillary_numeric(
+                            r.get(bot_col), bot_unit, "BOTTOM"
+                        )
+                        if top_v is None and bot_v is None:
+                            continue
+                        if top_v is None:
+                            top_v = bot_v
+                        if bot_v is None:
+                            bot_v = top_v
+                        if bot_v < top_v:
+                            top_v, bot_v = bot_v, top_v
+                        bs_v = (
+                            _convert_ancillary_numeric(
+                                r.get(bs_col), bs_unit, "BIT_SIZE"
+                            )
+                            if bs_col
+                            else None
+                        )
+                        s_name = (
+                            str(r.get(name_col, "")).strip()
+                            if name_col and r.get(name_col) is not None
+                            else ""
+                        )
+                        if not s_name or s_name.lower() in ("nan", "none"):
+                            s_name = (
+                                f'{bs_v:g}" Section'
+                                if bs_v and bs_v > 0
+                                else f"Section-{idx + 1}"
+                            )
+                        mt_raw = (
+                            str(r.get(mt_col, "WBM")).strip().upper()
+                            if mt_col and r.get(mt_col) is not None
+                            else "WBM"
+                        )
+                        mt_v = (
+                            "OBM"
+                            if mt_raw in ("OBM", "OIL", "OIL-BASED", "OIL_BASED")
+                            else (
+                                "SBM"
+                                if mt_raw in ("SBM", "SYNTHETIC", "SOBM")
+                                else "WBM"
+                            )
+                        )
+                        secs_payload.append(
+                            {
+                                "name": s_name,
+                                "top": top_v,
+                                "bottom": bot_v,
+                                "bit_size": bs_v,
+                                "mud_type": mt_v,
+                                "mud_weight": _convert_ancillary_numeric(
+                                    r.get(mw_col), mw_unit, "MUD_WEIGHT"
+                                )
+                                if mw_col
+                                else None,
+                                "mud_salinity": _convert_ancillary_numeric(
+                                    r.get(sal_col), sal_unit, "MUD_SALINITY"
+                                )
+                                if sal_col
+                                else None,
+                                "rmf": _convert_ancillary_numeric(
+                                    r.get(rmf_col), rmf_unit, "RMF"
+                                )
+                                if rmf_col
+                                else None,
+                                "rmf_temp": _convert_ancillary_numeric(
+                                    r.get(rmft_col), rmft_unit, "RMF_TEMP"
+                                )
+                                if rmft_col
+                                else None,
+                            }
+                        )
+                    if secs_payload:
+                        well.add_hole_sections(secs_payload, replace=should_replace)
+                        summary_by_well[wn] = len(secs_payload)
 
                 elif dtype == "rca":
                     s_col, _ = col_map.get("SAMPLE_NAME", (None, None))

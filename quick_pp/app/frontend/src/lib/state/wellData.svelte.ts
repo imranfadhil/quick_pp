@@ -38,6 +38,19 @@ export interface PerforationItem {
 	description?: string;
 }
 
+export interface HoleSectionItem {
+	id: string;
+	name: string;
+	top: number;
+	bottom: number;
+	bit_size?: number | null;
+	mud_type?: string | null;
+	mud_weight?: number | null;
+	mud_salinity?: number | null;
+	rmf?: number | null;
+	rmf_temp?: number | null;
+}
+
 export type CurveEditOperation =
 	| 'add'
 	| 'subtract'
@@ -412,6 +425,7 @@ class WellDataState {
 	tops = $state<FormationTop[]>([]);
 	contacts = $state<FluidContact[]>([]);
 	perforations = $state<PerforationItem[]>([]);
+	holeSections = $state<HoleSectionItem[]>([]);
 	coreSamples = $state<Record<string, any>[]>([]);
 	originalCoreSamples = $state.raw<Record<string, any>[]>([]);
 	originalScalPc = $state.raw<Record<string, any>[]>([]);
@@ -1742,6 +1756,33 @@ class WellDataState {
 					description: p.description ?? ''
 				}))
 				.filter((p) => Number.isFinite(p.top) && Number.isFinite(p.bottom))
+				.sort((a, b) => a.top - b.top);
+			this.holeSections = (((data as any).hole_sections || []) as any[])
+				.map((s: any, i: number) => ({
+					id: String(s.id ?? `hs-${i}`),
+					name: String(s.name ?? `Section-${i + 1}`),
+					top: Number(s.top),
+					bottom: Number(s.bottom),
+					bit_size:
+						s.bit_size != null && Number.isFinite(Number(s.bit_size))
+							? Number(s.bit_size)
+							: null,
+					mud_type: s.mud_type ? String(s.mud_type).trim().toUpperCase() : '',
+					mud_weight:
+						s.mud_weight != null && Number.isFinite(Number(s.mud_weight))
+							? Number(s.mud_weight)
+							: null,
+					mud_salinity:
+						s.mud_salinity != null && Number.isFinite(Number(s.mud_salinity))
+							? Number(s.mud_salinity)
+							: null,
+					rmf: s.rmf != null && Number.isFinite(Number(s.rmf)) ? Number(s.rmf) : null,
+					rmf_temp:
+						s.rmf_temp != null && Number.isFinite(Number(s.rmf_temp))
+							? Number(s.rmf_temp)
+							: null
+				}))
+				.filter((s) => Number.isFinite(s.top) && Number.isFinite(s.bottom))
 				.sort((a, b) => a.top - b.top);
 			this.coreSamples = rawCoreList.map((s: any) => ({
 				...s,
@@ -4339,6 +4380,49 @@ class WellDataState {
 			CPERM: computeSummaryStats(newCperm, dept),
 			...(hasAmb ? { CPORE_AMB: computeSummaryStats(newCporeAmb, dept) } : {}),
 			...(hasAir ? { CPERM_AIR: computeSummaryStats(newCpermAir, dept) } : {})
+		};
+	}
+
+	/**
+	 * Rebuild in-memory `BS` (bit size) curve from `this.holeSections` so Track 1 (`CALI / BS`)
+	 * updates immediately when hole sections are added, edited, or deleted.
+	 */
+	syncBitSizeCurveFromHoleSections() {
+		const dept = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
+		if (dept.length === 0) return;
+
+		const validSections = [...this.holeSections]
+			.filter(
+				(s) =>
+					Number.isFinite(Number(s.top)) &&
+					Number(s.bottom) > Number(s.top) &&
+					s.bit_size != null &&
+					Number.isFinite(Number(s.bit_size)) &&
+					Number(s.bit_size) > 0
+			)
+			.sort((a, b) => Number(a.top) - Number(b.top));
+
+		if (validSections.length === 0) return;
+
+		const newBs = dept.map((d) => {
+			if (!Number.isFinite(d)) return Number.NaN;
+			let val = Number.NaN;
+			for (const s of validSections) {
+				if (d >= Number(s.top) && d <= Number(s.bottom)) {
+					val = Number(s.bit_size);
+				}
+			}
+			return val;
+		});
+		if (!newBs.some((v) => Number.isFinite(v))) return;
+
+		this.curves = {
+			...this.curves,
+			BS: newBs
+		};
+		this.stats = {
+			...this.stats,
+			BS: computeSummaryStats(newBs, dept)
 		};
 	}
 

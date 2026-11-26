@@ -278,3 +278,53 @@ def test_in_gauge_two_curve_wbm_does_not_inflate_rt_or_invent_invasion():
     assert (out["INVASION_FLAG"] == 0).all()
     assert out["DI_EST"].isna().all()
     assert out["RXO_EST"].isna().all()
+
+
+def test_mud_program_uses_measured_depth_on_deviated_wells_and_overrides_stale_bs():
+    md = np.array([1000.0, 1400.0, 1600.0, 2200.0])
+    tvd = np.array([950.0, 1250.0, 1380.0, 1480.0])  # TVD stays < 1500m while MD crosses 1500m!
+    df = pd.DataFrame(
+        {
+            "DEPTH": md,
+            "TVD": tvd,
+            "BS": [6.0, 6.0, 6.0, 6.0],  # stale BS column
+            "CALI": [12.3, 12.3, 8.6, 8.6],
+            "GR": [55.0, 60.0, 65.0, 70.0],
+            "NPHI": [0.22, 0.21, 0.20, 0.19],
+            "RHOB": [2.30, 2.32, 2.35, 2.38],
+            "RT": [15.0, 18.0, 25.0, 30.0],
+        }
+    )
+    env = environment_from_config(
+        {
+            "surface_temp": 20.0,
+            "temp_gradient_c_per_km": 30.0,
+            "mud_program": [
+                {
+                    "top": 0.0,
+                    "bottom": 1500.0,
+                    "bit_size": 12.25,
+                    "mud_type": "WBM",
+                    "mud_weight": 9.5,
+                    "salinity_ppm": 25000.0,
+                },
+                {
+                    "top": 1500.0,
+                    "bottom": 2500.0,
+                    "bit_size": 8.5,
+                    "mud_type": "OBM",
+                    "mud_weight": 12.0,
+                },
+            ],
+        }
+    )
+    assert not any("Mud weight not provided" in a for a in env.assumptions)
+
+    out = apply_environmental_corrections(df, depth_unit="m", environment=env)
+    # MD < 1500 -> 12.25" WBM; MD >= 1500 (even though TVD < 1500!) -> 8.5" OBM
+    assert list(out["ENV_BS"]) == [12.25, 12.25, 8.5, 8.5]
+    assert out["ENV_RMF"].iloc[0] > 0 and out["ENV_RMF"].iloc[1] > 0
+    assert np.isnan(out["ENV_RMF"].iloc[2]) and np.isnan(out["ENV_RMF"].iloc[3])
+    # Temperature still uses TVD (20 + 30 * 1.480 = 64.4 C at last sample)
+    assert np.isclose(out["ENV_TEMP_C"].iloc[-1], 20.0 + 30.0 * 1.480)
+

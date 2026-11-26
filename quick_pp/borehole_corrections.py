@@ -779,7 +779,12 @@ def apply_environmental_corrections(
         temp_explicit = bool(env.explicit.get("temperature"))
     temp_f = c_to_f(temp_c)
 
-    mud = env.mud_arrays(d_vals, temp_c)
+    md_vals = (
+        pd.to_numeric(out_df["DEPTH"], errors="coerce").to_numpy(dtype=float)
+        if "DEPTH" in out_df.columns
+        else d_vals
+    )
+    mud = env.mud_arrays(md_vals, temp_c)
     is_oil = mud["is_oil"]
     mw_ppg = mud["mud_weight_ppg"].copy()
     if isinstance(mud_weight, str) and mud_weight in out_df.columns:
@@ -813,7 +818,7 @@ def apply_environmental_corrections(
     prog_bs = pd.Series(
         np.where(mud["bit_size_explicit"], mud["bit_size_in"], np.nan), index=idx
     )
-    bs_s = bs_s.fillna(prog_bs)
+    bs_s = prog_bs.combine_first(bs_s)
     if bs_s.isna().any() and auto_bitsize:
         est = _estimate_bit_size(out_df, float(env.default_bit_size_in))
         if est is not None:

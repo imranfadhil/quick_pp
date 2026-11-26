@@ -252,6 +252,12 @@ export function describeApiEndpoint(method: string, rawUrl: string): EndpointSta
 					done: `Perforations saved (${wellName})`,
 					detail: wellName
 				};
+			case 'hole_sections':
+				return {
+					active: `Saving hole sections (${wellName})...`,
+					done: `Hole sections saved (${wellName})`,
+					detail: wellName
+				};
 			case 'core_samples':
 				return {
 					active: `Saving core plug samples (${wellName})...`,
@@ -604,11 +610,20 @@ export async function saveAncillaryItems(
 		| 'formation_tops'
 		| 'fluid_contacts'
 		| 'perforations'
+		| 'hole_sections'
 		| 'core_samples'
 		| 'scal_pc'
 		| 'pressure_tests'
 		| 'well_surveys',
-	payloadKey: 'tops' | 'contacts' | 'perforations' | 'samples' | 'pc_data' | 'tests' | 'surveys',
+	payloadKey:
+		| 'tops'
+		| 'contacts'
+		| 'perforations'
+		| 'hole_sections'
+		| 'samples'
+		| 'pc_data'
+		| 'tests'
+		| 'surveys',
 	items: Record<string, any>[],
 	replace: boolean = true
 ) {
@@ -652,6 +667,7 @@ export async function deleteAncillaryItem(
 		| 'formation_tops'
 		| 'fluid_contacts'
 		| 'perforations'
+		| 'hole_sections'
 		| 'core_samples'
 		| 'scal_pc'
 		| 'pressure_tests',

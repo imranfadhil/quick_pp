@@ -59,27 +59,30 @@ export const CROSSPLOTS: readonly CrossplotDefinition[] = [
 	{
 		id: 'histogram',
 		label: 'Single-Well Histogram',
-		single: { group: 'Step 1 · Data & QAQC', steps: ['qaqc', 'toc'], autoFor: ['qaqc'] }
+		single: { group: 'Step 2 · Data & QAQC', steps: ['qaqc', 'toc'], autoFor: ['qaqc'] }
 	},
 	{
 		id: 'curve-depth',
 		label: 'Curve Editor · Log vs Depth',
-		single: { group: 'Step 1 · Data & QAQC', steps: ['qaqc', 'toc'] }
+		single: { group: 'Step 2 · Data & QAQC', steps: ['qaqc', 'toc'] }
 	},
 	{
 		id: 'env-corr-qc',
 		label: 'Borehole Env Correction QC',
-		single: { group: 'Step 1 · Data & QAQC', steps: ['qaqc'] }
+		single: { group: 'Step 2 · Data & QAQC', steps: ['qaqc'] }
 	},
 	{
 		id: 'temp-pressure',
 		label: 'Temperature & Pressure Profile',
-		single: { group: 'Step 1 · Data & QAQC', steps: ['qaqc', 'ancillary', 'litho-poro'] }
+		single: {
+			group: 'Step 1 · Well & Ancillary',
+			steps: ['ancillary', 'qaqc', 'litho-poro']
+		}
 	},
 	{
 		id: 'enhanced-vs-raw',
 		label: 'Resolution Enhanced vs. Raw',
-		single: { group: 'Step 1 · Data & QAQC', steps: ['qaqc'] }
+		single: { group: 'Step 2 · Data & QAQC', steps: ['qaqc'] }
 	},
 	{
 		id: 'nphi-rhob',

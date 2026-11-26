@@ -10,6 +10,7 @@
 
 	let activeTab = $state<
 		| 'las'
+		| 'hole_sections'
 		| 'formation_tops'
 		| 'fluid_contacts'
 		| 'perforations'
@@ -363,6 +364,7 @@
 			>
 				{#each [
 					['las', 'LAS / DLIS / Parquet Logs'],
+					['hole_sections', 'Hole Sections'],
 					['formation_tops', 'Formation Tops'],
 					['fluid_contacts', 'Fluid Contacts'],
 					['perforations', 'Perforations'],

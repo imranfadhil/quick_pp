@@ -186,6 +186,12 @@ class Well(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    hole_sections: Mapped[List["HoleSection"]] = relationship(
+        "HoleSection",
+        back_populates="well",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
     __table_args__ = (UniqueConstraint("project_id", "uwi", name="uq_project_id_uwi"),)
 
@@ -303,6 +309,40 @@ class Perforation(Base):
 
     def __repr__(self):
         return f"<Perforation(perf_id={self.perf_id}, well_id={self.well_id}, name='{self.name}', top={self.top}, bottom={self.bottom})>"
+
+
+class HoleSection(Base):
+    __tablename__ = "hole_sections"
+
+    section_id: Mapped[int] = mapped_column(
+        Integer, primary_key=True, autoincrement=True
+    )
+    well_id: Mapped[int] = mapped_column(
+        ForeignKey("wells.well_id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    top: Mapped[float] = mapped_column(REAL, nullable=False)
+    bottom: Mapped[float] = mapped_column(REAL, nullable=False)
+    bit_size: Mapped[Optional[float]] = mapped_column(REAL, nullable=True)  # inches
+    mud_type: Mapped[Optional[str]] = mapped_column(
+        String(20), default="WBM", nullable=True
+    )  # WBM | OBM | SBM
+    mud_weight: Mapped[Optional[float]] = mapped_column(REAL, nullable=True)  # ppg
+    mud_salinity: Mapped[Optional[float]] = mapped_column(REAL, nullable=True)  # ppm
+    rmf: Mapped[Optional[float]] = mapped_column(REAL, nullable=True)  # ohm.m
+    rmf_temp: Mapped[Optional[float]] = mapped_column(REAL, nullable=True)  # degC
+
+    well: Mapped["Well"] = relationship("Well", back_populates="hole_sections")
+
+    __table_args__ = (
+        UniqueConstraint("well_id", "name", "top", "bottom", name="uq_well_id_hole_section"),
+    )
+
+    def __repr__(self):
+        return (
+            f"<HoleSection(section_id={self.section_id}, well_id={self.well_id}, "
+            f"name='{self.name}', top={self.top}, bottom={self.bottom}, bit_size={self.bit_size})>"
+        )
 
 
 class Curve(Base):

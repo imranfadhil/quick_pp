@@ -730,6 +730,54 @@ def _resolve_fluid_zone_array(
     return zone
 
 
+def _load_well_hole_sections(
+    project_id: int, well_name: str
+) -> List[Dict[str, Any]]:
+    """Load hole sections (mud program intervals) for a well from ephemeral config or DB."""
+    if _isolated_evaluation.get() is not None:
+        return []
+    eph = _ephemeral_well_configs.get(
+        (project_id, well_name)
+    ) or _ephemeral_well_configs.get(
+        (project_id, resolve_db_well_name(project_id, well_name))
+    )
+    if isinstance(eph, dict) and isinstance(eph.get("hole_sections"), list):
+        return list(eph["hole_sections"])
+    try:
+        with get_db() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            well_obj = proj.get_well(resolve_db_well_name(project_id, well_name))
+            hs_df = well_obj.get_hole_sections()
+            if isinstance(hs_df, pd.DataFrame) and not hs_df.empty:
+                return hs_df.to_dict(orient="records")
+    except Exception:
+        pass
+    return []
+
+
+def _synthesize_bitsize_series(
+    depths: pd.Series, hole_sections: List[Dict[str, Any]]
+) -> pd.Series:
+    """Synthesize a depth-aligned nominal Bit Size (BS) series from hole sections."""
+    d_arr = pd.to_numeric(depths, errors="coerce").to_numpy(dtype=float)
+    bs_arr = np.full(len(d_arr), np.nan, dtype=float)
+    for sec in hole_sections or []:
+        try:
+            top_v = float(sec.get("top"))
+            bot_v = float(sec.get("bottom"))
+            bs_v = sec.get("bit_size")
+            if bs_v is None or not np.isfinite(float(bs_v)) or float(bs_v) <= 0:
+                continue
+            bs_f = float(bs_v)
+        except (TypeError, ValueError):
+            continue
+        if bot_v < top_v:
+            top_v, bot_v = bot_v, top_v
+        mask = np.isfinite(d_arr) & (d_arr >= top_v) & (d_arr <= bot_v)
+        bs_arr[mask] = bs_f
+    return pd.Series(bs_arr, index=depths.index, dtype=float)
+
+
 def _compute_continuous_rho_fluid(
     df: pd.DataFrame,
     depth: pd.Series,
@@ -739,6 +787,7 @@ def _compute_continuous_rho_fluid(
     well_header: Optional[Dict[str, Any]] = None,
     contacts: Optional[List[Dict[str, Any]]] = None,
     badhole_mask: Optional[pd.Series] = None,
+    hole_sections: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, np.ndarray]:
     """Run the continuous RHO_FL engine for the valid samples of a well.
 
@@ -912,6 +961,124 @@ def _compute_continuous_rho_fluid(
         if badhole_mask is not None
         else np.zeros(n, dtype=bool)
     )
+
+    # Apply per-interval mud properties from Hole Sections when enabled and available
+    if getattr(cfg, "use_hole_sections", True) and hole_sections:
+        d_arr = pd.to_numeric(depth, errors="coerce").to_numpy(dtype=float)
+        sec_mud_types = np.full(n, mud_type, dtype=object)
+        default_sal = float(salinity_ppm) if salinity_ppm is not None else np.nan
+        sec_sal = np.full(n, default_sal, dtype=float)
+        sec_rmf = np.full(
+            n,
+            float(rmf_surface) if (rmf_surface is not None and rmf_surface > 0) else np.nan,
+            dtype=float,
+        )
+        sec_rmf_t = np.full(n, float(rmf_temp_c), dtype=float)
+        any_matched = False
+        for sec in hole_sections:
+            try:
+                t_v = float(sec.get("top"))
+                b_v = float(sec.get("bottom"))
+            except (TypeError, ValueError):
+                continue
+            if b_v < t_v:
+                t_v, b_v = b_v, t_v
+            sel = np.isfinite(d_arr) & (d_arr >= t_v) & (d_arr <= b_v)
+            if not sel.any():
+                continue
+            any_matched = True
+            s_mt = str(sec.get("mud_type") or mud_type).strip().upper()
+            if s_mt in ("WBM", "OBM", "SBM"):
+                sec_mud_types[sel] = s_mt
+            s_sal = sec.get("mud_salinity")
+            if s_sal is not None and np.isfinite(float(s_sal)):
+                sec_sal[sel] = float(s_sal)
+            s_rmf = sec.get("rmf")
+            if s_rmf is not None and np.isfinite(float(s_rmf)) and float(s_rmf) > 0:
+                sec_rmf[sel] = float(s_rmf)
+            s_rmft = sec.get("rmf_temp")
+            if s_rmft is not None and np.isfinite(float(s_rmft)):
+                sec_rmf_t[sel] = float(s_rmft)
+
+        if any_matched:
+            from quick_pp.environment import arps_resistivity
+            from quick_pp.fluid_type import brine_density
+            from quick_pp.porosity import salinity_from_rmf
+
+            is_obm_mask = np.isin(sec_mud_types, ["OBM", "SBM"])
+            # Back-fill WBM salinity from section Rmf where salinity wasn't explicitly set
+            need_sal = (~is_obm_mask) & (~np.isfinite(sec_sal)) & np.isfinite(sec_rmf)
+            if need_sal.any():
+                for idx_s in np.flatnonzero(need_sal):
+                    sec_sal[idx_s] = salinity_from_rmf(
+                        float(sec_rmf[idx_s]), float(sec_rmf_t[idx_s])
+                    )
+
+            rmf_dh_sec = np.full(n, np.nan, dtype=float)
+            has_s_rmf = (~is_obm_mask) & np.isfinite(sec_rmf) & (sec_rmf > 0)
+            if has_s_rmf.any():
+                rmf_dh_sec[has_s_rmf] = arps_resistivity(
+                    sec_rmf[has_s_rmf], sec_rmf_t[has_s_rmf], temp_arr[has_s_rmf]
+                )
+            need_rmf_dh = (~is_obm_mask) & (~np.isfinite(rmf_dh_sec)) & np.isfinite(sec_sal)
+            if need_rmf_dh.any():
+                rho_mf_p = brine_density(
+                    temp_arr[need_rmf_dh], pres_arr[need_rmf_dh], sec_sal[need_rmf_dh]
+                )
+                rmf_dh_sec[need_rmf_dh] = np.where(
+                    rho_mf_p > 0, 0.9 / np.maximum(rho_mf_p, 0.5), np.nan
+                )
+
+            def _run_slice(mask: np.ndarray, m_type: str) -> Dict[str, np.ndarray]:
+                sal_in = (
+                    None
+                    if m_type != "WBM"
+                    else np.where(np.isfinite(sec_sal[mask]), sec_sal[mask], 5000.0)
+                )
+                rmf_dh_in = None if m_type != "WBM" else rmf_dh_sec[mask]
+                return estimate_continuous_rho_fluid(
+                    rhob=rhob_v[mask],
+                    rhoma=rho_ma[mask] if np.ndim(rho_ma) > 0 else rho_ma,
+                    tvd=tvd_v[mask],
+                    temp_c=temp_arr[mask],
+                    pressure_mpa=pres_arr[mask],
+                    mud_type=m_type,
+                    salinity_ppm=sal_in,
+                    rmf=None,
+                    rmf_temp_c=rmf_temp_c,
+                    obm_base_density=obm_base,
+                    rho_w=None,
+                    rho_h_app=rho_h_app[mask],
+                    rxo=rxo[mask] if rxo is not None else None,
+                    rt=rt[mask] if rt is not None else None,
+                    rmf_downhole=rmf_dh_in,
+                    rw_downhole=rw_downhole[mask],
+                    badhole_flag=badhole_arr[mask],
+                    fluid_zone=fluid_zone[mask],
+                    a=cfg.a,
+                    m=cfg.m,
+                    n=cfg.n,
+                    flush_exponent=cfg.flush_exponent,
+                    default_shr_gas=cfg.default_shr_gas,
+                    default_shr_oil=cfg.default_shr_oil,
+                    max_iter=cfg.max_iter,
+                    tol=cfg.tol,
+                )
+
+            if is_obm_mask.all():
+                return _run_slice(np.ones(n, dtype=bool), "OBM")
+            if (~is_obm_mask).all():
+                return _run_slice(np.ones(n, dtype=bool), "WBM")
+            wbm_mask = ~is_obm_mask
+            res_w = _run_slice(wbm_mask, "WBM")
+            res_o = _run_slice(is_obm_mask, "OBM")
+            combined_res: Dict[str, np.ndarray] = {}
+            for k in res_w.keys():
+                arr = np.empty(n, dtype=res_w[k].dtype)
+                arr[wbm_mask] = res_w[k]
+                arr[is_obm_mask] = res_o[k]
+                combined_res[k] = arr
+            return combined_res
 
     result = estimate_continuous_rho_fluid(
         rhob=rhob_v,
@@ -1388,6 +1555,10 @@ def _apply_qc_weighted_inputs(df: pd.DataFrame, req: Any) -> pd.DataFrame:
 
 
 class WorkspaceBadholeRequest(WorkspaceFilterBase):
+    use_hole_sections: bool = Field(
+        True,
+        description="Use nominal bit sizes per depth interval from Hole Sections table when available (False = manual/auto override)",
+    )
     use_cali: bool = Field(
         True, description="Flag badhole using Differential Caliper |CALI - BS|"
     )
@@ -2935,6 +3106,53 @@ def workspace_well_bundle(
             if p.get("top") is not None
         ]
 
+        hs_raw = (
+            list(eph_cfg["hole_sections"])
+            if (isinstance(eph_cfg, dict) and isinstance(eph_cfg.get("hole_sections"), list))
+            else _df_or_list(ancillary.get("hole_sections"))
+        )
+        hole_sections = [
+            {
+                "id": f"hs-{i}-{s.get('name', i)}",
+                "name": str(s.get("name") or f"Section-{i + 1}"),
+                "top": float(s.get("top", 0.0)),
+                "bottom": float(s.get("bottom", s.get("top", 0.0))),
+                "bit_size": float(s["bit_size"])
+                if s.get("bit_size") is not None and pd.notna(s.get("bit_size"))
+                else None,
+                "mud_type": str(s.get("mud_type") or "WBM").upper(),
+                "mud_weight": float(s["mud_weight"])
+                if s.get("mud_weight") is not None and pd.notna(s.get("mud_weight"))
+                else None,
+                "mud_salinity": float(s["mud_salinity"])
+                if s.get("mud_salinity") is not None and pd.notna(s.get("mud_salinity"))
+                else None,
+                "rmf": float(s["rmf"])
+                if s.get("rmf") is not None and pd.notna(s.get("rmf"))
+                else None,
+                "rmf_temp": float(s["rmf_temp"])
+                if s.get("rmf_temp") is not None and pd.notna(s.get("rmf_temp"))
+                else None,
+            }
+            for i, s in enumerate(hs_raw)
+            if s.get("top") is not None
+        ]
+        if (
+            hole_sections
+            and depth_s is not None
+            and (
+                "BS" not in curves_map
+                or not any(v is not None for v in curves_map.get("BS", []))
+            )
+        ):
+            bs_synth = _synthesize_bitsize_series(depth_s, hole_sections)
+            if bs_synth.notna().any():
+                curves_map["BS"] = [
+                    round(float(x), 4) if pd.notna(x) else None
+                    for x in bs_synth.tolist()
+                ]
+                stats["BS"] = _curve_summary_stats(bs_synth, depth_s)
+
         core_samples_list: List[Dict[str, Any]] = []
         scal_pc_list: List[Dict[str, Any]] = []
         pc_scale_saved = (
@@ -3174,6 +3392,7 @@ def workspace_well_bundle(
                 "tops": tops,
                 "contacts": contacts,
                 "perforations": perforations,
+                "hole_sections": hole_sections,
                 "core_samples": core_samples_list,
                 "scal_pc": scal_pc_list,
                 "pressure_tests": _df_or_list(ancillary.get("pressure_tests")),
@@ -3926,8 +4145,15 @@ def workspace_badhole_flagging(
             project_id, well_name, req.min_depth, req.max_depth, req.zones
         )
         # Drop any previously generated BS column so re-running with updated
-        # auto_bitsize / bitsize_default parameters always recomputes BS fresh.
+        # auto_bitsize / bitsize_default / hole_sections parameters always recomputes BS fresh.
         df_bh_input = df.drop(columns=["BS"], errors="ignore")
+        if req.use_hole_sections and "DEPTH" in df_bh_input.columns:
+            hs_list = _load_well_hole_sections(project_id, well_name)
+            if hs_list:
+                bs_from_hs = _synthesize_bitsize_series(df_bh_input["DEPTH"], hs_list)
+                if bs_from_hs.notna().any():
+                    df_bh_input = df_bh_input.copy()
+                    df_bh_input["BS"] = bs_from_hs
         bh_df = badhole_flagging(
             df_bh_input,
             thold=float(req.cali_threshold),
@@ -5990,6 +6216,11 @@ def workspace_porosity(
                 well_header = {**well_header, **eph_hdr}
 
             bh_mask = _resolve_badhole_mask(df, auto_detect_if_missing=False)
+            hs_for_rho = (
+                _load_well_hole_sections(project_id, well_name)
+                if getattr(fd_cfg, "use_hole_sections", True)
+                else []
+            )
             rho_fl_result = _compute_continuous_rho_fluid(
                 df=df.loc[valid_mask],
                 depth=df.loc[valid_mask, "DEPTH"],
@@ -5999,6 +6230,7 @@ def workspace_porosity(
                 well_header=well_header,
                 contacts=contacts,
                 badhole_mask=bh_mask.loc[valid_mask],
+                hole_sections=hs_for_rho,
             )
             phid_engine = np.asarray(rho_fl_result["PHID"], dtype=float)
             phid_v = np.where(np.isfinite(phid_engine), phid_engine, phid_v)
@@ -11257,6 +11489,10 @@ class WorkspaceEnvCorrectionRequest(WorkspaceFilterBase):
     rmf: Optional[float] = Field(None)
     rmf_temp_c: Optional[float] = Field(None)
     mud_program: Optional[List[EnvMudIntervalModel]] = Field(None)
+    use_hole_sections: bool = Field(
+        True,
+        description="Use mud program intervals from Hole Sections table when available (False = manual scalar override)",
+    )
     washout_thold: float = Field(2.0, gt=0)
     good_conf: float = Field(0.8, ge=0, le=1)
     unreliable_conf: float = Field(0.4, ge=0, le=1)
@@ -12809,6 +13045,38 @@ def _run_env_corrections(
         overrides["bht_records"] = [r.model_dump() for r in req.bht_records]
     if req.mud_program:
         overrides["mud_program"] = [iv.model_dump() for iv in req.mud_program]
+    elif getattr(req, "use_hole_sections", True):
+        hs_rows = _load_well_hole_sections(project_id, well_name)
+        if hs_rows:
+            overrides["mud_program"] = [
+                {
+                    "top": float(s["top"]),
+                    "bottom": float(s["bottom"]),
+                    "bit_size_in": float(s["bit_size"])
+                    if s.get("bit_size") is not None
+                    else None,
+                    "mud_type": str(s.get("mud_type") or "WBM").upper(),
+                    "mud_weight_ppg": float(s["mud_weight"])
+                    if s.get("mud_weight") is not None
+                    else None,
+                    "salinity_ppm": float(s["mud_salinity"])
+                    if s.get("mud_salinity") is not None
+                    else None,
+                    "rmf": float(s["rmf"]) if s.get("rmf") is not None else None,
+                    "rmf_temp_c": float(s["rmf_temp"])
+                    if s.get("rmf_temp") is not None
+                    else None,
+                }
+                for s in hs_rows
+                if s.get("top") is not None and s.get("bottom") is not None
+            ]
+    use_hs = bool(getattr(req, "use_hole_sections", True))
+    if not use_hs:
+        cfg.pop("mud_program", None)
+        if req.bitsize_default is not None:
+            overrides["bit_size"] = float(req.bitsize_default)
+    elif req.bitsize_default is not None and not cfg.get("bit_size"):
+        overrides["bit_size"] = float(req.bitsize_default)
     if cfg.get("mud_type") is None and req.mud_type is None:
         cfg["mud_type"] = "WBM"
     if cfg.get("mud_type") is not None and str(cfg["mud_type"]).upper() not in (
@@ -12821,9 +13089,16 @@ def _run_env_corrections(
     if unit_note:
         env.assumptions.insert(0, unit_note)
 
+    df_env_in = df if use_hs else df.drop(columns=["BS"], errors="ignore")
+    eff_bs_default = (
+        float(cfg.get("bit_size") or req.bitsize_default)
+        if use_hs
+        else float(req.bitsize_default or 8.5)
+    )
+
     corr_df = apply_environmental_corrections(
-        df,
-        bitsize_default=float(cfg.get("bit_size") or req.bitsize_default),
+        df_env_in,
+        bitsize_default=eff_bs_default,
         rho_mudcake=req.rho_mudcake,
         depth_unit=depth_unit,
         mud_type=env.default_mud_type,
@@ -12833,6 +13108,7 @@ def _run_env_corrections(
         tool_type=req.tool_type,
         environment=env,
         res_tool=req.res_tool,
+        auto_bitsize=use_hs,
     )
     out_cols = [
         f"{log}{suf}"
@@ -13398,8 +13674,16 @@ def workspace_multi_well_badhole_flagging(
 
         for wdf in dfs:
             wn = str(wdf["WELL_NAME"].iloc[0])
+            wdf_bh = wdf.drop(columns=["BS"], errors="ignore")
+            if req.use_hole_sections and "DEPTH" in wdf_bh.columns:
+                hs_list = _load_well_hole_sections(project_id, wn)
+                if hs_list:
+                    bs_from_hs = _synthesize_bitsize_series(wdf_bh["DEPTH"], hs_list)
+                    if bs_from_hs.notna().any():
+                        wdf_bh = wdf_bh.copy()
+                        wdf_bh["BS"] = bs_from_hs
             bh_df = badhole_flagging(
-                wdf,
+                wdf_bh,
                 thold=req.cali_threshold,
                 use_cali=req.use_cali,
                 auto_bitsize=req.auto_bitsize,

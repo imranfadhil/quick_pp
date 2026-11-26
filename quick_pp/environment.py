@@ -90,26 +90,32 @@ class MudInterval:
         if mt not in MUD_TYPES:
             raise ValueError(f"mud_type must be one of {MUD_TYPES}, got {mt!r}")
 
-        def _f(key):
-            v = d.get(key)
-            try:
-                return None if v is None else float(v)
-            except (TypeError, ValueError):
-                return None
+        def _f(*keys):
+            for key in keys:
+                v = d.get(key)
+                if v is None:
+                    continue
+                try:
+                    fv = float(v)
+                    if np.isfinite(fv):
+                        return fv
+                except (TypeError, ValueError):
+                    continue
+            return None
 
         return cls(
             top=float(d["top"]),
             bottom=float(d["bottom"]),
-            bit_size_in=_f("bit_size_in"),
+            bit_size_in=_f("bit_size_in", "bit_size"),
             mud_type=mt,
-            mud_weight_ppg=_f("mud_weight_ppg"),
+            mud_weight_ppg=_f("mud_weight_ppg", "mud_weight", "mud_density"),
             rm=_f("rm"),
-            rm_temp_c=_f("rm_temp_c"),
+            rm_temp_c=_f("rm_temp_c", "rm_temp"),
             rmf=_f("rmf"),
-            rmf_temp_c=_f("rmf_temp_c"),
+            rmf_temp_c=_f("rmf_temp_c", "rmf_temp"),
             rmc=_f("rmc"),
-            rmc_temp_c=_f("rmc_temp_c"),
-            salinity_ppm=_f("salinity_ppm"),
+            rmc_temp_c=_f("rmc_temp_c", "rmc_temp"),
+            salinity_ppm=_f("salinity_ppm", "mud_salinity", "mud_salinity_ppm"),
         )
 
 
@@ -378,10 +384,6 @@ def environment_from_config(
     if mw is not None:
         env.default_mud_weight_ppg = float(mud_weight_to_ppg(mw))
         env.explicit["mud_weight"] = True
-    else:
-        notes.append(
-            f"Mud weight not provided; assumed {env.default_mud_weight_ppg:.1f} ppg."
-        )
     bs = _num(cfg.get("bit_size"))
     if bs is not None and bs > 0:
         env.default_bit_size_in = bs
@@ -399,8 +401,17 @@ def environment_from_config(
 
     prog = cfg.get("mud_program") or []
     for item in prog:
-        env.mud_program.append(
-            item if isinstance(item, MudInterval) else MudInterval.from_dict(item)
+        iv = item if isinstance(item, MudInterval) else MudInterval.from_dict(item)
+        env.mud_program.append(iv)
+        if iv.mud_weight_ppg is not None and iv.mud_weight_ppg > 0:
+            env.explicit["mud_weight"] = True
+        if iv.bit_size_in is not None and iv.bit_size_in > 0:
+            env.explicit["bit_size"] = True
+        if iv.salinity_ppm is not None or (iv.rmf is not None and iv.rmf > 0):
+            env.explicit["mud_salinity"] = True
+    if not env.explicit.get("mud_weight"):
+        notes.append(
+            f"Mud weight not provided; assumed {env.default_mud_weight_ppg:.1f} ppg."
         )
     def _mud_temp_c(key):
         t = _num(cfg.get(key))

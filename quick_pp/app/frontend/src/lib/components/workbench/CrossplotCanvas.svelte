@@ -209,7 +209,7 @@
 			case 'grain-density':
 				return hasTrace((name) => name === 'Core grain density')
 					? null
-					: 'No core grain density (CGD) paired with a GR/CGR driver in the selection. Add grain density in Tops & Ancillary → RCA and check the driver log.';
+					: 'No core grain density (CGD) paired with a GR/CGR driver in the selection. Add grain density in Well & Ancillary → RCA and check the driver log.';
 			default:
 				return null;
 		}

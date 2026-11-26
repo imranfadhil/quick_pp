@@ -2,6 +2,7 @@
   import WellSelector from './WellSelector.svelte';
   export let projectId: string | number;
   export let type:
+    | 'hole_sections'
     | 'formation_tops'
     | 'fluid_contacts'
     | 'perforations'
@@ -61,6 +62,7 @@
   let importMode: 'merge' | 'append_only' | 'replace' = 'merge';
 
   const BACKEND_DATA_TYPE_MAP: Record<string, string> = {
+    hole_sections: 'hole_sections',
     formation_tops: 'tops',
     fluid_contacts: 'contacts',
     perforations: 'perforations',
@@ -71,6 +73,7 @@
   };
 
   const DATA_TYPE_DESCRIPTIONS: Record<string, string> = {
+    hole_sections: 'Map columns for Well Name (or select Target Well), Top MD, Bottom MD, Bit Size (in), Mud Type (WBM/OBM/SBM), Mud Weight (ppg), Mud Salinity (ppm), and Rmf.',
     formation_tops: 'Map columns for Well Name (or select Target Well), Formation/Marker Name, and Measured Depth (MD).',
     fluid_contacts: 'Map columns for Well Name (or select Target Well), Contact Type (OWC/GOC/GWC/FWL), and Depth.',
     perforations: 'Map columns for Well Name (or select Target Well), Perforation Name, Top MD, Bottom MD, and Description.',
@@ -81,6 +84,18 @@
   };
 
   const TARGET_COLUMN_OPTIONS: Record<string, Array<{ key: string; label: string; required?: boolean }>> = {
+    hole_sections: [
+      { key: 'WELL_NAME', label: 'WELL_NAME — Well Name / UWI' },
+      { key: 'SECTION_NAME', label: 'SECTION_NAME — Hole / Casing Section Name' },
+      { key: 'TOP', label: 'TOP — Section Top MD *', required: true },
+      { key: 'BOTTOM', label: 'BOTTOM — Section Bottom MD *', required: true },
+      { key: 'BIT_SIZE', label: 'BIT_SIZE — Bit Size (in; mm auto-converted)' },
+      { key: 'MUD_TYPE', label: 'MUD_TYPE — Mud System (WBM / OBM / SBM)' },
+      { key: 'MUD_WEIGHT', label: 'MUD_WEIGHT — Mud Weight (ppg; g/cc & SG auto-converted)' },
+      { key: 'MUD_SALINITY', label: 'MUD_SALINITY — Mud Filtrate Salinity (ppm; kppm auto-converted)' },
+      { key: 'RMF', label: 'RMF — Mud Filtrate Resistivity (ohm.m)' },
+      { key: 'RMF_TEMP', label: 'RMF_TEMP — Rmf Measurement Temperature (degC; degF auto-converted)' }
+    ],
     formation_tops: [
       { key: 'WELL_NAME', label: 'WELL_NAME — Well Name / UWI' },
       { key: 'TOP_NAME', label: 'TOP_NAME — Formation / Marker Name *', required: true },
@@ -494,6 +509,7 @@
           bind:value={type}
           class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2.5 pr-7 py-0 text-xs font-medium text-[var(--text-primary)]"
         >
+          <option value="hole_sections">Hole Sections (Bit Size &amp; Mud Program)</option>
           <option value="formation_tops">Formation Tops</option>
           <option value="fluid_contacts">Fluid Contacts</option>
           <option value="perforations">Perforations</option>

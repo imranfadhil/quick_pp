@@ -175,6 +175,8 @@
 		let contactsWells = 0;
 		let perfsTotal = 0;
 		let perfsWells = 0;
+		let holeTotal = 0;
+		let holeWells = 0;
 		let pressureTotal = 0;
 		let pressureWells = 0;
 		let surveyTotal = 0;
@@ -210,6 +212,11 @@
 				perfsTotal += perfs;
 				perfsWells++;
 			}
+			const holes = (w as any).hole_section_count ?? (w as any).hole_sections?.length ?? 0;
+			if (holes > 0) {
+				holeTotal += holes;
+				holeWells++;
+			}
 			const press = w.pressure_test_count ?? w.pressure_tests_count ?? 0;
 			if (press > 0) {
 				pressureTotal += press;
@@ -236,6 +243,8 @@
 			contactsWells,
 			perfsTotal,
 			perfsWells,
+			holeTotal,
+			holeWells,
 			pressureTotal,
 			pressureWells,
 			surveyTotal,
@@ -629,6 +638,21 @@
 						{ancillaryTotals.surveyTotal}
 						<span class="text-[9px] font-normal text-[var(--text-secondary)]">
 							({ancillaryTotals.surveyWells}/{ancillaryTotals.totalWells}w)
+						</span>
+					</div>
+				</div>
+				<div
+					class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-1.5 py-1"
+				>
+					<div class="text-[9.5px] text-[var(--text-muted)]">Hole Sections</div>
+					<div
+						class="mono-num font-semibold {ancillaryTotals.holeTotal > 0
+							? 'text-amber-700'
+							: 'text-[var(--text-muted)]'}"
+					>
+						{ancillaryTotals.holeTotal}
+						<span class="text-[9px] font-normal text-[var(--text-secondary)]">
+							({ancillaryTotals.holeWells}/{ancillaryTotals.totalWells}w)
 						</span>
 					</div>
 				</div>

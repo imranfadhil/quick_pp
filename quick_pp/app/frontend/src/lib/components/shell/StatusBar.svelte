@@ -10,8 +10,8 @@
 	import { fmtDepth } from '$lib/utils/formatters';
 
 	const STEP_LABELS: Record<string, string> = {
+		ancillary: 'Well & Ancillary',
 		qaqc: 'Data & QAQC',
-		ancillary: 'Tops & Ancillary',
 		'litho-poro': 'Lithology & Porosity',
 		perm: 'Permeability',
 		saturation: 'Saturation',

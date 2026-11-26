@@ -151,6 +151,7 @@ export function fluidDensityParameters(lp: LithoEndpointParams) {
 	const isObm = lp.fluidDensityMudType !== 'WBM';
 	return {
 		mode: lp.fluidDensityMode,
+		use_hole_sections: lp.fluidDensityUseHoleSections ?? true,
 		static_rho_fl: lp.fluidRhob,
 		mud_type: lp.fluidDensityMudType,
 		mud_salinity_ppm: isObm ? null : lp.fluidDensitySalinityPpm,

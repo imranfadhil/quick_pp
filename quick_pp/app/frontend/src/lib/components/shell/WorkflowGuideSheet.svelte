@@ -26,17 +26,17 @@
 			isStandalone: false
 		},
 		{
-			id: 'sw-step-1-qaqc',
+			id: 'sw-step-1-ancillary',
 			num: 'Step 1',
-			title: 'Log QA/QC, Bad-Hole Flagging & Repair',
-			stepId: 'qaqc',
+			title: 'Well Header, Hole Sections, Ancillary & Trajectory',
+			stepId: 'ancillary',
 			isStandalone: false
 		},
 		{
-			id: 'sw-step-2-ancillary',
+			id: 'sw-step-2-qaqc',
 			num: 'Step 2',
-			title: 'Ancillary Data & Minimum Curvature Trajectory',
-			stepId: 'ancillary',
+			title: 'Log QA/QC, Bad-Hole Flagging & Env Corrections',
+			stepId: 'qaqc',
 			isStandalone: false
 		},
 		{
@@ -459,10 +459,10 @@
 				</div>
 			</div>
 
-			<!-- SW STEP 1: QAQC -->
-			{#if matchesSearch('qaqc bad hole caliper bit size limits repair')}
+			<!-- SW STEP 1: WELL & ANCILLARY -->
+			{#if matchesSearch('well header hole sections mud weight bit size ancillary tops trajectory minimum curvature tvd tvdss core')}
 				<section
-					id="sw-step-1-qaqc"
+					id="sw-step-1-ancillary"
 					class="space-y-2.5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-3.5 shadow-2xs"
 				>
 					<div class="flex items-center justify-between">
@@ -472,7 +472,70 @@
 								>1</span
 							>
 							<h4 class="text-xs font-bold text-[var(--text-primary)]">
-								Step 1: Log QA/QC, Bad-Hole Flagging & Curve Repair (InspectorQaqc)
+								Step 1: Well Header, Hole Sections, Tops & Minimum Curvature Trajectory
+								(InspectorAncillary)
+							</h4>
+						</div>
+						<button
+							type="button"
+							onclick={() => handleJumpToWorkbenchStep('single-well', 'ancillary')}
+							class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 py-0.5 text-[10px] font-bold text-[var(--accent-primary)] hover:bg-[var(--accent-primary)] hover:text-white"
+						>
+							Open Step
+						</button>
+					</div>
+
+					<p>
+						Establishes well header metadata (KB/DF datum, BHT, mud filtrate properties),
+						depth-zoned Hole Sections (Bit Size, Mud Type, Mud Weight, Mud Salinity, Rmf),
+						formation tops, fluid contacts, core data, and computes True Vertical Depth (TVD / TVDSS)
+						from directional surveys using the SPE Minimum Curvature Method (MCM).
+					</p>
+
+					<div
+						class="space-y-1.5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-2.5"
+					>
+						<div
+							class="text-[10px] font-bold tracking-wider text-[var(--text-muted)] uppercase"
+						>
+							Core Equations
+						</div>
+						<div class="font-mono text-[11px] text-[var(--text-primary)]">
+							Dogleg Severity (DL): cos(DL) = cos(I₂ - I₁) - sin(I₁) · sin(I₂) · (1 -
+							cos(A₂ - A₁))<br />
+							Ratio Factor (RF): RF = (2 / DL) · tan(DL / 2)<br />
+							ΔTVD = (ΔMD / 2) · [cos(I₁) + cos(I₂)] · RF<br />
+							TVDSS = TVD - Elevation_KB
+						</div>
+					</div>
+
+					<div class="grid grid-cols-2 gap-2 text-[10px]">
+						<div>
+							<span class="font-bold text-[var(--text-primary)]">Inputs:</span> Header Datum,
+							Hole Sections (BS, MW, Salinity, Rmf), Tops, Survey (MD, Inc, Azim)
+						</div>
+						<div>
+							<span class="font-bold text-[var(--text-primary)]">Outputs:</span> BS, TVD, TVDSS,
+							DX, DY, Closure, Dogleg Severity
+						</div>
+					</div>
+				</section>
+			{/if}
+
+			<!-- SW STEP 2: QAQC -->
+			{#if matchesSearch('qaqc bad hole caliper bit size limits repair environmental correction')}
+				<section
+					id="sw-step-2-qaqc"
+					class="space-y-2.5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-3.5 shadow-2xs"
+				>
+					<div class="flex items-center justify-between">
+						<div class="flex items-center gap-2">
+							<span
+								class="flex h-5 w-5 items-center justify-center rounded-xs bg-slate-200 font-bold text-slate-800"
+								>2</span
+							>
+							<h4 class="text-xs font-bold text-[var(--text-primary)]">
+								Step 2: Log QA/QC, Bad-Hole Flagging & Environmental Corrections (InspectorQaqc)
 							</h4>
 						</div>
 						<button
@@ -485,9 +548,9 @@
 					</div>
 
 					<p>
-						Flags borehole washouts, mudcake buildup, and casing intervals. Evaluates
-						raw logs against absolute physical and environmental limits, performing
-						spline reconstruction and median filtering.
+						Flags borehole washouts, mudcake buildup, and casing intervals using Hole Section
+						bit sizes and mud properties (with optional manual override), applies borehole
+						environmental corrections, and performs curve editing/splicing.
 					</p>
 
 					<div
@@ -510,73 +573,11 @@
 					<div class="grid grid-cols-2 gap-2 text-[10px]">
 						<div>
 							<span class="font-bold text-[var(--text-primary)]">Inputs:</span> CALI, BS,
-							RHOB, DRHO, NPHI, GR, RT, DTC
+							RHOB, DRHO, NPHI, GR, RT, DTC, Hole Sections
 						</div>
 						<div>
-							<span class="font-bold text-[var(--text-primary)]">Outputs:</span> BAD_HOLE,
-							CALI_DEV, REPAIRED_CURVES
-						</div>
-					</div>
-				</section>
-			{/if}
-
-			<!-- SW STEP 2: ANCILLARY & TRAJECTORY -->
-			{#if matchesSearch('ancillary tops trajectory minimum curvature tvd tvdss core')}
-				<section
-					id="sw-step-2-ancillary"
-					class="space-y-2.5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-3.5 shadow-2xs"
-				>
-					<div class="flex items-center justify-between">
-						<div class="flex items-center gap-2">
-							<span
-								class="flex h-5 w-5 items-center justify-center rounded-xs bg-slate-200 font-bold text-slate-800"
-								>2</span
-							>
-							<h4 class="text-xs font-bold text-[var(--text-primary)]">
-								Step 2: Tops, Deviation & Minimum Curvature Trajectory
-								(InspectorAncillary)
-							</h4>
-						</div>
-						<button
-							type="button"
-							onclick={() => handleJumpToWorkbenchStep('single-well', 'ancillary')}
-							class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 py-0.5 text-[10px] font-bold text-[var(--accent-primary)] hover:bg-[var(--accent-primary)] hover:text-white"
-						>
-							Open Step
-						</button>
-					</div>
-
-					<p>
-						Computes True Vertical Depth (TVD) and True Vertical Depth Subsea (TVDSS)
-						from directional surveys using the standard SPE Minimum Curvature Method
-						(MCM).
-					</p>
-
-					<div
-						class="space-y-1.5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-2.5"
-					>
-						<div
-							class="text-[10px] font-bold tracking-wider text-[var(--text-muted)] uppercase"
-						>
-							Core Equations
-						</div>
-						<div class="font-mono text-[11px] text-[var(--text-primary)]">
-							Dogleg Severity (DL): cos(DL) = cos(I₂ - I₁) - sin(I₁) · sin(I₂) · (1 -
-							cos(A₂ - A₁))<br />
-							Ratio Factor (RF): RF = (2 / DL) · tan(DL / 2)<br />
-							ΔTVD = (ΔMD / 2) · [cos(I₁) + cos(I₂)] · RF<br />
-							TVDSS = TVD - Elevation_KB
-						</div>
-					</div>
-
-					<div class="grid grid-cols-2 gap-2 text-[10px]">
-						<div>
-							<span class="font-bold text-[var(--text-primary)]">Inputs:</span> MD, Inclination
-							(deg), Azimuth (deg), KB elevation, Tops
-						</div>
-						<div>
-							<span class="font-bold text-[var(--text-primary)]">Outputs:</span> TVD, TVDSS,
-							DX, DY, Closure, Dogleg Severity
+							<span class="font-bold text-[var(--text-primary)]">Outputs:</span> BADHOLE,
+							DCALI, *_ENV_CORR, *_QC_CONF
 						</div>
 					</div>
 				</section>
