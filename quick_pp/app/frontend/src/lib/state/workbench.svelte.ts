@@ -1,4 +1,5 @@
 import { resolveCrossplot, type CrossplotContext, type CrossplotId } from '../utils/crossplots';
+import type { EnvQcTrackFilter, EnvQcViewMode } from '../utils/envCorrQc';
 
 export type SingleWellStep =
 	| 'qaqc'
@@ -797,6 +798,12 @@ class WorkbenchState {
 
 	/** Curve focused by the 'enhanced-vs-raw' crossplot; null shows every enhanced curve. */
 	enhanceCompareCurve = $state<string | null>(null);
+
+	/** Controls for the 'env-corr-qc' Borehole Environmental Correction QC multi-track view. */
+	envQcViewMode = $state<EnvQcViewMode>('overlay');
+	envQcTrackFilter = $state<EnvQcTrackFilter>('all');
+	envQcShowSigma = $state<boolean>(true);
+	envQcShowFluidRes = $state<boolean>(false);
 
 	get crossplotContext(): CrossplotContext {
 		return this.scope === 'single-well'

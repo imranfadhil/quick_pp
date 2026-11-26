@@ -68,8 +68,21 @@ def test_arps_and_mud_program_obm():
     assert arps_resistivity(1.0, 25.0, 100.0) < 1.0
     env = Environment(
         mud_program=[
-            MudInterval(top=0, bottom=1500, bit_size_in=12.25, mud_type="WBM", rmf=0.5, rmf_temp_c=25.0),
-            MudInterval(top=1500, bottom=4000, bit_size_in=8.5, mud_type="OBM", mud_weight_ppg=12.0),
+            MudInterval(
+                top=0,
+                bottom=1500,
+                bit_size_in=12.25,
+                mud_type="WBM",
+                rmf=0.5,
+                rmf_temp_c=25.0,
+            ),
+            MudInterval(
+                top=1500,
+                bottom=4000,
+                bit_size_in=8.5,
+                mud_type="OBM",
+                mud_weight_ppg=12.0,
+            ),
         ]
     )
     d = np.array([1000.0, 2000.0])
@@ -104,7 +117,13 @@ def test_invasion_inversion_recovers_step_profile():
 
 def test_borehole_correction_skips_obm():
     r = np.array([10.0, 10.0])
-    out = resistivity_borehole_correction(r, np.array([12.0, 12.0]), np.array([0.05, np.nan]), 0.015, np.array([False, True]))
+    out = resistivity_borehole_correction(
+        r,
+        np.array([12.0, 12.0]),
+        np.array([0.05, np.nan]),
+        0.015,
+        np.array([False, True]),
+    )
     assert out[0] > 10.0  # conductive mud lowered the reading
     assert out[1] == 10.0  # OBM: unchanged
 
@@ -119,7 +138,10 @@ def test_invasion_profile_classification():
     )
     assert list(res["code"]) == [1, 2, 3, 4]
     # Rmf ~ Rw: uninformative
-    assert classify_invasion_profile(np.array([1.0]), np.array([3.0]), 0.1, 0.1)["code"][0] == 0
+    assert (
+        classify_invasion_profile(np.array([1.0]), np.array([3.0]), 0.1, 0.1)["code"][0]
+        == 0
+    )
 
 
 # ---------------------------------------------------------------- flags
@@ -140,7 +162,9 @@ def test_signal_flags():
 def test_no_caliper_reduces_confidence():
     df = _well()
     with_cali = apply_environmental_corrections(df, depth_unit="m")
-    no_cali = apply_environmental_corrections(df.drop(columns=["CALI", "DRHO"]), depth_unit="m")
+    no_cali = apply_environmental_corrections(
+        df.drop(columns=["CALI", "DRHO"]), depth_unit="m"
+    )
     for log in ("GR", "NPHI", "RHOB"):
         assert no_cali[f"{log}_QC_CONF"].mean() < with_cali[f"{log}_QC_CONF"].mean()
     assert (no_cali["ENV_QC_REASON"] & ENV_QC_REASON_BITS["NO_CALIPER"]).all()
@@ -169,18 +193,52 @@ def test_environment_object_and_resistivity_outputs():
     df["RM"] = 12.0
     df["RXO"] = 3.0
     env = environment_from_config(
-        {"water_depth": 500.0, "mud_type": "WBM", "rmf": 0.3, "rmf_temp": 24.0, "mud_density": 1.2}
+        {
+            "water_depth": 500.0,
+            "mud_type": "WBM",
+            "rmf": 0.3,
+            "rmf_temp": 24.0,
+            "mud_density": 1.2,
+        }
     )
-    out = apply_environmental_corrections(df, depth_unit="m", environment=env, formation_salinity_ppm=60000)
-    for col in ("RT_ENV_CORR", "RXO_EST", "DI_EST", "INVASION_FLAG", "INVASION_PROFILE", "RT_SIGMA", "ENV_TEMP_C"):
+    out = apply_environmental_corrections(
+        df, depth_unit="m", environment=env, formation_salinity_ppm=60000
+    )
+    for col in (
+        "RT_ENV_CORR",
+        "RXO_EST",
+        "DI_EST",
+        "INVASION_FLAG",
+        "INVASION_PROFILE",
+        "RT_SIGMA",
+        "ENV_TEMP_C",
+        "ENV_RM",
+        "ENV_RMF",
+        "ENV_RW",
+    ):
         assert col in out.columns
     assert (out["RT_ENV_CORR"] > 30.0).all()
     assert (out["INVASION_FLAG"] == 1).all()
     # Offshore: seabed 4 degC + 30 degC/km * ~1.5 km
     assert 40 < out["ENV_TEMP_C"].iloc[0] < 55
+    # WBM: ENV_RM > ENV_RMF > ENV_RW (60000 ppm saline formation water vs 0.3 ohm.m @ 24C Rmf)
+    assert (
+        out["ENV_RM"].notna().all()
+        and out["ENV_RMF"].notna().all()
+        and out["ENV_RW"].notna().all()
+    )
+    assert (out["ENV_RM"] > out["ENV_RMF"]).all()
+    assert (out["ENV_RMF"] > out["ENV_RW"]).all()
 
-    obm = apply_environmental_corrections(df, depth_unit="m", mud_type="OBM", res_tool="laterolog")
+    obm = apply_environmental_corrections(
+        df, depth_unit="m", mud_type="OBM", res_tool="laterolog"
+    )
     assert (obm["INVASION_PROFILE"] == 0).all()
+    assert (
+        obm["ENV_RM"].isna().all()
+        and obm["ENV_RMF"].isna().all()
+        and obm["ENV_RW"].notna().all()
+    )
     assert (obm["ENV_QC_REASON"] & ENV_QC_REASON_BITS["RES_MUD_MISMATCH"]).all()
     assert obm["RT_QC_CONF"].mean() < out["RT_QC_CONF"].mean()
 
@@ -193,5 +251,7 @@ def test_confidence_weighted_curve():
     out = confidence_weighted_curve(v, conf, depth=np.arange(50.0))
     assert np.allclose(out[20:25], 2.40)
     assert np.allclose(out[:20], 2.40)
-    mid = confidence_weighted_curve(v, np.where(conf < 1, 0.5, 1.0), depth=np.arange(50.0))
+    mid = confidence_weighted_curve(
+        v, np.where(conf < 1, 0.5, 1.0), depth=np.arange(50.0)
+    )
     assert 2.0 < mid[22] < 2.4

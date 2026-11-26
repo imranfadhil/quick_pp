@@ -14,6 +14,7 @@ export type CrossplotId =
 	| 'fluid-typing'
 	| 'histogram'
 	| 'curve-depth'
+	| 'env-corr-qc'
 	| 'enhanced-vs-raw'
 	| 'mw-distribution'
 	| 'swirr-fit'
@@ -63,6 +64,11 @@ export const CROSSPLOTS: readonly CrossplotDefinition[] = [
 		id: 'curve-depth',
 		label: 'Curve Editor · Log vs Depth',
 		single: { group: 'Step 1 · Data & QAQC', steps: ['qaqc', 'toc'] }
+	},
+	{
+		id: 'env-corr-qc',
+		label: 'Borehole Env Correction QC',
+		single: { group: 'Step 1 · Data & QAQC', steps: ['qaqc'] }
 	},
 	{
 		id: 'enhanced-vs-raw',

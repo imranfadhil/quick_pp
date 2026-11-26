@@ -50,7 +50,9 @@ class ToolProfile:
     gr_position: str
     gr_mu: float
     nphi_hole_coeff: float  # v/v per inch of washout (applied as a subtraction)
-    hole_span_factor: float  # excess caliper = factor * washout_thold -> hole penalty 1.0
+    hole_span_factor: (
+        float  # excess caliper = factor * washout_thold -> hole penalty 1.0
+    )
     hole_weight: Dict[str, float]
     sigma_meas: Dict[str, float]  # measurement precision (RT in log10 decades)
     tolerance: Dict[str, float]  # usable tolerance used to scale confidence
@@ -158,12 +160,16 @@ def gr_borehole_correction(
 
     rho_mud = np.where(mw_arr > 3.0, mw_arr / PPG_PER_GCC, mw_arr)
     rho_mud_ref = 9.0 / PPG_PER_GCC
-    d_hole = np.clip(np.where(np.isnan(cali_arr), bs_arr, cali_arr), tool_diameter, 36.0)
+    d_hole = np.clip(
+        np.where(np.isnan(cali_arr), bs_arr, cali_arr), tool_diameter, 36.0
+    )
     ref = bs_arr if reference_hole_in is None else np.asarray(reference_hole_in, float)
     d_ref = np.clip(ref, tool_diameter, 36.0)
     geom = 0.65 if str(tool_position).lower().startswith("ecc") else 1.0
     exponent = (
-        mu * 1.27 * geom
+        mu
+        * 1.27
+        * geom
         * (rho_mud * (d_hole - tool_diameter) - rho_mud_ref * (d_ref - tool_diameter))
     )
     cf = np.clip(np.exp(exponent), 0.5, 2.5)
@@ -252,7 +258,9 @@ def density_mudcake_correction(
         compensated = drho is not None
     delta = np.zeros_like(rhob_arr, dtype=float)
     if not compensated:
-        gap = np.clip((np.where(np.isnan(cali_arr), bs_arr, cali_arr) - bs_arr) / 2.0, 0.0, 6.0)
+        gap = np.clip(
+            (np.where(np.isnan(cali_arr), bs_arr, cali_arr) - bs_arr) / 2.0, 0.0, 6.0
+        )
         delta = delta + 0.06 * gap * np.maximum(rhob_arr - rho_mudcake, 0.0)
     if drho is not None and residual_drho_gain:
         d = np.asarray(drho, dtype=float)
@@ -279,7 +287,12 @@ def resistivity_borehole_correction(
     rm_arr = np.asarray(rm, dtype=float)
     oil = np.asarray(mud_is_oil, dtype=bool)
     ok = np.isfinite(rm_arr) & (rm_arr > 0) & np.isfinite(cali_arr) & ~oil
-    g = np.clip(g0 * (np.where(np.isfinite(cali_arr), cali_arr, ref_hole_in) / ref_hole_in) ** 2, 0.0, 0.2)
+    g = np.clip(
+        g0
+        * (np.where(np.isfinite(cali_arr), cali_arr, ref_hole_in) / ref_hole_in) ** 2,
+        0.0,
+        0.2,
+    )
     ca = 1.0 / r_arr
     cm = 1.0 / np.where(ok, rm_arr, 1.0)
     ct = (ca - g * cm) / (1.0 - g)
@@ -357,7 +370,10 @@ def invert_invasion_profile(rt, rm=None, rxo=None) -> Dict[str, np.ndarray]:
     avail = np.stack([np.isfinite(v) for v in curves.values()])
     count = avail.sum(axis=0)
     names = list(curves)
-    for cnt, grid, ok_state in ((3, _DI_GRID_IN, 1), (2, np.array([_DI_ASSUMED_IN]), 2)):
+    for cnt, grid, ok_state in (
+        (3, _DI_GRID_IN, 1),
+        (2, np.array([_DI_ASSUMED_IN]), 2),
+    ):
         if cnt > len(names):
             continue
         sel_cnt = count == cnt
@@ -371,7 +387,11 @@ def invert_invasion_profile(rt, rm=None, rxo=None) -> Dict[str, np.ndarray]:
             idx = np.flatnonzero(sel_cnt & np.all(avail.T == np.array(pat), axis=1))
             if idx.size == 0:
                 continue
-            cond = {nm: 1.0 / curves[nm][idx] for nm, p in zip(names, pat, strict=False) if p}
+            cond = {
+                nm: 1.0 / curves[nm][idx]
+                for nm, p in zip(names, pat, strict=False)
+                if p
+            }
             ct, cxo, di, mis = _solve_step_profile(cond, grid)
             cd = cond["deep"]
             plausible = np.isfinite(ct) & (np.abs(np.log10(ct / cd)) <= 1.0)
@@ -457,7 +477,10 @@ def detect_flatline(values, window: int = 15) -> np.ndarray:
     """Samples inside a run of ``window`` identical values (stuck tool or padded data)."""
     s = pd.Series(np.asarray(values, dtype=float))
     flat_end = (
-        (s.rolling(window, min_periods=window).max() == s.rolling(window, min_periods=window).min())
+        (
+            s.rolling(window, min_periods=window).max()
+            == s.rolling(window, min_periods=window).min()
+        )
         & s.notna()
     ).astype(float)
     return (flat_end[::-1].rolling(window, min_periods=1).max()[::-1] > 0).to_numpy()
@@ -503,7 +526,9 @@ _HOLE_SEVERITY_EDGES = (0.15, 0.40, 0.75)
 _MODEL_ERROR_FRACTION = 0.25  # fraction of |correction| treated as model error
 
 
-def _perturbation_sigma(fn: Callable[..., Any], base: Dict[str, Any], perts: List[Dict[str, Any]]):
+def _perturbation_sigma(
+    fn: Callable[..., Any], base: Dict[str, Any], perts: List[Dict[str, Any]]
+):
     """Root-sum-square change of ``fn`` for each perturbed input set."""
     ref = np.asarray(fn(**base), dtype=float)
     acc = np.zeros_like(ref)
@@ -536,7 +561,9 @@ def _legacy_environment(
     cfg: Dict[str, Any] = {
         "surface_temp": surface_temp_f,
         "surface_temp_unit": "degF",
-        "temp_gradient_c_per_km": temp_grad_f_per_100ft * (5.0 / 9.0) * (1000.0 / 30.48),
+        "temp_gradient_c_per_km": temp_grad_f_per_100ft
+        * (5.0 / 9.0)
+        * (1000.0 / 30.48),
         "mud_type": mud_type,
         "formation_salinity_ppm": formation_salinity_ppm,
     }
@@ -553,14 +580,19 @@ def _legacy_environment(
         np.isclose(surface_temp_f, 75.0) and np.isclose(temp_grad_f_per_100ft, 1.5)
     )
     env.assumptions = [
-        a for a in env.assumptions if "gradient provided" not in a and "Surface temperature" not in a
+        a
+        for a in env.assumptions
+        if "gradient provided" not in a and "Surface temperature" not in a
     ]
     return env
 
 
 def _estimate_bit_size(df: pd.DataFrame, default: float) -> Optional[np.ndarray]:
     """Per-section bit size from CALI via ``badhole_flagging`` (needs sorted depth)."""
-    if "CALI" not in df.columns or not pd.to_numeric(df["CALI"], errors="coerce").notna().any():
+    if (
+        "CALI" not in df.columns
+        or not pd.to_numeric(df["CALI"], errors="coerce").notna().any()
+    ):
         return None
     depth = df["DEPTH"] if "DEPTH" in df.columns else None
     if depth is None or not pd.Series(depth).is_monotonic_increasing:
@@ -569,7 +601,9 @@ def _estimate_bit_size(df: pd.DataFrame, default: float) -> Optional[np.ndarray]
         from quick_pp.qaqc import badhole_flagging
 
         tmp = df.drop(columns=["BS"], errors="ignore").reset_index(drop=True)
-        res = badhole_flagging(tmp, auto_bitsize=True, bitsize_default=default, use_cali=True)
+        res = badhole_flagging(
+            tmp, auto_bitsize=True, bitsize_default=default, use_cali=True
+        )
         if len(res) == len(df) and "BS" in res.columns:
             return res["BS"].to_numpy(dtype=float)
     except Exception as exc:  # pragma: no cover - defensive
@@ -615,8 +649,9 @@ def apply_environmental_corrections(
     ``<LOG>_CORR_DELTA`` (RT in log10 decades), ``<LOG>_SIGMA`` (1-sigma in curve
     units, RT in decades), ``<LOG>_QC_CONF`` (0-1) and ``<LOG>_QC_STATUS`` (see
     ``ENV_QC_STATUS``), plus ``ENV_QC_REASON`` (bit mask, ``ENV_QC_REASON_BITS``),
-    ``HOLE_SEVERITY`` (0-3), ``ENV_TEMP_C``, and, when resistivity is present,
-    ``RXO_EST``, ``DI_EST``, ``INVASION_FLAG`` and ``INVASION_PROFILE``.
+    ``HOLE_SEVERITY`` (0-3), ``ENV_TEMP_C``, ``ENV_RM``, ``ENV_RMF``, ``ENV_RW``,
+    and, when resistivity is present, ``RXO_EST``, ``DI_EST``, ``INVASION_FLAG``
+    and ``INVASION_PROFILE``.
 
     Environment: pass ``environment`` (see :mod:`quick_pp.environment`) for a mud
     program, offshore water depth and BHT calibration, otherwise one is built from
@@ -660,7 +695,9 @@ def apply_environmental_corrections(
 
     # ---- depth ---------------------------------------------------------------
     depth_col = (
-        "TVD" if "TVD" in out_df.columns else ("DEPTH" if "DEPTH" in out_df.columns else None)
+        "TVD"
+        if "TVD" in out_df.columns
+        else ("DEPTH" if "DEPTH" in out_df.columns else None)
     )
     d_vals = (
         pd.to_numeric(out_df[depth_col], errors="coerce").to_numpy(dtype=float)
@@ -669,13 +706,19 @@ def apply_environmental_corrections(
     )
     if depth_unit == "auto":
         eff_unit = "m" if np.nanmax(np.nan_to_num(d_vals, nan=0.0)) < 6000 else "ft"
-        notes.append(f"Depth unit guessed as '{eff_unit}' from magnitude; set it explicitly.")
+        notes.append(
+            f"Depth unit guessed as '{eff_unit}' from magnitude; set it explicitly."
+        )
     else:
         eff_unit = depth_unit
     if depth_col == "DEPTH":
-        notes.append("No TVD curve: measured depth was used as TVD (deviated wells will be biased).")
+        notes.append(
+            "No TVD curve: measured depth was used as TVD (deviated wells will be biased)."
+        )
     if depth_col is None:
-        notes.append("No depth curve: temperature and pressure fall back to the surface values.")
+        notes.append(
+            "No depth curve: temperature and pressure fall back to the surface values."
+        )
 
     # ---- environment ---------------------------------------------------------
     sal_scalar = salinity_ppm if not isinstance(salinity_ppm, str) else None
@@ -703,7 +746,10 @@ def apply_environmental_corrections(
 
     depth_m = env.to_metres(d_vals)
     temp_c = env.temperature_c(depth_m)
-    if "TEMP" in out_df.columns and pd.to_numeric(out_df["TEMP"], errors="coerce").notna().any():
+    if (
+        "TEMP" in out_df.columns
+        and pd.to_numeric(out_df["TEMP"], errors="coerce").notna().any()
+    ):
         t_col = pd.to_numeric(out_df["TEMP"], errors="coerce").to_numpy(dtype=float)
         t_col_c = (t_col - 32.0) * 5.0 / 9.0 if temp_unit == "f" else t_col
         temp_c = np.where(np.isfinite(t_col_c), t_col_c, temp_c)
@@ -743,7 +789,9 @@ def apply_environmental_corrections(
         if "BS" in out_df.columns
         else pd.Series(np.nan, index=idx)
     )
-    prog_bs = pd.Series(np.where(mud["bit_size_explicit"], mud["bit_size_in"], np.nan), index=idx)
+    prog_bs = pd.Series(
+        np.where(mud["bit_size_explicit"], mud["bit_size_in"], np.nan), index=idx
+    )
     bs_s = bs_s.fillna(prog_bs)
     if bs_s.isna().any() and auto_bitsize:
         est = _estimate_bit_size(out_df, float(env.default_bit_size_in))
@@ -752,19 +800,23 @@ def apply_environmental_corrections(
     bs_assumed = bs_s.isna() & (not env.explicit.get("bit_size", False))
     bs = bs_s.fillna(float(env.default_bit_size_in))
     if bool(bs_assumed.any()):
-        notes.append(f"Bit size assumed {env.default_bit_size_in:g} in where BS was unknown.")
+        notes.append(
+            f"Bit size assumed {env.default_bit_size_in:g} in where BS was unknown."
+        )
     cali_raw = (
-        pd.to_numeric(out_df["CALI"], errors="coerce") if "CALI" in out_df.columns else pd.Series(np.nan, index=idx)
+        pd.to_numeric(out_df["CALI"], errors="coerce")
+        if "CALI" in out_df.columns
+        else pd.Series(np.nan, index=idx)
     )
     no_cali = cali_raw.isna()
     cali = cali_raw.fillna(bs)
     if bool(no_cali.any()):
-        notes.append("Caliper missing for some samples: hole size unknown, confidence reduced.")
+        notes.append(
+            "Caliper missing for some samples: hole size unknown, confidence reduced."
+        )
 
     drho_col = _first_col(out_df, ("DRHO", "HDRA", "DCOR"))
-    drho = (
-        pd.to_numeric(out_df[drho_col], errors="coerce") if drho_col else None
-    )
+    drho = pd.to_numeric(out_df[drho_col], errors="coerce") if drho_col else None
 
     # ---- hole quality ---------------------------------------------------------
     excess = (cali - bs).clip(lower=0.0).fillna(0.0)
@@ -809,7 +861,9 @@ def apply_environmental_corrections(
             base,
             [{"mud_weight": mw_ppg + mw_unc}, {"bitsize": bs.to_numpy() + bs_unc}],
         )
-        results["GR"] = _CurveResult(pd.Series(corr, index=idx), pd.Series(sig, index=idx))
+        results["GR"] = _CurveResult(
+            pd.Series(corr, index=idx), pd.Series(sig, index=idx)
+        )
 
     if "NPHI" in out_df.columns:
         base = {
@@ -834,7 +888,9 @@ def apply_environmental_corrections(
                 {"bitsize": bs.to_numpy() + bs_unc},
             ],
         )
-        results["NPHI"] = _CurveResult(pd.Series(corr, index=idx), pd.Series(sig, index=idx))
+        results["NPHI"] = _CurveResult(
+            pd.Series(corr, index=idx), pd.Series(sig, index=idx)
+        )
 
     if "RHOB" in out_df.columns:
         compensated = drho is not None
@@ -853,7 +909,9 @@ def apply_environmental_corrections(
             base,
             [{"bitsize": bs.to_numpy() + bs_unc}, {"rho_mudcake": rho_mudcake + 0.2}],
         )
-        results["RHOB"] = _CurveResult(pd.Series(corr, index=idx), pd.Series(sig, index=idx))
+        results["RHOB"] = _CurveResult(
+            pd.Series(corr, index=idx), pd.Series(sig, index=idx)
+        )
 
     dt_col = _first_col(out_df, ("DTC", "DT"))
     cycle_skip = np.zeros(n, dtype=bool)
@@ -869,13 +927,16 @@ def apply_environmental_corrections(
         results["DT"] = _CurveResult(dt_corr, pd.Series(0.0, index=idx))
 
     # ---- resistivity ----------------------------------------------------------
+    rw_t = rw_from_salinity(temp_c, env.formation_salinity_ppm)
     inv_flag = inv_profile = None
     res_mismatch = np.zeros(n, dtype=bool)
     rc = resistivity_curves or {}
     deep_col = rc.get("deep") or ("RT" if "RT" in out_df.columns else None)
     if deep_col and deep_col in out_df.columns:
         med_col = rc.get("medium") or _first_col(out_df, ("RM", "ILM", "RMED", "RLA3"))
-        sha_col = rc.get("shallow") or _first_col(out_df, ("RXO", "MSFL", "RSHAL", "RS", "RLA1"))
+        sha_col = rc.get("shallow") or _first_col(
+            out_df, ("RXO", "MSFL", "RSHAL", "RS", "RLA1")
+        )
         g0 = _RES_HOLE_G0[res_tool]
         rm_t = mud["rm"]
         res_mismatch = np.full(n, res_tool == "laterolog") & is_oil
@@ -899,7 +960,6 @@ def apply_environmental_corrections(
         flag_arr[done & (ratio < -0.06)] = 1
         flag_arr[done & (ratio > 0.06)] = 2
         inv_flag = flag_arr
-        rw_t = rw_from_salinity(temp_c, env.formation_salinity_ppm)
         prof = classify_invasion_profile(inv["rt"], inv["rxo"], mud["rmf"], rw_t)
         inv_profile = prof["code"]
         rt_corr = pd.Series(inv["rt"], index=idx)
@@ -924,7 +984,9 @@ def apply_environmental_corrections(
         if bool(res_mismatch.any()):
             notes.append("Laterolog resistivity in non-conductive mud is unreliable.")
         if not bool(mud["rmf_known"].any()) and not bool(is_oil.all()):
-            notes.append("Rmf not provided; estimated from mud salinity for the invasion profile.")
+            notes.append(
+                "Rmf not provided; estimated from mud salinity for the invasion profile."
+            )
         results["RT"].extra_penalty_sigma = pd.Series(
             np.where(res_mismatch, 2.0 * profile.tolerance["RT"], 0.0), index=idx
         )
@@ -940,7 +1002,13 @@ def apply_environmental_corrections(
     spike_any = np.zeros(n, dtype=bool)
     flat_any = np.zeros(n, dtype=bool)
     if qc_columns:
-        raw_cols = {"GR": "GR", "NPHI": "NPHI", "RHOB": "RHOB", "RT": deep_col, "DT": dt_col}
+        raw_cols = {
+            "GR": "GR",
+            "NPHI": "NPHI",
+            "RHOB": "RHOB",
+            "RT": deep_col,
+            "DT": dt_col,
+        }
         for log, res in results.items():
             src = raw_cols.get(log)
             if not src or src not in df.columns:
@@ -955,7 +1023,8 @@ def apply_environmental_corrections(
             max_delta = profile.max_trusted_delta[log]
             sig_meas = profile.sigma_meas[log]
             sig_corr = np.sqrt(
-                res.sigma_corr.to_numpy() ** 2 + (_MODEL_ERROR_FRACTION * delta.abs().fillna(0.0).to_numpy()) ** 2
+                res.sigma_corr.to_numpy() ** 2
+                + (_MODEL_ERROR_FRACTION * delta.abs().fillna(0.0).to_numpy()) ** 2
             )
             sig_hole = hole_pen.to_numpy() * profile.hole_weight[log] * max_delta
             spike = detect_spikes(raw.to_numpy(dtype=float), tol)
@@ -965,8 +1034,19 @@ def apply_environmental_corrections(
             sig_sig = np.where(spike, 2.0 * tol, 0.0)
             sig_sig = np.sqrt(sig_sig**2 + np.where(flat, 1.5 * tol, 0.0) ** 2)
             sig_cs = np.where(cycle_skip, 2.0 * tol, 0.0) if log == "DT" else 0.0
-            sig_extra = res.extra_penalty_sigma.to_numpy() if res.extra_penalty_sigma is not None else 0.0
-            sigma = np.sqrt(sig_meas**2 + sig_corr**2 + sig_hole**2 + sig_sig**2 + sig_cs**2 + sig_extra**2)
+            sig_extra = (
+                res.extra_penalty_sigma.to_numpy()
+                if res.extra_penalty_sigma is not None
+                else 0.0
+            )
+            sigma = np.sqrt(
+                sig_meas**2
+                + sig_corr**2
+                + sig_hole**2
+                + sig_sig**2
+                + sig_cs**2
+                + sig_extra**2
+            )
             conf = 1.0 / (1.0 + (sigma / tol) ** 2)
             conf = pd.Series(conf, index=idx).where(raw.notna() & corr.notna(), 0.0)
             changed = (delta.abs() / max_delta) > 0.05
@@ -980,7 +1060,9 @@ def apply_environmental_corrections(
             out_df[f"{log}_QC_STATUS"] = status.astype(int)
 
         invaded = (
-            pd.Series(inv_flag, index=idx).gt(0) if inv_flag is not None else pd.Series(False, index=idx)
+            pd.Series(inv_flag, index=idx).gt(0)
+            if inv_flag is not None
+            else pd.Series(False, index=idx)
         )
         bits = ENV_QC_REASON_BITS
         reason = (
@@ -998,6 +1080,9 @@ def apply_environmental_corrections(
         out_df["ENV_QC_REASON"] = reason.astype(int)
         out_df["HOLE_SEVERITY"] = severity.astype(int)
         out_df["ENV_TEMP_C"] = np.round(temp_c, 2)
+        out_df["ENV_RM"] = pd.Series(mud["rm"], index=idx).round(5)
+        out_df["ENV_RMF"] = pd.Series(mud["rmf"], index=idx).round(5)
+        out_df["ENV_RW"] = pd.Series(rw_t, index=idx).round(5)
     out_df.attrs["env_assumptions"] = list(dict.fromkeys(notes))
     out_df.attrs["env_tool_profile"] = profile.name
     return out_df

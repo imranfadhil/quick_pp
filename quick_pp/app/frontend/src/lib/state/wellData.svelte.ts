@@ -79,6 +79,9 @@ export const CALCULATED_CURVE_GROUPS: Record<
 			'ENV_QC_REASON',
 			'HOLE_SEVERITY',
 			'ENV_TEMP_C',
+			'ENV_RM',
+			'ENV_RMF',
+			'ENV_RW',
 			...['GR', 'NPHI', 'RHOB', 'RT', 'DT'].flatMap((l) => [
 				`${l}_QC_CONF`,
 				`${l}_QC_STATUS`,

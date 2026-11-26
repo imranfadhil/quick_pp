@@ -22,6 +22,11 @@
 		enhancedVsRawSeries,
 		ENHANCED_CURVE_PAIRS
 	} from '$lib/utils/curveDepth';
+	import {
+		buildEnvCorrQcPlot,
+		computeEnvCorrQcSummary,
+		ENV_QC_TRACK_FILTERS
+	} from '$lib/utils/envCorrQc';
 	import { gammaEndpoints, gammaLabel } from '$lib/utils/lithology';
 	import { normalizedScalSaturation, poreThroatDistribution } from '$lib/utils/poreThroat';
 	import {
@@ -114,6 +119,10 @@
 						: Array.isArray(trace.y) && trace.y.length > 0)
 			);
 		switch (mode) {
+			case 'env-corr-qc':
+				return traces.length > 0
+					? null
+					: 'No borehole or sensor log curves available in the current depth and zone selection.';
 			case 'enhanced-vs-raw':
 				return traces.some((trace) =>
 					trace.x?.some((value: number | null) => value !== null)
@@ -670,6 +679,22 @@
 			};
 			baseLayout.yaxis.title = { text: 'Grain / Matrix Density (g/cc)' };
 			return { traces, layout: baseLayout };
+		}
+
+		if (effectiveMode === 'env-corr-qc') {
+			const envPlot = buildEnvCorrQcPlot({
+				curves: wellData.curves,
+				depthsMeters: deptAll,
+				indices,
+				depthUnit: depthDisplay.unit,
+				viewMode: workbench.envQcViewMode,
+				trackFilter: workbench.envQcTrackFilter,
+				showSigma: workbench.envQcShowSigma,
+				showFluidRes: workbench.envQcShowFluidRes,
+				envParams: workbench.envCorrParams
+			});
+			envPlot.layout.uirevision = `env-corr-qc-${workbench.projectId}-${workbench.wellId}-${depthDisplay.unit}-${workbench.envQcViewMode}-${workbench.envQcTrackFilter}-${workbench.envQcShowFluidRes}-${workbench.selectedZones.join(',')}-${workbench.depthFilter?.min ?? ''}_${workbench.depthFilter?.max ?? ''}`;
+			return { traces: envPlot.traces, layout: envPlot.layout };
 		}
 
 		if (effectiveMode === 'enhanced-vs-raw') {
@@ -6243,7 +6268,10 @@
 			if (tab === 'scal-drt') {
 				const activeDrt = projectData.drtMethod;
 				const rawCutoffs = projectData.activeDrtCutoffs || [0.5, 1.2, 2.5, 5.0];
-				const cutoffs = [...rawCutoffs].map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+				const cutoffs = [...rawCutoffs]
+					.map(Number)
+					.filter(Number.isFinite)
+					.sort((a, b) => a - b);
 				const nCut = cutoffs.length;
 				const phiGrid = Array.from({ length: 100 }, (_, i) => 0.01 + i * 0.0039);
 
@@ -6255,7 +6283,13 @@
 					for (let i = 0; i < rtRes.phit.length; i++) {
 						const pVal = rtRes.phit[i];
 						const kVal = rtRes.perm[i];
-						if (Number.isFinite(pVal) && Number.isFinite(kVal) && pVal > 0 && pVal < 0.5 && kVal > 0) {
+						if (
+							Number.isFinite(pVal) &&
+							Number.isFinite(kVal) &&
+							pVal > 0 &&
+							pVal < 0.5 &&
+							kVal > 0
+						) {
 							bgX.push(pVal);
 							bgY.push(kVal);
 						}
@@ -6279,7 +6313,10 @@
 						const r35 = cutoffs[i];
 						if (!Number.isFinite(r35) || r35 <= 0) continue;
 						const kCurve = phiGrid.map((phi) =>
-							Math.pow(10, (Math.log10(r35) - 0.732 + 0.864 * Math.log10(phi * 100)) / 0.588)
+							Math.pow(
+								10,
+								(Math.log10(r35) - 0.732 + 0.864 * Math.log10(phi * 100)) / 0.588
+							)
 						);
 						const rtAbove = nCut - i;
 						const rtBelow = nCut - i + 1;
@@ -6300,7 +6337,12 @@
 						if (!Number.isFinite(rfn) || rfn <= 0) continue;
 						const logRfn = Math.log10(rfn);
 						const kCurve = luciaPhiGrid.map((phi) =>
-							Math.pow(10, 9.7892 - 12.0838 * logRfn + (8.6711 - 8.2965 * logRfn) * Math.log10(phi))
+							Math.pow(
+								10,
+								9.7892 -
+									12.0838 * logRfn +
+									(8.6711 - 8.2965 * logRfn) * Math.log10(phi)
+							)
 						);
 						const rtAbove = i + 1;
 						const rtBelow = i + 2;
@@ -6320,7 +6362,10 @@
 						const fzi = cutoffs[i];
 						if (!Number.isFinite(fzi) || fzi <= 0) continue;
 						const kCurve = phiGrid.map(
-							(phi) => 1014.2 * Math.pow(fzi, 2) * (Math.pow(phi, 3) / Math.pow(1 - phi, 2))
+							(phi) =>
+								1014.2 *
+								Math.pow(fzi, 2) *
+								(Math.pow(phi, 3) / Math.pow(1 - phi, 2))
 						);
 						const rtAbove = nCut - i;
 						const rtBelow = nCut - i + 1;
@@ -6338,14 +6383,21 @@
 
 				// 3. SCAL Plugs by Rock Type
 				const numCutoffs = cutoffs.length;
-				const cutoffRts = Array.from({ length: Math.max(3, numCutoffs + 1) }, (_, i) => i + 1);
-				const plugRts = filteredPlugs.map((p) => p.rt).filter((r) => r != null && Number.isFinite(r));
-				const allRtKeys = Array.from(new Set([...cutoffRts, ...plugRts])).sort((a, b) => a - b);
+				const cutoffRts = Array.from(
+					{ length: Math.max(3, numCutoffs + 1) },
+					(_, i) => i + 1
+				);
+				const plugRts = filteredPlugs
+					.map((p) => p.rt)
+					.filter((r) => r != null && Number.isFinite(r));
+				const allRtKeys = Array.from(new Set([...cutoffRts, ...plugRts])).sort(
+					(a, b) => a - b
+				);
 
 				for (const rt of allRtKeys) {
 					const grp = filteredPlugs.filter((p) => (p.rt ?? 1) === rt);
 					const col = getRockTypeColor(rt);
-					const isNonRes = rt >= (numCutoffs + 1);
+					const isNonRes = rt >= numCutoffs + 1;
 					const labelSuffix = isNonRes ? ' (Non-Res)' : '';
 
 					if (grp.length === 0) {
@@ -6374,27 +6426,45 @@
 						textfont: { family: 'JetBrains Mono', size: 9, color: col },
 						marker: {
 							size: grp.map((p) => {
-								const normPid = projectData.normalizeScalPlugId(p.plug_id, p.well, p.sample);
+								const normPid = projectData.normalizeScalPlugId(
+									p.plug_id,
+									p.well,
+									p.sample
+								);
 								return focusedPlugId === normPid ? 11.5 : 8.5;
 							}),
 							color: col,
 							symbol: grp.map((p) => (p.included ? 'circle' : 'x')),
 							opacity: grp.map((p) => {
-								const normPid = projectData.normalizeScalPlugId(p.plug_id, p.well, p.sample);
+								const normPid = projectData.normalizeScalPlugId(
+									p.plug_id,
+									p.well,
+									p.sample
+								);
 								if (focusedPlugId) return focusedPlugId === normPid ? 1.0 : 0.25;
 								return p.included ? 0.95 : 0.45;
 							}),
 							line: {
 								color: '#0F172A',
 								width: grp.map((p) => {
-									const normPid = projectData.normalizeScalPlugId(p.plug_id, p.well, p.sample);
+									const normPid = projectData.normalizeScalPlugId(
+										p.plug_id,
+										p.well,
+										p.sample
+									);
 									return focusedPlugId === normPid ? 2.0 : 0.8;
 								})
 							}
 						},
 						hovertext: grp.map((p) => {
-							const pZone = projectData.resolveScalSampleZone(p.well, p.depth, p.zone);
-							const fziVal = p.fzi ?? (0.0314 * Math.sqrt(p.cperm / p.cpore)) / (p.cpore / (1 - p.cpore));
+							const pZone = projectData.resolveScalSampleZone(
+								p.well,
+								p.depth,
+								p.zone
+							);
+							const fziVal =
+								p.fzi ??
+								(0.0314 * Math.sqrt(p.cperm / p.cpore)) / (p.cpore / (1 - p.cpore));
 							return (
 								`<b>${p.well} · Sample ${p.sample}</b> (RT ${p.rt}${isNonRes ? ' - Non-Reservoir' : ''})<br>` +
 								`Depth: ${p.depth > 0 ? fmtNum(p.depth, 1) + ' m' : '—'} | Zone: ${pZone}<br>` +
@@ -6880,6 +6950,28 @@
 			void wellData.curves[cName];
 			void wellData.curves[`${cName}_ORI`];
 			void wellData.stats[cName];
+		} else if (mode === 'env-corr-qc') {
+			void wellData.curves;
+			void depthDisplay.unit;
+			void workbench.envQcViewMode;
+			void workbench.envQcTrackFilter;
+			void workbench.envQcShowSigma;
+			void workbench.envQcShowFluidRes;
+			void workbench.envCorrParams.bitsizeDefault;
+			void workbench.envCorrParams.washoutThold;
+			void workbench.envCorrParams.mudType;
+			void workbench.envCorrParams.salinityPpm;
+			void workbench.envCorrParams.rmf;
+			void workbench.envCorrParams.rmfTempC;
+			void workbench.envCorrParams.formationSalinityPpm;
+			void workbench.envCorrParams.surfaceTemp;
+			void workbench.envCorrParams.tempGrad;
+			void workbench.envCorrParams.offshore;
+			void workbench.envCorrParams.waterDepth;
+			void workbench.envCorrParams.seabedTempC;
+			void workbench.projectId;
+			void workbench.wellId;
+			void wellData.wellLoadGeneration;
 		} else if (mode === 'curve-depth') {
 			void wellData.curves;
 			void workbench.selectedQaqcCurve;
@@ -7119,6 +7211,7 @@
 			emptyPlotMessage = untrack(() => getEmptyPlotMessage(mode, traces));
 			layout.autosize = true;
 			const depthPlot =
+				mode === 'env-corr-qc' ||
 				mode === 'curve-depth' ||
 				mode === 'sw-comparison' ||
 				mode === 'toc-tracks' ||
@@ -7130,7 +7223,7 @@
 			const visibleLegendTraces = traces.filter(
 				(t: any) => t.showlegend !== false && t.name
 			).length;
-			if (visibleLegendTraces > 5) {
+			if (visibleLegendTraces > 5 && mode !== 'env-corr-qc') {
 				layout.legend = {
 					orientation: 'v',
 					x: 1.01,
@@ -7156,6 +7249,7 @@
 					'xaxis4',
 					'xaxis5',
 					'xaxis6',
+					'xaxis7',
 					'yaxis',
 					'yaxis2'
 				]) {
@@ -7249,7 +7343,9 @@
 								return;
 							}
 							if (
-								(effectiveMode === 'core-qc' || effectiveMode === 'vsh-qc') &&
+								(effectiveMode === 'core-qc' ||
+									effectiveMode === 'vsh-qc' ||
+									effectiveMode === 'env-corr-qc') &&
 								typeof pt?.customdata === 'number'
 							) {
 								const dept =
@@ -7316,6 +7412,16 @@
 			max: Math.max(...depths)
 		};
 	});
+
+	let envQcSummary = $derived.by(() =>
+		effectiveMode === 'env-corr-qc'
+			? computeEnvCorrQcSummary(
+					wellData.curves,
+					wellData.visibleIndices,
+					workbench.envCorrParams
+				)
+			: null
+	);
 
 	let isScalCrossplotActive = $derived(
 		(effectiveMode === 'swirr-fit' && workbench.swirrCrossplotTab !== 'relperm') ||
@@ -7475,6 +7581,59 @@
 						</button>
 					{/each}
 				</div>
+			</div>
+		{/if}
+
+		{#if effectiveMode === 'env-corr-qc'}
+			<div class="flex flex-wrap items-center gap-1">
+				<select
+					bind:value={workbench.envQcTrackFilter}
+					title="Focus a sensor family alongside the Hole Condition (CALI/BS + DRHO) track, or show all 6 tracks"
+					class="h-5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-[10.5px] font-medium text-[var(--text-primary)] focus:outline-none"
+				>
+					{#each ENV_QC_TRACK_FILTERS as opt (opt.id)}
+						<option value={opt.id}>{opt.label}</option>
+					{/each}
+				</select>
+				<div
+					class="inline-flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]"
+				>
+					{#each [['overlay', 'Overlay', 'Raw vs. *_ENV_CORR overlays with differential shading and ±1σ uncertainty band'], ['delta', 'Δ Shift', 'Correction residuals (*_CORR_DELTA) centered at 0 against tool tolerance limits']] as [mKey, mLbl, mTip]}
+						<button
+							type="button"
+							title={mTip}
+							onclick={() => (workbench.envQcViewMode = mKey as 'overlay' | 'delta')}
+							class="h-5 px-1.5 text-[10px] font-medium whitespace-nowrap transition-colors first:border-r first:border-[var(--border-hairline)] {workbench.envQcViewMode ===
+							mKey
+								? 'bg-blue-600 font-semibold text-white'
+								: 'text-[var(--text-secondary)] hover:bg-slate-100'}"
+						>
+							{mLbl}
+						</button>
+					{/each}
+				</div>
+				<button
+					type="button"
+					title="Show or hide ±1σ per-sample uncertainty band (*_SIGMA) from hole quality, assumed inputs, and model error"
+					onclick={() => (workbench.envQcShowSigma = !workbench.envQcShowSigma)}
+					class="h-5 rounded-xs border px-1.5 text-[10px] font-medium whitespace-nowrap transition-colors {workbench.envQcShowSigma
+						? 'border-blue-600 bg-blue-50 font-semibold text-blue-700'
+						: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+				>
+					±1σ
+				</button>
+				{#if workbench.envQcViewMode === 'overlay' && (workbench.envQcTrackFilter === 'all' || workbench.envQcTrackFilter === 'RT')}
+					<button
+						type="button"
+						title="Overlay formation-temperature Rw, Rmf, and borehole mud Rm on the Resistivity track (widens log scale to 0.01 Ω·m)"
+						onclick={() => (workbench.envQcShowFluidRes = !workbench.envQcShowFluidRes)}
+						class="h-5 rounded-xs border px-1.5 text-[10px] font-medium whitespace-nowrap transition-colors {workbench.envQcShowFluidRes
+							? 'border-violet-600 bg-violet-50 font-semibold text-violet-800'
+							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+					>
+						Rw · Rmf · Rm
+					</button>
+				{/if}
 			</div>
 		{/if}
 
@@ -7755,6 +7914,60 @@
 		{/if}
 	</div>
 
+	{#if effectiveMode === 'env-corr-qc' && envQcSummary && envQcSummary.totalSamples > 0}
+		<div
+			class="mono-num flex shrink-0 flex-wrap items-center justify-between gap-x-2.5 gap-y-1 border-b border-[var(--border-hairline)] bg-slate-50/90 px-2.5 py-1 text-[10px]"
+		>
+			<div class="flex flex-wrap items-center gap-x-2 text-slate-700">
+				<span>
+					Washout: <strong
+						class={envQcSummary.washoutPct > 10 ? 'text-amber-700' : 'text-slate-900'}
+						>{envQcSummary.washoutPct}%</strong
+					>
+				</span>
+				<span>
+					|DRHO|&gt;0.15: <strong
+						class={envQcSummary.drhoHighPct > 5 ? 'text-red-700' : 'text-slate-900'}
+						>{envQcSummary.drhoHighPct}%</strong
+					>
+				</span>
+				{#if envQcSummary.invadedPct > 0}
+					<span>Invaded: <strong>{envQcSummary.invadedPct}%</strong></span>
+				{/if}
+				{#if envQcSummary.cycleSkipCount > 0}
+					<span class="text-red-700">
+						Cycle Skips: <strong>{envQcSummary.cycleSkipCount}</strong>
+					</span>
+				{/if}
+			</div>
+			{#if !envQcSummary.hasEnvCorr}
+				<span
+					class="rounded-xs border border-amber-200 bg-amber-50 px-1.5 py-0.5 font-sans text-[9.5px] font-medium text-amber-900"
+				>
+					Raw preview — click Apply Env Corrections in Data &amp; QAQC for *_ENV_CORR
+					&amp; ±1σ
+				</span>
+			{:else}
+				<div class="flex flex-wrap items-center gap-x-2 text-[9.5px] text-slate-600">
+					{#each envQcSummary.rows as r (r.CURVE)}
+						<span
+							title={`${r.CURVE}: Good ${r.GOOD_PCT}%, Corrected ${r.CORRECTED_PCT}%, Unreliable ${r.UNRELIABLE_PCT}%`}
+						>
+							<strong>{r.CURVE}</strong>:
+							<span
+								class={r.UNRELIABLE_PCT > 10
+									? 'font-bold text-red-700'
+									: 'text-emerald-700'}
+							>
+								{r.MEAN_CONF !== null ? r.MEAN_CONF.toFixed(2) : '—'}
+							</span>
+						</span>
+					{/each}
+				</div>
+			{/if}
+		</div>
+	{/if}
+
 	{#if effectiveMode === 'bqv'}
 		<div
 			class="mono-num flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-[var(--border-hairline)] bg-slate-50/90 px-2.5 py-1 text-[10px]"
@@ -7957,10 +8170,16 @@
 		<div
 			class="shrink-0 border-b border-[var(--border-hairline)] bg-slate-50 px-2 py-1 text-[10px] text-slate-700"
 		>
-			<span class="font-semibold text-slate-900">DRT Method:</span> {projectData.drtMethod.toUpperCase()} |
-			<span class="font-semibold text-slate-900">Cutoffs:</span> [{[...projectData.activeDrtCutoffs].sort((a, b) => a - b).join(', ')}] —
-			Iso-lines partition poro-perm space into Rock Types (RT 1 to RT {projectData.activeDrtCutoffs.length + 1}).
-			SCAL plugs are plotted as prominent points colored by RT; points below cutoff line C1 are grouped into RT {projectData.activeDrtCutoffs.length + 1} (Non-Reservoir).
+			<span class="font-semibold text-slate-900">DRT Method:</span>
+			{projectData.drtMethod.toUpperCase()} |
+			<span class="font-semibold text-slate-900">Cutoffs:</span> [{[
+				...projectData.activeDrtCutoffs
+			]
+				.sort((a, b) => a - b)
+				.join(', ')}] — Iso-lines partition poro-perm space into Rock Types (RT 1 to RT {projectData
+				.activeDrtCutoffs.length + 1}). SCAL plugs are plotted as prominent points colored
+			by RT; points below cutoff line C1 are grouped into RT {projectData.activeDrtCutoffs
+				.length + 1} (Non-Reservoir).
 		</div>
 	{/if}
 

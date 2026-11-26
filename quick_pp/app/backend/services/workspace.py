@@ -1318,7 +1318,13 @@ class QcWeightedInputsMixin(BaseModel):
     qc_min_conf: float = Field(0.2, ge=0.0, le=1.0)
 
 
-_QC_WEIGHTED_LOGS = {"GR": "GR", "NPHI": "NPHI", "RHOB": "RHOB", "RT": "RT", "DTC": "DT"}
+_QC_WEIGHTED_LOGS = {
+    "GR": "GR",
+    "NPHI": "NPHI",
+    "RHOB": "RHOB",
+    "RT": "RT",
+    "DTC": "DT",
+}
 
 
 def _apply_qc_weighted_inputs(df: pd.DataFrame, req: Any) -> pd.DataFrame:
@@ -1330,7 +1336,9 @@ def _apply_qc_weighted_inputs(df: pd.DataFrame, req: Any) -> pd.DataFrame:
     Only the in-memory copy used for the computation is changed.
     No-op when no QC columns are present or the request disables it.
     """
-    if not getattr(req, "confidence_weighting", False) and not getattr(req, "use_env_corrected", False):
+    if not getattr(req, "confidence_weighting", False) and not getattr(
+        req, "use_env_corrected", False
+    ):
         return df
     from quick_pp.borehole_corrections import confidence_weighted_curve
 
@@ -1341,8 +1349,14 @@ def _apply_qc_weighted_inputs(df: pd.DataFrame, req: Any) -> pd.DataFrame:
         if log not in df.columns:
             continue
         conf_col, corr_col = f"{qc}_QC_CONF", f"{qc}_ENV_CORR"
-        has_conf = conf_col in df.columns and pd.to_numeric(df[conf_col], errors="coerce").notna().any()
-        has_corr = corr_col in df.columns and pd.to_numeric(df[corr_col], errors="coerce").notna().any()
+        has_conf = (
+            conf_col in df.columns
+            and pd.to_numeric(df[conf_col], errors="coerce").notna().any()
+        )
+        has_corr = (
+            corr_col in df.columns
+            and pd.to_numeric(df[corr_col], errors="coerce").notna().any()
+        )
         if not has_conf and not (has_corr and req.use_env_corrected):
             continue
         raw = pd.to_numeric(df[log], errors="coerce")
@@ -1353,10 +1367,14 @@ def _apply_qc_weighted_inputs(df: pd.DataFrame, req: Any) -> pd.DataFrame:
             conf = pd.to_numeric(df[conf_col], errors="coerce").fillna(1.0)
             if log == "RT":
                 lb = np.log10(base.clip(lower=1e-3))
-                blended = confidence_weighted_curve(lb, conf, depth, req.qc_good_conf, req.qc_min_conf)
+                blended = confidence_weighted_curve(
+                    lb, conf, depth, req.qc_good_conf, req.qc_min_conf
+                )
                 new = pd.Series(10.0 ** blended.to_numpy(), index=df.index)
             else:
-                new = confidence_weighted_curve(base, conf, depth, req.qc_good_conf, req.qc_min_conf)
+                new = confidence_weighted_curve(
+                    base, conf, depth, req.qc_good_conf, req.qc_min_conf
+                )
                 new.index = df.index
         else:
             new = base
@@ -1429,7 +1447,9 @@ class GammaParameters(BaseModel):
     )
 
 
-class WorkspaceHCCorrectionRequest(WorkspaceFilterBase, GammaParameters, QcWeightedInputsMixin):
+class WorkspaceHCCorrectionRequest(
+    WorkspaceFilterBase, GammaParameters, QcWeightedInputsMixin
+):
     dry_sand_point: Tuple[float, float] = Field((-0.02, 2.65))
     dry_silt_point: Optional[Tuple[float, float]] = Field(None)
     dry_clay_point: Tuple[float, float] = Field((0.33, 2.7))
@@ -1591,7 +1611,9 @@ class WorkspaceDenCorrectionRequest(WorkspaceFilterBase, GammaParameters):
     )
 
 
-class WorkspaceLithologyRequest(WorkspaceFilterBase, GammaParameters, QcWeightedInputsMixin):
+class WorkspaceLithologyRequest(
+    WorkspaceFilterBase, GammaParameters, QcWeightedInputsMixin
+):
     model: str = Field(
         "ssc",
         description="Lithology model: 'ssc', 'sand_shale', 'multi_mineral', or 'vsh_gr'",
@@ -1745,7 +1767,9 @@ class GrainDensityCorrelation(BaseModel):
     )
 
 
-class WorkspacePorosityRequest(WorkspaceFilterBase, GammaParameters, QcWeightedInputsMixin):
+class WorkspacePorosityRequest(
+    WorkspaceFilterBase, GammaParameters, QcWeightedInputsMixin
+):
     method: Literal[
         "den",
         "neu_den",
@@ -11205,9 +11229,15 @@ class WorkspaceEnvCorrectionRequest(WorkspaceFilterBase):
 
     bitsize_default: float = Field(8.5)
     mud_weight: Optional[float] = Field(None, description="Mud weight (ppg or g/cc)")
-    surface_temp: Optional[float] = Field(None, description="Surface temperature (degF)")
-    temp_grad: Optional[float] = Field(None, description="Geothermal gradient (degF/100 ft)")
-    salinity_ppm: Optional[float] = Field(None, description="Borehole mud salinity (ppm NaCl)")
+    surface_temp: Optional[float] = Field(
+        None, description="Surface temperature (degF)"
+    )
+    temp_grad: Optional[float] = Field(
+        None, description="Geothermal gradient (degF/100 ft)"
+    )
+    salinity_ppm: Optional[float] = Field(
+        None, description="Borehole mud salinity (ppm NaCl)"
+    )
     rho_mudcake: float = Field(1.5)
     tool_type: Literal["WL", "LWD"] = Field("WL")
     mud_type: Optional[Literal["WBM", "OBM", "SBM"]] = Field(None)
@@ -11215,7 +11245,9 @@ class WorkspaceEnvCorrectionRequest(WorkspaceFilterBase):
     depth_unit: Optional[Literal["m", "ft"]] = Field(
         None, description="Log depth unit; defaults to the well depth unit"
     )
-    water_depth: Optional[float] = Field(None, description="Water depth (log depth unit); > 0 = offshore")
+    water_depth: Optional[float] = Field(
+        None, description="Water depth (log depth unit); > 0 = offshore"
+    )
     seabed_temp_c: Optional[float] = Field(None)
     temp_gradient_c_per_km: Optional[float] = Field(None)
     bht_records: Optional[List[EnvBhtRecordModel]] = Field(None)
@@ -12670,6 +12702,9 @@ ENV_QC_SHARED_COLS = (
     "ENV_QC_REASON",
     "HOLE_SEVERITY",
     "ENV_TEMP_C",
+    "ENV_RM",
+    "ENV_RMF",
+    "ENV_RW",
     "INVASION_FLAG",
     "INVASION_PROFILE",
     "RXO_EST",
@@ -12677,7 +12712,9 @@ ENV_QC_SHARED_COLS = (
 )
 
 
-def _load_well_env_config(project_id: int, well_name: str) -> Tuple[Dict[str, Any], Optional[str]]:
+def _load_well_env_config(
+    project_id: int, well_name: str
+) -> Tuple[Dict[str, Any], Optional[str]]:
     """Merge LAS header metadata, DB well config and ephemeral config for environment inputs.
 
     Returns ``(config, depth_unit)``. ``depth_unit`` is the stored well depth unit
@@ -12695,27 +12732,40 @@ def _load_well_env_config(project_id: int, well_name: str) -> Tuple[Dict[str, An
             if orm is not None:
                 depth_uom = orm.depth_uom
                 if isinstance(orm.header_data, dict):
-                    meta = extract_las_metadata(dict(orm.header_data), fallback_well_name=well_name)
+                    meta = extract_las_metadata(
+                        dict(orm.header_data), fallback_well_name=well_name
+                    )
                     cfg.update({k: v for k, v in dict(meta).items() if v is not None})
                     ovr = orm.header_data.get("header_overrides")
                     if isinstance(ovr, dict):
                         cfg.update({k: v for k, v in ovr.items() if v is not None})
                 if isinstance(orm.config_data, dict):
-                    cfg.update({k: v for k, v in orm.config_data.items() if v is not None})
+                    cfg.update(
+                        {k: v for k, v in orm.config_data.items() if v is not None}
+                    )
     except Exception as exc:
         logger.debug(f"[env_corr] could not load well config for {well_name}: {exc}")
-    eph = _ephemeral_well_configs.get((project_id, well_name)) or _ephemeral_well_configs.get(
+    eph = _ephemeral_well_configs.get(
+        (project_id, well_name)
+    ) or _ephemeral_well_configs.get(
         (project_id, resolve_db_well_name(project_id, well_name))
     )
     if isinstance(eph, dict):
         cfg.update({k: v for k, v in eph.items() if v is not None})
     unit = str(depth_uom or cfg.get("datum_unit") or "").strip().lower()
-    unit_norm = "ft" if unit in ("ft", "f", "feet", "foot") else ("m" if unit in ("m", "meter", "metre", "meters", "metres") else None)
+    unit_norm = (
+        "ft"
+        if unit in ("ft", "f", "feet", "foot")
+        else ("m" if unit in ("m", "meter", "metre", "meters", "metres") else None)
+    )
     return cfg, unit_norm
 
 
 def _run_env_corrections(
-    project_id: int, well_name: str, df: pd.DataFrame, req: "WorkspaceEnvCorrectionRequest"
+    project_id: int,
+    well_name: str,
+    df: pd.DataFrame,
+    req: "WorkspaceEnvCorrectionRequest",
 ) -> Tuple[pd.DataFrame, List[str], Dict[str, Any]]:
     """Build the environment for one well and run the generic corrections.
 
@@ -12751,14 +12801,20 @@ def _run_env_corrections(
         overrides["surface_temp"] = req.surface_temp
         overrides["surface_temp_unit"] = "degF"
     if req.temp_grad is not None and req.temp_gradient_c_per_km is None:
-        overrides["temp_gradient_c_per_km"] = float(req.temp_grad) * (5.0 / 9.0) * (1000.0 / 30.48)
+        overrides["temp_gradient_c_per_km"] = (
+            float(req.temp_grad) * (5.0 / 9.0) * (1000.0 / 30.48)
+        )
     if req.bht_records:
         overrides["bht_records"] = [r.model_dump() for r in req.bht_records]
     if req.mud_program:
         overrides["mud_program"] = [iv.model_dump() for iv in req.mud_program]
     if cfg.get("mud_type") is None and req.mud_type is None:
         cfg["mud_type"] = "WBM"
-    if cfg.get("mud_type") is not None and str(cfg["mud_type"]).upper() not in ("WBM", "OBM", "SBM"):
+    if cfg.get("mud_type") is not None and str(cfg["mud_type"]).upper() not in (
+        "WBM",
+        "OBM",
+        "SBM",
+    ):
         cfg.pop("mud_type")
     env = environment_from_config(cfg, overrides, depth_unit=depth_unit)
     if unit_note:
@@ -12786,7 +12842,11 @@ def _run_env_corrections(
 
     qc_summary: Dict[str, Any] = {}
     for log in ENV_QC_OUTPUT_CURVES:
-        st_col, cf_col, dl_col = f"{log}_QC_STATUS", f"{log}_QC_CONF", f"{log}_CORR_DELTA"
+        st_col, cf_col, dl_col = (
+            f"{log}_QC_STATUS",
+            f"{log}_QC_CONF",
+            f"{log}_CORR_DELTA",
+        )
         if st_col not in corr_df.columns:
             continue
         st = pd.to_numeric(corr_df[st_col], errors="coerce")
@@ -12796,11 +12856,23 @@ def _run_env_corrections(
         qc_summary[log] = {
             "samples": nv,
             "good_pct": round(float((st == 0).sum()) * 100.0 / nv, 1) if nv else 0.0,
-            "corrected_pct": round(float((st == 1).sum()) * 100.0 / nv, 1) if nv else 0.0,
-            "unreliable_pct": round(float((st == 2).sum()) * 100.0 / nv, 1) if nv else 0.0,
-            "mean_conf": round(float(pd.to_numeric(corr_df[cf_col], errors="coerce")[valid].mean()), 3) if nv else None,
-            "mean_abs_delta": round(float(delta.mean()), 5) if nv and delta.notna().any() else None,
-            "p95_abs_delta": round(float(delta.quantile(0.95)), 5) if nv and delta.notna().any() else None,
+            "corrected_pct": round(float((st == 1).sum()) * 100.0 / nv, 1)
+            if nv
+            else 0.0,
+            "unreliable_pct": round(float((st == 2).sum()) * 100.0 / nv, 1)
+            if nv
+            else 0.0,
+            "mean_conf": round(
+                float(pd.to_numeric(corr_df[cf_col], errors="coerce")[valid].mean()), 3
+            )
+            if nv
+            else None,
+            "mean_abs_delta": round(float(delta.mean()), 5)
+            if nv and delta.notna().any()
+            else None,
+            "p95_abs_delta": round(float(delta.quantile(0.95)), 5)
+            if nv and delta.notna().any()
+            else None,
         }
     meta = {
         "qc_summary": qc_summary,

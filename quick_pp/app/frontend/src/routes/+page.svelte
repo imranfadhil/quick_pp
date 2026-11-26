@@ -50,6 +50,7 @@
 	import { currentSelection, moduleParams, selectionKey } from '$lib/state/moduleParams.svelte';
 	import { projectParams, zoneSelectionKey } from '$lib/state/projectParams.svelte';
 	import { isCrossplotAvailable } from '$lib/utils/crossplots';
+	import { computeEnvCorrQcSummary } from '$lib/utils/envCorrQc';
 	import { gammaLabel } from '$lib/utils/lithology';
 
 	$effect(() => {
@@ -827,6 +828,51 @@
 						rec_vol: isOil ? z.rec_oil?.p50 : z.rec_gas?.p50
 					}))
 				};
+			}
+
+			if (workbench.effectiveCrossplot === 'env-corr-qc') {
+				const eq = computeEnvCorrQcSummary(
+					wellData.curves,
+					wellData.visibleIndices,
+					workbench.envCorrParams
+				);
+				if (eq.rows.length > 0) {
+					return {
+						title: `Borehole Env Correction QC Summary (n=${eq.totalSamples} | Washout ${eq.washoutPct}%, |DRHO|>0.15 ${eq.drhoHighPct}%)`,
+						columns: [
+							{ key: 'CURVE', label: 'Curve' },
+							{ key: 'SAMPLES', label: 'Samples', numeric: true, decimals: 0 },
+							{
+								key: 'GOOD_PCT',
+								label: 'Good',
+								unit: '%',
+								numeric: true,
+								decimals: 1
+							},
+							{
+								key: 'CORRECTED_PCT',
+								label: 'Corr.',
+								unit: '%',
+								numeric: true,
+								decimals: 1
+							},
+							{
+								key: 'UNRELIABLE_PCT',
+								label: 'Unrel.',
+								unit: '%',
+								numeric: true,
+								decimals: 1
+							},
+							{ key: 'MEAN_CONF', label: 'Mean Conf', numeric: true, decimals: 3 },
+							{ key: 'MEAN_DELTA', label: 'Mean Δ', numeric: true, decimals: 4 },
+							{ key: 'P95_ABS_DELTA', label: 'P95 |Δ|', numeric: true, decimals: 4 },
+							{ key: 'MEAN_SIGMA', label: 'Mean σ', numeric: true, decimals: 4 },
+							{ key: 'UNIT', label: 'Unit' },
+							{ key: 'DOMINANT_REASON', label: 'Dominant Flag' }
+						],
+						rows: eq.rows
+					};
+				}
 			}
 
 			if (
