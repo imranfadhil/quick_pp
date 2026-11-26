@@ -9,7 +9,12 @@ WORKDIR /code
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     postgresql-client \
+    chromium \
+    fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
+
+# kaleido (plotly PNG export for report figures) drives this browser
+ENV BROWSER_PATH=/usr/bin/chromium
 
 COPY pyproject.toml .
 

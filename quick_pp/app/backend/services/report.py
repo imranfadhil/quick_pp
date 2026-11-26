@@ -6415,24 +6415,61 @@ def api_get_project_report_context(
 
 _REPORT_JOBS: Dict[str, Dict[str, Any]] = {}
 
+# Job state is also written to disk. The backend runs several gunicorn workers on Linux, and a status poll
+# can reach a different worker than the one that started the job, so an in-memory dict alone returns 404.
+_REPORT_JOBS_DIR = REPORTS_STATIC_ROOT / "_jobs"
+
+
+def _job_path(job_id: str) -> Path:
+    safe = "".join(c for c in str(job_id) if c.isalnum() or c in ("_", "-"))
+    return _REPORT_JOBS_DIR / f"{safe}.json"
+
+
+def _save_job(job_id: str, state: Dict[str, Any]) -> None:
+    _REPORT_JOBS[job_id] = state
+    try:
+        _REPORT_JOBS_DIR.mkdir(parents=True, exist_ok=True)
+        path = _job_path(job_id)
+        tmp = path.with_suffix(f".{uuid4().hex[:6]}.tmp")
+        tmp.write_text(json.dumps(state, default=str), encoding="utf-8")
+        tmp.replace(path)
+    except Exception as exc:
+        logger.warning(f"Could not persist report job {job_id} to disk: {exc}")
+
+
+def _load_job(job_id: str) -> Optional[Dict[str, Any]]:
+    path = _job_path(job_id)
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.warning(f"Could not read report job {job_id} from disk: {exc}")
+    return _REPORT_JOBS.get(job_id)
+
 
 def _run_report_job(job_id: str, req: ReportGenerationRequest) -> None:
     try:
         res = generate_petrophysical_report_service(req)
-        _REPORT_JOBS[job_id] = {
-            "job_id": job_id,
-            "status": "completed",
-            "report": res.model_dump(),
-            "error": None,
-        }
+        _save_job(
+            job_id,
+            {
+                "job_id": job_id,
+                "status": "completed",
+                "report": res.model_dump(),
+                "error": None,
+            },
+        )
     except Exception as e:
         logger.exception(f"Background report job {job_id} failed: {e}")
-        _REPORT_JOBS[job_id] = {
-            "job_id": job_id,
-            "status": "failed",
-            "report": None,
-            "error": str(e),
-        }
+        _save_job(
+            job_id,
+            {
+                "job_id": job_id,
+                "status": "failed",
+                "report": None,
+                "error": str(e),
+            },
+        )
 
 
 @router.post(
@@ -6451,12 +6488,15 @@ def api_generate_project_report(
     req.project_id = project_id
     if async_job:
         job_id = f"job_{uuid4().hex[:10]}"
-        _REPORT_JOBS[job_id] = {
-            "job_id": job_id,
-            "status": "running",
-            "report": None,
-            "error": None,
-        }
+        _save_job(
+            job_id,
+            {
+                "job_id": job_id,
+                "status": "running",
+                "report": None,
+                "error": None,
+            },
+        )
         t = threading.Thread(target=_run_report_job, args=(job_id, req), daemon=True)
         t.start()
         return {"job_id": job_id, "status": "running"}
@@ -6478,7 +6518,7 @@ def api_generate_project_report(
 )
 def api_get_report_job_status(project_id: int, job_id: str):
     """Return status and completed payload for an asynchronous report generation job."""
-    job = _REPORT_JOBS.get(job_id)
+    job = _load_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail=f"Report job '{job_id}' not found.")
     return job

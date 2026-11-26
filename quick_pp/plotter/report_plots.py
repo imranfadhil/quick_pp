@@ -1902,6 +1902,10 @@ def generate_upscaling_comparison_plot(
     return _save_fig(fig, "fig_9_1_upscaling_plot.png", output_dir, url_prefix)
 
 
+# Set once kaleido reports that no Chrome/Chromium exists; avoids a failed browser launch for every well.
+_PLOTLY_EXPORT_DISABLED_REASON: Optional[str] = None
+
+
 def _render_cpi_with_plotly(
     df: pd.DataFrame,
     well_name: str,
@@ -1918,6 +1922,10 @@ def _render_cpi_with_plotly(
 
     Returns None on any failure (missing kaleido/Chrome, bad data) so callers can fall back to matplotlib.
     """
+    global _PLOTLY_EXPORT_DISABLED_REASON
+    if _PLOTLY_EXPORT_DISABLED_REASON:
+        # A previous well already showed that PNG export cannot work in this process; skip the retry.
+        return None
     try:
         from quick_pp.plotter.well_log import plotly_log
 
@@ -1958,7 +1966,19 @@ def _render_cpi_with_plotly(
             return None
         return _format_return_path(out_path, url_prefix=url_prefix)
     except Exception as exc:
-        logger.warning(f"Plotly CPI export failed for {well_name}; falling back to matplotlib: {exc}")
+        if "chrome" in str(exc).lower():
+            # Environment problem (no browser), not a data problem: disable for this process and say so once.
+            _PLOTLY_EXPORT_DISABLED_REASON = "Chrome/Chromium not found"
+            logger.warning(
+                "Plotly CPI export disabled: Chrome/Chromium is not installed for kaleido. "
+                "Using the matplotlib CPI log instead. Install Chromium (or run `plotly_get_chrome`) "
+                "and restart the backend to enable the frontend-style log. "
+                f"First failure was for well {well_name}."
+            )
+        else:
+            logger.warning(
+                f"Plotly CPI export failed for {well_name}; falling back to matplotlib: {exc}"
+            )
         return None
 
 
