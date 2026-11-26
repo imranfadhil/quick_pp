@@ -73,6 +73,18 @@ export const CALCULATED_CURVE_GROUPS: Record<
 			'CALI_ENV_CORR',
 			'DT_ENV_CORR',
 			'INVASION_FLAG',
+			'INVASION_PROFILE',
+			'RXO_EST',
+			'DI_EST',
+			'ENV_QC_REASON',
+			'HOLE_SEVERITY',
+			'ENV_TEMP_C',
+			...['GR', 'NPHI', 'RHOB', 'RT', 'DT'].flatMap((l) => [
+				`${l}_QC_CONF`,
+				`${l}_QC_STATUS`,
+				`${l}_SIGMA`,
+				`${l}_CORR_DELTA`
+			]),
 			'GR_NORM',
 			'NPHI_NORM',
 			'NPHI_HC',
@@ -291,7 +303,7 @@ export function isCalculatedCurveMnemonic(c: string): boolean {
 	if (/(?:_FLAG|_FLAGS)$/i.test(up) || /^FLAG_/i.test(up)) return true;
 	// Normalizations, corrections, enhancements, predictions, reconstructions, synthetic models
 	if (
-		/(?:_NORM|_ENV_CORR|_DEN_CORR|_HC|_BLK|_SYN|_RECON|_ENH|_IMP|_PRED|_ML|_CONSTRUCTED|_P10|_P50|_P90)$/i.test(
+		/(?:_NORM|_ENV_CORR|_DEN_CORR|_HC|_BLK|_SYN|_RECON|_ENH|_IMP|_PRED|_ML|_CONSTRUCTED|_P10|_P50|_P90|_QC_CONF|_QC_STATUS|_SIGMA|_CORR_DELTA|_EST)$/i.test(
 			up
 		)
 	) {

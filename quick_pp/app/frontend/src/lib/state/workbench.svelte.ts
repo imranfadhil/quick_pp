@@ -383,7 +383,22 @@ export interface EnvCorrectionParams {
 	mudWeight: number;
 	surfaceTemp: number;
 	tempGrad: number;
+	/** Borehole mud salinity (ppm NaCl); ignored for OBM/SBM. */
 	salinityPpm: number;
+	toolType: 'WL' | 'LWD';
+	mudType: 'WBM' | 'OBM' | 'SBM';
+	resTool: 'auto' | 'induction' | 'laterolog' | 'propagation';
+	depthUnit: 'auto' | 'm' | 'ft';
+	offshore: boolean;
+	/** Water depth in the log depth unit (offshore only). */
+	waterDepth: number;
+	seabedTempC: number;
+	/** 0 = not provided (estimated from salinity). */
+	rmf: number;
+	rmfTempC: number;
+	formationSalinityPpm: number;
+	rhoMudcake: number;
+	washoutThold: number;
 }
 
 export interface PermModelParams {
@@ -1149,7 +1164,19 @@ class WorkbenchState {
 		mudWeight: 9.5,
 		surfaceTemp: 75.0,
 		tempGrad: 1.5,
-		salinityPpm: 30000.0
+		salinityPpm: 30000.0,
+		toolType: 'WL',
+		mudType: 'WBM',
+		resTool: 'auto',
+		depthUnit: 'auto',
+		offshore: false,
+		waterDepth: 0,
+		seabedTempC: 4.0,
+		rmf: 0,
+		rmfTempC: 25.0,
+		formationSalinityPpm: 35000,
+		rhoMudcake: 1.5,
+		washoutThold: 2.0
 	});
 
 	permParams = $state<PermModelParams>({

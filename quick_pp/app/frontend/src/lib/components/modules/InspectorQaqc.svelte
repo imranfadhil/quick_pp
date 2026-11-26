@@ -917,6 +917,35 @@
 		}
 	}
 
+	// Environmental correction QC outputs (per-curve reliability, assumed inputs, resolved environment)
+	type EnvQcCurveSummary = {
+		samples: number;
+		good_pct: number;
+		corrected_pct: number;
+		unreliable_pct: number;
+		mean_conf: number | null;
+		mean_abs_delta: number | null;
+		p95_abs_delta: number | null;
+	};
+	let envQcSummary = $state<Record<string, EnvQcCurveSummary> | null>(null);
+	let envAssumptions = $state<string[]>([]);
+	let envInfo = $state<{
+		tool_type: string;
+		depth_unit: string;
+		offshore: boolean;
+		top_temp_c: number;
+		gradient_c_per_km: number;
+		mud_type: string;
+		mud_weight_ppg: number;
+	} | null>(null);
+	const ENV_DELTA_UNITS: Record<string, string> = {
+		GR: 'API',
+		NPHI: 'v/v',
+		RHOB: 'g/cc',
+		RT: 'dec',
+		DT: 'us/ft'
+	};
+
 	// Badhole Flagging diagnostics summary
 	let badholeSummary = $state<{
 		total_samples: number;
@@ -1041,9 +1070,20 @@
 				{
 					bitsize_default: ep.bitsizeDefault,
 					mud_weight: ep.mudWeight,
-					surface_temp: ep.surfaceTemp,
+					surface_temp: ep.offshore ? null : ep.surfaceTemp,
 					temp_grad: ep.tempGrad,
-					salinity_ppm: ep.salinityPpm,
+					salinity_ppm: ep.mudType === 'WBM' ? ep.salinityPpm : 0,
+					rho_mudcake: ep.rhoMudcake,
+					tool_type: ep.toolType,
+					mud_type: ep.mudType,
+					res_tool: ep.resTool === 'auto' ? null : ep.resTool,
+					depth_unit: ep.depthUnit === 'auto' ? null : ep.depthUnit,
+					water_depth: ep.offshore && ep.waterDepth > 0 ? ep.waterDepth : null,
+					seabed_temp_c: ep.offshore ? ep.seabedTempC : null,
+					rmf: ep.mudType === 'WBM' && ep.rmf > 0 ? ep.rmf : null,
+					rmf_temp_c: ep.mudType === 'WBM' && ep.rmf > 0 ? ep.rmfTempC : null,
+					formation_salinity_ppm: ep.formationSalinityPpm,
+					washout_thold: ep.washoutThold,
 					min_depth: workbench.depthFilter?.min ?? null,
 					max_depth: workbench.depthFilter?.max ?? null,
 					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
@@ -1054,6 +1094,9 @@
 				wellData.mergeComputedCurves(res.data, res.stats, selectionIndices);
 				wellData.markModuleComputed('qaqc-env', res.data);
 			}
+			envQcSummary = res.qc_summary ?? null;
+			envAssumptions = Array.isArray(res.assumptions) ? res.assumptions : [];
+			envInfo = res.environment ?? null;
 			if (persist) {
 				if (selectionMode) {
 					await wellData.saveModuleComputed('qaqc-env', 'Env Corrections Saved ✓');
@@ -2902,17 +2945,77 @@
 
 		<ParameterSection
 			title="Borehole Environmental Corrections"
-			badge="GR / NPHI / RHOB / RT"
+			badge={envQcSummary ? 'GR / NPHI / RHOB / RT / DT · Run' : 'GR / NPHI / RHOB / RT / DT'}
 			defaultOpen={false}
 		>
+			<div class="mb-1.5 rounded-xs bg-[var(--bg-subtle)] px-2 py-1 text-[10px] leading-snug text-[var(--text-secondary)]">
+				Generic (tool-agnostic) corrections. Each curve gets <span class="mono-num">*_ENV_CORR</span>, <span class="mono-num">*_SIGMA</span>, <span class="mono-num">*_QC_CONF</span> and <span class="mono-num">*_QC_STATUS</span>. Lithology, porosity and saturation use the corrected curves, weighted by confidence. Inputs left blank come from the well header, otherwise a default is used and listed below.
+			</div>
+			{#each [
+				{ label: 'Tool Conveyance', key: 'toolType', options: [['WL', 'Wireline'], ['LWD', 'LWD']] },
+				{ label: 'Mud Type', key: 'mudType', options: [['WBM', 'Water-based (WBM)'], ['OBM', 'Oil-based (OBM)'], ['SBM', 'Synthetic (SBM)']] },
+				{ label: 'Resistivity Tool', key: 'resTool', options: [['auto', 'Auto (from conveyance)'], ['induction', 'Induction'], ['laterolog', 'Laterolog'], ['propagation', 'Propagation (LWD)']] },
+				{ label: 'Depth Unit', key: 'depthUnit', options: [['auto', 'Well header'], ['m', 'm'], ['ft', 'ft']] }
+			] as sel (sel.key)}
+				<div class="grid grid-cols-[1fr_148px] items-center gap-x-2 py-0.5">
+					<span class="text-xs font-medium text-[var(--text-primary)]">{sel.label}</span>
+					<select
+						value={(ep as any)[sel.key]}
+						onchange={(e) => ((ep as any)[sel.key] = (e.currentTarget as HTMLSelectElement).value)}
+						class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
+					>
+						{#each sel.options as [val, text] (val)}
+							<option value={val}>{text}</option>
+						{/each}
+					</select>
+				</div>
+			{/each}
+			{#if ep.mudType !== 'WBM' && ep.resTool === 'laterolog'}
+				<div class="mb-1 rounded-xs border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] text-amber-800">
+					Laterolog does not read in non-conductive mud. RT is flagged unreliable.
+				</div>
+			{/if}
+
+			<label class="mt-1 flex items-center gap-1.5 text-[11px] font-semibold text-[var(--text-primary)] cursor-pointer">
+				<input
+					type="checkbox"
+					bind:checked={ep.offshore}
+					class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+				/>
+				<span>Offshore well (temperature from seabed)</span>
+			</label>
+			{#if ep.offshore}
+				<div class="grid grid-cols-2 gap-x-2">
+					<NumericScrubber
+						label="Water Depth"
+						bind:value={ep.waterDepth}
+						unit={ep.depthUnit === 'ft' ? 'ft' : 'm'}
+						min={0}
+						max={4000}
+						step={10}
+						decimals={0}
+						onrun={() => runEnvCorrections(false)}
+					/>
+					<NumericScrubber
+						label="Seabed Temp"
+						bind:value={ep.seabedTempC}
+						unit="°C"
+						min={-2}
+						max={30}
+						step={0.5}
+						onrun={() => runEnvCorrections(false)}
+					/>
+				</div>
+			{/if}
+
 			<div class="grid grid-cols-2 gap-x-2">
 				<NumericScrubber
 					label="Bit Size"
 					bind:value={ep.bitsizeDefault}
 					unit="in"
-					min={4.5}
-					max={17.5}
-					step={0.25}
+					min={3.5}
+					max={26.0}
+					step={0.125}
 					onrun={() => runEnvCorrections(false)}
 				/>
 				<NumericScrubber
@@ -2924,15 +3027,17 @@
 					step={0.2}
 					onrun={() => runEnvCorrections(false)}
 				/>
-				<NumericScrubber
-					label="Surface Temp"
-					bind:value={ep.surfaceTemp}
-					unit="°F"
-					min={40}
-					max={120}
-					step={2}
-					onrun={() => runEnvCorrections(false)}
-				/>
+				{#if !ep.offshore}
+					<NumericScrubber
+						label="Surface Temp"
+						bind:value={ep.surfaceTemp}
+						unit="°F"
+						min={-20}
+						max={120}
+						step={2}
+						onrun={() => runEnvCorrections(false)}
+					/>
+				{/if}
 				<NumericScrubber
 					label="Temp Gradient"
 					bind:value={ep.tempGrad}
@@ -2942,16 +3047,68 @@
 					step={0.1}
 					onrun={() => runEnvCorrections(false)}
 				/>
+				<NumericScrubber
+					label="Washout ΔCALI"
+					bind:value={ep.washoutThold}
+					unit="in"
+					min={0.5}
+					max={6.0}
+					step={0.25}
+					onrun={() => runEnvCorrections(false)}
+				/>
+				<NumericScrubber
+					label="Mudcake Density"
+					bind:value={ep.rhoMudcake}
+					unit="g/cc"
+					min={1.0}
+					max={2.6}
+					step={0.05}
+					onrun={() => runEnvCorrections(false)}
+				/>
+				<NumericScrubber
+					label="Formation Water Sal."
+					bind:value={ep.formationSalinityPpm}
+					unit="ppm"
+					min={500}
+					max={300000}
+					step={5000}
+					decimals={0}
+					onrun={() => runEnvCorrections(false)}
+				/>
 			</div>
-			<NumericScrubber
-				label="Mud Filtrate Salinity"
-				bind:value={ep.salinityPpm}
-				unit="ppm"
-				min={1000}
-				max={250000}
-				step={2000}
-				onrun={() => runEnvCorrections(false)}
-			/>
+			{#if ep.mudType === 'WBM'}
+				<div class="grid grid-cols-3 gap-x-1.5">
+					<NumericScrubber
+						label="Mud Salinity"
+						bind:value={ep.salinityPpm}
+						unit="ppm"
+						min={0}
+						max={250000}
+						step={2000}
+						decimals={0}
+						onrun={() => runEnvCorrections(false)}
+					/>
+					<NumericScrubber
+						label="Rmf (0 = est.)"
+						bind:value={ep.rmf}
+						unit="Ω·m"
+						min={0}
+						max={20}
+						step={0.01}
+						decimals={3}
+						onrun={() => runEnvCorrections(false)}
+					/>
+					<NumericScrubber
+						label="Rmf Temp"
+						bind:value={ep.rmfTempC}
+						unit="°C"
+						min={0}
+						max={80}
+						step={1}
+						onrun={() => runEnvCorrections(false)}
+					/>
+				</div>
+			{/if}
 			<div class="mt-1 flex gap-1.5">
 				<button
 					type="button"
@@ -2976,6 +3133,56 @@
 					{wellData.isSaving ? 'Saving...' : 'Save'}
 				</button>
 			</div>
+
+			{#if envInfo}
+				<div class="mt-1.5 flex flex-wrap gap-1 text-[9.5px]">
+					<span class="rounded-xs bg-slate-100 px-1.5 py-0.5 font-semibold text-slate-700">{envInfo.tool_type}</span>
+					<span class="rounded-xs bg-slate-100 px-1.5 py-0.5 font-semibold text-slate-700">{envInfo.mud_type} · {envInfo.mud_weight_ppg} ppg</span>
+					<span class="rounded-xs bg-slate-100 px-1.5 py-0.5 font-semibold text-slate-700">{envInfo.offshore ? 'Offshore' : 'Onshore'}</span>
+					<span class="rounded-xs bg-slate-100 px-1.5 py-0.5 mono-num text-slate-700">T₀ {envInfo.top_temp_c} °C · {envInfo.gradient_c_per_km} °C/km</span>
+					<span class="rounded-xs bg-slate-100 px-1.5 py-0.5 mono-num text-slate-700">depth {envInfo.depth_unit}</span>
+				</div>
+			{/if}
+
+			{#if envQcSummary && Object.keys(envQcSummary).length > 0}
+				<table class="mt-1.5 w-full border-collapse text-[9.5px]">
+					<thead>
+						<tr class="text-[var(--text-muted)]">
+							<th class="py-0.5 text-left font-medium">Curve</th>
+							<th class="py-0.5 text-right font-medium" title="Gauge hole, negligible correction">Good</th>
+							<th class="py-0.5 text-right font-medium" title="Corrected, still reliable">Corr.</th>
+							<th class="py-0.5 text-right font-medium" title="Confidence below threshold: candidate for reconstruction">Unrel.</th>
+							<th class="py-0.5 text-right font-medium">Conf</th>
+							<th class="py-0.5 text-right font-medium" title="95th percentile |corrected − raw|">P95 |Δ|</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each Object.entries(envQcSummary) as [log, s] (log)}
+							<tr class="border-t border-[var(--border-hairline)]">
+								<td class="py-0.5 mono-num font-semibold text-[var(--text-primary)]">{log}</td>
+								<td class="py-0.5 text-right mono-num text-emerald-700">{s.good_pct}%</td>
+								<td class="py-0.5 text-right mono-num text-blue-700">{s.corrected_pct}%</td>
+								<td class="py-0.5 text-right mono-num {s.unreliable_pct > 10 ? 'font-bold text-red-700' : 'text-red-600'}">{s.unreliable_pct}%</td>
+								<td class="py-0.5 text-right mono-num text-[var(--text-primary)]">{s.mean_conf ?? '—'}</td>
+								<td class="py-0.5 text-right mono-num text-[var(--text-secondary)]">
+									{s.p95_abs_delta != null ? `${s.p95_abs_delta} ${ENV_DELTA_UNITS[log] ?? ''}` : '—'}
+								</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			{/if}
+
+			{#if envAssumptions.length > 0}
+				<div class="mt-1.5 rounded-xs border border-amber-200 bg-amber-50/60 px-2 py-1 text-[10px] leading-snug text-amber-900">
+					<div class="mb-0.5 font-semibold">Assumed inputs ({envAssumptions.length}). These widen *_SIGMA:</div>
+					<ul class="list-disc pl-3.5">
+						{#each envAssumptions as a, i (i)}
+							<li>{a}</li>
+						{/each}
+					</ul>
+				</div>
+			{/if}
 		</ParameterSection>
 
 		<ParameterSection

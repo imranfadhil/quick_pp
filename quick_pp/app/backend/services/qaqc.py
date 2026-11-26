@@ -9,7 +9,7 @@ Input Pydantic models:
 - `HCCorrectionInput` — Hydrocarbon correction for NPHI/RHOB data
 """
 
-from typing import List, Optional, Tuple
+from typing import List, Literal, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -81,8 +81,16 @@ class EnvironmentalCorrectionInput(BaseModel):
     mud_weight: float = Field(9.0, description="Drilling mud weight (ppg)")
     surface_temp: float = Field(75.0, description="Surface temperature (deg F)")
     temp_grad: float = Field(1.5, description="Geothermal gradient (deg F / 100 ft)")
-    salinity_ppm: float = Field(0.0, description="Salinity (ppm NaCl)")
+    salinity_ppm: float = Field(0.0, description="Borehole mud salinity (ppm NaCl)")
     rho_mudcake: float = Field(1.5, description="Mudcake bulk density (g/cm^3)")
+    tool_type: Literal["WL", "LWD"] = Field("WL", description="Generic tool profile")
+    mud_type: Literal["WBM", "OBM", "SBM"] = Field("WBM")
+    res_tool: Optional[Literal["induction", "laterolog", "propagation"]] = Field(None)
+    depth_unit: Literal["m", "ft", "auto"] = Field(
+        "auto", description="Depth unit of DEPTH/TVD; 'auto' guesses from magnitude"
+    )
+    formation_salinity_ppm: Optional[float] = Field(None)
+    washout_thold: float = Field(2.0, gt=0)
     data: List[dict] = Field(..., description="Well log records")
 
 
@@ -183,6 +191,15 @@ async def run_environmental_corrections(inputs: EnvironmentalCorrectionInput):
         temp_grad=inputs.temp_grad,
         salinity_ppm=inputs.salinity_ppm,
         rho_mudcake=inputs.rho_mudcake,
+        tool_type=inputs.tool_type,
+        mud_type=inputs.mud_type,
+        res_tool=inputs.res_tool,
+        depth_unit=inputs.depth_unit,
+        formation_salinity_ppm=inputs.formation_salinity_ppm,
+        washout_thold=inputs.washout_thold,
     )
-    return {"data": corr_df.replace({np.nan: None}).to_dict(orient="records")}
+    return {
+        "data": corr_df.replace({np.nan: None}).to_dict(orient="records"),
+        "assumptions": list(corr_df.attrs.get("env_assumptions") or []),
+    }
 

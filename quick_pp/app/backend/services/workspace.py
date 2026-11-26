@@ -1303,6 +1303,72 @@ class WorkspaceFilterBase(BaseModel):
     )
 
 
+class QcWeightedInputsMixin(BaseModel):
+    """Confidence-weighted input curves (only active once QC columns exist)."""
+
+    confidence_weighting: bool = Field(
+        True,
+        description="Blend GR/NPHI/RHOB/RT/DTC toward a local high-confidence trend by <LOG>_QC_CONF",
+    )
+    use_env_corrected: bool = Field(
+        True,
+        description="Use <LOG>_ENV_CORR as the input curve when it exists",
+    )
+    qc_good_conf: float = Field(0.8, ge=0.0, le=1.0)
+    qc_min_conf: float = Field(0.2, ge=0.0, le=1.0)
+
+
+_QC_WEIGHTED_LOGS = {"GR": "GR", "NPHI": "NPHI", "RHOB": "RHOB", "RT": "RT", "DTC": "DT"}
+
+
+def _apply_qc_weighted_inputs(df: pd.DataFrame, req: Any) -> pd.DataFrame:
+    """Replace raw input curves with environment-corrected, confidence-weighted curves.
+
+    For each log with a ``<QC>_QC_CONF`` column the input becomes
+    ``confidence_weighted_curve(base, conf)`` where ``base`` is ``<QC>_ENV_CORR``
+    (if ``use_env_corrected``) or the raw curve. RT is blended in log10 space.
+    Only the in-memory copy used for the computation is changed.
+    No-op when no QC columns are present or the request disables it.
+    """
+    if not getattr(req, "confidence_weighting", False) and not getattr(req, "use_env_corrected", False):
+        return df
+    from quick_pp.borehole_corrections import confidence_weighted_curve
+
+    out = df
+    applied: List[str] = []
+    depth = df["DEPTH"].to_numpy(dtype=float) if "DEPTH" in df.columns else None
+    for log, qc in _QC_WEIGHTED_LOGS.items():
+        if log not in df.columns:
+            continue
+        conf_col, corr_col = f"{qc}_QC_CONF", f"{qc}_ENV_CORR"
+        has_conf = conf_col in df.columns and pd.to_numeric(df[conf_col], errors="coerce").notna().any()
+        has_corr = corr_col in df.columns and pd.to_numeric(df[corr_col], errors="coerce").notna().any()
+        if not has_conf and not (has_corr and req.use_env_corrected):
+            continue
+        raw = pd.to_numeric(df[log], errors="coerce")
+        base = raw
+        if req.use_env_corrected and has_corr:
+            base = pd.to_numeric(df[corr_col], errors="coerce").fillna(raw)
+        if req.confidence_weighting and has_conf:
+            conf = pd.to_numeric(df[conf_col], errors="coerce").fillna(1.0)
+            if log == "RT":
+                lb = np.log10(base.clip(lower=1e-3))
+                blended = confidence_weighted_curve(lb, conf, depth, req.qc_good_conf, req.qc_min_conf)
+                new = pd.Series(10.0 ** blended.to_numpy(), index=df.index)
+            else:
+                new = confidence_weighted_curve(base, conf, depth, req.qc_good_conf, req.qc_min_conf)
+                new.index = df.index
+        else:
+            new = base
+        if out is df:
+            out = df.copy()
+        out[log] = new.where(raw.notna() | new.notna())
+        applied.append(log)
+    if applied:
+        out.attrs["qc_weighted_inputs"] = applied
+    return out
+
+
 class WorkspaceBadholeRequest(WorkspaceFilterBase):
     use_cali: bool = Field(
         True, description="Flag badhole using Differential Caliper |CALI - BS|"
@@ -1363,7 +1429,7 @@ class GammaParameters(BaseModel):
     )
 
 
-class WorkspaceHCCorrectionRequest(WorkspaceFilterBase, GammaParameters):
+class WorkspaceHCCorrectionRequest(WorkspaceFilterBase, GammaParameters, QcWeightedInputsMixin):
     dry_sand_point: Tuple[float, float] = Field((-0.02, 2.65))
     dry_silt_point: Optional[Tuple[float, float]] = Field(None)
     dry_clay_point: Tuple[float, float] = Field((0.33, 2.7))
@@ -1525,7 +1591,7 @@ class WorkspaceDenCorrectionRequest(WorkspaceFilterBase, GammaParameters):
     )
 
 
-class WorkspaceLithologyRequest(WorkspaceFilterBase, GammaParameters):
+class WorkspaceLithologyRequest(WorkspaceFilterBase, GammaParameters, QcWeightedInputsMixin):
     model: str = Field(
         "ssc",
         description="Lithology model: 'ssc', 'sand_shale', 'multi_mineral', or 'vsh_gr'",
@@ -1679,7 +1745,7 @@ class GrainDensityCorrelation(BaseModel):
     )
 
 
-class WorkspacePorosityRequest(WorkspaceFilterBase, GammaParameters):
+class WorkspacePorosityRequest(WorkspaceFilterBase, GammaParameters, QcWeightedInputsMixin):
     method: Literal[
         "den",
         "neu_den",
@@ -1964,7 +2030,7 @@ class WorkspacePermeabilityRequest(WorkspaceFilterBase):
     )
 
 
-class WorkspaceSaturationRequest(WorkspaceFilterBase):
+class WorkspaceSaturationRequest(WorkspaceFilterBase, QcWeightedInputsMixin):
     lithology_model: Optional[str] = Field(None, description="Active lithology model")
     use_enhanced_logs: bool = Field(
         False,
@@ -3124,6 +3190,7 @@ def workspace_hc_correction(
         df = _get_filtered_well_df(
             project_id, well_name, req.min_depth, req.max_depth, req.zones
         )
+        df = _apply_qc_weighted_inputs(df, req)
         nphi, rhob = _select_nphi_rhob(df, use_hc_corrected=False)
         valid_mask = nphi.notna() & rhob.notna()
         if not valid_mask.any():
@@ -4606,6 +4673,7 @@ def workspace_lithology(
         df = _get_filtered_well_df(
             project_id, well_name, req.min_depth, req.max_depth, req.zones
         )
+        df = _apply_qc_weighted_inputs(df, req)
         model = req.model.lower()
         source = (req.gamma_source or "gr").lower()
         out_df = pd.DataFrame({"DEPTH": df["DEPTH"]})
@@ -5723,6 +5791,7 @@ def workspace_porosity(
         df = _get_filtered_well_df(
             project_id, well_name, req.min_depth, req.max_depth, req.zones
         )
+        df = _apply_qc_weighted_inputs(df, req)
         nphi, rhob = _select_nphi_rhob(
             df,
             use_hc_corrected=req.use_hc_corrected,
@@ -6868,6 +6937,7 @@ def workspace_saturation(
         df = _get_filtered_well_df(
             project_id, well_name, req.min_depth, req.max_depth, req.zones
         )
+        df = _apply_qc_weighted_inputs(df, req)
         df = _merge_request_fallback_curves(
             df,
             depths=req.depths,
@@ -11103,13 +11173,61 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
         ) from e
 
 
+class EnvMudIntervalModel(BaseModel):
+    """One hole section of the mud program (depths in the log depth unit)."""
+
+    top: float
+    bottom: float
+    bit_size_in: Optional[float] = None
+    mud_type: Literal["WBM", "OBM", "SBM"] = "WBM"
+    mud_weight_ppg: Optional[float] = None
+    rm: Optional[float] = None
+    rm_temp_c: Optional[float] = None
+    rmf: Optional[float] = None
+    rmf_temp_c: Optional[float] = None
+    rmc: Optional[float] = None
+    rmc_temp_c: Optional[float] = None
+    salinity_ppm: Optional[float] = None
+
+
+class EnvBhtRecordModel(BaseModel):
+    depth_m: float
+    temp_c: float
+
+
 class WorkspaceEnvCorrectionRequest(WorkspaceFilterBase):
+    """Environmental correction settings.
+
+    ``None`` means "take it from the well header / config, otherwise use a
+    documented default". Legacy scalar fields (``surface_temp`` degF,
+    ``temp_grad`` degF/100 ft, ``mud_weight`` ppg) are still accepted.
+    """
+
     bitsize_default: float = Field(8.5)
-    mud_weight: float = Field(9.0)
-    surface_temp: float = Field(75.0)
-    temp_grad: float = Field(1.5)
-    salinity_ppm: float = Field(35000.0)
+    mud_weight: Optional[float] = Field(None, description="Mud weight (ppg or g/cc)")
+    surface_temp: Optional[float] = Field(None, description="Surface temperature (degF)")
+    temp_grad: Optional[float] = Field(None, description="Geothermal gradient (degF/100 ft)")
+    salinity_ppm: Optional[float] = Field(None, description="Borehole mud salinity (ppm NaCl)")
     rho_mudcake: float = Field(1.5)
+    tool_type: Literal["WL", "LWD"] = Field("WL")
+    mud_type: Optional[Literal["WBM", "OBM", "SBM"]] = Field(None)
+    res_tool: Optional[Literal["induction", "laterolog", "propagation"]] = Field(None)
+    depth_unit: Optional[Literal["m", "ft"]] = Field(
+        None, description="Log depth unit; defaults to the well depth unit"
+    )
+    water_depth: Optional[float] = Field(None, description="Water depth (log depth unit); > 0 = offshore")
+    seabed_temp_c: Optional[float] = Field(None)
+    temp_gradient_c_per_km: Optional[float] = Field(None)
+    bht_records: Optional[List[EnvBhtRecordModel]] = Field(None)
+    formation_salinity_ppm: Optional[float] = Field(None)
+    rm: Optional[float] = Field(None)
+    rm_temp_c: Optional[float] = Field(None)
+    rmf: Optional[float] = Field(None)
+    rmf_temp_c: Optional[float] = Field(None)
+    mud_program: Optional[List[EnvMudIntervalModel]] = Field(None)
+    washout_thold: float = Field(2.0, gt=0)
+    good_conf: float = Field(0.8, ge=0, le=1)
+    unreliable_conf: float = Field(0.4, ge=0, le=1)
 
 
 class WorkspaceStratNormalizationRequest(BaseModel):
@@ -12546,6 +12664,163 @@ class WorkspaceOptimizeFwlRequest(BaseModel):
     save: bool = Field(False)
 
 
+ENV_QC_OUTPUT_CURVES = ("GR", "NPHI", "RHOB", "RT", "DT")
+ENV_QC_SUFFIXES = ("_ENV_CORR", "_CORR_DELTA", "_SIGMA", "_QC_CONF", "_QC_STATUS")
+ENV_QC_SHARED_COLS = (
+    "ENV_QC_REASON",
+    "HOLE_SEVERITY",
+    "ENV_TEMP_C",
+    "INVASION_FLAG",
+    "INVASION_PROFILE",
+    "RXO_EST",
+    "DI_EST",
+)
+
+
+def _load_well_env_config(project_id: int, well_name: str) -> Tuple[Dict[str, Any], Optional[str]]:
+    """Merge LAS header metadata, DB well config and ephemeral config for environment inputs.
+
+    Returns ``(config, depth_unit)``. ``depth_unit`` is the stored well depth unit
+    (``'m'``/``'ft'``) or ``None`` when unknown.
+    """
+    cfg: Dict[str, Any] = {}
+    depth_uom: Optional[str] = None
+    if _isolated_evaluation.get() is not None:
+        return cfg, None
+    try:
+        with get_db() as session:
+            proj = db_objects.Project.load(session, project_id=project_id)
+            well_obj = proj.get_well(resolve_db_well_name(project_id, well_name))
+            orm = getattr(well_obj, "_orm_well", None)
+            if orm is not None:
+                depth_uom = orm.depth_uom
+                if isinstance(orm.header_data, dict):
+                    meta = extract_las_metadata(dict(orm.header_data), fallback_well_name=well_name)
+                    cfg.update({k: v for k, v in dict(meta).items() if v is not None})
+                    ovr = orm.header_data.get("header_overrides")
+                    if isinstance(ovr, dict):
+                        cfg.update({k: v for k, v in ovr.items() if v is not None})
+                if isinstance(orm.config_data, dict):
+                    cfg.update({k: v for k, v in orm.config_data.items() if v is not None})
+    except Exception as exc:
+        logger.debug(f"[env_corr] could not load well config for {well_name}: {exc}")
+    eph = _ephemeral_well_configs.get((project_id, well_name)) or _ephemeral_well_configs.get(
+        (project_id, resolve_db_well_name(project_id, well_name))
+    )
+    if isinstance(eph, dict):
+        cfg.update({k: v for k, v in eph.items() if v is not None})
+    unit = str(depth_uom or cfg.get("datum_unit") or "").strip().lower()
+    unit_norm = "ft" if unit in ("ft", "f", "feet", "foot") else ("m" if unit in ("m", "meter", "metre", "meters", "metres") else None)
+    return cfg, unit_norm
+
+
+def _run_env_corrections(
+    project_id: int, well_name: str, df: pd.DataFrame, req: "WorkspaceEnvCorrectionRequest"
+) -> Tuple[pd.DataFrame, List[str], Dict[str, Any]]:
+    """Build the environment for one well and run the generic corrections.
+
+    Request values override the well header/config. Returns the corrected
+    DataFrame, the output column list and response metadata.
+    """
+    from quick_pp.environment import environment_from_config
+
+    cfg, well_unit = _load_well_env_config(project_id, well_name)
+    depth_unit = req.depth_unit or well_unit
+    unit_note = None
+    if depth_unit is None:
+        depth_unit = "m"
+        unit_note = "Well depth unit unknown; metres assumed."
+
+    overrides: Dict[str, Any] = {
+        "mud_type": req.mud_type,
+        "water_depth": req.water_depth,
+        "seabed_temp_c": req.seabed_temp_c,
+        "temp_gradient_c_per_km": req.temp_gradient_c_per_km,
+        "formation_salinity_ppm": req.formation_salinity_ppm,
+        "mud_salinity_ppm": req.salinity_ppm,
+        "rm": req.rm,
+        "rm_temp": req.rm_temp_c,
+        "rmf": req.rmf,
+        "rmf_temp": req.rmf_temp_c,
+        "rm_temp_unit": "degC" if req.rm_temp_c is not None else None,
+        "rmf_temp_unit": "degC" if req.rmf_temp_c is not None else None,
+    }
+    if req.mud_weight is not None:
+        overrides["mud_weight_ppg"] = req.mud_weight
+    if req.surface_temp is not None:
+        overrides["surface_temp"] = req.surface_temp
+        overrides["surface_temp_unit"] = "degF"
+    if req.temp_grad is not None and req.temp_gradient_c_per_km is None:
+        overrides["temp_gradient_c_per_km"] = float(req.temp_grad) * (5.0 / 9.0) * (1000.0 / 30.48)
+    if req.bht_records:
+        overrides["bht_records"] = [r.model_dump() for r in req.bht_records]
+    if req.mud_program:
+        overrides["mud_program"] = [iv.model_dump() for iv in req.mud_program]
+    if cfg.get("mud_type") is None and req.mud_type is None:
+        cfg["mud_type"] = "WBM"
+    if cfg.get("mud_type") is not None and str(cfg["mud_type"]).upper() not in ("WBM", "OBM", "SBM"):
+        cfg.pop("mud_type")
+    env = environment_from_config(cfg, overrides, depth_unit=depth_unit)
+    if unit_note:
+        env.assumptions.insert(0, unit_note)
+
+    corr_df = apply_environmental_corrections(
+        df,
+        bitsize_default=float(cfg.get("bit_size") or req.bitsize_default),
+        rho_mudcake=req.rho_mudcake,
+        depth_unit=depth_unit,
+        mud_type=env.default_mud_type,
+        washout_thold=req.washout_thold,
+        good_conf=req.good_conf,
+        unreliable_conf=req.unreliable_conf,
+        tool_type=req.tool_type,
+        environment=env,
+        res_tool=req.res_tool,
+    )
+    out_cols = [
+        f"{log}{suf}"
+        for log in ENV_QC_OUTPUT_CURVES
+        for suf in ENV_QC_SUFFIXES
+        if f"{log}{suf}" in corr_df.columns
+    ] + [c for c in ENV_QC_SHARED_COLS if c in corr_df.columns]
+
+    qc_summary: Dict[str, Any] = {}
+    for log in ENV_QC_OUTPUT_CURVES:
+        st_col, cf_col, dl_col = f"{log}_QC_STATUS", f"{log}_QC_CONF", f"{log}_CORR_DELTA"
+        if st_col not in corr_df.columns:
+            continue
+        st = pd.to_numeric(corr_df[st_col], errors="coerce")
+        valid = st >= 0
+        nv = int(valid.sum())
+        delta = pd.to_numeric(corr_df[dl_col], errors="coerce").abs()[valid]
+        qc_summary[log] = {
+            "samples": nv,
+            "good_pct": round(float((st == 0).sum()) * 100.0 / nv, 1) if nv else 0.0,
+            "corrected_pct": round(float((st == 1).sum()) * 100.0 / nv, 1) if nv else 0.0,
+            "unreliable_pct": round(float((st == 2).sum()) * 100.0 / nv, 1) if nv else 0.0,
+            "mean_conf": round(float(pd.to_numeric(corr_df[cf_col], errors="coerce")[valid].mean()), 3) if nv else None,
+            "mean_abs_delta": round(float(delta.mean()), 5) if nv and delta.notna().any() else None,
+            "p95_abs_delta": round(float(delta.quantile(0.95)), 5) if nv and delta.notna().any() else None,
+        }
+    meta = {
+        "qc_summary": qc_summary,
+        "assumptions": list(corr_df.attrs.get("env_assumptions") or []),
+        "environment": {
+            "tool_type": req.tool_type,
+            "depth_unit": depth_unit,
+            "offshore": env.offshore,
+            "water_depth_m": round(env.water_depth_m, 2),
+            "top_temp_c": round(env.top_temp_c, 2),
+            "gradient_c_per_km": round(env.gradient_c_per_km, 2),
+            "mud_type": env.default_mud_type,
+            "mud_weight_ppg": round(env.default_mud_weight_ppg, 2),
+            "formation_salinity_ppm": env.formation_salinity_ppm,
+            "mud_program_sections": len(env.mud_program),
+        },
+    }
+    return corr_df, out_cols, meta
+
+
 @router.post(
     "/wells/{well_name}/environmental_corrections",
     summary="Apply borehole environmental and invasion corrections to well logs",
@@ -12553,41 +12828,31 @@ class WorkspaceOptimizeFwlRequest(BaseModel):
 def workspace_environmental_corrections(
     project_id: int, well_name: str, req: WorkspaceEnvCorrectionRequest
 ) -> Dict[str, Any]:
-    """Apply environmental corrections (GR_ENV_CORR, NPHI_ENV_CORR, RHOB_ENV_CORR, RT_ENV_CORR) to a well."""
+    """Apply generic environmental corrections and return corrected curves with QC outputs.
+
+    Returns ``<LOG>_ENV_CORR`` plus per-curve ``_CORR_DELTA``, ``_SIGMA``,
+    ``_QC_CONF``, ``_QC_STATUS``, and ``ENV_QC_REASON``, ``HOLE_SEVERITY``,
+    ``ENV_TEMP_C`` and resistivity invasion outputs, together with a per-curve
+    ``qc_summary`` and the list of ``assumptions`` that were made.
+    """
     try:
         df = _get_filtered_well_df(
             project_id, well_name, req.min_depth, req.max_depth, req.zones
         )
-        corr_df = apply_environmental_corrections(
-            df,
-            bitsize_default=req.bitsize_default,
-            mud_weight=req.mud_weight,
-            surface_temp=req.surface_temp,
-            temp_grad=req.temp_grad,
-            salinity_ppm=req.salinity_ppm,
-            rho_mudcake=req.rho_mudcake,
-        )
-        corr_cols = [
-            c
-            for c in (
-                "GR_ENV_CORR",
-                "NPHI_ENV_CORR",
-                "RHOB_ENV_CORR",
-                "RT_ENV_CORR",
-                "INVASION_FLAG",
-            )
-            if c in corr_df.columns
-        ]
-        out_df = corr_df[["DEPTH"] + corr_cols].copy()
+        corr_df, out_cols, meta = _run_env_corrections(project_id, well_name, df, req)
+        out_df = corr_df[["DEPTH"] + out_cols].copy()
         saved_rows = 0
-        if req.save and corr_cols:
+        if req.save and out_cols:
             saved_rows = _save_curves_to_well(project_id, well_name, out_df)
-        stats = {col: _curve_summary_stats(out_df[col]) for col in corr_cols}
+        elif out_cols:
+            _update_in_memory_well_cache(project_id, well_name, out_df)
+        stats = {col: _curve_summary_stats(out_df[col]) for col in out_cols}
         return {
             "well_name": well_name,
             "saved": req.save,
             "saved_rows": saved_rows,
             "stats": stats,
+            **meta,
             **dataframe_to_columnar(out_df),
         }
     except Exception as e:
@@ -13155,26 +13420,9 @@ def workspace_multi_well_environmental_corrections(
 
         for wdf in dfs:
             wn = str(wdf["WELL_NAME"].iloc[0])
-            corr_df = apply_environmental_corrections(
-                wdf,
-                bitsize_default=req.bitsize_default,
-                mud_weight=req.mud_weight,
-                surface_temp=req.surface_temp,
-                temp_grad=req.temp_grad,
-                salinity_ppm=req.salinity_ppm,
-                rho_mudcake=req.rho_mudcake,
-            )
-            corr_cols = [
-                c
-                for c in (
-                    "GR_ENV_CORR",
-                    "NPHI_ENV_CORR",
-                    "RHOB_ENV_CORR",
-                    "RT_ENV_CORR",
-                    "INVASION_FLAG",
-                )
-                if c in corr_df.columns
-            ]
+            if "DEPTH" in wdf.columns:
+                wdf = wdf.sort_values("DEPTH").reset_index(drop=True)
+            corr_df, corr_cols, meta = _run_env_corrections(project_id, wn, wdf, req)
             all_corr_cols.update(corr_cols)
             if corr_cols and "DEPTH" in corr_df.columns:
                 sub_df = corr_df[["DEPTH"] + corr_cols].copy()
@@ -13188,7 +13436,18 @@ def workspace_multi_well_environmental_corrections(
                 {
                     "WELL_NAME": wn,
                     "ROWS": len(corr_df),
-                    "CURVES_CORRECTED": ", ".join(corr_cols),
+                    "CURVES_CORRECTED": ", ".join(
+                        c for c in corr_cols if c.endswith("_ENV_CORR")
+                    ),
+                    **{
+                        f"{log}_UNRELIABLE_PCT": s["unreliable_pct"]
+                        for log, s in meta["qc_summary"].items()
+                    },
+                    **{
+                        f"{log}_MEAN_CONF": s["mean_conf"]
+                        for log, s in meta["qc_summary"].items()
+                    },
+                    "ASSUMPTIONS": len(meta["assumptions"]),
                 }
             )
 

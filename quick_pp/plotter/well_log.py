@@ -86,12 +86,12 @@ def add_defined_traces(fig, df, index, no_of_track, trace_defs, **kwargs):
             ):
                 continue
 
-        trace_args = dict(
-            x=round(df[col], 3) if df[col].dtype == "float64" else df[col],
-            y=index,
-            name=col,
+        trace_args = {
+            "x": round(df[col], 3) if df[col].dtype == "float64" else df[col],
+            "y": index,
+            "name": col,
             **kwargs,
-        )
+        }
         trace_args.update(style)
         fig.add_trace(
             go.Scatter(**trace_args),

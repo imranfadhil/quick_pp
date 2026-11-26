@@ -324,11 +324,14 @@ def test_environmental_and_invasion_corrections():
 
     # 3. Density mudcake/washout correction: washout reads light mudcake -> corrected RHOB > raw RHOB
     rhob_nom = density_mudcake_correction(2.35, cali=8.5, bitsize=8.5, rho_mudcake=1.5)
-    rhob_wash = density_mudcake_correction(
-        2.35, cali=11.5, bitsize=8.5, rho_mudcake=1.5, drho=0.25
-    )
+    rhob_wash = density_mudcake_correction(2.35, cali=11.5, bitsize=8.5, rho_mudcake=1.5)
     assert np.isclose(rhob_nom, 2.35, atol=1e-5)
     assert rhob_wash > 2.35
+    # Vendor-compensated RHOB (DRHO supplied) is not corrected a second time.
+    rhob_comp = density_mudcake_correction(
+        2.35, cali=11.5, bitsize=8.5, rho_mudcake=1.5, drho=0.25
+    )
+    assert np.isclose(rhob_comp, 2.35, atol=1e-6)
 
     # 4. Resistivity invasion correction:
     # Row 0: Conductive invasion in hydrocarbon sand (Rt=50 > Rm=20 > Rxo=5) -> Rt_corr > 50, flag = 1
@@ -368,7 +371,9 @@ def test_environmental_and_invasion_corrections():
     ):
         assert col in corr_df.columns
     assert corr_df.loc[1, "GR_ENV_CORR"] > corr_df.loc[1, "GR"]
-    assert corr_df.loc[1, "RHOB_ENV_CORR"] > corr_df.loc[1, "RHOB"]
+    # DRHO present -> compensated density is not re-corrected, but confidence drops.
+    assert np.isclose(corr_df.loc[1, "RHOB_ENV_CORR"], corr_df.loc[1, "RHOB"])
+    assert corr_df.loc[1, "RHOB_QC_CONF"] < corr_df.loc[0, "RHOB_QC_CONF"]
     assert corr_df.loc[0, "RT_ENV_CORR"] > corr_df.loc[0, "RT"]
     assert corr_df.loc[0, "INVASION_FLAG"] == 1
     assert corr_df.loc[1, "INVASION_FLAG"] == 2
