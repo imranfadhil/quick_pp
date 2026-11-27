@@ -98,6 +98,45 @@ export function decodeInvasionProfile(code: number | null | undefined): string {
 	}
 }
 
+/**
+ * Parse water depth from a well header into canonical meters, honoring
+ * `water_depth_unit` / `datum_unit` / `depth_unit`. Returns null when absent or invalid.
+ */
+export function parseHeaderWaterDepthMeters(
+	hdr: Record<string, any> | null | undefined
+): number | null {
+	if (!hdr || typeof hdr !== 'object') return null;
+	if (hdr.water_depth === null || hdr.water_depth === undefined || hdr.water_depth === '') {
+		return null;
+	}
+	const raw = Number(hdr.water_depth);
+	if (!Number.isFinite(raw) || raw < 0) return null;
+	const u = String(hdr.water_depth_unit ?? hdr.datum_unit ?? hdr.depth_unit ?? 'm')
+		.trim()
+		.toLowerCase();
+	const isFt = u === 'ft' || u === 'f' || u === 'feet' || u === 'foot';
+	return isFt ? raw / M_TO_FT : raw;
+}
+
+/**
+ * Synchronize well header water depth (converted to meters) into borehole environmental
+ * correction parameters.
+ */
+export function syncHeaderToEnvParams(
+	hdr: Record<string, any> | null | undefined,
+	ep: { offshore: boolean; waterDepth: number }
+): void {
+	if (!hdr || typeof hdr !== 'object') return;
+	const wdM = parseHeaderWaterDepthMeters(hdr);
+	if (wdM !== null && wdM > 0) {
+		ep.offshore = true;
+		ep.waterDepth = Number(wdM.toFixed(2));
+	} else {
+		ep.offshore = false;
+		ep.waterDepth = 0;
+	}
+}
+
 function firstCurve(
 	curves: Record<string, Array<number | null> | undefined>,
 	names: readonly string[]

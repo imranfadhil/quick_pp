@@ -3,6 +3,7 @@ import type { CoreComparisonMetrics, CurveSummaryStats } from '$lib/api/schema';
 import { appStatus } from './status.svelte';
 import { workbench } from './workbench.svelte';
 import { calibrateGamma, gammaEndpoints, gammaKey, gammaLabel, selectedGamma, setGammaEndpoints, syncHeaderToLithoParams } from '$lib/utils/lithology';
+import { syncHeaderToEnvParams } from '$lib/utils/envCorrQc';
 import {
 	selectSpliceInterval,
 	validateSpliceInterval,
@@ -3599,6 +3600,13 @@ class WellDataState {
 			...updates
 		};
 		syncHeaderToLithoParams(updates, workbench.lithoParams);
+		if (
+			'water_depth' in updates ||
+			'datum_unit' in updates ||
+			'water_depth_unit' in updates
+		) {
+			syncHeaderToEnvParams(this.header, workbench.envCorrParams);
+		}
 		if (persist && pid && wid) {
 			const res = await postJson<any>(
 				`/quick_pp/workspace/projects/${encodeURIComponent(pid)}/wells/${encodeURIComponent(wid)}/config`,

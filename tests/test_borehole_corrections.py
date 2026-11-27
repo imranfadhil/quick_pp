@@ -53,6 +53,34 @@ def test_onshore_vs_offshore_temperature():
     assert off.formation_pressure_psi(2025.0) < on.formation_pressure_psi(2025.0)
 
 
+def test_water_depth_header_unit_and_overrides():
+    # Header water_depth in feet (datum_unit='ft') converts to metres even when log depth_unit='m'
+    off_ft_hdr = environment_from_config(
+        {"water_depth": 384.0, "kb_elev": 82.0, "datum_unit": "ft"},
+        depth_unit="m",
+    )
+    assert off_ft_hdr.offshore
+    assert np.isclose(off_ft_hdr.water_depth_m, 384.0 * 0.3048, rtol=1e-4)
+    assert np.isclose(off_ft_hdr.air_gap_m, 82.0 * 0.3048, rtol=1e-4)
+
+    # Explicit water_depth_unit='m' override wins over ft header and ft log unit
+    off_m_ovr = environment_from_config(
+        {"water_depth": 384.0, "datum_unit": "ft"},
+        overrides={"water_depth": 117.0, "water_depth_unit": "m"},
+        depth_unit="ft",
+    )
+    assert np.isclose(off_m_ovr.water_depth_m, 117.0)
+
+    # Explicit water_depth=0 override switches offshore header back to onshore
+    on_ovr = environment_from_config(
+        {"water_depth": 384.0, "datum_unit": "ft"},
+        overrides={"water_depth": 0.0, "water_depth_unit": "m"},
+        depth_unit="m",
+    )
+    assert not on_ovr.offshore
+    assert on_ovr.water_depth_m == 0.0
+
+
 def test_bht_calibration_and_assumptions():
     env = environment_from_config(
         {"surface_temp": 20.0, "bht": 110.0, "bht_unit": "degC", "bht_depth": 3000.0}

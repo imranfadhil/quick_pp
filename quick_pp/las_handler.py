@@ -74,13 +74,23 @@ def read_las_file_fast(file_object, depth_uom=None):
 
     # Convert depth unit if depth_uom requested
     if depth_uom and len(las_header.curves) > 0:
-        raw_d_unit = str(getattr(las_header.curves[0], "unit", "") or "").strip().lower()
+        raw_d_unit = (
+            str(getattr(las_header.curves[0], "unit", "") or "").strip().lower()
+        )
         target_d_unit = str(depth_uom).strip().lower()
-        if raw_d_unit in ("ft", "f", "feet") and target_d_unit in ("m", "meter", "meters"):
+        if raw_d_unit in ("ft", "f", "feet") and target_d_unit in (
+            "m",
+            "meter",
+            "meters",
+        ):
             df["DEPTH"] = df["DEPTH"] * 0.3048
             meta_dict["depth_unit"] = "m"
             meta_dict["datum_unit"] = "m"
-        elif raw_d_unit in ("m", "meter", "meters") and target_d_unit in ("ft", "f", "feet"):
+        elif raw_d_unit in ("m", "meter", "meters") and target_d_unit in (
+            "ft",
+            "f",
+            "feet",
+        ):
             df["DEPTH"] = df["DEPTH"] / 0.3048
             meta_dict["depth_unit"] = "ft"
             meta_dict["datum_unit"] = "ft"
@@ -131,7 +141,9 @@ def read_las_files(las_files, depth_uom=None):
                     f.seek(0)
                 df, well_header = read_las_file_welly(f, depth_uom)
             except Exception as e:
-                logger.error(f"[read_las_files] Exception for {getattr(f, 'name', f)} | {e} ")
+                logger.error(
+                    f"[read_las_files] Exception for {getattr(f, 'name', f)} | {e} "
+                )
                 if hasattr(f, "seek"):
                     f.seek(0)
                 df, well_header, _ = read_las_file_mmap(f)
@@ -690,9 +702,24 @@ def build_las_object(
                 )
 
         for las_mnem, keys, unit_val, descr in (
-            ("EKB", ("kb_elev", "kb_elevation", "EKB"), d_unit, "KELLY BUSHING ELEVATION"),
-            ("EDF", ("df_elev", "dfe_elevation", "EDF"), d_unit, "DRILL FLOOR ELEVATION"),
-            ("EGL", ("gl_elev", "ground_elevation", "EGL"), d_unit, "GROUND LEVEL ELEVATION"),
+            (
+                "EKB",
+                ("kb_elev", "kb_elevation", "EKB"),
+                d_unit,
+                "KELLY BUSHING ELEVATION",
+            ),
+            (
+                "EDF",
+                ("df_elev", "dfe_elevation", "EDF"),
+                d_unit,
+                "DRILL FLOOR ELEVATION",
+            ),
+            (
+                "EGL",
+                ("gl_elev", "ground_elevation", "EGL"),
+                d_unit,
+                "GROUND LEVEL ELEVATION",
+            ),
             ("WDEP", ("water_depth", "WDEP"), d_unit, "WATER DEPTH"),
             ("X", ("x_coord", "X"), "m", "X COORDINATE"),
             ("Y", ("y_coord", "Y"), "m", "Y COORDINATE"),
@@ -721,10 +748,16 @@ def build_las_object(
     depths = df["DEPTH"].to_numpy(dtype=float)
     if len(depths) > 0:
         las_file.well.STRT = lasio.HeaderItem(
-            "STRT", unit=depth_uom, value=round(float(depths[0]), 4), descr="START DEPTH"
+            "STRT",
+            unit=depth_uom,
+            value=round(float(depths[0]), 4),
+            descr="START DEPTH",
         )
         las_file.well.STOP = lasio.HeaderItem(
-            "STOP", unit=depth_uom, value=round(float(depths[-1]), 4), descr="STOP DEPTH"
+            "STOP",
+            unit=depth_uom,
+            value=round(float(depths[-1]), 4),
+            descr="STOP DEPTH",
         )
         if len(depths) > 1:
             diffs = np.diff(depths)
@@ -825,21 +858,39 @@ def export_to_las_string(
     try:
         data_arr = getattr(las_file, "data", None)
         if data_arr is not None and len(las_file.curves) > 0 and len(data_arr) > 20:
-            strt_val = round(float(las_file.well.STRT.value), 4) if hasattr(las_file.well, "STRT") else 0.0
-            stop_val = round(float(las_file.well.STOP.value), 4) if hasattr(las_file.well, "STOP") else 0.0
-            step_val = round(float(las_file.well.STEP.value), 4) if hasattr(las_file.well, "STEP") else 0.0
+            strt_val = (
+                round(float(las_file.well.STRT.value), 4)
+                if hasattr(las_file.well, "STRT")
+                else 0.0
+            )
+            stop_val = (
+                round(float(las_file.well.STOP.value), 4)
+                if hasattr(las_file.well, "STOP")
+                else 0.0
+            )
+            step_val = (
+                round(float(las_file.well.STEP.value), 4)
+                if hasattr(las_file.well, "STEP")
+                else 0.0
+            )
 
             hdr_buf = io.StringIO()
             las_file.data = data_arr[:1]
-            las_file.write(hdr_buf, version=2.0, STRT=strt_val, STOP=stop_val, STEP=step_val)
+            las_file.write(
+                hdr_buf, version=2.0, STRT=strt_val, STOP=stop_val, STEP=step_val
+            )
             las_file.data = data_arr
 
             hdr_str = hdr_buf.getvalue()
             ascii_idx = hdr_str.find("~A")
             if ascii_idx != -1:
                 hdr_end = hdr_str.find("\n", ascii_idx)
-                header_part = hdr_str[:hdr_end + 1]
-                null_val = float(las_file.well.NULL.value) if hasattr(las_file.well, "NULL") else -999.25
+                header_part = hdr_str[: hdr_end + 1]
+                null_val = (
+                    float(las_file.well.NULL.value)
+                    if hasattr(las_file.well, "NULL")
+                    else -999.25
+                )
                 mat = np.nan_to_num(data_arr, nan=null_val)
                 data_buf = io.BytesIO()
                 np.savetxt(data_buf, mat, fmt=" %11.5f")
@@ -887,7 +938,9 @@ def export_to_las(
     """
     if folder:
         os.makedirs(folder, exist_ok=True)
-    well_path = os.path.join(folder, f"{well_name}.las") if folder else f"{well_name}.las"
+    well_path = (
+        os.path.join(folder, f"{well_name}.las") if folder else f"{well_name}.las"
+    )
     las_str = export_to_las_string(
         well_data=well_data,
         well_name=well_name,
@@ -1013,14 +1066,22 @@ def _parse_coordinate_value(val: Any) -> Optional[float]:
         return None
     if isinstance(val, (int, float, np.number)):
         fval = float(val)
-        return None if (np.isnan(fval) or np.isinf(fval) or fval in SENTINEL_NULLS) else fval
+        return (
+            None
+            if (np.isnan(fval) or np.isinf(fval) or fval in SENTINEL_NULLS)
+            else fval
+        )
     s = str(val).strip()
     if not s:
         return None
     # Try simple float first if no DMS indicators
     try:
         fval = float(s)
-        return None if (np.isnan(fval) or np.isinf(fval) or fval in SENTINEL_NULLS) else fval
+        return (
+            None
+            if (np.isnan(fval) or np.isinf(fval) or fval in SENTINEL_NULLS)
+            else fval
+        )
     except ValueError:
         pass
     # Extract numbers for DMS / DM / decimal+hemisphere patterns
@@ -1075,9 +1136,7 @@ def _las_header_to_dataframe(las_header: lasio.LASFile) -> pd.DataFrame:
                     "descr": str(getattr(item, "descr", "") or "").strip(),
                 }
             )
-    return pd.DataFrame(
-        rows, columns=["section", "mnemonic", "unit", "value", "descr"]
-    )
+    return pd.DataFrame(rows, columns=["section", "mnemonic", "unit", "value", "descr"])
 
 
 def extract_las_metadata(
@@ -1246,7 +1305,9 @@ def extract_las_metadata(
                         continue
                     return s
             # Also check direct_meta (case-insensitive)
-            dm_val = direct_meta.get(a) if a in direct_meta else direct_meta.get(a.lower())
+            dm_val = (
+                direct_meta.get(a) if a in direct_meta else direct_meta.get(a.lower())
+            )
             if _is_meaningful_header_val(dm_val):
                 s = re.split(r"\s{2,}:\s*", str(dm_val).strip())[0].strip()
                 if not _is_meaningful_header_val(s):
@@ -1263,7 +1324,9 @@ def extract_las_metadata(
                 fval = _parse_float_safe(item.get("value"))
                 if fval is not None and fval not in SENTINEL_NULLS:
                     return fval, (item.get("unit") or None)
-            dm_val = direct_meta.get(a) if a in direct_meta else direct_meta.get(a.lower())
+            dm_val = (
+                direct_meta.get(a) if a in direct_meta else direct_meta.get(a.lower())
+            )
             if dm_val is not None and not isinstance(dm_val, (dict, list)):
                 fval = _parse_float_safe(dm_val)
                 if fval is not None and fval not in SENTINEL_NULLS:
@@ -1277,7 +1340,9 @@ def extract_las_metadata(
                 cval = _parse_coordinate_value(item.get("value"))
                 if cval is not None and cval not in SENTINEL_NULLS:
                     return cval
-            dm_val = direct_meta.get(a) if a in direct_meta else direct_meta.get(a.lower())
+            dm_val = (
+                direct_meta.get(a) if a in direct_meta else direct_meta.get(a.lower())
+            )
             if dm_val is not None and not isinstance(dm_val, (dict, list)):
                 cval = _parse_coordinate_value(dm_val)
                 if cval is not None and cval not in SENTINEL_NULLS:
@@ -1359,17 +1424,31 @@ def extract_las_metadata(
         null_v = _parse_float_safe(raw_null) if raw_null is not None else -999.25
 
     datum_unit = (
-        kb_unit
-        or df_unit
-        or gl_unit
-        or start_unit
-        or _find_str(["datum_unit", "depth_unit"])
-        or "m"
-    ).strip().lower()
+        (
+            kb_unit
+            or df_unit
+            or gl_unit
+            or wd_unit
+            or start_unit
+            or _find_str(["datum_unit", "depth_unit"])
+            or "m"
+        )
+        .strip()
+        .lower()
+    )
     if datum_unit in ("ft", "f", "feet", "foot"):
         datum_unit = "ft"
     else:
         datum_unit = "m"
+
+    if water_depth is not None and wd_unit:
+        wd_u_norm = wd_unit.strip().lower()
+        wd_is_ft = wd_u_norm in ("ft", "f", "feet", "foot")
+        wd_is_m = wd_u_norm in ("m", "meter", "meters", "metre", "metres")
+        if wd_is_ft and datum_unit == "m":
+            water_depth = round(float(water_depth) * 0.3048, 4)
+        elif wd_is_m and datum_unit == "ft":
+            water_depth = round(float(water_depth) / 0.3048, 4)
 
     bht, bht_u = _find_float(["BHT", "BHWT", "BLI", "TEMP", "MAX_BHT", "BHTEMP"])
     bht_unit = bht_u or _find_str(["bht_unit"]) or "degC"
@@ -1389,9 +1468,7 @@ def extract_las_metadata(
     mud_filtrate_density, _ = _find_float(
         ["MF_DENSITY", "MUD_FILTRATE_DENSITY", "MFDEN", "MF_RHO", "MFRHO"]
     )
-    mud_type_raw = _find_str(
-        ["MUD_TYPE", "MUDTYPE", "MUD_SYSTEM", "MUDSYS", "MUD"]
-    )
+    mud_type_raw = _find_str(["MUD_TYPE", "MUDTYPE", "MUD_SYSTEM", "MUDSYS", "MUD"])
     mud_type = None
     if mud_type_raw:
         _mt = str(mud_type_raw).strip().upper()
@@ -1437,7 +1514,9 @@ def extract_las_metadata(
     meta = WellHeaderMetadata(
         uwi=clean_uwi,
         well_name=clean_well_name,
-        field=_find_str(["FLD", "FIELD", "FN", "FIELD_NAME", "FIELD-NAME", "FIELDNAME"]),
+        field=_find_str(
+            ["FLD", "FIELD", "FN", "FIELD_NAME", "FIELD-NAME", "FIELDNAME"]
+        ),
         company=_find_str(
             ["COMP", "COMPANY", "OPERATOR", "OPER", "CN", "COMPANY_NAME"]
         ),
@@ -1591,7 +1670,9 @@ def extract_well_df_elevation(
     )
 
     meta_dict: Dict[str, Any] = {}
-    if header_data is not None and (not isinstance(header_data, dict) or bool(header_data)):
+    if header_data is not None and (
+        not isinstance(header_data, dict) or bool(header_data)
+    ):
         try:
             meta_dict = dict(extract_las_metadata(header_data))
         except Exception:
@@ -1634,15 +1715,19 @@ def extract_well_df_elevation(
     if elev_val is None:
         return None
 
-    datum_unit = str(
-        ovr_dict.get("datum_unit")
-        or ovr_dict.get("depth_unit")
-        or cfg_dict.get("datum_unit")
-        or cfg_dict.get("depth_unit")
-        or meta_dict.get("datum_unit")
-        or hdr_dict.get("datum_unit")
-        or "m"
-    ).strip().lower()
+    datum_unit = (
+        str(
+            ovr_dict.get("datum_unit")
+            or ovr_dict.get("depth_unit")
+            or cfg_dict.get("datum_unit")
+            or cfg_dict.get("depth_unit")
+            or meta_dict.get("datum_unit")
+            or hdr_dict.get("datum_unit")
+            or "m"
+        )
+        .strip()
+        .lower()
+    )
 
     if target_depth_uom:
         target_u = str(target_depth_uom).strip().lower()
@@ -1700,9 +1785,13 @@ def normalize_las3_to_las2_stream(
     - Optional `~Core_Definition` / `~Core_Data` and `~Tops_Definition` / `~Tops_Data`
     """
     delim_match = re.search(
-        r"^\s*(?:DELIM|DLM)\s*\.\s*(\S+)", text_content, flags=re.IGNORECASE | re.MULTILINE
+        r"^\s*(?:DELIM|DLM)\s*\.\s*(\S+)",
+        text_content,
+        flags=re.IGNORECASE | re.MULTILINE,
     )
-    delim_code = delim_match.group(1).split(":")[0].strip().upper() if delim_match else "SPACE"
+    delim_code = (
+        delim_match.group(1).split(":")[0].strip().upper() if delim_match else "SPACE"
+    )
     sep_map = {"COMMA": ",", "TAB": "\t", "SPACE": r"\s+"}
     sep = sep_map.get(delim_code, r"\s+")
 
@@ -1744,19 +1833,25 @@ def normalize_las3_to_las2_stream(
         elif t_up.startswith(("~C", "~LOG_DEFINITION")):
             if "~CORE" in t_up:
                 core_def_lines = [
-                    ln for ln in body.splitlines() if ln.strip() and not ln.strip().startswith("#")
+                    ln
+                    for ln in body.splitlines()
+                    if ln.strip() and not ln.strip().startswith("#")
                 ]
             else:
                 las2_header_blocks.append(f"~Curve\n{body}")
         elif "~CORE_DEFINITION" in t_up:
             core_def_lines = [
-                ln for ln in body.splitlines() if ln.strip() and not ln.strip().startswith("#")
+                ln
+                for ln in body.splitlines()
+                if ln.strip() and not ln.strip().startswith("#")
             ]
         elif "~CORE_DATA" in t_up:
             core_data_body = body
         elif "~TOPS_DEFINITION" in t_up:
             tops_def_lines = [
-                ln for ln in body.splitlines() if ln.strip() and not ln.strip().startswith("#")
+                ln
+                for ln in body.splitlines()
+                if ln.strip() and not ln.strip().startswith("#")
             ]
         elif "~TOPS_DATA" in t_up:
             tops_data_body = body
@@ -1878,7 +1973,9 @@ def fast_read_las(
     if is_las3:
         full_text = raw_bytes.decode("utf-8", errors="ignore")
         las3_info = normalize_las3_to_las2_stream(full_text)
-        las_header = lasio.read(io.StringIO(las3_info["las2_header_str"]), ignore_data=True)
+        las_header = lasio.read(
+            io.StringIO(las3_info["las2_header_str"]), ignore_data=True
+        )
         las_header._las3_core_df = las3_info["core_df"]
         las_header._las3_tops_df = las3_info["tops_df"]
         las_header._is_las3 = True
@@ -1946,12 +2043,15 @@ def fast_read_las(
                 names=curve_names,
                 dtype=dtypes,
                 na_values=list({null_val, *SENTINEL_NULLS}),
-                 comment="#",
+                comment="#",
                 engine="c",
                 on_bad_lines="warn",
             )
             if not df.empty and len(df.columns) == len(curve_names):
-                if df.columns[0].upper() in ("DEPT", "MD", "DEPTH") and df.columns[0] != "DEPTH":
+                if (
+                    df.columns[0].upper() in ("DEPT", "MD", "DEPTH")
+                    and df.columns[0] != "DEPTH"
+                ):
                     df = df.rename(columns={df.columns[0]: "DEPTH"})
                 return las_header, df
         except Exception as e:
@@ -1965,7 +2065,11 @@ def fast_read_las(
         if pd.api.types.is_numeric_dtype(df[col]):
             df[col] = df[col].replace(list({null_val, *SENTINEL_NULLS}), np.nan)
             df[col] = df[col].astype(np.float64 if i == 0 else np.float32)
-    if not df.empty and df.columns[0].upper() in ("DEPT", "MD", "DEPTH") and df.columns[0] != "DEPTH":
+    if (
+        not df.empty
+        and df.columns[0].upper() in ("DEPT", "MD", "DEPTH")
+        and df.columns[0] != "DEPTH"
+    ):
         df = df.rename(columns={df.columns[0]: "DEPTH"})
     return las_full, df
 
@@ -2009,7 +2113,11 @@ def mnemonic_mapper(
             continue
         col_up = col.strip().upper()
         resolved = Config.resolve_mnemonic_alias(col_up)
-        if resolved != col_up and resolved not in assigned_targets and resolved not in existing_up:
+        if (
+            resolved != col_up
+            and resolved not in assigned_targets
+            and resolved not in existing_up
+        ):
             mapping[col] = resolved
             assigned_targets.add(resolved)
         else:
@@ -2162,7 +2270,7 @@ def merge_well_curves_with_dedup(
         inc_indexed = inc_clean.set_index("DEPTH").reindex(union_depths)
     else:
         union_depths = inc_clean["DEPTH"].to_numpy(dtype=np.float64)
-        base_indexed = pd.DataFrame(index= pd.Index(union_depths, name="DEPTH"))
+        base_indexed = pd.DataFrame(index=pd.Index(union_depths, name="DEPTH"))
         inc_indexed = inc_clean.set_index("DEPTH")
 
     # Preserve WELL_NAME / UWI metadata columns across all union depths
@@ -2209,8 +2317,11 @@ def merge_well_curves_with_dedup(
                     candidate_cols.append(actual_col)
 
             identical = next(
-                (cand for cand in candidate_cols
-                 if _curves_are_identical(base_indexed[cand], inc_series)),
+                (
+                    cand
+                    for cand in candidate_cols
+                    if _curves_are_identical(base_indexed[cand], inc_series)
+                ),
                 None,
             )
             if identical is not None:
@@ -2235,9 +2346,7 @@ def merge_well_curves_with_dedup(
 
     merged_out = base_indexed.reset_index()
     # Keep DEPTH, WELL_NAME, UWI at the front
-    front_cols = [
-        c for c in ("WELL_NAME", "UWI", "DEPTH") if c in merged_out.columns
-    ]
+    front_cols = [c for c in ("WELL_NAME", "UWI", "DEPTH") if c in merged_out.columns]
     other_cols = [c for c in merged_out.columns if c not in front_cols]
     merged_out = merged_out[front_cols + other_cols]
     return merged_out, summary
@@ -2265,7 +2374,10 @@ def standardize_curve_units(
         return pd.DataFrame(), {}, {}
 
     out_df = df.copy()
-    units_in = {str(k).strip().upper(): str(v or "").strip() for k, v in (curve_units or {}).items()}
+    units_in = {
+        str(k).strip().upper(): str(v or "").strip()
+        for k, v in (curve_units or {}).items()
+    }
     col_map = mnemonic_mapper(out_df, custom_mapping=custom_mnemonic_map)
 
     # Map units and handle any duplicate target mnemonics within the same file
@@ -2278,7 +2390,10 @@ def standardize_curve_units(
     for col_idx, orig_col in enumerate(out_df.columns):
         orig_str = str(orig_col)
         mapped_raw = col_map.get(orig_str, orig_str)
-        base_target = re.sub(r":\d+$", "", str(mapped_raw).strip()).strip() or str(mapped_raw).strip()
+        base_target = (
+            re.sub(r":\d+$", "", str(mapped_raw).strip()).strip()
+            or str(mapped_raw).strip()
+        )
         target_up = base_target.upper()
         s_col = out_df.iloc[:, col_idx]
         u_str = units_in.get(orig_str.strip().upper(), units_in.get(target_up, ""))
@@ -2301,8 +2416,11 @@ def standardize_curve_units(
         else:
             # Check if identical to an already-seen column with the same base mnemonic in this file
             identical = next(
-                (name for name, prev_s in seen_series_by_base[target_up]
-                 if _curves_are_identical(prev_s, s_col)),
+                (
+                    name
+                    for name, prev_s in seen_series_by_base[target_up]
+                    if _curves_are_identical(prev_s, s_col)
+                ),
                 None,
             )
             if identical is not None:
@@ -2451,7 +2569,12 @@ def standardize_curve_units(
         used_names = {str(c).upper() for c in out_df.columns}
         for col_idx, original, target, unit in lineage_sources:
             raw_name = None
-            if original.strip().upper() != target.upper() and target.upper() not in ("DEPTH", "DEPT", "WELL_NAME", "UWI"):
+            if original.strip().upper() != target.upper() and target.upper() not in (
+                "DEPTH",
+                "DEPT",
+                "WELL_NAME",
+                "UWI",
+            ):
                 base = re.sub(r":(\d+)$", r"_\1", original.strip().upper())
                 if base in used_names or base in ("DEPTH", "DEPT", "WELL_NAME", "UWI"):
                     base = f"RAW_{base}"
@@ -2463,12 +2586,14 @@ def standardize_curve_units(
                 out_df[raw_name] = df.iloc[:, col_idx].to_numpy()
                 std_units[raw_name] = unit
                 used_names.add(raw_name.upper())
-            curve_lineage.append({
-                "source_mnemonic": original,
-                "source_unit": unit,
-                "stored_curve": target,
-                "raw_curve": raw_name,
-            })
+            curve_lineage.append(
+                {
+                    "source_mnemonic": original,
+                    "source_unit": unit,
+                    "stored_curve": target,
+                    "raw_curve": raw_name,
+                }
+            )
 
     return out_df, std_units, conversions
 
@@ -2513,11 +2638,15 @@ def compute_curve_qaqc(
     for col in df.columns:
         if col in ("WELL_NAME", "UWI"):
             continue
-        s = pd.to_numeric(df[col], errors="coerce").replace(list(SENTINEL_NULLS), np.nan)
+        s = pd.to_numeric(df[col], errors="coerce").replace(
+            list(SENTINEL_NULLS), np.nan
+        )
         valid = s.dropna()
         valid_count = int(len(valid))
         null_count = int(total_rows - valid_count)
-        completeness = round((valid_count / total_rows) * 100.0, 2) if total_rows > 0 else 0.0
+        completeness = (
+            round((valid_count / total_rows) * 100.0, 2) if total_rows > 0 else 0.0
+        )
 
         warnings: List[str] = []
         min_v = round(float(valid.min()), 4) if valid_count > 0 else None
@@ -2525,11 +2654,7 @@ def compute_curve_qaqc(
 
         # Flatline check (>10m constant value) on continuous logs (skip binary flags)
         col_up = str(col).upper()
-        if (
-            col_up != "DEPTH"
-            and "FLAG" not in col_up
-            and valid_count >= window_pts
-        ):
+        if col_up != "DEPTH" and "FLAG" not in col_up and valid_count >= window_pts:
             roll_std = s.rolling(window=window_pts, min_periods=window_pts).std()
             flat_count = int((roll_std == 0.0).sum())
             if flat_count > 0 or (valid_count > 10 and float(valid.std()) == 0.0):
@@ -2541,7 +2666,9 @@ def compute_curve_qaqc(
             if col_up == "RT":
                 oob = int((valid <= 0.0).sum())
                 if oob > 0:
-                    warnings.append(f"Out-of-bounds physics: {oob} pts with RT <= 0 {u_lbl}")
+                    warnings.append(
+                        f"Out-of-bounds physics: {oob} pts with RT <= 0 {u_lbl}"
+                    )
             else:
                 oob = int(((valid < lo) | (valid > hi)).sum())
                 if oob > 0:
@@ -2667,7 +2794,9 @@ def splice_and_regularize_runs(
         out_df[k] = v
 
     for c in all_curves:
-        stacked = np.column_stack([ir[c].to_numpy(dtype=np.float64) for ir in interp_runs])
+        stacked = np.column_stack(
+            [ir[c].to_numpy(dtype=np.float64) for ir in interp_runs]
+        )
         if mode == "keep_first":
             merged_c = np.full(len(target_grid), np.nan, dtype=np.float32)
             for col_idx in range(stacked.shape[1]):
@@ -2771,7 +2900,9 @@ def inspect_dlis(
             # Iterate over Frames
             for fr in getattr(lf, "frames", []):
                 fr_name = str(getattr(fr, "name", "0"))
-                idx_type = str(getattr(fr, "index_type", "BOREHOLE-DEPTH") or "BOREHOLE-DEPTH")
+                idx_type = str(
+                    getattr(fr, "index_type", "BOREHOLE-DEPTH") or "BOREHOLE-DEPTH"
+                )
                 idx_ch_name = str(getattr(fr, "index", "DEPTH") or "DEPTH")
 
                 scalar_chs: List[str] = []
@@ -2796,10 +2927,19 @@ def inspect_dlis(
                         auto_conv = None
                         t_unit = ch_unit
                         u_up = ch_unit.upper()
-                        if target_mnem == "DEPTH" and u_up in ("0.1 IN", "0.1IN", "FT", "F"):
+                        if target_mnem == "DEPTH" and u_up in (
+                            "0.1 IN",
+                            "0.1IN",
+                            "FT",
+                            "F",
+                        ):
                             t_unit = "m"
                             auto_conv = f"{ch_unit} -> m"
-                        elif target_mnem in ("NPHI", "PHIT", "PHIE") and u_up in ("%", "PU", "P.U."):
+                        elif target_mnem in ("NPHI", "PHIT", "PHIE") and u_up in (
+                            "%",
+                            "PU",
+                            "P.U.",
+                        ):
                             t_unit = "v/v"
                             auto_conv = f"{ch_unit} -> v/v"
                         elif target_mnem == "RHOB" and u_up in ("KG/M3", "KGM3"):
@@ -2856,8 +2996,12 @@ def inspect_dlis(
                         frame_name=fr_name,
                         index_type=idx_type,
                         index_channel=idx_ch_name,
-                        start_depth=round(start_d * d_scale, 4) if start_d is not None else None,
-                        stop_depth=round(stop_d * d_scale, 4) if stop_d is not None else None,
+                        start_depth=round(start_d * d_scale, 4)
+                        if start_d is not None
+                        else None,
+                        stop_depth=round(stop_d * d_scale, 4)
+                        if stop_d is not None
+                        else None,
                         step=round(step_d * d_scale, 4) if step_d is not None else None,
                         depth_unit="m" if d_scale != 1.0 else depth_raw_unit,
                         scalar_channels=scalar_chs,
@@ -2895,7 +3039,9 @@ def inspect_dlis(
         }
     )
     fallback_stem = Path(filename).stem if filename else p.stem
-    well_meta_dict = extract_las_metadata(combined_header, fallback_well_name=fallback_stem)
+    well_meta_dict = extract_las_metadata(
+        combined_header, fallback_well_name=fallback_stem
+    )
     if frames_info:
         sel = next((f for f in frames_info if f.selected), frames_info[0])
         well_meta_dict["start_depth"] = sel.start_depth
@@ -2976,7 +3122,10 @@ def inspect_lis(
                     if not record.isstructured():
                         continue
                     table = record.table(simple=True)
-                    field_names = {str(name).strip().upper(): name for name in table.dtype.names or ()}
+                    field_names = {
+                        str(name).strip().upper(): name
+                        for name in table.dtype.names or ()
+                    }
                     if "MNEM" not in field_names or "VALU" not in field_names:
                         continue
                     for row in table:
@@ -2999,20 +3148,24 @@ def inspect_lis(
                 scalar_channels: List[str] = []
                 step = _parse_float_safe(getattr(dfsr, "spacing", None))
                 unit_upper = index_unit.upper()
-                is_depth_index = Config.resolve_mnemonic_alias(index_mnemonic) == "DEPTH"
+                is_depth_index = (
+                    Config.resolve_mnemonic_alias(index_mnemonic) == "DEPTH"
+                )
                 depth_scale = (
-                    0.00254 if unit_upper in (".1IN", ".1 IN", "0.1IN", "0.1 IN")
-                    else 0.3048 if unit_upper in ("FT", "F", "FEET", "FOOT")
-                    else 0.0254 if unit_upper in ("IN", "IN.", "INCH", "INCHES")
+                    0.00254
+                    if unit_upper in (".1IN", ".1 IN", "0.1IN", "0.1 IN")
+                    else 0.3048
+                    if unit_upper in ("FT", "F", "FEET", "FOOT")
+                    else 0.0254
+                    if unit_upper in ("IN", "IN.", "INCH", "INCHES")
                     else 1.0
                 )
                 sample_rates = sorted(dfsr.sample_rates()) or [None]
-                overview = lis.curves(
-                    logical_file, dfsr, sample_rate=sample_rates[0]
-                )
+                overview = lis.curves(logical_file, dfsr, sample_rate=sample_rates[0])
                 index_field = next(
                     (
-                        field for field in overview.dtype.names or ()
+                        field
+                        for field in overview.dtype.names or ()
                         if field.strip().upper() == index_mnemonic.upper()
                     ),
                     None,
@@ -3057,12 +3210,23 @@ def inspect_lis(
                     auto_conversion = None
                     unit_upper = raw_unit.upper()
                     if target_mnemonic == "DEPTH" and unit_upper in (
-                        ".1IN", ".1 IN", "0.1IN", "0.1 IN", "FT", "F", "FEET", "FOOT"
+                        ".1IN",
+                        ".1 IN",
+                        "0.1IN",
+                        "0.1 IN",
+                        "FT",
+                        "F",
+                        "FEET",
+                        "FOOT",
                     ):
                         target_unit = "m"
                         auto_conversion = f"{raw_unit} -> m"
                     elif target_mnemonic in ("NPHI", "PHIT", "PHIE") and unit_upper in (
-                        "%", "PU", "P.U.", "PERCENT", "PCT"
+                        "%",
+                        "PU",
+                        "P.U.",
+                        "PERCENT",
+                        "PCT",
                     ):
                         target_unit = "v/v"
                         auto_conversion = f"{raw_unit} -> v/v"
@@ -3075,7 +3239,9 @@ def inspect_lis(
                             target_mnemonic=target_mnemonic,
                             raw_unit=raw_unit,
                             target_unit=target_unit,
-                            description=str(getattr(channel, "long_name", "") or "").strip(),
+                            description=str(
+                                getattr(channel, "long_name", "") or ""
+                            ).strip(),
                             auto_conversion=auto_conversion,
                         )
                     )
@@ -3084,7 +3250,9 @@ def inspect_lis(
                     DlisFrameInfo(
                         logical_file_index=lf_idx,
                         frame_name=frame_name,
-                        index_type="BOREHOLE-DEPTH" if is_depth_index else index_mnemonic,
+                        index_type="BOREHOLE-DEPTH"
+                        if is_depth_index
+                        else index_mnemonic,
                         index_channel=index_mnemonic,
                         start_depth=(
                             round(start_depth * depth_scale, 4)
@@ -3106,7 +3274,11 @@ def inspect_lis(
     if not frames:
         if index_warnings:
             issue_summary = "; ".join(
-                re.sub(r"\s+", " ", warning).strip().split(" Where:")[0].replace("Problem:", "").strip()
+                re.sub(r"\s+", " ", warning)
+                .strip()
+                .split(" Where:")[0]
+                .replace("Problem:", "")
+                .strip()
                 for warning in index_warnings
             )
             raise ValueError(
@@ -3138,7 +3310,11 @@ def inspect_lis(
     qaqc_warnings = []
     if index_warnings:
         issue_summary = "; ".join(
-            re.sub(r"\s+", " ", warning).strip().split(" Where:")[0].replace("Problem:", "").strip()
+            re.sub(r"\s+", " ", warning)
+            .strip()
+            .split(" Where:")[0]
+            .replace("Problem:", "")
+            .strip()
             for warning in index_warnings
         )
         qaqc_warnings.append(
@@ -3219,7 +3395,9 @@ def read_lis_frame(
     logical_files, _ = _load_lis_file(lis, p)
     with logical_files:
         if logical_file_idx >= len(logical_files):
-            raise ValueError(f"LIS logical file index {logical_file_idx} is out of range")
+            raise ValueError(
+                f"LIS logical file index {logical_file_idx} is out of range"
+            )
         logical_file = logical_files[logical_file_idx]
         dfsrs = list(logical_file.data_format_specs())
         if dfsr_idx >= len(dfsrs):
@@ -3251,7 +3429,8 @@ def read_lis_frame(
             current_df = current_df.loc[:, ~current_df.columns.duplicated()]
             index_col = next(
                 (
-                    column for column in current_df.columns
+                    column
+                    for column in current_df.columns
                     if column.upper() == index_mnemonic.upper()
                 ),
                 None,
@@ -3265,13 +3444,16 @@ def read_lis_frame(
             if absent_value is not None:
                 current_df = current_df.replace(absent_value, np.nan)
             current_df = current_df.replace(list(SENTINEL_NULLS), np.nan)
-            current_df = current_df.drop_duplicates(subset=[index_mnemonic], keep="last")
+            current_df = current_df.drop_duplicates(
+                subset=[index_mnemonic], keep="last"
+            )
 
             if merged_df is None:
                 merged_df = current_df
                 continue
             duplicate_curves = [
-                column for column in current_df.columns
+                column
+                for column in current_df.columns
                 if column != index_mnemonic and column in merged_df.columns
             ]
             if duplicate_curves:
@@ -3283,7 +3465,9 @@ def read_lis_frame(
     if merged_df is None or merged_df.empty:
         raise ValueError(f"No log data found in {filename or p.name}")
 
-    merged_df = merged_df.sort_values(index_mnemonic, kind="stable").reset_index(drop=True)
+    merged_df = merged_df.sort_values(index_mnemonic, kind="stable").reset_index(
+        drop=True
+    )
     df, std_units, _ = standardize_curve_units(
         merged_df,
         curve_units=curve_units,
@@ -3391,7 +3575,11 @@ def read_dlis_frame(
             if ch_name in (raw_curves.dtype.names or ()):
                 arr = np.asarray(raw_curves[ch_name])
                 if arr.ndim == 1:
-                    is_idx = ch_name.upper() in ("DEPTH", "DEPT", str(target_frame.index).upper())
+                    is_idx = ch_name.upper() in (
+                        "DEPTH",
+                        "DEPT",
+                        str(target_frame.index).upper(),
+                    )
                     arr_f = arr.astype(np.float64 if is_idx else np.float32)
                     for nv in SENTINEL_NULLS:
                         arr_f[np.isclose(arr_f, nv, atol=1e-3)] = np.nan
@@ -3406,7 +3594,12 @@ def read_dlis_frame(
             custom_mnemonic_map=custom_mnemonic_map,
         )
         if "WELL_NAME" not in df.columns:
-            df.insert(0, "WELL_NAME", meta_dict.get("well_name") or (Path(filename).stem if filename else p.stem))
+            df.insert(
+                0,
+                "WELL_NAME",
+                meta_dict.get("well_name")
+                or (Path(filename).stem if filename else p.stem),
+            )
         if meta_dict.get("uwi") and "UWI" not in df.columns:
             df.insert(0, "UWI", meta_dict["uwi"])
 

@@ -9,7 +9,7 @@
  *            overbalance / underbalance shading) + Single-Well RFT/MDT pressure_tests vs. TVDSS.
  */
 
-import type { EnvQcParamsInput } from './envCorrQc.ts';
+import { parseHeaderWaterDepthMeters, type EnvQcParamsInput } from './envCorrQc.ts';
 import { computeMinimumCurvature } from './trajectory.ts';
 
 export type TempDisplayUnit = 'degC' | 'degF';
@@ -138,28 +138,14 @@ function resolveDatumElevationMeters(
 function resolveEnvironmentGeometry(
 	envParams: EnvQcParamsInput,
 	header: Record<string, any>,
-	depthUnit: 'm' | 'ft',
+	_depthUnit: 'm' | 'ft',
 	kbM: number
 ) {
-	const hdrDatumFt = String(header?.datum_unit ?? '')
-		.trim()
-		.toLowerCase()
-		.startsWith('f');
-	const hdrWd = Number(header?.water_depth);
-	const paramWd = isFiniteNum(envParams.waterDepth) ? envParams.waterDepth : 0;
-	const offshore =
-		Boolean(envParams.offshore && paramWd > 0) ||
-		(!envParams.offshore && Number.isFinite(hdrWd) && hdrWd > 0 && paramWd > 0);
-	const wdM =
-		envParams.offshore && paramWd > 0
-			? depthUnit === 'ft'
-				? paramWd / M_TO_FT
-				: paramWd
-			: offshore && Number.isFinite(hdrWd) && hdrWd > 0
-				? hdrDatumFt
-					? hdrWd / M_TO_FT
-					: hdrWd
-				: 0;
+	const hdrWdM = parseHeaderWaterDepthMeters(header);
+	const paramWdM =
+		isFiniteNum(envParams.waterDepth) && envParams.waterDepth > 0 ? envParams.waterDepth : 0;
+	const wdM = envParams.offshore ? (paramWdM > 0 ? paramWdM : (hdrWdM ?? 0)) : 0;
+	const offshore = Boolean(envParams.offshore && wdM > 0);
 	// In TVD (from KB/DF), seabed is at water_depth + air_gap (KB).
 	// In TVDSS (below MSL), seabed is directly at water_depth!
 	const seabedTvdM = offshore ? wdM + kbM : 0;

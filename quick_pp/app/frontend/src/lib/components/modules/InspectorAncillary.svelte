@@ -1574,6 +1574,19 @@
 							</label>
 							<label class="flex flex-col gap-0.5">
 								<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
+									>Water Depth ({headerDraft.datum_unit || 'm'})</span
+								>
+								<input
+									type="number"
+									min="0"
+									step="0.1"
+									bind:value={headerDraft.water_depth}
+									placeholder="Offshore WD"
+									class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+								/>
+							</label>
+							<label class="flex flex-col gap-0.5">
+								<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
 									>Service Company</span
 								>
 								<input

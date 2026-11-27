@@ -395,7 +395,7 @@ export interface EnvCorrectionParams {
 	resTool: 'auto' | 'induction' | 'laterolog' | 'propagation';
 	depthUnit: 'auto' | 'm' | 'ft';
 	offshore: boolean;
-	/** Water depth in the log depth unit (offshore only). */
+	/** Water depth in meters (offshore only; displayed in active depthDisplay.unit). */
 	waterDepth: number;
 	seabedTempC: number;
 	/** 0 = not provided (estimated from salinity). */

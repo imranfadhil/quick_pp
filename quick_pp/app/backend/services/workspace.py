@@ -730,9 +730,7 @@ def _resolve_fluid_zone_array(
     return zone
 
 
-def _load_well_hole_sections(
-    project_id: int, well_name: str
-) -> List[Dict[str, Any]]:
+def _load_well_hole_sections(project_id: int, well_name: str) -> List[Dict[str, Any]]:
     """Load hole sections (mud program intervals) for a well from ephemeral config or DB."""
     if _isolated_evaluation.get() is not None:
         return []
@@ -970,7 +968,9 @@ def _compute_continuous_rho_fluid(
         sec_sal = np.full(n, default_sal, dtype=float)
         sec_rmf = np.full(
             n,
-            float(rmf_surface) if (rmf_surface is not None and rmf_surface > 0) else np.nan,
+            float(rmf_surface)
+            if (rmf_surface is not None and rmf_surface > 0)
+            else np.nan,
             dtype=float,
         )
         sec_rmf_t = np.full(n, float(rmf_temp_c), dtype=float)
@@ -1020,7 +1020,9 @@ def _compute_continuous_rho_fluid(
                 rmf_dh_sec[has_s_rmf] = arps_resistivity(
                     sec_rmf[has_s_rmf], sec_rmf_t[has_s_rmf], temp_arr[has_s_rmf]
                 )
-            need_rmf_dh = (~is_obm_mask) & (~np.isfinite(rmf_dh_sec)) & np.isfinite(sec_sal)
+            need_rmf_dh = (
+                (~is_obm_mask) & (~np.isfinite(rmf_dh_sec)) & np.isfinite(sec_sal)
+            )
             if need_rmf_dh.any():
                 rho_mf_p = brine_density(
                     temp_arr[need_rmf_dh], pres_arr[need_rmf_dh], sec_sal[need_rmf_dh]
@@ -3108,7 +3110,10 @@ def workspace_well_bundle(
 
         hs_raw = (
             list(eph_cfg["hole_sections"])
-            if (isinstance(eph_cfg, dict) and isinstance(eph_cfg.get("hole_sections"), list))
+            if (
+                isinstance(eph_cfg, dict)
+                and isinstance(eph_cfg.get("hole_sections"), list)
+            )
             else _df_or_list(ancillary.get("hole_sections"))
         )
         hole_sections = [
@@ -11478,7 +11483,12 @@ class WorkspaceEnvCorrectionRequest(WorkspaceFilterBase):
         None, description="Log depth unit; defaults to the well depth unit"
     )
     water_depth: Optional[float] = Field(
-        None, description="Water depth (log depth unit); > 0 = offshore"
+        None,
+        description="Water depth (in water_depth_unit or log depth unit); > 0 = offshore, 0 = onshore",
+    )
+    water_depth_unit: Optional[Literal["m", "ft"]] = Field(
+        None,
+        description="Unit for water_depth ('m' or 'ft'); defaults to log depth unit",
     )
     seabed_temp_c: Optional[float] = Field(None)
     temp_gradient_c_per_km: Optional[float] = Field(None)
@@ -13017,6 +13027,7 @@ def _run_env_corrections(
     overrides: Dict[str, Any] = {
         "mud_type": req.mud_type,
         "water_depth": req.water_depth,
+        "water_depth_unit": req.water_depth_unit,
         "seabed_temp_c": req.seabed_temp_c,
         "temp_gradient_c_per_km": req.temp_gradient_c_per_km,
         "formation_salinity_ppm": req.formation_salinity_ppm,

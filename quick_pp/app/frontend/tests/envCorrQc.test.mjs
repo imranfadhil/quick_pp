@@ -6,7 +6,9 @@ import {
 	decodeEnvQcReason,
 	decodeEnvQcStatus,
 	decodeInvasionProfile,
-	resolveFluidResistivities
+	parseHeaderWaterDepthMeters,
+	resolveFluidResistivities,
+	syncHeaderToEnvParams
 } from '../src/lib/utils/envCorrQc.ts';
 
 const baseParams = {
@@ -80,6 +82,22 @@ test('decodeEnvQcReason and decodeInvasionProfile format bitmasks and profile co
 	assert.equal(decodeEnvQcStatus(2), 'Unreliable');
 	assert.equal(decodeInvasionProfile(2), 'HC-like (Rxo/Rt < Rmf/Rw)');
 	assert.equal(decodeInvasionProfile(0), 'Uninformative / None');
+});
+
+test('parseHeaderWaterDepthMeters and syncHeaderToEnvParams honor header datum_unit (ft and m)', () => {
+	const ftM = parseHeaderWaterDepthMeters({ water_depth: 384, datum_unit: 'ft' });
+	assert.ok(ftM !== null && Math.abs(ftM - 384 * 0.3048) < 1e-3);
+	assert.equal(parseHeaderWaterDepthMeters({ water_depth: 117, datum_unit: 'm' }), 117);
+	assert.equal(parseHeaderWaterDepthMeters({ water_depth: null, datum_unit: 'ft' }), null);
+
+	const ep = { offshore: false, waterDepth: 0 };
+	syncHeaderToEnvParams({ water_depth: 384, datum_unit: 'ft' }, ep);
+	assert.equal(ep.offshore, true);
+	assert.equal(ep.waterDepth, Number((384 * 0.3048).toFixed(2)));
+
+	syncHeaderToEnvParams({ water_depth: null, datum_unit: 'm' }, ep);
+	assert.equal(ep.offshore, false);
+	assert.equal(ep.waterDepth, 0);
 });
 
 test('resolveFluidResistivities prefers backend ENV_RM/RMF/RW and falls back cleanly for WBM vs OBM', () => {

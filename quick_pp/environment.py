@@ -201,8 +201,10 @@ class Environment:
     # -- pressure -------------------------------------------------------
     def borehole_pressure_psi(self, tvd_m, mud_weight_ppg) -> np.ndarray:
         """Static mud-column pressure at depth (no ECD)."""
-        return 0.052 * np.asarray(mud_weight_ppg, dtype=float) * (
-            np.asarray(tvd_m, dtype=float) * FT_PER_M
+        return (
+            0.052
+            * np.asarray(mud_weight_ppg, dtype=float)
+            * (np.asarray(tvd_m, dtype=float) * FT_PER_M)
         )
 
     def formation_pressure_psi(self, tvd_m) -> np.ndarray:
@@ -318,14 +320,25 @@ def environment_from_config(
     log_unit_ft = env.depth_unit == "ft"
     notes = env.assumptions
 
+    def _is_ft(u) -> bool:
+        return str(u or "").strip().lower() in ("ft", "f", "feet", "foot")
+
     # --- top temperature / offshore --------------------------------------
     wd = _num(cfg.get("water_depth"))
     if wd and wd > 0:
-        wd_unit = str(cfg.get("water_depth_unit") or env.depth_unit).lower()
-        env.water_depth_m = wd * M_PER_FT if wd_unit == "ft" else wd
+        wd_from_override = bool(overrides and overrides.get("water_depth") is not None)
+        wd_unit = (
+            (overrides or {}).get("water_depth_unit")
+            or (env.depth_unit if wd_from_override else None)
+            or cfg.get("water_depth_unit")
+            or cfg.get("datum_unit")
+            or env.depth_unit
+        )
+        env.water_depth_m = wd * M_PER_FT if _is_ft(wd_unit) else wd
         kb = _num(cfg.get("air_gap", cfg.get("kb_elev")))
         if kb and kb > 0:
-            env.air_gap_m = kb * M_PER_FT if log_unit_ft else kb
+            kb_unit = cfg.get("datum_unit") or env.depth_unit
+            env.air_gap_m = kb * M_PER_FT if _is_ft(kb_unit) else kb
         st = _num(cfg.get("seabed_temp_c"))
         env.seabed_temp_c = st if st is not None else 4.0
         env.explicit["seabed_temp"] = st is not None
@@ -413,6 +426,7 @@ def environment_from_config(
         notes.append(
             f"Mud weight not provided; assumed {env.default_mud_weight_ppg:.1f} ppg."
         )
+
     def _mud_temp_c(key):
         t = _num(cfg.get(key))
         if t is None:
@@ -429,7 +443,9 @@ def environment_from_config(
     ):
         for k in ("rm", "rmf", "rmc"):
             if _num(cfg.get(k)) is not None and _num(cfg.get(f"{k}_temp")) is None:
-                notes.append(f"{k.upper()} measurement temperature unknown; 25 degC assumed.")
+                notes.append(
+                    f"{k.upper()} measurement temperature unknown; 25 degC assumed."
+                )
         env.mud_program.append(
             MudInterval(
                 top=-1e9,

@@ -28,6 +28,7 @@
 	import { depthFromMeters, depthToMeters } from '$lib/utils/depthUnits';
 	import { selectSpliceInterval, type SpliceInterval } from '$lib/utils/spliceIntervals';
 	import { salinityFromRmf } from '$lib/utils/fluidUnits';
+	import { parseHeaderWaterDepthMeters, syncHeaderToEnvParams } from '$lib/utils/envCorrQc';
 
 	const REQUIRED_STANDARD = ['GR', 'RT', 'NPHI', 'RHOB', 'CALI', 'DTC', 'PEF'];
 	const EVALUATED_CURVES = ALL_CALCULATED_CURVE_MNEMONICS;
@@ -809,6 +810,23 @@
 	// switches and are restored per zone / depth interval from saved well config.
 	const ep = workbench.envCorrParams;
 
+	let headerWaterDepthM = $derived(parseHeaderWaterDepthMeters(wellData.header));
+	let waterDepthMatchesHeader = $derived(
+		headerWaterDepthM !== null &&
+			headerWaterDepthM > 0 &&
+			ep.offshore &&
+			Math.abs((ep.waterDepth || 0) - headerWaterDepthM) <= 0.1
+	);
+	const waterDepthBinding = {
+		get: () => Number(depthFromMeters(ep.waterDepth || 0, depthDisplay.unit).toFixed(1)),
+		set: (val: number) => {
+			if (val !== waterDepthBinding.get()) {
+				const clamped = Math.max(0, val);
+				ep.waterDepth = Number(depthToMeters(clamped, depthDisplay.unit).toFixed(2));
+			}
+		}
+	};
+
 	function seedManualFromHoleSections() {
 		const sections = wellData.holeSections;
 		if (!sections || sections.length === 0) return;
@@ -882,6 +900,7 @@
 			) {
 				ep.surfaceTemp = hdr.surface_temp;
 			}
+			syncHeaderToEnvParams(hdr, ep);
 			if (wellData.holeSections.length > 0) {
 				seedManualFromHoleSections();
 			}
@@ -1051,7 +1070,8 @@
 					mud_type: ep.mudType,
 					res_tool: ep.resTool === 'auto' ? null : ep.resTool,
 					depth_unit: ep.depthUnit === 'auto' ? null : ep.depthUnit,
-					water_depth: ep.offshore && ep.waterDepth > 0 ? ep.waterDepth : null,
+					water_depth: ep.offshore && ep.waterDepth > 0 ? ep.waterDepth : 0,
+					water_depth_unit: 'm',
 					seabed_temp_c: ep.offshore ? ep.seabedTempC : null,
 					rmf: ep.mudType === 'WBM' && ep.rmf > 0 ? ep.rmf : null,
 					rmf_temp_c: ep.mudType === 'WBM' && ep.rmf > 0 ? ep.rmfTempC : null,
@@ -2913,26 +2933,60 @@
 				</div>
 			{/if}
 
-			<label
-				class="mt-1 flex cursor-pointer items-center gap-1.5 text-[11px] font-semibold text-[var(--text-primary)]"
-			>
-				<input
-					type="checkbox"
-					bind:checked={ep.offshore}
-					class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
-				/>
-				<span>Offshore well (temperature from seabed)</span>
-			</label>
+			<div class="mt-1 flex items-center justify-between gap-1">
+				<label
+					class="flex cursor-pointer items-center gap-1.5 text-[11px] font-semibold text-[var(--text-primary)]"
+				>
+					<input
+						type="checkbox"
+						bind:checked={ep.offshore}
+						onchange={() => {
+							if (
+								ep.offshore &&
+								(!ep.waterDepth || ep.waterDepth <= 0) &&
+								headerWaterDepthM !== null &&
+								headerWaterDepthM > 0
+							) {
+								ep.waterDepth = Number(headerWaterDepthM.toFixed(2));
+							}
+						}}
+						class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+					/>
+					<span>Offshore well (temperature from seabed)</span>
+				</label>
+				{#if headerWaterDepthM !== null && headerWaterDepthM > 0}
+					{#if waterDepthMatchesHeader}
+						<span
+							class="mono-num shrink-0 rounded-xs bg-blue-50 px-1 py-0.5 text-[9px] font-semibold text-blue-700"
+							title="Synced from Well Header water depth"
+						>
+							Header
+						</span>
+					{:else}
+						<button
+							type="button"
+							onclick={() => {
+								ep.offshore = true;
+								ep.waterDepth = Number(headerWaterDepthM!.toFixed(2));
+							}}
+							class="mono-num shrink-0 cursor-pointer text-[9.5px] font-semibold text-blue-700 hover:underline"
+							title="Apply Water Depth from Well Header"
+						>
+							↺ Header ({fmtNum(depthFromMeters(headerWaterDepthM, depthDisplay.unit), 1)} {depthDisplay.unit})
+						</button>
+					{/if}
+				{/if}
+			</div>
 			{#if ep.offshore}
 				<div class="grid grid-cols-2 gap-x-2">
 					<NumericScrubber
 						label="Water Depth"
-						bind:value={ep.waterDepth}
-						unit={ep.depthUnit === 'ft' ? 'ft' : 'm'}
+						bind:value={waterDepthBinding.get, waterDepthBinding.set}
+						unit={depthDisplay.unit}
 						min={0}
-						max={4000}
-						step={10}
-						decimals={0}
+						max={depthDisplay.unit === 'ft' ? 13000 : 4000}
+						step={depthDisplay.unit === 'ft' ? 10 : 5}
+						decimals={1}
 						onrun={() => runEnvCorrections(false)}
 					/>
 					<NumericScrubber

@@ -1781,6 +1781,9 @@ def build_report_context(
                 env_overrides["water_depth"] = float(
                     p_src.get("waterDepth", p_src.get("water_depth"))
                 )
+                env_overrides["water_depth_unit"] = str(
+                    p_src.get("waterDepthUnit", p_src.get("water_depth_unit", "m"))
+                ).lower()
                 if (
                     p_src.get("seabedTempC") is not None
                     or p_src.get("seabed_temp_c") is not None
@@ -1788,6 +1791,9 @@ def build_report_context(
                     env_overrides["seabed_temp_c"] = float(
                         p_src.get("seabedTempC", p_src.get("seabed_temp_c"))
                     )
+            elif p_src.get("offshore") is False:
+                env_overrides["water_depth"] = 0.0
+                env_overrides["water_depth_unit"] = "m"
             if (
                 p_src.get("surfaceTemp") is not None
                 or p_src.get("surface_temp") is not None
