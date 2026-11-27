@@ -201,7 +201,7 @@ flowchart TD
       Rearranging yields the Kozeny-Carman hydraulic unit permeability relation $k = 1014 \cdot \text{FZI}^2 \cdot \frac{\phi^3}{(1 - \phi)^2}$. Distinct flow units manifest as log-normal populations of $\log_{10}(\text{FZI})$.
 
     * **Winland $r_{35}$ Pore-Throat Radius (`winland`):**
-      Estimates pore-throat radius ($\mu\text{m}$) at $35\%$ mercury saturation from permeability (mD) and porosity ($\phi_{\%} = 100\phi$):
+      Estimates pore-throat radius ($\mu\text{m}$) at 35% mercury saturation from permeability (mD) and porosity percentage ($100\phi$):
       
       $$\log_{10}(r_{35}) = 0.732 + 0.588 \log_{10}(k) - 0.864 \log_{10}(100\phi)$$
       
@@ -284,7 +284,7 @@ flowchart TD
 * **Technical Foundation:**
 
     * **Multi-Well Empirical Cutoff Sensitivity (`workspace_multi_well_cutoffs_sensitivity`):**
-      Pools evaluated logs across selected project wells and zones to sweep $V_{\text{sh}}$, $\phi_t$, and $S_{wt}$ cutoffs against cumulative $\text{HCPV}$ recovery (default $95\%$ PRMS threshold) before volumetric rollup.
+      Pools evaluated logs across selected project wells and zones to sweep $V_{\text{sh}}$, $\phi_t$, and $S_{wt}$ cutoffs against cumulative $\text{HCPV}$ recovery (default 95% PRMS threshold) before volumetric rollup.
 
     * **Governing Volumetric Equations (`AREA` vs. `GRV` Modes):**
       Supports Oil (`STOIIP`, Recoverable Oil via $RF_o$), Free Gas (`GIIP`, Recoverable Gas via $RF_g$), and Associated Solution Gas ($R_s$):

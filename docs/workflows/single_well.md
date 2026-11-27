@@ -170,11 +170,11 @@ flowchart TD
 
     * **Unified Logging Environment, Borehole Corrections & Radial Invasion (`quick_pp.environment` & `quick_pp.borehole_corrections`):**
       Constructs a continuous onshore or offshore (`water_depth`, `air_gap`, `seabed_temp`) temperature $T(z)$ (anchored to BHT records when provided) and mud/hydrostatic pressure $P(z)$ profile, converting $R_m, R_{mf}, R_w$ to formation temperature via Arps' equation. Evaluates generic Wireline (`WL`) and Logging-While-Drilling (`LWD`) tool profiles:
-      * *Gamma Ray (`GR_ENV_CORR`):* Compensates exponential mud-annulus attenuation across $d_{\text{hole}} - d_{\text{tool}}$ and strips KCl mud potassium background ($\approx 16\,\text{gAPI}/\%\text{K}$ scaled by annulus area fraction).
+      * *Gamma Ray (`GR_ENV_CORR`):* Compensates exponential mud-annulus attenuation across $d_{\text{hole}} - d_{\text{tool}}$ and strips KCl mud potassium background (~16 gAPI/%K scaled by annulus area fraction).
       * *Thermal Neutron (`NPHI_ENV_CORR`):* Additive borehole washout, temperature, pressure, mud weight, borehole/formation salinity, and tool standoff corrections.
       * *Bulk Density (`RHOB_ENV_CORR`):* Preserves vendor spine-and-ribs compensated `RHOB` when `DRHO` is present to avoid double-correcting mudcake; applies two-layer wall-gap compensation only for uncompensated density logs (with large $|\text{DRHO}|$ penalizing confidence).
       * *Resistivity Borehole & Step-Profile Radial Invasion (`RT_ENV_CORR`, `RXO_INV`, `DI_IN`, `INVASION_FLAG`, `INVASION_PROFILE`):* Removes conductive washout-annulus mixing in `WBM`, then inverts 2- or 3-curve radial resistivity suites (`RT`, `RMED`, `RXO`) via a Gaussian step-profile geometric factor $J_k(d_i) = 1 - \exp(-(d_i/r_k)^2)$ for true $R_t$, flushed $R_{xo}$, and invasion diameter $d_i$ ($6\text{–}120\,\text{in}$ grid for 3 curves; $35\,\text{in}$ fixed for 2 curves). Compares $\log_{10}(R_{xo}/R_t)$ against $\log_{10}(R_{mf}/R_w)$ to classify water-like, movable hydrocarbon-like, anomalous, or tight/uninvaded intervals.
-      * *Per-Sample Uncertainty ($\sigma$) & Sensor Confidence:* Perturbation root-sum-square propagation combines sensor precision, $25\%$ model error, assumed-parameter uncertainty, and hole-severity penalties into `<LOG>_SIGMA`, `<LOG>_QC_CONF` $\in [0, 1]$, `<LOG>_QC_STATUS` (`GOOD`, `CORRECTED`, `UNRELIABLE`), `HOLE_SEVERITY`, and bitmask `ENV_QC_REASON` (including isolated MAD `SPIKE`, stuck `FLATLINE`, and Gardner-checked sonic `CYCLE_SKIP`). Downstream modules can consume `*_ENV_CORR` with confidence-weighted blending (`QcWeightedInputsMixin`), and `*_SIGMA` propagates into stochastic Monte Carlo log uncertainty.
+      * *Per-Sample Uncertainty ($\sigma$) & Sensor Confidence:* Perturbation root-sum-square propagation combines sensor precision, 25% model error, assumed-parameter uncertainty, and hole-severity penalties into `<LOG>_SIGMA`, `<LOG>_QC_CONF` $\in [0, 1]$, `<LOG>_QC_STATUS` (`GOOD`, `CORRECTED`, `UNRELIABLE`), `HOLE_SEVERITY`, and bitmask `ENV_QC_REASON` (including isolated MAD `SPIKE`, stuck `FLATLINE`, and Gardner-checked sonic `CYCLE_SKIP`). Downstream modules can consume `*_ENV_CORR` with confidence-weighted blending (`QcWeightedInputsMixin`), and `*_SIGMA` propagates into stochastic Monte Carlo log uncertainty.
 
     * **Right-Pane Environmental, Invasion & P&T QC Views:**
       Provides dedicated right-pane diagnostic views—**Borehole Env Correction QC** ($\pm 1\sigma$ ribbons, $\Delta$-correction tracks, confidence & reason flags), **Invasion Profile** ($R_t / R_m / R_{xo}$ radial separation, $d_i$, and $R_{xo}/R_t$ vs. $R_{mf}/R_w$ classification), and **P&T Profile** (formation temperature, BHT anchors, hydrostatic vs. mud-column pressure, and depth-varying $R_m / R_{mf} / R_w$).
@@ -278,7 +278,7 @@ flowchart TD
 * **Objective:** Generate continuous single-well absolute permeability (`PERM`, in mD) profiles from evaluated porosity, clay/silt fractions, or irreducible water saturation ($S_{\text{wirr}}$), calibrated against routine core permeability (`CPERM`).
 
 > [!NOTE]
-> **Scope Boundary — Single-Well Empirical Perm vs. Multi-Well Rock-Type Perm:** Single-Well Step 4 evaluates continuous log-based empirical correlations (`Choo`, `Kozeny-Carman`, `Timur`, `Tixier`, `Coates`). Discrete Hydraulic Flow Units (**Amaefule FZI / RQI**, **Winland $r_{35}$**, **Lucia RFN**) and rock-type-partitioned power-law regressions ($k = a_k \cdot \phi^{b_k} \to \text{PERM\_TRANS}$) belong to the **Multi-Well Workflow** ([Step 3: Rock Typing](multi_well.md#mw-step-3-rock-typing) and [Step 4: Field Permeability Transforms](multi_well.md#mw-step-4-perm-transform)), where multi-well core datasets establish statistically representative flow units across the field.
+> **Scope Boundary — Single-Well Empirical Perm vs. Multi-Well Rock-Type Perm:** Single-Well Step 4 evaluates continuous log-based empirical correlations (`Choo`, `Kozeny-Carman`, `Timur`, `Tixier`, `Coates`). Discrete Hydraulic Flow Units (**Amaefule FZI / RQI**, **Winland $r_{35}$**, **Lucia RFN**) and rock-type-partitioned power-law regressions ($k = a_k \cdot \phi^{b_k}$ → `PERM_TRANS`) belong to the **Multi-Well Workflow** ([Step 3: Rock Typing](multi_well.md#mw-step-3-rock-typing) and [Step 4: Field Permeability Transforms](multi_well.md#mw-step-4-perm-transform)), where multi-well core datasets establish statistically representative flow units across the field.
 
 * **Technical Foundation (`quick_pp.permeability`):**
 
@@ -398,12 +398,12 @@ flowchart TD
     * **Rock, Reservoir & Pay Interval Flagging (`flag_interval`):**
       Evaluates shale volume (`VCLAY` or `VSHALE`), total porosity (`PHIT`), water saturation (`SWT`), and permeability (`PERM_TRANS` when present, otherwise `PERM`):
       
-      $$\text{ROCK\_FLAG} = \mathbb{I}\left(V_{\text{sh}} \le V_{\text{sh,cut}}\right), \qquad \text{RES\_FLAG} = \text{ROCK\_FLAG} \;\land\; \mathbb{I}\left(\phi_t \ge \phi_{\text{cut}}\right) \;\land\; \mathbb{I}\left(k \ge k_{\text{cut}} \text{ if enabled}\right)$$
+      $$F_{\text{rock}} = \mathbb{I}\left(V_{\text{sh}} \le V_{\text{sh,cut}}\right), \qquad F_{\text{res}} = F_{\text{rock}} \;\land\; \mathbb{I}\left(\phi_t \ge \phi_{\text{cut}}\right) \;\land\; \mathbb{I}\left(k \ge k_{\text{cut}} \text{ if enabled}\right)$$
       
-      $$\text{PAY\_FLAG} = \text{RES\_FLAG} \;\land\; \mathbb{I}\left(S_{wt} \le S_{w,\text{cut}}\right)$$
+      $$F_{\text{pay}} = F_{\text{res}} \;\land\; \mathbb{I}\left(S_{wt} \le S_{w,\text{cut}}\right)$$
 
     * **Empirical Cutoff Sensitivity Analysis (`cutoffs_analysis`):**
-      Sweeps candidate $V_{\text{sh}}$, $\phi_t$, and $S_{wt}$ cutoffs against cumulative Hydrocarbon Pore Volume ($\text{HCPV}$) and Net Pay thickness to identify inflection knees at a target PRMS HCPV recovery percentile (default $95\%$).
+      Sweeps candidate $V_{\text{sh}}$, $\phi_t$, and $S_{wt}$ cutoffs against cumulative Hydrocarbon Pore Volume ($\text{HCPV}$) and Net Pay thickness to identify inflection knees at a target PRMS HCPV recovery percentile (default 95%).
 
     * **PRMS/SEC-Compliant Zonal Integration (`calc_reservoir_summary`):**
       
@@ -493,21 +493,21 @@ flowchart TD
     * **Passey et al. (1990) $\Delta\log R$ Technique:**
       Overlays a scaled porosity log ($\Delta t$, $\rho_b$, or $\phi_N$) on deep resistivity ($R_t$) such that one logarithmic resistivity decade corresponds to $50\,\mu\text{s/ft}$ sonic transit time ($0.02$), $-0.25\,\text{g/cm}^3$ ($-2.5$ scaling) bulk density, or $0.25\,\text{v/v}$ ($+4.0$ scaling) neutron porosity:
       
-      $$\Delta\log R = \log_{10}(R_t / R_{\text{baseline}}) + \text{coeff} \cdot (\text{Poro\_log} - \text{Poro\_baseline})$$
+      $$\Delta\log R = \log_{10}(R_t / R_{\text{baseline}}) + \text{coeff} \cdot (\phi_{\text{log}} - \phi_{\text{baseline}})$$
       
-      where $R_{\text{baseline}}$ and $\text{Poro\_baseline}$ represent lean, water-saturated non-source shale (selectable manually or via auto-detection).
+      where $R_{\text{baseline}}$ and $\phi_{\text{baseline}}$ represent lean, water-saturated non-source shale (selectable manually or via auto-detection).
 
     * **Hood et al. (1975) Level of Organic Metamorphism (LOM) & Continuous TOC:**
       
       $$\text{LOM} = 10.59 + 4.54 \cdot \ln(R_o), \qquad \text{TOC} = \Delta\log R \cdot 10^{\left(2.297 - 0.1688 \cdot \text{LOM}\right)} + \text{TOC}_{\text{baseline}}$$
       
-      Negative $\Delta\log R$ separations in non-source rocks are clamped to $\text{TOC}_{\text{baseline}}$ (default $0.8\,\text{wt}\%$) when `clamp_negative=True`.
+      Negative $\Delta\log R$ separations in non-source rocks are clamped to $\text{TOC}_{\text{baseline}}$ (default 0.8 wt%) when `clamp_negative=True`.
 
     * **Core Geochemical Calibration (`calibrate_toc_to_core`):**
       Regresses measured core TOC (`CTOC`) against log-derived $\Delta\log R$ ($\text{TOC}_{\text{core}} = a \cdot \Delta\log R + b$), deriving implied maturity $\text{LOM}_{\text{implied}} = (2.297 - \log_{10} a) / 0.1688$.
 
     * **Composite Log & Crossplot Diagnostics:**
-      Track 2 overlays $R_t$ and porosity-equivalent resistivity $R_{\text{poro}}$ ($0.2\text{–}2000\,\Omega\cdot\text{m}$); Track 4 displays `TOC` ($0\text{–}10\,\text{wt}\%$) with source-rock shading ($\text{TOC} \ge 2.0\,\text{wt}\%$), paired with right-pane $\Delta\log R$ vs. core calibration crossplots.
+      Track 2 overlays $R_t$ and porosity-equivalent resistivity $R_{\text{poro}}$ ($0.2\text{–}2000\,\Omega\cdot\text{m}$); Track 4 displays `TOC` (0–10 wt%) with source-rock shading (`TOC >= 2.0 wt%`), paired with right-pane $\Delta\log R$ vs. core calibration crossplots.
 
-* **Input Data:** `RT`, Porosity Log (`DT`, `RHOB`, or `NPHI`), $R_{\text{baseline}}$, $\text{Poro\_baseline}$, $R_o\,\%$ or LOM, $\text{TOC}_{\text{baseline}}$, optional Core TOC (`CTOC`)  
+* **Input Data:** `RT`, Porosity Log (`DT`, `RHOB`, or `NPHI`), $R_{\text{baseline}}$, $\phi_{\text{baseline}}$, $R_o$ (%) or LOM, $\text{TOC}_{\text{baseline}}$, optional Core TOC (`CTOC`)  
 * **Output Data:** `DELTA_LOG_R`, `TOC`, `TOC_PASSEY`, `TOC_SHALE_FLAG`
