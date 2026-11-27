@@ -99,24 +99,97 @@ export function decodeInvasionProfile(code: number | null | undefined): string {
 	}
 }
 
+function parseFiniteHeaderNum(val: unknown): number | null {
+	if (val === null || val === undefined || val === '') return null;
+	const n = Number(val);
+	return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Resolve the rig depth datum above MSL (KB / DFE play the identical petrophysical role:
+ * ``TVDSS = TVD - rigDatum``, and offshore ``airGap = rigDatum``).
+ */
+export function resolveHeaderRigDatum(
+	hdr: Record<string, any> | null | undefined
+): { value: number | null; source: 'DFE' | 'KB' | 'KB/DFE' | null } {
+	if (!hdr || typeof hdr !== 'object') return { value: null, source: null };
+	const df = parseFiniteHeaderNum(hdr.df_elev ?? hdr.dfe_elevation);
+	const kb = parseFiniteHeaderNum(hdr.kb_elev ?? hdr.kb_elevation);
+	if (df !== null && kb !== null) {
+		if (Math.abs(df - kb) <= 0.1) return { value: kb, source: 'KB/DFE' };
+		return { value: df, source: 'DFE' };
+	}
+	if (kb !== null) return { value: kb, source: 'KB' };
+	if (df !== null) return { value: df, source: 'DFE' };
+	return { value: null, source: null };
+}
+
+/**
+ * Resolve whether a well header represents Onshore (Ground Level above MSL) vs.
+ * Offshore (Water Depth from MSL to Seabed), handling legacy LAS conventions where
+ * seabed depth was stored in `gl_elev` (either as `gl_elev < 0` below MSL or
+ * `gl_elev > rigDatum` such as UKCS `KB=109 ft, GL=117 ft`).
+ */
+export function resolveHeaderSurfaceAndWaterDepth(
+	hdr: Record<string, any> | null | undefined
+): {
+	offshore: boolean;
+	waterDepth: number | null;
+	glElev: number | null;
+	inferredFromGl: boolean;
+} {
+	if (!hdr || typeof hdr !== 'object') {
+		return { offshore: false, waterDepth: null, glElev: null, inferredFromGl: false };
+	}
+	const rawWd = parseFiniteHeaderNum(hdr.water_depth);
+	const rawGl = parseFiniteHeaderNum(hdr.gl_elev ?? hdr.ground_elevation);
+	const rig = resolveHeaderRigDatum(hdr).value;
+
+	if (rawWd !== null && rawWd > 0) {
+		return { offshore: true, waterDepth: rawWd, glElev: null, inferredFromGl: false };
+	}
+	if (rawWd === 0) {
+		return { offshore: false, waterDepth: null, glElev: rawGl, inferredFromGl: false };
+	}
+	if (rawGl !== null) {
+		if (rawGl < 0) {
+			return {
+				offshore: true,
+				waterDepth: Math.abs(rawGl),
+				glElev: null,
+				inferredFromGl: true
+			};
+		}
+		if (rawGl > 0 && rig !== null && rig > 0 && rawGl > rig) {
+			return {
+				offshore: true,
+				waterDepth: rawGl,
+				glElev: null,
+				inferredFromGl: true
+			};
+		}
+	}
+	return { offshore: false, waterDepth: null, glElev: rawGl, inferredFromGl: false };
+}
+
 /**
  * Parse water depth from a well header into canonical meters, honoring
- * `water_depth_unit` / `datum_unit` / `depth_unit`. Returns null when absent or invalid.
+ * `water_depth_unit` / `datum_unit` / `depth_unit` as well as subsea/offshore `gl_elev`
+ * conventions. Returns null when onshore or absent.
  */
 export function parseHeaderWaterDepthMeters(
 	hdr: Record<string, any> | null | undefined
 ): number | null {
 	if (!hdr || typeof hdr !== 'object') return null;
-	if (hdr.water_depth === null || hdr.water_depth === undefined || hdr.water_depth === '') {
+	const surf = resolveHeaderSurfaceAndWaterDepth(hdr);
+	if (!surf.offshore || surf.waterDepth === null || surf.waterDepth <= 0) {
 		return null;
 	}
-	const raw = Number(hdr.water_depth);
-	if (!Number.isFinite(raw) || raw < 0) return null;
 	const u = String(hdr.water_depth_unit ?? hdr.datum_unit ?? hdr.depth_unit ?? 'm')
 		.trim()
 		.toLowerCase();
 	const isFt = u === 'ft' || u === 'f' || u === 'feet' || u === 'foot';
-	return isFt ? raw / M_TO_FT : raw;
+	return isFt ? surf.waterDepth / M_TO_FT : surf.waterDepth;
 }
 
 /**

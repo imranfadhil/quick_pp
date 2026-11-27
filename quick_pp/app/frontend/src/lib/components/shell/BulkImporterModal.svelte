@@ -7,6 +7,10 @@
 	import { appStatus } from '$lib/state/status.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
+	import {
+		resolveHeaderRigDatum,
+		resolveHeaderSurfaceAndWaterDepth
+	} from '$lib/utils/envCorrQc';
 
 	let activeTab = $state<
 		| 'las'
@@ -702,32 +706,76 @@
 																</select>
 															</label>
 															<label class="flex flex-col gap-0.5">
-																<span class="text-[10px] font-semibold text-[var(--text-secondary)]">KB Elevation ({fileItem.metadata.datum_unit || 'm'})</span>
+																<span
+																	class="text-[10px] font-semibold text-[var(--text-secondary)]"
+																	title="Rig reference above Mean Sea Level (KB / RKB / DFE; offshore air gap)"
+																>
+																	KB / DFE above MSL ({fileItem.metadata.datum_unit || 'm'})
+																</span>
 																<input
 																	type="number"
 																	step="0.1"
-																	bind:value={fileItem.metadata.kb_elev}
+																	value={resolveHeaderRigDatum(fileItem.metadata).value}
+																	oninput={(e) => {
+																		const raw = (e.currentTarget as HTMLInputElement).value;
+																		const v = raw === '' ? null : Number(raw);
+																		fileItem.metadata.kb_elev = v;
+																		fileItem.metadata.df_elev = v;
+																	}}
 																	class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1.5 font-mono"
 																/>
 															</label>
 															<label class="flex flex-col gap-0.5">
-																<span class="text-[10px] font-semibold text-[var(--text-secondary)]">DF Elevation ({fileItem.metadata.datum_unit || 'm'})</span>
-																<input
-																	type="number"
-																	step="0.1"
-																	bind:value={fileItem.metadata.df_elev}
-																	class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1.5 font-mono"
-																/>
+																<span class="text-[10px] font-semibold text-[var(--text-secondary)]">Well Setting</span>
+																<select
+																	value={resolveHeaderSurfaceAndWaterDepth(fileItem.metadata).offshore ? 'offshore' : 'onshore'}
+																	onchange={(e) => {
+																		const isOff = (e.currentTarget as HTMLSelectElement).value === 'offshore';
+																		if (isOff) {
+																			const surf = resolveHeaderSurfaceAndWaterDepth(fileItem.metadata);
+																			fileItem.metadata.water_depth =
+																				surf.waterDepth ??
+																				(fileItem.metadata.gl_elev != null
+																					? Math.abs(Number(fileItem.metadata.gl_elev))
+																					: 50);
+																			fileItem.metadata.gl_elev = null;
+																		} else {
+																			fileItem.metadata.water_depth = null;
+																		}
+																	}}
+																	class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1.5"
+																>
+																	<option value="onshore">Onshore (Ground Level)</option>
+																	<option value="offshore">Offshore (Water Depth)</option>
+																</select>
 															</label>
-															<label class="flex flex-col gap-0.5">
-																<span class="text-[10px] font-semibold text-[var(--text-secondary)]">GL / Seabed Elev ({fileItem.metadata.datum_unit || 'm'})</span>
-																<input
-																	type="number"
-																	step="0.1"
-																	bind:value={fileItem.metadata.gl_elev}
-																	class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1.5 font-mono"
-																/>
-															</label>
+															{#if resolveHeaderSurfaceAndWaterDepth(fileItem.metadata).offshore}
+																<label class="flex flex-col gap-0.5">
+																	<span class="text-[10px] font-semibold text-[var(--text-secondary)]">Water Depth ({fileItem.metadata.datum_unit || 'm'})</span>
+																	<input
+																		type="number"
+																		min="0"
+																		step="0.1"
+																		value={resolveHeaderSurfaceAndWaterDepth(fileItem.metadata).waterDepth}
+																		oninput={(e) => {
+																			const raw = (e.currentTarget as HTMLInputElement).value;
+																			fileItem.metadata.water_depth = raw === '' ? null : Math.max(0, Number(raw));
+																			fileItem.metadata.gl_elev = null;
+																		}}
+																		class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1.5 font-mono"
+																	/>
+																</label>
+															{:else}
+																<label class="flex flex-col gap-0.5">
+																	<span class="text-[10px] font-semibold text-[var(--text-secondary)]">Ground Level — GL ({fileItem.metadata.datum_unit || 'm'})</span>
+																	<input
+																		type="number"
+																		step="0.1"
+																		bind:value={fileItem.metadata.gl_elev}
+																		class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1.5 font-mono"
+																	/>
+																</label>
+															{/if}
 
 															<label class="flex flex-col gap-0.5">
 																<span class="text-[10px] font-semibold text-[var(--text-secondary)]">Log Date</span>

@@ -1005,7 +1005,22 @@ export function buildDepthAlignmentQcPlot(opts: BuildDepthAlignPlotOptions): {
 		});
 	}
 
+	let gradMin = -1.2;
+	let gradMax = 3.5;
+	for (let i = 0; i < refGrad.signal.length; i++) {
+		if (refGrad.valid[i]) {
+			if (refGrad.signal[i] < gradMin) gradMin = refGrad.signal[i];
+			if (refGrad.signal[i] > gradMax) gradMax = refGrad.signal[i];
+		}
+		if (tgtGrad.valid[i]) {
+			if (tgtGrad.signal[i] < gradMin) gradMin = tgtGrad.signal[i];
+			if (tgtGrad.signal[i] > gradMax) gradMax = tgtGrad.signal[i];
+		}
+	}
+	const gradPad = Math.max(0.15, 0.06 * (gradMax - gradMin));
+
 	const layout: Record<string, any> = {
+		dragmode: 'pan',
 		margin: { l: 54, r: 14, t: 42, b: 28 },
 		paper_bgcolor: '#ffffff',
 		plot_bgcolor: '#f8fafc',
@@ -1026,6 +1041,8 @@ export function buildDepthAlignmentQcPlot(opts: BuildDepthAlignPlotOptions): {
 			side: 'top',
 			title: { text: `${summary.referenceCurve} vs ${activeTarget} (Scaled)`, font: { size: 10 } },
 			range: [-0.08, 1.08],
+			fixedrange: true,
+			zeroline: false,
 			gridcolor: '#e2e8f0',
 			tickfont: { size: 9 }
 		},
@@ -1033,6 +1050,12 @@ export function buildDepthAlignmentQcPlot(opts: BuildDepthAlignPlotOptions): {
 			domain: [0.34, 0.64],
 			side: 'top',
 			title: { text: 'Boundary Gradient |∂f/∂z| (z-score)', font: { size: 10 } },
+			range: [
+				Number((gradMin - gradPad).toFixed(2)),
+				Number((gradMax + gradPad).toFixed(2))
+			],
+			fixedrange: true,
+			zeroline: false,
 			gridcolor: '#e2e8f0',
 			tickfont: { size: 9 }
 		},
@@ -1041,6 +1064,7 @@ export function buildDepthAlignmentQcPlot(opts: BuildDepthAlignPlotOptions): {
 			side: 'top',
 			title: { text: `Local Drift Δz (${uLbl}, +Down)`, font: { size: 10 } },
 			range: [-maxDriftBound, maxDriftBound],
+			fixedrange: true,
 			zeroline: true,
 			zerolinecolor: '#0f172a',
 			zerolinewidth: 1.2,

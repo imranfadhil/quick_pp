@@ -82,6 +82,11 @@ test('buildDepthAlignmentQcPlot builds both 3-track drift composite and correlog
 	});
 	assert.equal(driftPlot.activeTarget, 'DTC');
 	assert.ok(driftPlot.layout.xaxis && driftPlot.layout.xaxis2 && driftPlot.layout.xaxis3);
+	assert.equal(driftPlot.layout.dragmode, 'pan');
+	assert.equal(driftPlot.layout.xaxis.fixedrange, true);
+	assert.equal(driftPlot.layout.xaxis2.fixedrange, true);
+	assert.equal(driftPlot.layout.xaxis3.fixedrange, true);
+	assert.ok(Array.isArray(driftPlot.layout.xaxis2.range) && driftPlot.layout.xaxis2.range.length === 2);
 	assert.ok(driftPlot.traces.length >= 6);
 
 	const corrPlot = buildDepthAlignmentQcPlot({

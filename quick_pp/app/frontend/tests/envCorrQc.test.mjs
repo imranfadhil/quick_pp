@@ -8,6 +8,8 @@ import {
 	decodeInvasionProfile,
 	parseHeaderWaterDepthMeters,
 	resolveFluidResistivities,
+	resolveHeaderRigDatum,
+	resolveHeaderSurfaceAndWaterDepth,
 	syncHeaderToEnvParams
 } from '../src/lib/utils/envCorrQc.ts';
 
@@ -98,6 +100,22 @@ test('parseHeaderWaterDepthMeters and syncHeaderToEnvParams honor header datum_u
 	syncHeaderToEnvParams({ water_depth: null, datum_unit: 'm' }, ep);
 	assert.equal(ep.offshore, false);
 	assert.equal(ep.waterDepth, 0);
+
+	// UKCS offshore conventions: GL > KB (e.g. 44-22-1 Murdoch KB=109 ft, GL=117 ft) & negative subsea GL (-255 ft)
+	const murdoch = resolveHeaderSurfaceAndWaterDepth({ kb_elev: 109, gl_elev: 117, datum_unit: 'ft' });
+	assert.equal(murdoch.offshore, true);
+	assert.equal(murdoch.waterDepth, 117);
+	assert.equal(resolveHeaderRigDatum({ df_elev: 98 }).source, 'DFE');
+	assert.ok(
+		Math.abs((parseHeaderWaterDepthMeters({ df_elev: 98, gl_elev: -255, datum_unit: 'ft' }) ?? 0) - 255 * 0.3048) <
+			1e-2
+	);
+
+	// Onshore GL <= KB stays onshore
+	const onshore = resolveHeaderSurfaceAndWaterDepth({ kb_elev: 520, gl_elev: 500, datum_unit: 'ft' });
+	assert.equal(onshore.offshore, false);
+	assert.equal(onshore.glElev, 500);
+	assert.equal(parseHeaderWaterDepthMeters({ kb_elev: 520, gl_elev: 500, datum_unit: 'ft' }), null);
 });
 
 test('resolveFluidResistivities prefers backend ENV_RM/RMF/RW and falls back cleanly for WBM vs OBM', () => {

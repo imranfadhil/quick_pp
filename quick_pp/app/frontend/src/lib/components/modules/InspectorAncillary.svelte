@@ -12,6 +12,10 @@
 	import { depthFromMeters, depthToMeters } from '$lib/utils/depthUnits';
 	import { salinityFromRmf } from '$lib/utils/fluidUnits';
 	import { fmtNum } from '$lib/utils/formatters';
+	import {
+		resolveHeaderRigDatum,
+		resolveHeaderSurfaceAndWaterDepth
+	} from '$lib/utils/envCorrQc';
 	import { computeMinimumCurvature, interpolateTrajectoryOnGrid } from '$lib/utils/trajectory';
 
 	type AncillaryTab =
@@ -99,8 +103,15 @@
 		}
 	});
 
+	let headerOffshoreMode = $state(false);
+	let headerRigDatumVal = $state<number | null>(null);
+
 	function openHeaderEditor() {
 		const h = wellData.header || {};
+		const rig = resolveHeaderRigDatum(h);
+		const surf = resolveHeaderSurfaceAndWaterDepth(h);
+		headerOffshoreMode = surf.offshore;
+		headerRigDatumVal = rig.value;
 		headerDraft = {
 			uwi: h.uwi ?? workbench.wellId ?? '',
 			company: h.company ?? '',
@@ -117,10 +128,10 @@
 			y_coord: h.y_coord ?? null,
 			crs: h.crs ?? '',
 			datum_unit: h.datum_unit || 'm',
-			kb_elev: h.kb_elev ?? null,
-			df_elev: h.df_elev ?? null,
-			gl_elev: h.gl_elev ?? null,
-			water_depth: h.water_depth ?? null,
+			kb_elev: rig.value,
+			df_elev: rig.value,
+			gl_elev: surf.offshore ? null : surf.glElev,
+			water_depth: surf.offshore ? surf.waterDepth : null,
 			bht: h.bht ?? null,
 			bht_unit: h.bht_unit || 'degC',
 			bit_size: h.bit_size ?? null,
@@ -139,7 +150,14 @@
 	async function saveHeaderDraft() {
 		savingWellHeader = true;
 		try {
-			await wellData.saveWellHeader(headerDraft, true);
+			const payload = {
+				...headerDraft,
+				kb_elev: headerRigDatumVal,
+				df_elev: headerRigDatumVal,
+				water_depth: headerOffshoreMode ? headerDraft.water_depth : null,
+				gl_elev: headerOffshoreMode ? null : headerDraft.gl_elev
+			};
+			await wellData.saveWellHeader(payload, true);
 			editingWellHeader = false;
 		} catch (e: any) {
 			wellData.lastError = e?.message || 'Failed to save well header';
@@ -1170,6 +1188,8 @@
 
 	let hdr = $derived(wellData.header || {});
 	let dUnit = $derived(hdr.datum_unit || 'm');
+	let hdrRig = $derived(resolveHeaderRigDatum(hdr));
+	let hdrSurf = $derived(resolveHeaderSurfaceAndWaterDepth(hdr));
 </script>
 
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
@@ -1341,23 +1361,45 @@
 						{/if}
 						<div
 							class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1"
+							title="Rig depth reference above Mean Sea Level (KB and DFE are equivalent for TVDSS = TVD − Datum and offshore air gap)"
 						>
-							<div class="text-[9.5px] text-[var(--text-muted)]">KB / DF Elevation</div>
+							<div class="text-[9.5px] text-[var(--text-muted)]">
+								Rig Datum (KB / DFE above MSL)
+							</div>
 							<div class="mono-num truncate font-semibold text-[var(--text-primary)]">
-								KB: {hdr.kb_elev != null ? `${hdr.kb_elev} ${dUnit}` : '—'}
-								{#if hdr.df_elev != null}
-									• DF: {hdr.df_elev} {dUnit}
+								{#if hdrRig.value != null}
+									{hdrRig.value} {dUnit}
+									<span class="font-sans text-[9px] font-normal text-[var(--text-muted)]"
+										>({hdrRig.source})</span
+									>
+								{:else}
+									—
 								{/if}
 							</div>
 						</div>
 						<div
 							class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1"
+							title={hdrSurf.offshore
+								? 'Offshore water depth from Mean Sea Level to seabed'
+								: 'Onshore Ground Level elevation above Mean Sea Level'}
 						>
-							<div class="text-[9.5px] text-[var(--text-muted)]">GL / Water Depth</div>
+							<div class="flex items-center justify-between text-[9.5px] text-[var(--text-muted)]">
+								<span>
+									{hdrSurf.offshore ? 'Water Depth (MSL → Seabed)' : 'Ground Level (above MSL)'}
+								</span>
+								<span
+									class="rounded-2xs px-1 text-[8.5px] font-semibold {hdrSurf.offshore
+										? 'bg-sky-50 text-sky-700'
+										: 'bg-slate-100 text-slate-600'}"
+								>
+									{hdrSurf.offshore ? 'Offshore' : 'Onshore'}
+								</span>
+							</div>
 							<div class="mono-num truncate font-semibold text-[var(--text-primary)]">
-								GL: {hdr.gl_elev != null ? `${hdr.gl_elev} ${dUnit}` : '—'}
-								{#if hdr.water_depth != null}
-									• WD: {hdr.water_depth} {dUnit}
+								{#if hdrSurf.offshore}
+									WD: {hdrSurf.waterDepth != null ? `${hdrSurf.waterDepth} ${dUnit}` : '—'}
+								{:else}
+									GL: {hdrSurf.glElev != null ? `${hdrSurf.glElev} ${dUnit}` : '—'}
 								{/if}
 							</div>
 						</div>
@@ -1539,52 +1581,95 @@
 									class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
 								/>
 							</label>
-							<label class="flex flex-col gap-0.5">
-								<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
-									>KB Elevation ({headerDraft.datum_unit || 'm'})</span
+							<div class="col-span-2 flex items-center justify-between rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 py-1">
+								<span class="text-[9.5px] font-semibold text-[var(--text-primary)]"
+									>Well Setting &amp; Datum ({headerDraft.datum_unit || 'm'})</span
 								>
+								<div class="inline-flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]">
+									<button
+										type="button"
+										onclick={() => {
+											if (headerOffshoreMode) {
+												headerOffshoreMode = false;
+											}
+										}}
+										class="h-5 border-r border-[var(--border-hairline)] px-2 text-[9.5px] font-medium {!headerOffshoreMode
+											? 'bg-blue-600 font-semibold text-white'
+											: 'text-[var(--text-secondary)] hover:bg-slate-100'}"
+									>
+										Onshore (GL)
+									</button>
+									<button
+										type="button"
+										onclick={() => {
+											if (!headerOffshoreMode) {
+												if (
+													(headerDraft.water_depth == null || headerDraft.water_depth <= 0) &&
+													headerDraft.gl_elev != null &&
+													headerDraft.gl_elev !== 0
+												) {
+													headerDraft.water_depth = Math.abs(Number(headerDraft.gl_elev));
+												}
+												headerOffshoreMode = true;
+											}
+										}}
+										class="h-5 px-2 text-[9.5px] font-medium {headerOffshoreMode
+											? 'bg-blue-600 font-semibold text-white'
+											: 'text-[var(--text-secondary)] hover:bg-slate-100'}"
+									>
+										Offshore (Water Depth)
+									</button>
+								</div>
+							</div>
+							<label class="flex flex-col gap-0.5">
+								<span
+									class="text-[9.5px] font-medium text-[var(--text-muted)]"
+									title="Rig reference above Mean Sea Level (KB / RKB / DFE; offshore air gap)"
+								>
+									KB / DFE above MSL ({headerDraft.datum_unit || 'm'})
+								</span>
 								<input
 									type="number"
 									step="0.1"
-									bind:value={headerDraft.kb_elev}
+									bind:value={headerRigDatumVal}
+									placeholder="e.g. 25"
 									class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
 								/>
 							</label>
-							<label class="flex flex-col gap-0.5">
-								<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
-									>DF Elevation ({headerDraft.datum_unit || 'm'})</span
-								>
-								<input
-									type="number"
-									step="0.1"
-									bind:value={headerDraft.df_elev}
-									class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-								/>
-							</label>
-							<label class="flex flex-col gap-0.5">
-								<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
-									>GL / Seabed Elev ({headerDraft.datum_unit || 'm'})</span
-								>
-								<input
-									type="number"
-									step="0.1"
-									bind:value={headerDraft.gl_elev}
-									class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-								/>
-							</label>
-							<label class="flex flex-col gap-0.5">
-								<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
-									>Water Depth ({headerDraft.datum_unit || 'm'})</span
-								>
-								<input
-									type="number"
-									min="0"
-									step="0.1"
-									bind:value={headerDraft.water_depth}
-									placeholder="Offshore WD"
-									class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-								/>
-							</label>
+							{#if headerOffshoreMode}
+								<label class="flex flex-col gap-0.5">
+									<span
+										class="text-[9.5px] font-medium text-[var(--text-muted)]"
+										title="Water column depth from Mean Sea Level down to seabed"
+									>
+										Water Depth ({headerDraft.datum_unit || 'm'})
+									</span>
+									<input
+										type="number"
+										min="0"
+										step="0.1"
+										bind:value={headerDraft.water_depth}
+										placeholder="MSL to Seabed"
+										class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+									/>
+								</label>
+							{:else}
+								<label class="flex flex-col gap-0.5">
+									<span
+										class="text-[9.5px] font-medium text-[var(--text-muted)]"
+										title="Ground Level elevation above Mean Sea Level"
+									>
+										Ground Level — GL ({headerDraft.datum_unit || 'm'})
+									</span>
+									<input
+										type="number"
+										step="0.1"
+										bind:value={headerDraft.gl_elev}
+										placeholder="Above MSL"
+										class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+									/>
+								</label>
+							{/if}
 							<label class="flex flex-col gap-0.5">
 								<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
 									>Service Company</span

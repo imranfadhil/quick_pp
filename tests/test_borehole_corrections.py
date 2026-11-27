@@ -80,6 +80,31 @@ def test_water_depth_header_unit_and_overrides():
     assert not on_ovr.offshore
     assert on_ovr.water_depth_m == 0.0
 
+    # DFE works identically to KB as offshore air gap above MSL, and subsea/UKCS GL conventions resolve
+    ukcs_murdoch = environment_from_config(
+        {"kb_elev": 109.0, "gl_elev": 117.0, "datum_unit": "ft"},
+        depth_unit="m",
+    )
+    assert ukcs_murdoch.offshore
+    assert np.isclose(ukcs_murdoch.water_depth_m, 117.0 * 0.3048, rtol=1e-4)
+    assert np.isclose(ukcs_murdoch.air_gap_m, 109.0 * 0.3048, rtol=1e-4)
+
+    ukcs_subsea = environment_from_config(
+        {"df_elev": 98.0, "gl_elev": -255.0, "datum_unit": "ft"},
+        depth_unit="m",
+    )
+    assert ukcs_subsea.offshore
+    assert np.isclose(ukcs_subsea.water_depth_m, 255.0 * 0.3048, rtol=1e-4)
+    assert np.isclose(ukcs_subsea.air_gap_m, 98.0 * 0.3048, rtol=1e-4)
+
+    # Onshore well with GL <= KB stays strictly onshore
+    onshore_gl = environment_from_config(
+        {"kb_elev": 520.0, "gl_elev": 500.0, "datum_unit": "ft"},
+        depth_unit="m",
+    )
+    assert not onshore_gl.offshore
+    assert onshore_gl.water_depth_m == 0.0
+
 
 def test_bht_calibration_and_assumptions():
     env = environment_from_config(

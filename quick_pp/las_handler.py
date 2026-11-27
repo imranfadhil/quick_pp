@@ -1408,10 +1408,10 @@ def extract_las_metadata(
         ]
     )
     gl_elev, gl_unit = _find_float(
-        ["GL", "EGL", "GLE", "SEABED", "GL_ELEV", "ELEV_GL", "ground_elevation"]
+        ["GL", "EGL", "GLE", "GL_ELEV", "ELEV_GL", "ground_elevation"]
     )
     water_depth, wd_unit = _find_float(
-        ["WD", "WDEP", "WATER_DEPTH", "WTRD", "SEA_DEPTH"]
+        ["WD", "WDEP", "WATER_DEPTH", "WTRD", "SEA_DEPTH", "SEABED"]
     )
     apd, apd_unit = _find_float(["APD", "ELZ", "EPD"])
 
@@ -1441,14 +1441,34 @@ def extract_las_metadata(
     else:
         datum_unit = "m"
 
-    if water_depth is not None and wd_unit:
-        wd_u_norm = wd_unit.strip().lower()
-        wd_is_ft = wd_u_norm in ("ft", "f", "feet", "foot")
-        wd_is_m = wd_u_norm in ("m", "meter", "meters", "metre", "metres")
-        if wd_is_ft and datum_unit == "m":
-            water_depth = round(float(water_depth) * 0.3048, 4)
-        elif wd_is_m and datum_unit == "ft":
-            water_depth = round(float(water_depth) / 0.3048, 4)
+    def _conv_to_datum(
+        val: Optional[float], src_unit: Optional[str]
+    ) -> Optional[float]:
+        if val is None or not src_unit:
+            return val
+        u_norm = src_unit.strip().lower()
+        is_ft = u_norm in ("ft", "f", "feet", "foot")
+        is_m = u_norm in ("m", "meter", "meters", "metre", "metres")
+        if is_ft and datum_unit == "m":
+            return round(float(val) * 0.3048, 4)
+        if is_m and datum_unit == "ft":
+            return round(float(val) / 0.3048, 4)
+        return val
+
+    kb_elev = _conv_to_datum(kb_elev, kb_unit)
+    df_elev = _conv_to_datum(df_elev, df_unit)
+    gl_elev = _conv_to_datum(gl_elev, gl_unit)
+    water_depth = _conv_to_datum(water_depth, wd_unit)
+
+    # Infer offshore water_depth when LAS stores seabed in GL:
+    # 1) Subsea elevation below MSL (gl_elev < 0, e.g. -255 ft -> WD = 255 ft)
+    # 2) Positive depth exceeding rig datum KB/DFE (physically impossible onshore, e.g. KB=109 ft, GL=117 ft)
+    if water_depth is None and gl_elev is not None:
+        rig_ref = df_elev if df_elev is not None else kb_elev
+        if gl_elev < 0:
+            water_depth = round(abs(float(gl_elev)), 4)
+        elif rig_ref is not None and rig_ref > 0 and gl_elev > rig_ref:
+            water_depth = round(float(gl_elev), 4)
 
     bht, bht_u = _find_float(["BHT", "BHWT", "BLI", "TEMP", "MAX_BHT", "BHTEMP"])
     bht_unit = bht_u or _find_str(["bht_unit"]) or "degC"

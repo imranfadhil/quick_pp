@@ -3604,6 +3604,9 @@ class WellDataState {
 		syncHeaderToLithoParams(updates, workbench.lithoParams);
 		if (
 			'water_depth' in updates ||
+			'gl_elev' in updates ||
+			'kb_elev' in updates ||
+			'df_elev' in updates ||
 			'datum_unit' in updates ||
 			'water_depth_unit' in updates
 		) {

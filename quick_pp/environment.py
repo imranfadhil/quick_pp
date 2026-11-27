@@ -323,10 +323,26 @@ def environment_from_config(
     def _is_ft(u) -> bool:
         return str(u or "").strip().lower() in ("ft", "f", "feet", "foot")
 
+    # Rig depth datum above MSL (DFE and KB play the identical air-gap role offshore)
+    rig_elev = None
+    for rk in ("air_gap", "df_elev", "dfe_elevation", "kb_elev", "kb_elevation"):
+        rv = _num(cfg.get(rk))
+        if rv is not None and rv > 0:
+            rig_elev = rv
+            break
+
     # --- top temperature / offshore --------------------------------------
     wd = _num(cfg.get("water_depth"))
+    wd_from_override = bool(overrides and overrides.get("water_depth") is not None)
+    if wd is None and not wd_from_override:
+        gl = _num(cfg.get("gl_elev", cfg.get("ground_elevation")))
+        if gl is not None:
+            if gl < 0:
+                wd = abs(gl)
+            elif gl > 0 and rig_elev is not None and gl > rig_elev:
+                wd = gl
+
     if wd and wd > 0:
-        wd_from_override = bool(overrides and overrides.get("water_depth") is not None)
         wd_unit = (
             (overrides or {}).get("water_depth_unit")
             or (env.depth_unit if wd_from_override else None)
@@ -335,10 +351,9 @@ def environment_from_config(
             or env.depth_unit
         )
         env.water_depth_m = wd * M_PER_FT if _is_ft(wd_unit) else wd
-        kb = _num(cfg.get("air_gap", cfg.get("kb_elev")))
-        if kb and kb > 0:
+        if rig_elev is not None and rig_elev > 0:
             kb_unit = cfg.get("datum_unit") or env.depth_unit
-            env.air_gap_m = kb * M_PER_FT if _is_ft(kb_unit) else kb
+            env.air_gap_m = rig_elev * M_PER_FT if _is_ft(kb_unit) else rig_elev
         st = _num(cfg.get("seabed_temp_c"))
         env.seabed_temp_c = st if st is not None else 4.0
         env.explicit["seabed_temp"] = st is not None
