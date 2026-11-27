@@ -1035,7 +1035,7 @@
 							{ key: 'SAMPLES', label: 'Samples', numeric: true, decimals: 0 },
 							{
 								key: 'GOOD_PCT',
-								label: 'Good',
+								label: 'Unchanged',
 								unit: '%',
 								numeric: true,
 								decimals: 1

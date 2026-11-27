@@ -951,7 +951,7 @@ def generate_env_corr_qc_plot(
         y_pos = np.arange(len(labels))
 
         ax_cf.barh(
-            y_pos, good_v, height=0.52, color="#10b981", alpha=0.88, label="Good"
+            y_pos, good_v, height=0.52, color="#10b981", alpha=0.88, label="Unchanged"
         )
         ax_cf.barh(
             y_pos,

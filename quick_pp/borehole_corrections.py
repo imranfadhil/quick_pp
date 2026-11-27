@@ -530,7 +530,7 @@ def detect_sonic_cycle_skip(dt, rhob=None, window: int = 21) -> np.ndarray:
 # Confidence framework
 # --------------------------------------------------------------------------- #
 
-ENV_QC_STATUS = {-1: "NO_DATA", 0: "GOOD", 1: "CORRECTED", 2: "UNRELIABLE"}
+ENV_QC_STATUS = {-1: "NO_DATA", 0: "UNCHANGED", 1: "CORRECTED", 2: "UNRELIABLE"}
 ENV_QC_REASON_BITS = {
     "WASHOUT": 1,  # CALI - BS >= washout_thold
     "DRHO_HIGH": 2,  # |DRHO| > drho limit
@@ -836,10 +836,20 @@ def apply_environmental_corrections(
     )
     no_cali = cali_raw.isna()
     cali = cali_raw.fillna(bs)
-    if bool(no_cali.any()):
-        notes.append(
-            "Caliper missing for some samples: hole size unknown, confidence reduced."
-        )
+    n_no_cali = int(no_cali.sum())
+    if n_no_cali > 0 and n > 0:
+        pct_no_cali = 100.0 * n_no_cali / n
+        if n_no_cali == n:
+            notes.append(
+                f"Caliper missing for all samples (100%, {n_no_cali}/{n}): "
+                "hole size unknown, confidence reduced."
+            )
+        else:
+            pct_str = "<0.1%" if pct_no_cali < 0.1 else f"{pct_no_cali:.1f}%"
+            notes.append(
+                f"Caliper missing for {pct_str} of samples ({n_no_cali}/{n}): "
+                "hole size unknown, confidence reduced."
+            )
 
     drho_col = _first_col(out_df, ("DRHO", "HDRA", "DCOR"))
     drho = pd.to_numeric(out_df[drho_col], errors="coerce") if drho_col else None

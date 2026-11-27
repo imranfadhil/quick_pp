@@ -4,6 +4,7 @@ import {
 	buildEnvCorrQcPlot,
 	computeEnvCorrQcSummary,
 	decodeEnvQcReason,
+	decodeEnvQcStatus,
 	decodeInvasionProfile,
 	resolveFluidResistivities
 } from '../src/lib/utils/envCorrQc.ts';
@@ -74,6 +75,9 @@ function sampleCurves() {
 test('decodeEnvQcReason and decodeInvasionProfile format bitmasks and profile codes', () => {
 	assert.equal(decodeEnvQcReason(0), 'Clean');
 	assert.equal(decodeEnvQcReason(1 + 2 + 128), 'Washout, High DRHO, Cycle Skip');
+	assert.equal(decodeEnvQcStatus(0), 'Unchanged');
+	assert.equal(decodeEnvQcStatus(1), 'Corrected');
+	assert.equal(decodeEnvQcStatus(2), 'Unreliable');
 	assert.equal(decodeInvasionProfile(2), 'HC-like (Rxo/Rt < Rmf/Rw)');
 	assert.equal(decodeInvasionProfile(0), 'Uninformative / None');
 });

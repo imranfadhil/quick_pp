@@ -8080,7 +8080,7 @@
 					<div class="flex flex-wrap items-center gap-x-2 text-[9.5px] text-slate-600">
 						{#each envQcSummary.rows as r (r.CURVE)}
 							<span
-								title={`${r.CURVE}: Good ${r.GOOD_PCT}%, Corrected ${r.CORRECTED_PCT}%, Unreliable ${r.UNRELIABLE_PCT}%`}
+								title={`${r.CURVE}: Unchanged ${r.GOOD_PCT}%, Corrected ${r.CORRECTED_PCT}%, Unreliable ${r.UNRELIABLE_PCT}%`}
 							>
 								<strong>{r.CURVE}</strong>:
 								<span

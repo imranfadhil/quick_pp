@@ -3179,7 +3179,7 @@
 							<th class="py-0.5 text-left font-medium">Curve</th>
 							<th
 								class="py-0.5 text-right font-medium"
-								title="Gauge hole, negligible correction">Good</th
+								title="Gauge hole, negligible correction">Unchanged</th
 							>
 							<th
 								class="py-0.5 text-right font-medium"

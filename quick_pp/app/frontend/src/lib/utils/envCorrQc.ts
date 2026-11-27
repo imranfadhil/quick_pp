@@ -77,7 +77,7 @@ export function decodeEnvQcReason(mask: number | null | undefined): string {
 }
 
 export function decodeEnvQcStatus(status: number | null | undefined): string {
-	if (status === 0) return 'Good';
+	if (status === 0) return 'Unchanged';
 	if (status === 1) return 'Corrected';
 	if (status === 2) return 'Unreliable';
 	return 'No Data';

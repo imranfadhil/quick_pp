@@ -168,7 +168,17 @@ def test_no_caliper_reduces_confidence():
     for log in ("GR", "NPHI", "RHOB"):
         assert no_cali[f"{log}_QC_CONF"].mean() < with_cali[f"{log}_QC_CONF"].mean()
     assert (no_cali["ENV_QC_REASON"] & ENV_QC_REASON_BITS["NO_CALIPER"]).all()
-    assert any("Caliper" in a for a in no_cali.attrs["env_assumptions"])
+    assert any(
+        "Caliper missing for all samples (100%" in a
+        for a in no_cali.attrs["env_assumptions"]
+    )
+    df_partial = df.copy()
+    df_partial.loc[:5, "CALI"] = np.nan
+    partial_cali = apply_environmental_corrections(df_partial, depth_unit="m")
+    assert any(
+        "Caliper missing for 10.0% of samples (6/60)" in a
+        for a in partial_cali.attrs["env_assumptions"]
+    )
 
 
 def test_sigma_columns_wl_vs_lwd_and_obm():
@@ -282,7 +292,9 @@ def test_in_gauge_two_curve_wbm_does_not_inflate_rt_or_invent_invasion():
 
 def test_mud_program_uses_measured_depth_on_deviated_wells_and_overrides_stale_bs():
     md = np.array([1000.0, 1400.0, 1600.0, 2200.0])
-    tvd = np.array([950.0, 1250.0, 1380.0, 1480.0])  # TVD stays < 1500m while MD crosses 1500m!
+    tvd = np.array(
+        [950.0, 1250.0, 1380.0, 1480.0]
+    )  # TVD stays < 1500m while MD crosses 1500m!
     df = pd.DataFrame(
         {
             "DEPTH": md,
@@ -327,4 +339,3 @@ def test_mud_program_uses_measured_depth_on_deviated_wells_and_overrides_stale_b
     assert np.isnan(out["ENV_RMF"].iloc[2]) and np.isnan(out["ENV_RMF"].iloc[3])
     # Temperature still uses TVD (20 + 30 * 1.480 = 64.4 C at last sample)
     assert np.isclose(out["ENV_TEMP_C"].iloc[-1], 20.0 + 30.0 * 1.480)
-
