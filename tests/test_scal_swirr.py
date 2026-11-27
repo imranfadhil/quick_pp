@@ -96,3 +96,50 @@ def test_experiment_type_case_insensitive_detection():
                 exp_type2 = vals[0].strip().lower()
                 break
     assert exp_type2 == "porous_plate"
+
+
+def test_resolve_scal_fluid_system_and_leverett_j_invariance():
+    """Verify MICP, Air-Brine, Lab Oil-Brine, and Reservoir fluid systems produce consistent J regardless of reservoir IFT/theta."""
+    from quick_pp.app.backend.services.workspace import _resolve_scal_fluid_system
+    from quick_pp.core_analysis import leverett_j
+
+    # MICP (Hg-Air: 485 dyn/cm, 140 deg) vs Air-Brine (72 dyn/cm, 0 deg) measuring the exact same pore throat
+    sys_micp, ift_m, th_m, den_m, res1 = _resolve_scal_fluid_system(
+        "micp", 1500.0, ift_res=30.0, theta_res=30.0
+    )
+    sys_ab, ift_ab, th_ab, den_ab, _ = _resolve_scal_fluid_system(
+        "porous_plate", 120.0, ift_res=30.0, theta_res=30.0
+    )
+    sys_oil, ift_o, th_o, den_o, _ = _resolve_scal_fluid_system(
+        "centrifuge", 80.0, ift_res=30.0, theta_res=30.0, fluid_override="lab_oil_brine"
+    )
+    assert sys_micp == "micp" and ift_m == 485.0 and th_m == 140.0
+    assert sys_ab == "air_brine" and ift_ab == 72.0 and th_ab == 0.0
+    assert sys_oil == "lab_oil_brine" and ift_o == 48.0 and th_o == 30.0
+
+    # Suppose true reservoir Pc = 25 psi at IFT=30, theta=30 -> equivalent lab pressures:
+    pc_res_true = 25.0
+    pc_lab_micp = pc_res_true * (den_m / res1)
+    pc_lab_ab = pc_res_true * (den_ab / res1)
+
+    j_from_micp = float(leverett_j(pc_lab_micp, ift_m, th_m, 100.0, 0.20))
+    j_from_ab = float(leverett_j(pc_lab_ab, ift_ab, th_ab, 100.0, 0.20))
+    j_from_res = float(leverett_j(pc_res_true, 30.0, 30.0, 100.0, 0.20))
+
+    assert np.isclose(j_from_micp, j_from_ab, rtol=1e-6)
+    assert np.isclose(j_from_micp, j_from_res, rtol=1e-6)
+
+
+def test_swirr_and_shf_override_schemas():
+    """Verify WorkspaceSwirrFitRequest and WorkspaceShfRequest accept RT/fluid overrides and fit_scope."""
+    from quick_pp.app.backend.services.workspace import WorkspaceShfRequest
+
+    req_swirr = WorkspaceSwirrFitRequest(
+        plugRtOverrides={"Well-A::P1": 2},
+        plugFluidOverrides={"Well-A::P1": "micp"},
+    )
+    assert req_swirr.plugRtOverrides == {"Well-A::P1": 2}
+    assert req_swirr.plugFluidOverrides == {"Well-A::P1": "micp"}
+
+    req_shf = WorkspaceShfRequest(fit_scope="global")
+    assert req_shf.fit_scope == "global"

@@ -2730,6 +2730,88 @@ class WorkspacePermTransformRequest(BaseModel):
     save: bool = Field(False)
 
 
+def _resolve_scal_fluid_system(
+    exp_type_raw: Optional[str],
+    max_pc_raw: float,
+    ift_res: float = 30.0,
+    theta_res: float = 30.0,
+    fluid_override: Optional[str] = None,
+) -> Tuple[str, float, float, float, float]:
+    """Resolve SCAL plug fluid system and lab/reservoir IFT*|cos(theta)| factors.
+
+    Returns:
+        Tuple of (fluid_system, ift_lab, theta_lab, lab_ift_cos, res_ift_cos)
+    """
+    res_ift = max(float(ift_res or 30.0), 1e-4)
+    res_theta = float(theta_res if theta_res is not None else 30.0)
+    res_ift_cos = max(res_ift * abs(math.cos(math.radians(res_theta))), 1e-4)
+
+    ov = str(fluid_override or "").strip().lower()
+    if ov in ("micp", "air_brine", "lab_oil_brine", "reservoir"):
+        sys_key = ov
+    else:
+        exp_t = str(exp_type_raw or "").strip().lower()
+        if "res_scaled" in exp_t:
+            sys_key = "reservoir"
+        elif "lab_oil" in exp_t or "soltrol" in exp_t or "isopar" in exp_t:
+            sys_key = "lab_oil_brine"
+        elif any(m in exp_t for m in ("micp", "mercury", "hg")) or (
+            exp_t in ("unknown", "", "none") and max_pc_raw > 1000.0
+        ):
+            sys_key = "micp"
+        elif any(
+            m in exp_t
+            for m in (
+                "porous_plate",
+                "centrifuge",
+                "air_brine",
+                "brine_air",
+                "air_water",
+            )
+        ):
+            sys_key = "air_brine"
+        elif any(
+            m in exp_t
+            for m in (
+                "oil_brine",
+                "brine_oil",
+                "water_oil",
+                "oil_water",
+                "res",
+                "reservoir",
+            )
+        ):
+            sys_key = "reservoir"
+        elif max_pc_raw > 1000.0:
+            sys_key = "micp"
+        else:
+            sys_key = "air_brine"
+
+    if sys_key == "micp":
+        ift_lab, theta_lab = 485.0, 140.0
+    elif sys_key == "air_brine":
+        ift_lab, theta_lab = 72.0, 0.0
+    elif sys_key == "lab_oil_brine":
+        ift_lab, theta_lab = 48.0, 30.0
+    else:
+        ift_lab, theta_lab = res_ift, res_theta
+
+    lab_ift_cos = max(ift_lab * abs(math.cos(math.radians(theta_lab))), 1e-4)
+    return sys_key, ift_lab, theta_lab, lab_ift_cos, res_ift_cos
+
+
+def _normalize_scal_id_key(raw_key: Any) -> str:
+    k = str(raw_key or "").strip()
+    if not k:
+        return ""
+    if "::" not in k and ":" in k:
+        return k.replace(":", "::", 1)
+    if k.count("::") == 1 and ":" in k.split("::")[0]:
+        p_part, idx_part = k.split("::", 1)
+        return f"{p_part.replace(':', '::', 1)}::{idx_part}"
+    return k
+
+
 class WorkspaceShfRequest(BaseModel):
     well_names: Optional[List[str]] = Field(
         None, description="Optional subset of well names to include"
@@ -2738,6 +2820,11 @@ class WorkspaceShfRequest(BaseModel):
         "leverett_j",
         description="SHF model: 'leverett_j', 'skelt_harrison', or 'cuddy'",
     )
+    fit_scope: str = Field(
+        "per_rt",
+        description="SCAL curve fit scope: 'global' (aggregate all RTs into 1 shared curve) or 'per_rt'",
+    )
+    fitScope: Optional[str] = Field(None)
     j_sat_mode: str = Field(
         "swn",
         description="Saturation variable for Leverett-J curve fitting: 'swn' (normalized water saturation) or 'sw' (water saturation)",
@@ -10203,6 +10290,53 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                 if pt_str.count("::") == 1 and ":" in pt_str.split("::")[0]:
                     p_part, idx_part = pt_str.split("::", 1)
                     excl_pt_set.add(f"{p_part.replace(':', '::', 1)}::{idx_part}")
+        plug_rt_overrides: Dict[str, int] = {}
+        for k_ov, v_ov in (
+            swirr_cfg_dict.get("plugRtOverrides")
+            or swirr_cfg_dict.get("plug_rt_overrides")
+            or {}
+        ).items():
+            nk = _normalize_scal_id_key(k_ov)
+            try:
+                rv = int(v_ov)
+                if nk and rv >= 1:
+                    plug_rt_overrides[nk] = rv
+            except (TypeError, ValueError):
+                pass
+        point_rt_overrides: Dict[str, int] = {}
+        for k_ov, v_ov in (
+            swirr_cfg_dict.get("pointRtOverrides")
+            or swirr_cfg_dict.get("point_rt_overrides")
+            or {}
+        ).items():
+            nk = _normalize_scal_id_key(k_ov)
+            try:
+                rv = int(v_ov)
+                if nk and rv >= 1:
+                    point_rt_overrides[nk] = rv
+            except (TypeError, ValueError):
+                pass
+        plug_fluid_overrides: Dict[str, str] = {}
+        for k_ov, v_ov in (
+            swirr_cfg_dict.get("plugFluidOverrides")
+            or swirr_cfg_dict.get("plug_fluid_overrides")
+            or {}
+        ).items():
+            nk = _normalize_scal_id_key(k_ov)
+            sv = str(v_ov or "").strip().lower()
+            if nk and sv in ("micp", "air_brine", "lab_oil_brine", "reservoir"):
+                plug_fluid_overrides[nk] = sv
+        fit_scope = (
+            str(
+                getattr(req, "fitScope", None)
+                or getattr(req, "fit_scope", "per_rt")
+                or "per_rt"
+            )
+            .strip()
+            .lower()
+        )
+        if fit_scope not in ("global", "per_rt"):
+            fit_scope = "per_rt"
         allowed_zones_set = (
             {str(z).strip() for z in req.zones if str(z).strip()} if req.zones else None
         )
@@ -10503,6 +10637,9 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                         not np.isfinite(rf_val) or rf_val < 1
                     ) and near_rock_flag is not None:
                         rf_val = near_rock_flag
+                    plug_id_norm = f"{wn}::{sname}"
+                    if plug_id_norm in plug_rt_overrides:
+                        rf_val = plug_rt_overrides[plug_id_norm]
                     pc_col = next(
                         (
                             c
@@ -10561,41 +10698,22 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                         if s_meth and str(s_meth).strip():
                             exp_type = str(s_meth).strip().lower()
 
-                    # Convert lab capillary pressure to reservoir conditions for Leverett J / height fitting
-                    res_num = max(req.ift * abs(math.cos(math.radians(req.theta))), 1.0)
-                    if any(m in exp_type for m in ("micp", "mercury", "hg")) or (
-                        exp_type in ("unknown", "", "none")
-                        and np.nanmax(pc_vals) > 1000.0
-                    ):
-                        lab_den = 485.0 * abs(math.cos(math.radians(140.0)))
-                        pc_vals = pc_vals * (res_num / lab_den)
-                    elif any(
-                        m in exp_type
-                        for m in (
-                            "porous_plate",
-                            "centrifuge",
-                            "air_brine",
-                            "brine_air",
-                            "air_water",
-                        )
-                    ):
-                        lab_den = 72.0 * abs(math.cos(math.radians(0.0)))
-                        pc_vals = pc_vals * (res_num / lab_den)
-                    elif any(
-                        m in exp_type
-                        for m in (
-                            "oil_brine",
-                            "brine_oil",
-                            "water_oil",
-                            "oil_water",
-                            "res",
-                            "reservoir",
-                        )
-                    ):
-                        pass
-                    elif np.nanmax(pc_vals) > 1000.0:
-                        lab_den = 485.0 * abs(math.cos(math.radians(140.0)))
-                        pc_vals = pc_vals * (res_num / lab_den)
+                    # Resolve per-plug lab fluid system and convert lab Pc -> reservoir Pc
+                    (
+                        fluid_sys,
+                        ift_lab_plug,
+                        theta_lab_plug,
+                        lab_den,
+                        res_num,
+                    ) = _resolve_scal_fluid_system(
+                        exp_type,
+                        float(np.nanmax(pc_vals)),
+                        req.ift,
+                        req.theta,
+                        plug_fluid_overrides.get(plug_id_norm),
+                    )
+                    pc_lab_vals = pc_vals.copy()
+                    pc_vals = pc_lab_vals * (res_num / lab_den)
                     swirr_src_mode = (
                         "poro_perm"
                         if str(getattr(req, "swirr_source", "lab_min") or "lab_min")
@@ -10619,22 +10737,32 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                         raw_swn = (sw_vals - eff_swirr) / max(1.0 - eff_swirr, 0.05)
                         swn_vals = np.clip(raw_swn, 0.005, 0.99)
                     swirr_used_plug = eff_swirr
-                    order_pc = np.argsort(pc_vals)
+                    order_pc = np.argsort(pc_lab_vals)
+                    pc_lab_vals = pc_lab_vals[order_pc]
                     pc_vals = pc_vals[order_pc]
                     sw_vals = sw_vals[order_pc]
                     swn_vals = swn_vals[order_pc]
-                    for pt_idx, (pc_v, sw_v, swn_v) in enumerate(
-                        zip(pc_vals, sw_vals, swn_vals, strict=False)
+                    for pt_idx, (pc_lab_v, pc_v, sw_v, swn_v) in enumerate(
+                        zip(pc_lab_vals, pc_vals, sw_vals, swn_vals, strict=False)
                     ):
+                        pt_id_norm = f"{wn}::{sname}::{pt_idx}"
                         is_pt_excl = (
-                            f"{wn}::{sname}::{pt_idx}" in excl_pt_set
+                            pt_id_norm in excl_pt_set
                             or f"{wn}:{sname}::{pt_idx}" in excl_pt_set
                             or f"{wn}::{sname}::{round(float(pc_v), 2)}" in excl_pt_set
                             or f"{wn}:{sname}::{round(float(pc_v), 2)}" in excl_pt_set
+                            or f"{wn}::{sname}::{round(float(pc_lab_v), 2)}"
+                            in excl_pt_set
                         )
                         if not (0.004 <= swn_v <= 0.995 and pc_v > 0):
                             continue
-                        j_v = float(leverett_j(pc_v, req.ift, req.theta, cperm, cpore))
+                        # Compute Leverett-J directly from lab Pc and method-specific lab IFT & theta
+                        # (mathematically invariant to reservoir IFT/theta conversion)
+                        j_v = float(
+                            leverett_j(
+                                pc_lab_v, ift_lab_plug, theta_lab_plug, cperm, cpore
+                            )
+                        )
                         h_v = float(pc_v / grad_psi)
                         bvw_v = float(cpore * sw_v)
                         if not (
@@ -10644,9 +10772,10 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                             and math.isfinite(bvw_v)
                         ):
                             continue
+                        pt_rf_val = point_rt_overrides.get(pt_id_norm, rf_val)
                         core_rows.append(
                             {
-                                "ROCK_FLAG": rf_val,
+                                "ROCK_FLAG": int(pt_rf_val),
                                 "PC": round(float(pc_v), 4),
                                 "SW": round(float(sw_v), 4),
                                 "SWN": round(float(swn_v), 4),
@@ -10660,8 +10789,9 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                                 "Sample": str(sname),
                                 "DEPTH": round(float(s_depth), 2),
                                 "ZONE": s_zone,
-                                "POINT_ID": f"{wn}::{sname}::{pt_idx}",
-                                "PLUG_ID": f"{wn}::{sname}",
+                                "POINT_ID": pt_id_norm,
+                                "PLUG_ID": plug_id_norm,
+                                "FLUID_SYSTEM": fluid_sys,
                                 "EXCLUDED": bool(is_pt_excl),
                             }
                         )
@@ -10753,26 +10883,62 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
             if str(getattr(req, "j_sat_mode", "swn") or "swn").strip().lower() == "sw"
             else "swn"
         )
+        all_expected_rts = (
+            [str(r) for r in range(1, len(req.cutoffs or []) + 2)]
+            if req.cutoffs
+            else [str(r) for r in reservoir_flags]
+        )
+        scal_df_for_auto = (
+            scal_df_fit.assign(ROCK_FLAG=1)
+            if (fit_scope == "global" and not scal_df_fit.empty)
+            else scal_df_fit
+        )
         fits_swn: Dict[str, Dict[str, float]] = {}
         fits_sw: Dict[str, Dict[str, float]] = {}
-        if model == "leverett_j" and not scal_df_fit.empty:
-            for param in auto_j_params(scal_df_fit):
-                fits_swn[str(param["ROCK_FLAG"])] = {
-                    "a": float(param["a"]),
-                    "b": float(param["b"]),
-                    "rmse": float(param["rmse"]),
-                    "r2": float(param.get("r2", 0.0)),
-                    "count": int(param.get("count", 0)),
+        if model == "leverett_j" and not scal_df_for_auto.empty:
+            raw_j_swn = auto_j_params(scal_df_for_auto)
+            if fit_scope == "global" and raw_j_swn:
+                g_param = raw_j_swn[0]
+                g_entry = {
+                    "a": float(g_param["a"]),
+                    "b": float(g_param["b"]),
+                    "rmse": float(g_param["rmse"]),
+                    "r2": float(g_param.get("r2", 0.0)),
+                    "count": int(g_param.get("count", 0)),
                 }
-            scal_df_sw = scal_df_fit.assign(SWN=scal_df_fit["SW"])
-            for param in auto_j_params(scal_df_sw):
-                fits_sw[str(param["ROCK_FLAG"])] = {
-                    "a": float(param["a"]),
-                    "b": float(param["b"]),
-                    "rmse": float(param["rmse"]),
-                    "r2": float(param.get("r2", 0.0)),
-                    "count": int(param.get("count", 0)),
+                for r_key in all_expected_rts or ["1"]:
+                    fits_swn[r_key] = dict(g_entry)
+            else:
+                for param in raw_j_swn:
+                    fits_swn[str(param["ROCK_FLAG"])] = {
+                        "a": float(param["a"]),
+                        "b": float(param["b"]),
+                        "rmse": float(param["rmse"]),
+                        "r2": float(param.get("r2", 0.0)),
+                        "count": int(param.get("count", 0)),
+                    }
+            scal_df_sw = scal_df_for_auto.assign(SWN=scal_df_for_auto["SW"])
+            raw_j_sw = auto_j_params(scal_df_sw)
+            if fit_scope == "global" and raw_j_sw:
+                g_param_sw = raw_j_sw[0]
+                g_entry_sw = {
+                    "a": float(g_param_sw["a"]),
+                    "b": float(g_param_sw["b"]),
+                    "rmse": float(g_param_sw["rmse"]),
+                    "r2": float(g_param_sw.get("r2", 0.0)),
+                    "count": int(g_param_sw.get("count", 0)),
                 }
+                for r_key in all_expected_rts or ["1"]:
+                    fits_sw[r_key] = dict(g_entry_sw)
+            else:
+                for param in raw_j_sw:
+                    fits_sw[str(param["ROCK_FLAG"])] = {
+                        "a": float(param["a"]),
+                        "b": float(param["b"]),
+                        "rmse": float(param["rmse"]),
+                        "r2": float(param.get("r2", 0.0)),
+                        "count": int(param.get("count", 0)),
+                    }
 
         fits: Dict[str, Dict[str, float]] = {}
         if req.fits:
@@ -10781,8 +10947,19 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                     fits[str(k_rf)] = {
                         str(pk): float(pv)
                         for pk, pv in v_fit.items()
-                        if pv is not None and math.isfinite(float(pv))
+                        if pv is not None
+                        and isinstance(pv, (int, float))
+                        and not isinstance(pv, bool)
+                        and math.isfinite(float(pv))
                     }
+            if fit_scope == "global" and fits:
+                shared_src = (
+                    fits.get("global") or fits.get("1") or next(iter(fits.values()))
+                )
+                fits = {
+                    r_key: dict(shared_src)
+                    for r_key in (all_expected_rts or list(fits.keys()) or ["1"])
+                }
 
         if not fits:
             if req.leverett_a is not None and req.leverett_b is not None:
@@ -10796,38 +10973,61 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                         "r2": 1.0,
                         "count": 0,
                     }
-            elif not scal_df_fit.empty:
+            elif not scal_df_for_auto.empty:
                 if model == "skelt_harrison":
-                    for param in auto_skelt_harrison_params(scal_df_fit):
-                        fits[str(param["ROCK_FLAG"])] = {
-                            "a": float(param["a"]),
-                            "b": float(param["b"]),
-                            "c": float(param["c"]),
-                            "d": float(param["d"]),
-                            "rmse": float(param["rmse"]),
-                            "r2": float(param.get("r2", 0.0)),
-                            "count": int(param.get("count", 0)),
+                    raw_skelt = auto_skelt_harrison_params(scal_df_for_auto)
+                    if fit_scope == "global" and raw_skelt:
+                        gp = raw_skelt[0]
+                        ge = {
+                            "a": float(gp["a"]),
+                            "b": float(gp["b"]),
+                            "c": float(gp["c"]),
+                            "d": float(gp["d"]),
+                            "rmse": float(gp["rmse"]),
+                            "r2": float(gp.get("r2", 0.0)),
+                            "count": int(gp.get("count", 0)),
                         }
+                        for r_key in all_expected_rts or ["1"]:
+                            fits[r_key] = dict(ge)
+                    else:
+                        for param in raw_skelt:
+                            fits[str(param["ROCK_FLAG"])] = {
+                                "a": float(param["a"]),
+                                "b": float(param["b"]),
+                                "c": float(param["c"]),
+                                "d": float(param["d"]),
+                                "rmse": float(param["rmse"]),
+                                "r2": float(param.get("r2", 0.0)),
+                                "count": int(param.get("count", 0)),
+                            }
                 elif model == "cuddy":
-                    for param in auto_cuddy_params(scal_df_fit):
-                        fits[str(param["ROCK_FLAG"])] = {
-                            "a": float(param["a"]),
-                            "b": float(param["b"]),
-                            "rmse": float(param["rmse"]),
-                            "r2": float(param.get("r2", 0.0)),
-                            "count": int(param.get("count", 0)),
+                    raw_cuddy = auto_cuddy_params(scal_df_for_auto)
+                    if fit_scope == "global" and raw_cuddy:
+                        gp = raw_cuddy[0]
+                        ge = {
+                            "a": float(gp["a"]),
+                            "b": float(gp["b"]),
+                            "rmse": float(gp["rmse"]),
+                            "r2": float(gp.get("r2", 0.0)),
+                            "count": int(gp.get("count", 0)),
                         }
+                        for r_key in all_expected_rts or ["1"]:
+                            fits[r_key] = dict(ge)
+                    else:
+                        for param in raw_cuddy:
+                            fits[str(param["ROCK_FLAG"])] = {
+                                "a": float(param["a"]),
+                                "b": float(param["b"]),
+                                "rmse": float(param["rmse"]),
+                                "r2": float(param.get("r2", 0.0)),
+                                "count": int(param.get("count", 0)),
+                            }
                 else:
                     src_fits = fits_sw if j_sat_mode == "sw" else fits_swn
                     for rf_k, f_val in src_fits.items():
                         fits[rf_k] = dict(f_val)
 
         # Ensure all defined rock types exist in fits
-        all_expected_rts = (
-            [str(r) for r in range(1, len(req.cutoffs or []) + 2)]
-            if req.cutoffs
-            else [str(r) for r in reservoir_flags]
-        )
         if fits and all_expected_rts:
             fallback_fit = next(
                 iter(fits.values()),
@@ -10862,7 +11062,11 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                     rf_int = int(rf_key)
                 except ValueError:
                     continue
-                sub_scal = scal_df_fit[scal_df_fit["ROCK_FLAG"] == rf_int]
+                sub_scal = (
+                    scal_df_fit
+                    if fit_scope == "global"
+                    else scal_df_fit[scal_df_fit["ROCK_FLAG"] == rf_int]
+                )
                 if sub_scal.empty:
                     continue
                 a_f = float(fit_entry.get("a", 0.2))
@@ -11477,6 +11681,11 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                 if (not scal_df.empty and "PLUG_ID" in scal_df.columns)
                 else []
             ),
+            "fluid_systems": (
+                scal_df["FLUID_SYSTEM"].tolist()
+                if (not scal_df.empty and "FLUID_SYSTEM" in scal_df.columns)
+                else []
+            ),
             "excluded": (
                 [bool(x) for x in scal_df["EXCLUDED"].tolist()]
                 if (not scal_df.empty and "EXCLUDED" in scal_df.columns)
@@ -11487,6 +11696,7 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
         return {
             "project_id": project_id,
             "model": model,
+            "fit_scope": fit_scope,
             "j_sat_mode": j_sat_mode,
             "fits": fits,
             "fits_swn": fits_swn if model == "leverett_j" else fits,
@@ -17178,6 +17388,10 @@ class WorkspaceSwirrFitRequest(BaseModel):
     swirrMax: Optional[float] = Field(None)
     excluded_plug_ids: Optional[List[str]] = Field(None)
     excludedPlugIds: Optional[List[str]] = Field(None)
+    plug_rt_overrides: Optional[Dict[str, int]] = Field(None)
+    plugRtOverrides: Optional[Dict[str, int]] = Field(None)
+    plug_fluid_overrides: Optional[Dict[str, str]] = Field(None)
+    plugFluidOverrides: Optional[Dict[str, str]] = Field(None)
     rules: Optional[Dict[str, Dict[str, Any]]] = Field(None)
     auto_fit: bool = Field(True)
     drt_method: str = Field("fzi")
@@ -17253,6 +17467,8 @@ def _extract_project_scal_plugs_for_swirr(
     min_depth: Optional[float] = None,
     max_depth: Optional[float] = None,
     pc_domain: str = "lab",
+    plug_rt_overrides: Optional[Dict[str, int]] = None,
+    plug_fluid_overrides: Optional[Dict[str, str]] = None,
 ) -> List[Dict[str, Any]]:
     """Extract plug-level SCAL drainage curves and matched CPORE/CPERM/ROCK_FLAG across project wells."""
     cutoffs_list = sorted(float(c) for c in (cutoffs or [0.5, 1.2, 2.5, 5.0]))
@@ -17595,67 +17811,56 @@ def _extract_project_scal_plugs_for_swirr(
                     if s_meth and str(s_meth).strip():
                         exp_type = str(s_meth).strip().lower()
 
-                # Apply Lab-to-Reservoir conversion ONLY if requested (pc_domain == 'reservoir')
+                # Resolve per-plug lab fluid system and compute both lab and reservoir Pc curves
+                plug_id_norm = f"{wn}::{sname}"
                 pc_dom = str(pc_domain or "lab").strip().lower()
-                if pc_dom == "reservoir":
-                    res_num = max(ift * abs(math.cos(math.radians(theta))), 1.0)
-                    if any(m in exp_type for m in ("micp", "mercury", "hg")) or (
-                        exp_type in ("unknown", "", "none")
-                        and np.nanmax(pc_vals) > 1000.0
-                    ):
-                        # Mercury-Air lab system: sigma=485 mN/m, theta=140 deg
-                        lab_den = 485.0 * abs(math.cos(math.radians(140.0)))
-                        pc_vals = pc_vals * (res_num / lab_den)
-                    elif any(
-                        m in exp_type
-                        for m in (
-                            "porous_plate",
-                            "centrifuge",
-                            "air_brine",
-                            "brine_air",
-                            "air_water",
-                        )
-                    ):
-                        # Air-Brine lab system: sigma=72 mN/m, theta=0 deg
-                        lab_den = 72.0 * abs(math.cos(math.radians(0.0)))
-                        pc_vals = pc_vals * (res_num / lab_den)
-                    elif any(
-                        m in exp_type
-                        for m in (
-                            "oil_brine",
-                            "brine_oil",
-                            "water_oil",
-                            "oil_water",
-                            "res",
-                            "reservoir",
-                        )
-                    ):
-                        # Already reservoir oil-brine system
-                        pass
-                    else:
-                        if np.nanmax(pc_vals) > 1000.0:
-                            lab_den = 485.0 * abs(math.cos(math.radians(140.0)))
-                        else:
-                            lab_den = 72.0 * abs(math.cos(math.radians(0.0)))
-                        pc_vals = pc_vals * (res_num / lab_den)
+                (
+                    fluid_sys,
+                    ift_lab,
+                    theta_lab,
+                    lab_den,
+                    res_num,
+                ) = _resolve_scal_fluid_system(
+                    exp_type,
+                    float(np.nanmax(pc_vals)),
+                    ift,
+                    theta,
+                    (plug_fluid_overrides or {}).get(plug_id_norm),
+                )
+                pc_lab_vals = pc_vals.copy()
+                pc_res_vals = pc_lab_vals * (res_num / lab_den)
+                active_pc_vals = pc_res_vals if pc_dom == "reservoir" else pc_lab_vals
 
-                order = np.argsort(pc_vals)
-                pc_sorted = [round(float(x), 4) for x in pc_vals[order]]
+                order = np.argsort(pc_lab_vals)
+                pc_sorted = [round(float(x), 4) for x in active_pc_vals[order]]
+                pc_lab_sorted = [round(float(x), 4) for x in pc_lab_vals[order]]
+                pc_res_sorted = [round(float(x), 4) for x in pc_res_vals[order]]
                 sw_sorted = [round(float(x), 4) for x in sw_vals[order]]
+
+                auto_rt_val = int(rf_val)
+                eff_rt_val = int(
+                    (plug_rt_overrides or {}).get(plug_id_norm, auto_rt_val)
+                )
 
                 plug_records.append(
                     {
-                        "plug_id": f"{wn}::{sname}",
+                        "plug_id": plug_id_norm,
                         "well": str(wn),
                         "sample": str(sname),
                         "depth": round(float(s_depth), 2),
                         "zone": s_zone,
-                        "rt": int(rf_val),
+                        "rt": eff_rt_val,
+                        "auto_rt": auto_rt_val,
                         "cpore": round(float(cpore), 4),
                         "cperm": round(float(cperm), 4),
                         "experiment_type": exp_type,
+                        "fluid_system": fluid_sys,
+                        "ift_lab": round(float(ift_lab), 2),
+                        "theta_lab": round(float(theta_lab), 2),
                         "pc_domain": pc_dom,
                         "pc_curve": pc_sorted,
+                        "pc_lab_curve": pc_lab_sorted,
+                        "pc_res_curve": pc_res_sorted,
                         "sw_curve": sw_sorted,
                     }
                 )
@@ -17711,17 +17916,27 @@ def _extract_project_scal_plugs_for_swirr(
                     for pc_v in pc_grid
                 ]
                 sname_syn = f"SYN_RT{rf_int}_{p_idx + 1}"
+                syn_pid = f"{default_well}::{sname_syn}"
+                eff_syn_rt = int((plug_rt_overrides or {}).get(syn_pid, rf_int))
                 plug_records.append(
                     {
-                        "plug_id": f"{default_well}::{sname_syn}",
+                        "plug_id": syn_pid,
                         "well": str(default_well),
                         "sample": sname_syn,
                         "depth": round(1500.0 + rf_int * 25.0 + p_idx * 3.5, 2),
                         "zone": "Unknown",
-                        "rt": int(rf_int),
+                        "rt": eff_syn_rt,
+                        "auto_rt": int(rf_int),
                         "cpore": round(p_plug, 4),
                         "cperm": round(k_plug, 4),
+                        "experiment_type": "reservoir",
+                        "fluid_system": "reservoir",
+                        "ift_lab": round(float(ift), 2),
+                        "theta_lab": round(float(theta), 2),
+                        "pc_domain": str(pc_domain or "lab").strip().lower(),
                         "pc_curve": pc_grid,
+                        "pc_lab_curve": pc_grid,
+                        "pc_res_curve": pc_grid,
                         "sw_curve": sw_grid,
                     }
                 )
@@ -17791,6 +18006,33 @@ def workspace_swirr_fit(
                 else:
                     excluded_set.add(x_s)
 
+        raw_rt_ov = (
+            req.plug_rt_overrides
+            if req.plug_rt_overrides is not None
+            else (req.plugRtOverrides or {})
+        )
+        norm_rt_ov: Dict[str, int] = {}
+        for k_ov, v_ov in (raw_rt_ov or {}).items():
+            nk = _normalize_scal_id_key(k_ov)
+            try:
+                rv = int(v_ov)
+                if nk and rv >= 1:
+                    norm_rt_ov[nk] = rv
+            except (TypeError, ValueError):
+                pass
+
+        raw_fl_ov = (
+            req.plug_fluid_overrides
+            if req.plug_fluid_overrides is not None
+            else (req.plugFluidOverrides or {})
+        )
+        norm_fl_ov: Dict[str, str] = {}
+        for k_ov, v_ov in (raw_fl_ov or {}).items():
+            nk = _normalize_scal_id_key(k_ov)
+            sv = str(v_ov or "").strip().lower()
+            if nk and sv in ("micp", "air_brine", "lab_oil_brine", "reservoir"):
+                norm_fl_ov[nk] = sv
+
         cutoffs_list = sorted(
             float(c) for c in (req.cutoffs or [0.5, 1.2, 2.5, 5.0]) if c is not None
         )
@@ -17805,6 +18047,8 @@ def workspace_swirr_fit(
             min_depth=req.min_depth,
             max_depth=req.max_depth,
             pc_domain=pc_domain,
+            plug_rt_overrides=norm_rt_ov,
+            plug_fluid_overrides=norm_fl_ov,
         )
 
         plug_rows: List[Dict[str, Any]] = []
@@ -17964,6 +18208,8 @@ def workspace_swirr_fit(
             "swirrMax": swirr_max,
             "rules": rules_out,
             "excludedPlugIds": sorted(excluded_set),
+            "plugRtOverrides": norm_rt_ov,
+            "plugFluidOverrides": norm_fl_ov,
         }
 
         for p in plug_rows:

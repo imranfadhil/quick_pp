@@ -33,7 +33,11 @@
 	} from '$lib/utils/depthAlignmentQc';
 	import { buildTempPressurePlot } from '$lib/utils/tempPressureProfile';
 	import { gammaEndpoints, gammaLabel } from '$lib/utils/lithology';
-	import { normalizedScalSaturation, poreThroatDistribution } from '$lib/utils/poreThroat';
+	import {
+		normalizedScalSaturation,
+		poreThroatDistribution,
+		resolvePlugLabAndResPc
+	} from '$lib/utils/poreThroat';
 	import {
 		estimateBqvReferenceRw,
 		fillMissingCurve,
@@ -4802,7 +4806,9 @@
 				});
 			}
 
-			// Overlay fitted curves per Rock Type
+			// Overlay fitted curves (single shared curve in Global scope, or per Rock Type)
+			const isGlobalFitScope =
+				(sp.fitScope ?? sr?.fit_scope ?? 'per_rt') === 'global';
 			const activeFits =
 				activeModel === 'leverett_j'
 					? useRawSw
@@ -4817,9 +4823,14 @@
 				const sortedFitEntries = Object.entries(activeFits).sort(
 					([k1], [k2]) => Number(k1) - Number(k2)
 				);
-				for (const [rfKey, fit] of sortedFitEntries) {
+				const entriesToPlot = isGlobalFitScope
+					? sortedFitEntries.slice(0, 1)
+					: sortedFitEntries;
+				for (const [rfKey, fit] of entriesToPlot) {
 					const rfNum = Number(rfKey);
-					const color = getRockTypeColor(rfNum);
+					const color = isGlobalFitScope ? '#0F172A' : getRockTypeColor(rfNum);
+					const lineWidth = isGlobalFitScope ? 2.6 : 2.2;
+					const fitPrefix = isGlobalFitScope ? 'Global Fit' : `Fit RT ${rfKey}`;
 					const a = Number(fit.a ?? 0.2);
 					const b = Math.abs(Number(fit.b ?? 0.3));
 					if (!Number.isFinite(a) || !Number.isFinite(b) || a <= 0 || b <= 0) continue;
@@ -4839,10 +4850,10 @@
 						traces.push({
 							type: 'scatter',
 							mode: 'lines',
-							name: `Fit RT ${rfKey} (${aStr}·${satSym}^-${b.toFixed(2)})`,
+							name: `${fitPrefix} (${aStr}·${satSym}^-${b.toFixed(2)})`,
 							x: xs,
 							y: ys,
-							line: { color, width: 2.2 }
+							line: { color, width: lineWidth }
 						});
 					} else if (activeModel === 'skelt_harrison') {
 						const c = Number(fit.c ?? 1.5);
@@ -4866,10 +4877,10 @@
 						traces.push({
 							type: 'scatter',
 							mode: 'lines',
-							name: `Fit RT ${rfKey} (a=${a.toFixed(2)}, b=${b.toFixed(1)})`,
+							name: `${fitPrefix} (a=${a.toFixed(2)}, b=${b.toFixed(1)})`,
 							x: xs,
 							y: ys,
-							line: { color, width: 2.2 }
+							line: { color, width: lineWidth }
 						});
 					} else {
 						const xs: number[] = [];
@@ -4885,7 +4896,7 @@
 						traces.push({
 							type: 'scatter',
 							mode: 'lines',
-							name: `Fit RT ${rfKey} (${a.toFixed(3)}·Pc^-${b.toFixed(2)})`,
+							name: `${fitPrefix} (${a.toFixed(3)}·Pc^-${b.toFixed(2)})`,
 							x: xs,
 							y: ys,
 							line: { color, width: 2.2 }
@@ -6090,30 +6101,35 @@
 
 			if (tab === 'pore-throat') {
 				const sp = projectData.shfParams;
+				const plugFluidOverrides = projectData.swirrConfig.plugFluidOverrides || {};
 				const curves = filteredPlugs.flatMap((plug, index) => {
 					const phi = Math.max(1e-4, plug.cpore || 0.15);
 					const perm = Math.max(1e-4, plug.cperm || 10);
 					const rt = plug.rt ?? 1;
-					const fitRt =
-						plug.cpore && plug.cperm
-							? (projectData.classifyRockType(plug.cpore, plug.cperm) ?? rt)
-							: rt;
+					const normPid = projectData.normalizeScalPlugId(
+						plug.plug_id,
+						plug.well,
+						plug.sample
+					);
 					const sw = plug.sw_curve ?? [];
 					const swMin = sw.length ? Math.min(...sw) : (plug.sw_at_max_pc ?? 0.12);
 					const swirr =
 						sp.swirrSource === 'poro_perm'
-							? Math.min(
-									0.85,
-									Math.max(0.01, projectData.evalSwirrValue(phi, perm, fitRt))
-								)
+							? Math.min(0.85, Math.max(0.01, projectData.evalSwirrValue(phi, perm, rt)))
 							: Math.min(0.85, Math.max(0.01, swMin * 0.96));
+					const { fluid, pcLabCurve } = resolvePlugLabAndResPc(
+						plug,
+						sp.ift,
+						sp.theta,
+						plugFluidOverrides[normPid] ?? plugFluidOverrides[plug.plug_id]
+					);
 					const points = poreThroatDistribution(
-						plug.pc_curve ?? [],
+						pcLabCurve,
 						sw.map((value) =>
 							Number.isFinite(value) ? normalizedScalSaturation(value, swirr) : NaN
 						),
-						sp.ift,
-						sp.theta
+						fluid.iftLab,
+						fluid.thetaLab
 					);
 					return points.length ? [{ plug, index, rt, points }] : [];
 				});
@@ -7228,9 +7244,13 @@
 			void projectData.focusedScalPlugId;
 			void projectData.scalFilterRockType;
 			void projectData.shfParams.swirrSource;
+			void projectData.shfParams.fitScope;
 			void projectData.shfParams.jSatMode;
 			void projectData.shfParams.ift;
 			void projectData.shfParams.theta;
+			void projectData.swirrConfig.plugRtOverrides;
+			void projectData.swirrConfig.pointRtOverrides;
+			void projectData.swirrConfig.plugFluidOverrides;
 			void projectData.drtMethod;
 			void projectData.fziCutoffs;
 			void projectData.winlandCutoffs;
@@ -7261,10 +7281,14 @@
 			void projectData.focusedScalPlugId;
 			void projectData.scalFilterRockType;
 			void projectData.shfParams.swirrSource;
+			void projectData.shfParams.fitScope;
 			void projectData.shfParams.jSatMode;
 			void projectData.shfParams.fwl;
 			void projectData.shfParams.fwlByZone;
 			void projectData.shfParams.model;
+			void projectData.swirrConfig.plugRtOverrides;
+			void projectData.swirrConfig.pointRtOverrides;
+			void projectData.swirrConfig.plugFluidOverrides;
 			void shfView;
 			void shfLogScale;
 			void projectData.multiWellQaqcResult;

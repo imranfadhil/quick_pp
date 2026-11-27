@@ -179,11 +179,13 @@
 		projectData.error = null;
 		try {
 			const sp = projectData.shfParams;
+			const fitScope = sp.fitScope ?? 'per_rt';
 			const jSatMode = sp.jSatMode ?? 'swn';
 			// Prefer active in-memory fits (from SCAL or manual adjustments), falling back to restored fits from saved project params
 			const inMemoryFits =
 				!resetFits &&
 				projectData.shfResult?.model === sp.model &&
+				(projectData.shfResult?.fit_scope ?? 'per_rt') === fitScope &&
 				(sp.model !== 'leverett_j' ||
 					(projectData.shfResult?.j_sat_mode ?? 'swn') === jSatMode) &&
 				projectData.shfResult?.fits &&
@@ -195,6 +197,7 @@
 				!resetFits &&
 				saved &&
 				saved.model === sp.model &&
+				(saved.fit_scope ?? 'per_rt') === fitScope &&
 				(sp.model !== 'leverett_j' || (saved.j_sat_mode ?? 'swn') === jSatMode) &&
 				Object.keys(saved.fits ?? {}).length > 0
 					? saved.fits
@@ -210,6 +213,7 @@
 					min_depth: workbench.depthFilter?.min ?? null,
 					max_depth: workbench.depthFilter?.max ?? null,
 					model: sp.model,
+					fit_scope: fitScope,
 					j_sat_mode: jSatMode,
 					unit: sp.unit ?? 'metric',
 					drt_method: projectData.drtMethod,
@@ -236,6 +240,7 @@
 			};
 			projectData.shfResult = {
 				model: data.model ?? sp.model,
+				fit_scope: data.fit_scope ?? fitScope,
 				j_sat_mode: data.j_sat_mode ?? jSatMode,
 				fits: mergedFits,
 				fits_swn: data.fits_swn ?? (jSatMode === 'swn' ? mergedFits : undefined),
@@ -246,6 +251,7 @@
 			};
 			projectData.shfSavedFits = {
 				model: data.model ?? sp.model,
+				fit_scope: data.fit_scope ?? fitScope,
 				j_sat_mode: data.j_sat_mode ?? jSatMode,
 				fits: { ...mergedFits }
 			};
@@ -850,7 +856,12 @@
 				projectData.shfResult?.fits && Object.keys(projectData.shfResult.fits).length > 0
 					? projectData.shfResult.fits
 					: (projectData.shfSavedFits?.fits ?? {})}
+			{@const isGlobalFit =
+				(projectData.shfResult?.fit_scope ??
+					projectData.shfParams.fitScope ??
+					'per_rt') === 'global'}
 			{@const fitEntries = Object.entries(activeFits)}
+			{@const displayedFitEntries = isGlobalFit ? fitEntries.slice(0, 1) : fitEntries}
 			<ParameterSection title="Resultant SCAL Fit Parameters" badge={activeFormula}>
 				<div
 					class="mb-1.5 flex items-center justify-between text-[10px] text-[var(--text-secondary)]"
@@ -861,14 +872,29 @@
 							{projectData.shfResult?.scal_data?.pc?.length ?? 0}
 						</strong>
 					</span>
+					<div class="inline-flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]">
+						{#each [['global', 'Global Fit'], ['per_rt', 'Per-RT']] as [sKey, sLbl]}
+							<button
+								type="button"
+								onclick={() => projectData.setShfFitScope(sKey as 'global' | 'per_rt')}
+								class="px-1.5 py-0.5 text-[9.5px] font-medium first:border-r first:border-[var(--border-hairline)] {(projectData.shfParams.fitScope ?? 'per_rt') === sKey
+									? 'bg-[var(--accent-primary)] font-semibold text-white'
+									: 'text-[var(--text-secondary)] hover:bg-slate-100'}"
+							>
+								{sLbl}
+							</button>
+						{/each}
+					</div>
 				</div>
 
-				{#if fitEntries.length > 0}
+				{#if displayedFitEntries.length > 0}
 					<div class="overflow-x-auto border border-[var(--border-hairline)]">
 						<table class="w-full border-collapse text-left text-[11px]">
 							<thead class="bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
 								<tr class="h-6 border-b border-[var(--border-hairline)]">
-									<th class="px-1.5 font-semibold">RT</th>
+									<th class="px-1.5 font-semibold"
+										>{isGlobalFit ? 'Scope' : 'RT'}</th
+									>
 									<th class="px-1.5 text-right font-semibold">a</th>
 									<th class="px-1.5 text-right font-semibold">b</th>
 									{#if activeModel === 'skelt_harrison'}
@@ -882,16 +908,20 @@
 								</tr>
 							</thead>
 							<tbody class="divide-y divide-[var(--border-hairline)]">
-								{#each fitEntries as [rf, fit]}
-									{@const rtColor =
-										ROCK_COLORS[(Number(rf) - 1) % ROCK_COLORS.length] ??
-										'#2563eb'}
+								{#each displayedFitEntries as [rf, fit]}
+									{@const rtColor = isGlobalFit
+										? '#0F172A'
+										: (ROCK_COLORS[(Number(rf) - 1) % ROCK_COLORS.length] ??
+											'#2563eb')}
 									<tr class="h-6">
 										<td class="px-1.5 font-semibold whitespace-nowrap">
 											<span
 												class="mr-1 inline-block h-2 w-2 rounded-full"
 												style="background:{rtColor}"
-											></span>RT {rf}
+											></span
+											>{isGlobalFit
+												? `Global (RT 1..${fitEntries.length})`
+												: `RT ${rf}`}
 										</td>
 										<td
 											class="mono-num px-1.5 text-right text-[10px] font-medium text-[var(--text-primary)]"

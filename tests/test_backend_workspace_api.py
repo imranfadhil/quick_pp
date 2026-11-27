@@ -1573,6 +1573,57 @@ def test_end_to_end_workspace_compute_workflow(client_and_project):
         assert len(m_body["fits"]) >= 1
         assert len(m_body["data"]["shf"]) == 10
 
+    # 8b. Global SCAL Fit Scope (all RTs share identical fitted parameters) & Swirr plug overrides
+    r_shf_global = client.post(
+        f"/quick_pp/workspace/projects/{pid}/shf/compute",
+        json={
+            "fwl": 1020.0,
+            "model": "leverett_j",
+            "fit_scope": "global",
+            "cutoffs": [0.5, 1.5, 3.0],
+            "swirr_config": {
+                "pointRtOverrides": {"Well-A::SYN_RT1_1::0": 2},
+            },
+            "save": False,
+        },
+    )
+    assert r_shf_global.status_code == 200
+    g_body = r_shf_global.json()
+    assert g_body["fit_scope"] == "global"
+    g_fits = g_body["fits"]
+    assert len(g_fits) >= 2
+    first_fit = next(iter(g_fits.values()))
+    for fit_val in g_fits.values():
+        assert fit_val["a"] == first_fit["a"]
+        assert fit_val["b"] == first_fit["b"]
+
+    r_swirr_init = client.post(
+        f"/quick_pp/workspace/projects/{pid}/swirr/fit",
+        json={"pc_domain": "lab"},
+    )
+    assert r_swirr_init.status_code == 200
+    init_plugs = r_swirr_init.json()["plugs"]
+    assert len(init_plugs) >= 1
+    target_pid = init_plugs[0]["plug_id"]
+    orig_auto_rt = init_plugs[0]["auto_rt"]
+    new_target_rt = orig_auto_rt + 1
+
+    r_swirr_ov = client.post(
+        f"/quick_pp/workspace/projects/{pid}/swirr/fit",
+        json={
+            "pc_domain": "lab",
+            "plug_rt_overrides": {target_pid: new_target_rt},
+        },
+    )
+    assert r_swirr_ov.status_code == 200
+    swirr_ov_body = r_swirr_ov.json()
+    reassigned_plugs = [p for p in swirr_ov_body["plugs"] if p["plug_id"] == target_pid]
+    assert len(reassigned_plugs) == 1
+    assert reassigned_plugs[0]["rt"] == new_target_rt
+    assert reassigned_plugs[0]["auto_rt"] == orig_auto_rt
+    assert "pc_lab_curve" in reassigned_plugs[0]
+    assert "pc_res_curve" in reassigned_plugs[0]
+
     # 9. Columnar PUT well data
     r_put = client.put(
         f"/quick_pp/database/projects/{pid}/wells/Well-A/data",
@@ -2468,7 +2519,12 @@ def test_environmental_corrections_endpoint_returns_qc_and_weights_inputs(
     r1 = client.post(f"{base}/porosity", json={"method": "density", "save": False})
     r2 = client.post(
         f"{base}/porosity",
-        json={"method": "density", "save": False, "confidence_weighting": False, "use_env_corrected": False},
+        json={
+            "method": "density",
+            "save": False,
+            "confidence_weighting": False,
+            "use_env_corrected": False,
+        },
     )
     assert r1.status_code == 200 and r2.status_code == 200, (r1.text, r2.text)
     phit_w = r1.json()["data"].get("PHIT")

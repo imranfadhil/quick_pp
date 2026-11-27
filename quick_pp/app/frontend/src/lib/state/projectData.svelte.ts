@@ -4,7 +4,11 @@ import { appStatus } from './status.svelte';
 import { wellData } from './wellData.svelte';
 import { workbench, type MultiWellVolumetricResult } from './workbench.svelte';
 import { assignKnown, clone } from './moduleParams.svelte';
-import { normalizedScalSaturation } from '$lib/utils/poreThroat';
+import {
+	normalizedScalSaturation,
+	resolvePlugLabAndResPc,
+	type ScalFluidSystem
+} from '$lib/utils/poreThroat';
 import {
 	isProjectParamModuleKey,
 	PROJECT_PARAM_MODULE_KEYS,
@@ -153,6 +157,9 @@ export interface SwirrModelConfig {
 	rules: Record<string, SwirrCorrelationRule>;
 	excludedPlugIds: string[];
 	excludedScalPointIds?: string[];
+	plugRtOverrides?: Record<string, number>;
+	pointRtOverrides?: Record<string, number>;
+	plugFluidOverrides?: Record<string, ScalFluidSystem>;
 }
 
 export interface SwirrPlugRow {
@@ -162,6 +169,7 @@ export interface SwirrPlugRow {
 	depth: number;
 	zone?: string;
 	rt: number;
+	auto_rt?: number;
 	cpore: number;
 	cperm: number;
 	rqi_ratio: number;
@@ -169,6 +177,9 @@ export interface SwirrPlugRow {
 	fzi?: number;
 	max_pc: number;
 	experiment_type?: string;
+	fluid_system?: ScalFluidSystem;
+	ift_lab?: number;
+	theta_lab?: number;
 	pc_domain?: string;
 	sw_at_max_pc: number;
 	extracted_swirr: number;
@@ -178,6 +189,8 @@ export interface SwirrPlugRow {
 	excluded: boolean;
 	included: boolean;
 	pc_curve: number[];
+	pc_lab_curve?: number[];
+	pc_res_curve?: number[];
 	sw_curve: number[];
 }
 
@@ -444,6 +457,7 @@ class ProjectDataState {
 
 	shfParams = $state({
 		model: 'leverett_j' as 'leverett_j' | 'skelt_harrison' | 'cuddy',
+		fitScope: 'per_rt' as 'global' | 'per_rt',
 		jSatMode: 'swn' as 'swn' | 'sw',
 		swirrSource: 'lab_min' as 'lab_min' | 'poro_perm',
 		unit: 'metric' as 'metric' | 'imperial',
@@ -479,7 +493,10 @@ class ProjectDataState {
 			}
 		},
 		excludedPlugIds: [],
-		excludedScalPointIds: []
+		excludedScalPointIds: [],
+		plugRtOverrides: {},
+		pointRtOverrides: {},
+		plugFluidOverrides: {}
 	});
 
 	selectedScalPointIds = $state<string[]>([]);
@@ -506,7 +523,12 @@ class ProjectDataState {
 	/** Restored manually-edited perm-transform fits, consumed by the next perm-transform run. */
 	permTransformSavedFits: Record<string, { a: number; b: number }> | null = null;
 	/** Restored SHF fits, consumed by the next SHF run when no in-memory SHF result exists. */
-	shfSavedFits: { model: string; j_sat_mode: string; fits: Record<string, any> } | null = null;
+	shfSavedFits: {
+		model: string;
+		fit_scope?: 'global' | 'per_rt';
+		j_sat_mode: string;
+		fits: Record<string, any>;
+	} | null = null;
 
 	mwQaqcParams = $state<MultiWellQaqcParams>({
 		normMethod: 'quantile',
@@ -579,6 +601,7 @@ class ProjectDataState {
 
 	shfResult = $state.raw<{
 		model?: 'leverett_j' | 'skelt_harrison' | 'cuddy';
+		fit_scope?: 'global' | 'per_rt';
 		j_sat_mode?: 'swn' | 'sw';
 		fits: Record<
 			string,
@@ -623,6 +646,7 @@ class ProjectDataState {
 		contact_type?: string | null;
 		scal_data?: {
 			pc: number[];
+			pc_lab?: number[];
 			sw: number[];
 			swn: number[];
 			swirr_calc?: number[];
@@ -638,6 +662,7 @@ class ProjectDataState {
 			zones?: string[];
 			point_ids?: string[];
 			plug_ids?: string[];
+			fluid_systems?: string[];
 			excluded?: boolean[];
 		};
 		well_names: string[];
@@ -944,6 +969,7 @@ class ProjectDataState {
 						sr?.fits && Object.keys(sr.fits).length > 0
 							? {
 									model: sr.model ?? this.shfParams.model,
+									fit_scope: sr.fit_scope ?? this.shfParams.fitScope ?? 'per_rt',
 									j_sat_mode: sr.j_sat_mode ?? this.shfParams.jSatMode,
 									fits: clone(sr.fits)
 								}
@@ -1267,6 +1293,7 @@ class ProjectDataState {
 	/** Reset SHF model parameters, Leverett-J fits, and FWL datum (optionally clearing SHF / SW_SHF curves). */
 	async resetShf(clearWellCurves: boolean = false): Promise<void> {
 		this.shfParams.model = 'leverett_j';
+		this.shfParams.fitScope = 'per_rt';
 		this.shfParams.jSatMode = 'swn';
 		this.shfParams.swirrSource = 'lab_min';
 		this.shfParams.unit = 'metric';
@@ -1745,18 +1772,30 @@ class ProjectDataState {
 		if (!nextFits && sr.scal_data && Array.isArray(sr.scal_data.j)) {
 			const satArr = (mode === 'sw' ? sr.scal_data.sw : sr.scal_data.swn) || [];
 			const jArr = sr.scal_data.j || [];
-			const rfArr = sr.scal_data.rock_flags || [];
+			const rawRfArr = sr.scal_data.rock_flags || [];
+			const isGlobal = (this.shfParams.fitScope ?? sr.fit_scope ?? 'per_rt') === 'global';
+			const rfArr = isGlobal ? rawRfArr.map(() => 1) : rawRfArr;
 			const exclArr = sr.scal_data.excluded;
 			const computed = this.fitNonCrossingPowerLawByRf(
 				satArr,
 				jArr,
 				rfArr,
 				exclArr,
-				true,
+				!isGlobal,
 				true
 			);
 			if (Object.keys(computed).length > 0) {
-				nextFits = computed;
+				if (isGlobal && computed['1']) {
+					const rtKeys = Object.keys(sr.fits || {});
+					nextFits = Object.fromEntries(
+						(rtKeys.length > 0 ? rtKeys : ['1', '2', '3']).map((k) => [
+							k,
+							{ ...computed['1'] }
+						])
+					);
+				} else {
+					nextFits = computed;
+				}
 			}
 		}
 
@@ -1977,11 +2016,22 @@ class ProjectDataState {
 			(cfg.excludedPlugIds || []).map((id) => this.normalizeScalPlugId(id))
 		);
 
-		// 1. Re-extract Swirr per plug at referencePcPsi and respect active Well/Zone/Depth filters
+		// 1. Re-extract Swirr per plug at referencePcPsi and respect active Well/Zone/Depth filters & overrides
+		const plugRtOverrides = cfg.plugRtOverrides || {};
+		const plugFluidOverrides = cfg.plugFluidOverrides || {};
+		const pcDom = (cfg.pcDomain ?? 'lab') === 'reservoir' ? 'reservoir' : 'lab';
 		const updatedPlugs: SwirrPlugRow[] = sr.plugs.map((p) => {
 			const normPid = this.normalizeScalPlugId(p.plug_id, p.well, p.sample);
+			const legacyPid = `${p.well}:${p.sample}`;
 			const resolvedZone = this.resolveScalSampleZone(p.well, p.depth, p.zone);
-			const pcArr = p.pc_curve || [];
+			const flOv = plugFluidOverrides[normPid] ?? plugFluidOverrides[legacyPid];
+			const { fluid, pcLabCurve, pcResCurve } = resolvePlugLabAndResPc(
+				p,
+				this.shfParams.ift || 30.0,
+				this.shfParams.theta ?? 30.0,
+				flOv
+			);
+			const pcArr = pcDom === 'reservoir' ? pcResCurve : pcLabCurve;
 			const swArr = p.sw_curve || [];
 			const maxPc = pcArr.length > 0 ? Math.max(...pcArr) : p.max_pc;
 			const minSw = swArr.length > 0 ? Math.min(...swArr) : p.sw_at_max_pc;
@@ -2004,16 +2054,22 @@ class ProjectDataState {
 					if (den > 1e-8) {
 						const slope = Math.min(-0.01, num / den);
 						const intercept = my - slope * mx;
-						extSwirr = Math.min(0.99, Math.max(0.01, Math.exp(intercept + slope * Math.log(refPc))));
+						extSwirr = Math.min(
+							0.99,
+							Math.max(0.01, Math.exp(intercept + slope * Math.log(refPc)))
+						);
 					}
 				}
 			}
 			const isExcl = exclSet.has(normPid) || exclSet.has(p.plug_id);
 			const inFilter = this.isScalItemInActiveFilter(p.well, p.depth, resolvedZone);
-			const dynRt =
+			const autoRt =
 				p.cpore && p.cperm
-					? (this.classifyRockType(p.cpore, p.cperm) ?? p.rt ?? 1)
-					: (p.rt ?? 1);
+					? (this.classifyRockType(p.cpore, p.cperm) ?? p.auto_rt ?? p.rt ?? 1)
+					: (p.auto_rt ?? p.rt ?? 1);
+			const rtOv =
+				plugRtOverrides[normPid] ?? plugRtOverrides[p.plug_id] ?? plugRtOverrides[legacyPid];
+			const dynRt = typeof rtOv === 'number' && Number.isFinite(rtOv) && rtOv >= 1 ? rtOv : autoRt;
 			const phiCl = Math.max(1e-4, p.cpore || 0.15);
 			const kCl = Math.max(1e-4, p.cperm || 10.0);
 			const rqiCl = 0.0314 * Math.sqrt(kCl / phiCl);
@@ -2023,7 +2079,15 @@ class ProjectDataState {
 				...p,
 				plug_id: normPid,
 				zone: resolvedZone,
+				auto_rt: autoRt,
 				rt: dynRt,
+				fluid_system: fluid.system,
+				ift_lab: fluid.iftLab,
+				theta_lab: fluid.thetaLab,
+				pc_domain: pcDom,
+				pc_curve: pcArr.map((v) => Number(v.toFixed(4))),
+				pc_lab_curve: pcLabCurve.map((v) => Number(v.toFixed(4))),
+				pc_res_curve: pcResCurve.map((v) => Number(v.toFixed(4))),
 				fzi: Number(fziCl.toFixed(3)),
 				max_pc: Number(maxPc.toFixed(2)),
 				sw_at_max_pc: Number(minSw.toFixed(4)),
@@ -2241,6 +2305,8 @@ class ProjectDataState {
 					swirr_min: cfg.swirrMin,
 					swirr_max: cfg.swirrMax,
 					excluded_plug_ids: cfg.excludedPlugIds,
+					plug_rt_overrides: cfg.plugRtOverrides,
+					plug_fluid_overrides: cfg.plugFluidOverrides,
 					rules: cfg.rules,
 					auto_fit: !this.swirrManualRuleOverride,
 					drt_method: this.drtMethod,
@@ -2269,16 +2335,17 @@ class ProjectDataState {
 
 		const sp = this.shfParams;
 		const activeModel = sp.model ?? 'leverett_j';
+		const fitScope = sp.fitScope ?? 'per_rt';
+		const isGlobalScope = fitScope === 'global';
 		const jSatMode = sp.jSatMode ?? 'swn';
 		const swirrSource = sp.swirrSource ?? 'lab_min';
-		const iftCos = Math.max(
-			1e-4,
-			(sp.ift || 30.0) * Math.cos(((sp.theta ?? 30.0) * Math.PI) / 180.0)
-		);
+		const resIft = sp.ift || 30.0;
+		const resTheta = sp.theta ?? 30.0;
 		const conv = (sp.unit ?? 'metric') === 'metric' ? 0.433 * 3.28084 : 0.433;
 		const gradPsi = Math.max(1e-4, ((sp.gw ?? 1.05) - (sp.ghc ?? 0.8)) * conv);
 
 		const pcArr: number[] = [];
+		const pcLabArr: number[] = [];
 		const swArr: number[] = [];
 		const swnArr: number[] = [];
 		const swirrCalcArr: number[] = [];
@@ -2294,6 +2361,7 @@ class ProjectDataState {
 		const zoneArr: string[] = [];
 		const pointIdArr: string[] = [];
 		const plugIdArr: string[] = [];
+		const fluidSysArr: string[] = [];
 		const excludedArr: boolean[] = [];
 
 		const excludedPtsSet = new Set(
@@ -2302,20 +2370,40 @@ class ProjectDataState {
 		const excludedPlugsSet = new Set(
 			(this.swirrConfig.excludedPlugIds || []).map((id) => this.normalizeScalPlugId(id))
 		);
+		const plugRtOverrides = this.swirrConfig.plugRtOverrides || {};
+		const pointRtOverrides = this.swirrConfig.pointRtOverrides || {};
+		const plugFluidOverrides = this.swirrConfig.plugFluidOverrides || {};
 
 		for (const p of sr.plugs) {
 			const pZone = this.resolveScalSampleZone(p.well, p.depth, p.zone);
 			if (!this.isScalItemInActiveFilter(p.well, p.depth, pZone)) continue;
-			const pCurve = p.pc_curve || [];
 			const sCurve = p.sw_curve || [];
 			const phi = Math.max(1e-4, p.cpore || 0.15);
 			const k = Math.max(1e-4, p.cperm || 10.0);
-			const rf =
-				p.cpore && p.cperm
-					? (this.classifyRockType(p.cpore, p.cperm) ?? p.rt ?? 1)
-					: (p.rt ?? 1);
 			const plugId = this.normalizeScalPlugId(p.plug_id, p.well, p.sample);
 			const legacyPlugId = `${p.well}:${p.sample}`;
+			const autoRf =
+				p.cpore && p.cperm
+					? (this.classifyRockType(p.cpore, p.cperm) ?? p.auto_rt ?? p.rt ?? 1)
+					: (p.auto_rt ?? p.rt ?? 1);
+			const plugRtOv =
+				plugRtOverrides[plugId] ?? plugRtOverrides[p.plug_id] ?? plugRtOverrides[legacyPlugId];
+			const baseRf =
+				typeof plugRtOv === 'number' && Number.isFinite(plugRtOv) && plugRtOv >= 1
+					? plugRtOv
+					: autoRf;
+
+			const flOv =
+				plugFluidOverrides[plugId] ??
+				plugFluidOverrides[p.plug_id] ??
+				plugFluidOverrides[legacyPlugId];
+			const { fluid, pcLabCurve, pcResCurve } = resolvePlugLabAndResPc(
+				p,
+				resIft,
+				resTheta,
+				flOv
+			);
+
 			const isPlugExcluded =
 				Boolean(p.excluded) ||
 				excludedPlugsSet.has(plugId) ||
@@ -2325,27 +2413,40 @@ class ProjectDataState {
 
 			const swirrNorm =
 				swirrSource === 'poro_perm'
-					? Math.min(0.85, Math.max(0.01, this.evalSwirrValue(phi, k, rf)))
+					? Math.min(0.85, Math.max(0.01, this.evalSwirrValue(phi, k, baseRf)))
 					: Math.min(0.85, Math.max(0.01, swMinPlug * 0.96));
 
-			for (let i = 0; i < Math.min(pCurve.length, sCurve.length); i++) {
-				const pc = Number(pCurve[i]);
+			const nSteps = Math.min(pcLabCurve.length, pcResCurve.length, sCurve.length);
+			for (let i = 0; i < nSteps; i++) {
+				const pcLab = Number(pcLabCurve[i]);
+				const pcRes = Number(pcResCurve[i]);
 				const sw = Number(sCurve[i]);
-				if (!Number.isFinite(pc) || !Number.isFinite(sw) || pc <= 0 || sw <= 0) continue;
+				if (!Number.isFinite(pcLab) || !Number.isFinite(pcRes) || !Number.isFinite(sw))
+					continue;
+				if (pcLab <= 0 || pcRes <= 0 || sw <= 0) continue;
 				const swn = normalizedScalSaturation(sw, swirrNorm);
-				const j = (0.2166 * pc * Math.sqrt(k / phi)) / iftCos;
-				const h = pc / gradPsi;
+				// Leverett-J uses plug's true lab Pc & method-specific lab IFT*|cos(theta)|
+				const j = (0.2166 * pcLab * Math.sqrt(k / phi)) / fluid.labIftCos;
+				const h = pcRes / gradPsi;
 				const bvw = phi * sw;
 				const ptId = `${plugId}::${i}`;
 				const legacyPtId = `${legacyPlugId}::${i}`;
-				const ptIdByPc = `${plugId}::${Number(pc.toFixed(2))}`;
+				const ptIdByPcRes = `${plugId}::${Number(pcRes.toFixed(2))}`;
+				const ptIdByPcLab = `${plugId}::${Number(pcLab.toFixed(2))}`;
 				const isPtExcluded =
 					isPlugExcluded ||
 					excludedPtsSet.has(ptId) ||
 					excludedPtsSet.has(legacyPtId) ||
-					excludedPtsSet.has(ptIdByPc);
+					excludedPtsSet.has(ptIdByPcRes) ||
+					excludedPtsSet.has(ptIdByPcLab);
+				const ptRtOv = pointRtOverrides[ptId] ?? pointRtOverrides[legacyPtId];
+				const ptRf =
+					typeof ptRtOv === 'number' && Number.isFinite(ptRtOv) && ptRtOv >= 1
+						? ptRtOv
+						: baseRf;
 
-				pcArr.push(Number(pc.toFixed(3)));
+				pcArr.push(Number(pcRes.toFixed(3)));
+				pcLabArr.push(Number(pcLab.toFixed(3)));
 				swArr.push(Number(sw.toFixed(4)));
 				swnArr.push(Number(swn.toFixed(4)));
 				swirrCalcArr.push(Number(swirrNorm.toFixed(4)));
@@ -2354,18 +2455,23 @@ class ProjectDataState {
 				bvwArr.push(Number(bvw.toFixed(4)));
 				phitArr.push(Number(phi.toFixed(4)));
 				permArr.push(Number(k.toFixed(3)));
-				rfArr.push(rf);
+				rfArr.push(ptRf);
 				wellArr.push(p.well);
 				sampleArr.push(p.sample);
 				depthArr.push(Number((p.depth ?? 0).toFixed(2)));
 				zoneArr.push(pZone);
 				pointIdArr.push(ptId);
 				plugIdArr.push(plugId);
+				fluidSysArr.push(fluid.system);
 				excludedArr.push(isPtExcluded);
 			}
 		}
 
-		const fitSkeltByRf = (): Record<
+		const fitRfInput = isGlobalScope ? rfArr.map(() => 1) : rfArr;
+
+		const fitSkeltByRf = (
+			rfGrouping: number[]
+		): Record<
 			string,
 			{ a: number; b: number; c?: number; d?: number; rmse?: number; r2?: number; count?: number }
 		> => {
@@ -2374,7 +2480,7 @@ class ProjectDataState {
 				if (excludedArr[i]) continue;
 				const hv = hArr[i];
 				const sv = swArr[i];
-				const rf = rfArr[i] ?? 1;
+				const rf = rfGrouping[i] ?? 1;
 				if (hv > 0 && sv > 0 && sv <= 1.0) {
 					if (!byRf.has(rf)) byRf.set(rf, { h: [], sw: [] });
 					const g = byRf.get(rf)!;
@@ -2423,36 +2529,60 @@ class ProjectDataState {
 			return out;
 		};
 
-		const fitsSwn = this.fitNonCrossingPowerLawByRf(
-			swnArr,
-			jArr,
-			rfArr,
-			excludedArr,
-			true,
-			true
+		const numCutoffs = (this.activeDrtCutoffs || []).length;
+		const cutoffRts = Array.from({ length: Math.max(3, numCutoffs + 1) }, (_, i) => i + 1);
+		const plugRts = (sr.plugs || [])
+			.map((p) => {
+				const pid = this.normalizeScalPlugId(p.plug_id, p.well, p.sample);
+				return plugRtOverrides[pid] ?? p.rt;
+			})
+			.filter((r): r is number => r != null && Number.isFinite(r));
+		const ptRts = rfArr.filter((r) => r != null && Number.isFinite(r));
+		const allRts = Array.from(new Set([...cutoffRts, ...plugRts, ...ptRts])).sort(
+			(a, b) => a - b
 		);
-		const fitsSw = this.fitNonCrossingPowerLawByRf(
-			swArr,
-			jArr,
-			rfArr,
-			excludedArr,
-			true,
-			true
+
+		const expandGlobalFit = <T extends Record<string, any>>(rawMap: Record<string, T>): Record<string, T> => {
+			if (!isGlobalScope) return rawMap;
+			const shared = rawMap['1'] ?? Object.values(rawMap)[0];
+			if (!shared) return rawMap;
+			const expanded: Record<string, T> = {};
+			for (const rt of allRts) {
+				expanded[String(rt)] = { ...shared };
+			}
+			return expanded;
+		};
+
+		const fitsSwn = expandGlobalFit(
+			this.fitNonCrossingPowerLawByRf(
+				swnArr,
+				jArr,
+				fitRfInput,
+				excludedArr,
+				!isGlobalScope,
+				true
+			)
 		);
-		const fitsCuddy = this.fitNonCrossingPowerLawByRf(
-			pcArr,
-			bvwArr,
-			rfArr,
-			excludedArr,
-			false,
-			false
+		const fitsSw = expandGlobalFit(
+			this.fitNonCrossingPowerLawByRf(
+				swArr,
+				jArr,
+				fitRfInput,
+				excludedArr,
+				!isGlobalScope,
+				true
+			)
 		);
-		const fitsSkelt = fitSkeltByRf();
+		const fitsCuddy = expandGlobalFit(
+			this.fitNonCrossingPowerLawByRf(pcArr, bvwArr, fitRfInput, excludedArr, false, false)
+		);
+		const fitsSkelt = expandGlobalFit(fitSkeltByRf(fitRfInput));
 
 		const existing = this.shfResult;
 		const keepExistingFits =
 			!resetFits &&
 			existing?.model === activeModel &&
+			(existing?.fit_scope ?? 'per_rt') === fitScope &&
 			existing?.fits &&
 			Object.keys(existing.fits).length > 0;
 
@@ -2465,12 +2595,6 @@ class ProjectDataState {
 					: { ...fitsCuddy };
 
 		// Ensure every rock type in allRts has an entry in nextFits
-		const numCutoffs = (this.activeDrtCutoffs || []).length;
-		const cutoffRts = Array.from({ length: Math.max(3, numCutoffs + 1) }, (_, i) => i + 1);
-		const plugRts = (sr.plugs || [])
-			.map((p) => p.rt)
-			.filter((r) => r != null && Number.isFinite(r));
-		const allRts = Array.from(new Set([...cutoffRts, ...plugRts])).sort((a, b) => a - b);
 		for (const rt of allRts) {
 			const rtKey = String(rt);
 			if (!nextFits[rtKey]) {
@@ -2481,13 +2605,14 @@ class ProjectDataState {
 					Object.values(nextFits)[0] || { a: 0.1, b: 1.5, count: 0, r2: 0, rmse: 0 };
 				nextFits[rtKey] = {
 					...fallbackFit,
-					count: 0
+					count: isGlobalScope ? (fallbackFit.count ?? 0) : 0
 				};
 			}
 		}
 
 		this.shfResult = {
 			model: activeModel,
+			fit_scope: fitScope,
 			j_sat_mode: jSatMode,
 			fits: nextFits,
 			fits_swn: fitsSwn,
@@ -2495,6 +2620,7 @@ class ProjectDataState {
 			fwl_by_zone: existing?.fwl_by_zone ?? this.shfParams.fwlByZone,
 			scal_data: {
 				pc: pcArr,
+				pc_lab: pcLabArr,
 				sw: swArr,
 				swn: swnArr,
 				swirr_calc: swirrCalcArr,
@@ -2510,6 +2636,7 @@ class ProjectDataState {
 				zones: zoneArr,
 				point_ids: pointIdArr,
 				plug_ids: plugIdArr,
+				fluid_systems: fluidSysArr,
 				excluded: excludedArr
 			},
 			well_names: existing?.well_names ?? [],
@@ -2522,9 +2649,106 @@ class ProjectDataState {
 		};
 		this.shfSavedFits = {
 			model: activeModel,
+			fit_scope: fitScope,
 			j_sat_mode: jSatMode,
 			fits: { ...nextFits }
 		};
+	}
+
+	setShfFitScope(scope: 'global' | 'per_rt') {
+		if ((this.shfParams.fitScope ?? 'per_rt') === scope && this.shfResult?.fit_scope === scope) {
+			return;
+		}
+		this.shfParams.fitScope = scope;
+		this.shfManualFitOverride = false;
+		this.recomputeScalFitsFromPlugs(true);
+		void this.persistProjectParams([], ['swirr-corr', 'shf']);
+	}
+
+	setPlugRtOverride(plugId: string, rt: number | 'auto') {
+		const id = this.normalizeScalPlugId(plugId);
+		if (!id) return;
+		const next = { ...(this.swirrConfig.plugRtOverrides || {}) };
+		if (rt === 'auto' || !Number.isFinite(rt) || rt < 1) {
+			delete next[id];
+		} else {
+			next[id] = Math.round(rt);
+		}
+		this.swirrConfig.plugRtOverrides = next;
+		this.swirrManualRuleOverride = false;
+		this.shfManualFitOverride = false;
+		this.recomputeSwirrClientSide(true);
+		void this.persistProjectParams([], ['swirr-corr', 'shf']);
+	}
+
+	setPlugFluidOverride(plugId: string, system: ScalFluidSystem | 'auto') {
+		const id = this.normalizeScalPlugId(plugId);
+		if (!id) return;
+		const next = { ...(this.swirrConfig.plugFluidOverrides || {}) };
+		if (system === 'auto') {
+			delete next[id];
+		} else {
+			next[id] = system;
+		}
+		this.swirrConfig.plugFluidOverrides = next;
+		this.swirrManualRuleOverride = false;
+		this.shfManualFitOverride = false;
+		this.recomputeSwirrClientSide(true);
+		void this.persistProjectParams([], ['swirr-corr', 'shf']);
+	}
+
+	assignSelectedScalToRt(targetRt: number, mode: 'plug' | 'point' = 'plug') {
+		const rtInt = Math.max(1, Math.round(targetRt));
+		if (!Number.isFinite(rtInt) || this.selectedScalPointIds.length === 0) return;
+		if (mode === 'point') {
+			const nextPts = { ...(this.swirrConfig.pointRtOverrides || {}) };
+			for (const ptId of this.selectedScalPointIds) {
+				const cleanId = String(ptId || '').trim();
+				if (cleanId) nextPts[cleanId] = rtInt;
+			}
+			this.swirrConfig.pointRtOverrides = nextPts;
+			this.shfManualFitOverride = false;
+			this.selectedScalPointIds = [];
+			this.recomputeScalFitsFromPlugs(true);
+			void this.persistProjectParams([], ['swirr-corr', 'shf']);
+			return;
+		}
+		const nextPlugs = { ...(this.swirrConfig.plugRtOverrides || {}) };
+		for (const ptId of this.selectedScalPointIds) {
+			const parts = String(ptId || '').split('::');
+			if (parts.length >= 2) {
+				const pid = `${parts[0]}::${parts[1]}`;
+				nextPlugs[pid] = rtInt;
+			}
+		}
+		this.swirrConfig.plugRtOverrides = nextPlugs;
+		this.swirrManualRuleOverride = false;
+		this.shfManualFitOverride = false;
+		this.selectedScalPointIds = [];
+		this.recomputeSwirrClientSide(true);
+		void this.persistProjectParams([], ['swirr-corr', 'shf']);
+	}
+
+	clearPointRtOverride(pointId?: string) {
+		if (!pointId) {
+			this.swirrConfig.pointRtOverrides = {};
+		} else {
+			const next = { ...(this.swirrConfig.pointRtOverrides || {}) };
+			delete next[pointId];
+			this.swirrConfig.pointRtOverrides = next;
+		}
+		this.shfManualFitOverride = false;
+		this.recomputeScalFitsFromPlugs(true);
+		void this.persistProjectParams([], ['swirr-corr', 'shf']);
+	}
+
+	clearAllRtOverrides() {
+		this.swirrConfig.plugRtOverrides = {};
+		this.swirrConfig.pointRtOverrides = {};
+		this.swirrManualRuleOverride = false;
+		this.shfManualFitOverride = false;
+		this.recomputeSwirrClientSide(true);
+		void this.persistProjectParams([], ['swirr-corr', 'shf']);
 	}
 
 	toggleSwirrPlugExclusion(plugId: string) {

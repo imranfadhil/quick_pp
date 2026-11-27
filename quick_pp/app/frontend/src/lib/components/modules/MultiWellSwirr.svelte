@@ -16,6 +16,7 @@
 	import { workbench } from '$lib/state/workbench.svelte';
 	import { fmtNum } from '$lib/utils/formatters';
 	import { getRockTypeColor } from '$lib/utils/petrophysicsColors';
+	import { SCAL_FLUID_SYSTEM_OPTIONS, type ScalFluidSystem } from '$lib/utils/poreThroat';
 
 	let isApplying = $state(false);
 	let copiedSwof = $state(false);
@@ -272,6 +273,8 @@
 					swirr_min: cfg.swirrMin,
 					swirr_max: cfg.swirrMax,
 					excluded_plug_ids: cfg.excludedPlugIds,
+					plug_rt_overrides: cfg.plugRtOverrides,
+					plug_fluid_overrides: cfg.plugFluidOverrides,
 					rules: cfg.rules,
 					auto_fit: autoFit,
 					drt_method: projectData.drtMethod,
@@ -316,6 +319,8 @@
 					swirr_min: cfg.swirrMin,
 					swirr_max: cfg.swirrMax,
 					excluded_plug_ids: cfg.excludedPlugIds,
+					plug_rt_overrides: cfg.plugRtOverrides,
+					plug_fluid_overrides: cfg.plugFluidOverrides,
 					rules: cfg.rules,
 					auto_fit: !projectData.swirrManualRuleOverride,
 					drt_method: projectData.drtMethod,
@@ -463,35 +468,61 @@
 		projectData.shfParams.model = m;
 		projectData.shfManualFitOverride = false;
 		workbench.swirrCrossplotTab = 'scal-fit';
+		projectData.recomputeScalFitsFromPlugs(true);
 	}
 
 	function updateShfFitParam(rf: string, paramKey: 'a' | 'b' | 'c' | 'd', rawVal: string) {
 		const num = Number(rawVal);
-		if (!Number.isFinite(num) || !projectData.shfResult?.fits?.[rf]) return;
+		const existingFits = projectData.shfResult?.fits;
+		if (!Number.isFinite(num) || !existingFits || !projectData.shfResult) return;
+		const isGlobalScope = (projectData.shfParams.fitScope ?? 'per_rt') === 'global';
+		const baseEntry =
+			existingFits[rf] ?? existingFits['1'] ?? Object.values(existingFits)[0];
+		if (!baseEntry) return;
 		projectData.shfManualFitOverride = true;
-		const nextEntry = {
-			...projectData.shfResult.fits[rf],
-			[paramKey]: num
-		};
-		const nextFits = {
-			...projectData.shfResult.fits,
-			[rf]: nextEntry
-		};
+		let nextFits: Record<string, any>;
+		if (isGlobalScope) {
+			nextFits = Object.fromEntries(
+				Object.entries(existingFits).map(([k, entry]) => [
+					k,
+					{ ...entry, [paramKey]: num }
+				])
+			);
+		} else {
+			nextFits = {
+				...existingFits,
+				[rf]: {
+					...baseEntry,
+					[paramKey]: num
+				}
+			};
+		}
 		const isSwMode = (projectData.shfParams.jSatMode ?? 'swn') === 'sw';
 		projectData.shfResult = {
 			...projectData.shfResult,
+			fit_scope: projectData.shfParams.fitScope ?? 'per_rt',
 			fits: nextFits,
 			fits_swn: isSwMode ? projectData.shfResult.fits_swn : nextFits,
 			fits_sw: isSwMode ? nextFits : projectData.shfResult.fits_sw
 		};
 		projectData.shfSavedFits = {
 			model: projectData.shfParams.model,
+			fit_scope: projectData.shfParams.fitScope ?? 'per_rt',
 			j_sat_mode: projectData.shfParams.jSatMode ?? 'swn',
 			fits: { ...nextFits }
 		};
 		workbench.swirrCrossplotTab = 'scal-fit';
 		void projectData.persistProjectParams([], ['swirr-corr', 'shf']);
 	}
+
+	let availableRtNumbers = $derived.by(() => {
+		const nCut = (projectData.activeDrtCutoffs || []).length;
+		const baseRts = Array.from({ length: Math.max(3, nCut + 1) }, (_, i) => i + 1);
+		const plugRts = (projectData.swirrResult?.plugs ?? [])
+			.map((p) => p.rt)
+			.filter((r): r is number => typeof r === 'number' && Number.isFinite(r) && r >= 1);
+		return Array.from(new Set([...baseRts, ...plugRts])).sort((a, b) => a - b);
+	});
 
 	function clearExcludedPlugs() {
 		projectData.swirrConfig.excludedPlugIds = [];
@@ -960,32 +991,71 @@
 						{/each}
 					</div>
 
-					{#if activeShfModel === 'leverett_j'}
-						<div class="mt-2 grid grid-cols-2 gap-2">
-							<NumericScrubber
-								label="IFT"
-								bind:value={projectData.shfParams.ift}
-								unit="dyn/cm"
-								min={1.0}
-								max={80.0}
-								step={0.5}
-								onchange={() => {
-									projectData.shfManualFitOverride = false;
-								}}
-							/>
-							<NumericScrubber
-								label="Contact Angle (θ)"
-								bind:value={projectData.shfParams.theta}
-								unit="deg"
-								min={0}
-								max={90}
-								step={1.0}
-								onchange={() => {
-									projectData.shfManualFitOverride = false;
-								}}
-							/>
+					<div class="mt-2">
+						<span
+							class="mb-1 block text-[10px] font-semibold tracking-wider text-[var(--text-muted)] uppercase"
+						>
+							Fit Scope
+						</span>
+						<div class="grid grid-cols-2 gap-1">
+							{#each [['global', 'Global Fit (1 Shared Curve)'], ['per_rt', 'Per Rock Type (RT 1..N)']] as [sKey, sLbl]}
+								<button
+									type="button"
+									onclick={() => {
+										workbench.swirrCrossplotTab = 'scal-fit';
+										projectData.setShfFitScope(sKey as 'global' | 'per_rt');
+									}}
+									class="h-6 rounded-sm border text-[10px] font-medium transition-colors {(projectData
+										.shfParams.fitScope ?? 'per_rt') === sKey
+										? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
+										: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-50'}"
+								>
+									{sLbl}
+								</button>
+							{/each}
 						</div>
+					</div>
 
+					<div class="mt-2 grid grid-cols-2 gap-2">
+						<NumericScrubber
+							label="Res IFT (σ_res)"
+							bind:value={projectData.shfParams.ift}
+							unit="dyn/cm"
+							min={1.0}
+							max={80.0}
+							step={0.5}
+							onchange={() => {
+								projectData.shfManualFitOverride = false;
+								projectData.recomputeScalFitsFromPlugs(true);
+							}}
+						/>
+						<NumericScrubber
+							label="Res Angle (θ_res)"
+							bind:value={projectData.shfParams.theta}
+							unit="deg"
+							min={0}
+							max={90}
+							step={1.0}
+							onchange={() => {
+								projectData.shfManualFitOverride = false;
+								projectData.recomputeScalFitsFromPlugs(true);
+							}}
+						/>
+					</div>
+					<p class="mt-0.5 text-[9.5px] leading-snug text-[var(--text-muted)]">
+						{#if activeShfModel === 'leverett_j'}
+							Each sample uses its own lab fluid pair (MICP / Air–Brine / Lab Oil) to
+							compute dimensionless <span class="mono-num font-semibold">J</span>;
+							<span class="mono-num">σ_res, θ_res</span> apply to Reservoir-fluid samples
+							and downstream SHF height conversion.
+						{:else}
+							Each sample's lab Pc is scaled to <span class="mono-num font-semibold"
+								>Pc_res</span
+							> using its lab fluid pair and <span class="mono-num">σ_res, θ_res</span>.
+						{/if}
+					</p>
+
+					{#if activeShfModel === 'leverett_j'}
 						{#if !isSwMode}
 							<div class="mt-1.5">
 								<div class="mb-1 flex items-center justify-between text-[10px]">
@@ -1199,12 +1269,44 @@
 
 						{#if projectData.selectedScalPointIds.length > 0}
 							<div
-								class="mt-1.5 flex items-center justify-between rounded-xs border border-amber-300 bg-amber-100/70 px-1.5 py-1 text-[9.5px] text-amber-950"
+								class="mt-1.5 flex flex-wrap items-center justify-between gap-1 rounded-xs border border-amber-300 bg-amber-100/70 px-1.5 py-1 text-[9.5px] text-amber-950"
 							>
 								<span class="font-semibold">
 									{projectData.selectedScalPointIds.length} pts selected
 								</span>
-								<div class="flex items-center gap-1">
+								<div class="flex flex-wrap items-center gap-1">
+									<select
+										class="h-5 rounded-xs border border-blue-400 bg-white px-1 text-[9px] font-semibold text-blue-900 focus:outline-none"
+										title="Reassign the Core Sample(s) of the selected points to another Rock Type"
+										onchange={(e) => {
+											const val = Number(e.currentTarget.value);
+											if (Number.isFinite(val) && val >= 1) {
+												projectData.assignSelectedScalToRt(val, 'plug');
+											}
+											e.currentTarget.value = '';
+										}}
+									>
+										<option value="">Sample → RT...</option>
+										{#each availableRtNumbers as rtOpt (rtOpt)}
+											<option value={rtOpt}>Sample → RT {rtOpt}</option>
+										{/each}
+									</select>
+									<select
+										class="h-5 rounded-xs border border-indigo-400 bg-white px-1 text-[9px] font-semibold text-indigo-900 focus:outline-none"
+										title="Reassign only the selected individual datapoints to another Rock Type"
+										onchange={(e) => {
+											const val = Number(e.currentTarget.value);
+											if (Number.isFinite(val) && val >= 1) {
+												projectData.assignSelectedScalToRt(val, 'point');
+											}
+											e.currentTarget.value = '';
+										}}
+									>
+										<option value="">Pts → RT...</option>
+										{#each availableRtNumbers as rtOpt (rtOpt)}
+											<option value={rtOpt}>Pts → RT {rtOpt}</option>
+										{/each}
+									</select>
 									<button
 										type="button"
 										onclick={() => {
@@ -1237,6 +1339,11 @@
 						{/if}
 
 						{#if allPlugs.length > 0 || rawPlugs.length > 0}
+							{@const plugRtOvMap = projectData.swirrConfig.plugRtOverrides ?? {}}
+							{@const ptRtOvMap = projectData.swirrConfig.pointRtOverrides ?? {}}
+							{@const plugFlOvMap = projectData.swirrConfig.plugFluidOverrides ?? {}}
+							{@const rtOverrideCount =
+								Object.keys(plugRtOvMap).length + Object.keys(ptRtOvMap).length}
 							<details
 								class="mt-1.5 border-t border-[var(--border-hairline)] pt-1"
 								open
@@ -1256,6 +1363,20 @@
 										{/if})
 									</span>
 									<div class="flex items-center gap-1">
+										{#if rtOverrideCount > 0}
+											<button
+												type="button"
+												onclick={(e) => {
+													e.preventDefault();
+													e.stopPropagation();
+													projectData.clearAllRtOverrides();
+												}}
+												class="py-0.2 rounded-xs bg-indigo-100 px-1 font-mono text-[8.5px] font-semibold text-indigo-800 hover:bg-indigo-200"
+												title="Reset all manual sample and datapoint Rock Type reassignments back to auto DRT"
+											>
+												Reset RT ({rtOverrideCount}) ×
+											</button>
+										{/if}
 										{#if projectData.focusedScalPlugId}
 											<button
 												type="button"
@@ -1282,7 +1403,7 @@
 									</div>
 								</summary>
 								<div
-									class="mt-1 max-h-44 overflow-y-auto rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]"
+									class="mt-1 max-h-48 overflow-y-auto rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]"
 								>
 									<table class="w-full border-collapse text-left text-[9.5px]">
 										<thead
@@ -1301,9 +1422,16 @@
 												>
 												<th class="px-1 font-semibold">Sample</th>
 												<th class="px-1 font-semibold">Well</th>
-												<th class="px-1 font-semibold">Zone</th>
-												<th class="px-1 text-right font-semibold">Depth</th>
-												<th class="px-1 text-center font-semibold">RT</th>
+												<th
+													class="px-1 font-semibold"
+													title="Laboratory fluid system used for Leverett-J and Reservoir Pc scaling"
+													>Method</th
+												>
+												<th
+													class="px-1 text-center font-semibold"
+													title="Rock Type assignment (click dropdown to reassign sample to another RT)"
+													>RT</th
+												>
 												<th class="px-1 text-right font-semibold">φ</th>
 												<th class="px-1 text-right font-semibold">k</th>
 												<th class="px-1 text-right font-semibold">Pts</th>
@@ -1328,7 +1456,16 @@
 														plug.depth,
 														plug.zone
 													)}
-												{@const rtColor = getRockTypeColor(plug.rt ?? 1)}
+												{@const autoRt = plug.auto_rt ?? plug.rt ?? 1}
+												{@const activeRt = plug.rt ?? 1}
+												{@const hasRtOverride = plugRtOvMap[normPid] != null}
+												{@const activeFluid =
+													plugFlOvMap[normPid] ?? 'auto'}
+												{@const detectedFluidLabel =
+													SCAL_FLUID_SYSTEM_OPTIONS.find(
+														(o) => o.key === (plug.fluid_system ?? 'air_brine')
+													)?.shortLabel ?? 'Air–Brine'}
+												{@const rtColor = getRockTypeColor(activeRt)}
 												<tr
 													class="h-5 cursor-pointer transition-colors {isFocused
 														? 'bg-blue-50/90 font-semibold text-blue-950'
@@ -1338,7 +1475,7 @@
 													onclick={() => {
 														projectData.toggleFocusedScalPlug(normPid);
 													}}
-													title="Click row to spotlight {plug.well} · {plug.sample} on crossplot; use checkbox to include/exclude"
+													title="{plug.well} · {plug.sample} ({plugZone}, {fmtNum(plug.depth, 1)}m) — click row to spotlight on crossplot"
 												>
 													<td
 														class="px-1 text-center"
@@ -1370,23 +1507,79 @@
 														>{plug.sample}</td
 													>
 													<td
-														class="max-w-[60px] truncate px-1"
-														title={plug.well}>{plug.well}</td
+														class="max-w-[56px] truncate px-1"
+														title="{plug.well} · {plugZone} @ {fmtNum(plug.depth, 1)}m"
+														>{plug.well}</td
 													>
 													<td
-														class="max-w-[54px] truncate px-1 text-[9px] text-[var(--text-secondary)]"
-														title={plugZone}
+														class="px-0.5"
+														onclick={(e) => e.stopPropagation()}
 													>
-														{plugZone}
+														<select
+															class="h-4.5 max-w-[68px] rounded-xs border px-0.5 text-[8.5px] focus:outline-none {activeFluid !==
+															'auto'
+																? 'border-blue-400 bg-blue-50 font-semibold text-blue-900'
+																: 'border-transparent bg-transparent text-[var(--text-secondary)] hover:border-slate-300'}"
+															value={activeFluid}
+															title="Lab fluid pair for {plug.sample} (detected: {plug.experiment_type || 'porous_plate'})"
+															onchange={(e) => {
+																const v = e.currentTarget.value as
+																	| ScalFluidSystem
+																	| 'auto';
+																projectData.setPlugFluidOverride(
+																	normPid,
+																	v
+																);
+															}}
+														>
+															<option value="auto"
+																>{detectedFluidLabel}</option
+															>
+															{#each SCAL_FLUID_SYSTEM_OPTIONS as opt (opt.key)}
+																<option value={opt.key}
+																	>{opt.label}</option
+																>
+															{/each}
+														</select>
 													</td>
-													<td class="mono-num px-1 text-right"
-														>{fmtNum(plug.depth, 1)}</td
+													<td
+														class="px-0.5 text-center whitespace-nowrap"
+														onclick={(e) => e.stopPropagation()}
 													>
-													<td class="px-1 text-center whitespace-nowrap">
 														<span
 															class="mr-0.5 inline-block h-1.5 w-1.5 rounded-full"
 															style="background:{rtColor}"
-														></span>{plug.rt ?? 1}
+														></span><select
+															class="mono-num h-4.5 rounded-xs border px-0.5 text-[9px] focus:outline-none {hasRtOverride
+																? 'border-indigo-400 bg-indigo-50 font-bold text-indigo-900'
+																: 'border-transparent bg-transparent font-medium text-[var(--text-primary)] hover:border-slate-300'}"
+															value={hasRtOverride
+																? String(activeRt)
+																: 'auto'}
+															title={hasRtOverride
+																? `Manually reassigned to RT ${activeRt} (Auto DRT = RT ${autoRt})`
+																: `Auto DRT = RT ${autoRt} — select to reassign sample`}
+															onchange={(e) => {
+																const raw = e.currentTarget.value;
+																projectData.setPlugRtOverride(
+																	normPid,
+																	raw === 'auto'
+																		? 'auto'
+																		: Number(raw)
+																);
+															}}
+														>
+															<option value="auto"
+																>RT {autoRt}{hasRtOverride
+																	? ' (Auto)'
+																	: ''}</option
+															>
+															{#each availableRtNumbers as rtOpt (rtOpt)}
+																<option value={String(rtOpt)}
+																	>RT {rtOpt}</option
+																>
+															{/each}
+														</select>
 													</td>
 													<td class="mono-num px-1 text-right"
 														>{fmtNum(plug.cpore, 3)}</td
@@ -1403,6 +1596,38 @@
 									</table>
 								</div>
 							</details>
+
+							{#if Object.keys(ptRtOvMap).length > 0}
+								<details class="mt-1">
+									<summary
+										class="cursor-pointer text-[9.5px] font-medium text-indigo-800 select-none hover:underline"
+									>
+										Reassigned Individual Points ({Object.keys(ptRtOvMap)
+											.length}) — click chip to reset
+									</summary>
+									<div
+										class="mt-1 flex max-h-24 flex-wrap gap-1 overflow-y-auto pt-0.5"
+									>
+										{#each Object.entries(ptRtOvMap) as [ptId, rtVal] (ptId)}
+											{@const parts = ptId.split('::')}
+											{@const shortLabel =
+												parts.length >= 3
+													? `${parts[1]}#${Number(parts[2]) + 1}→RT${rtVal}`
+													: `${ptId}→RT${rtVal}`}
+											<button
+												type="button"
+												onclick={() =>
+													projectData.clearPointRtOverride(ptId)}
+												class="inline-flex items-center gap-0.5 rounded-xs border border-indigo-300 bg-indigo-50 px-1 py-0.5 font-mono text-[9px] text-indigo-900 hover:bg-indigo-100"
+												title="Reset {ptId} back to its sample Rock Type"
+											>
+												<span>{shortLabel}</span>
+												<span class="text-indigo-500">×</span>
+											</button>
+										{/each}
+									</div>
+								</details>
+							{/if}
 						{/if}
 
 						{#if excludedScalIds.length > 0}
@@ -1441,11 +1666,21 @@
 					</div>
 
 					{#if projectData.shfResult?.fits && Object.keys(projectData.shfResult.fits).length > 0}
+						{@const isGlobalShfFit =
+							(projectData.shfParams.fitScope ?? 'per_rt') === 'global'}
+						{@const sortedShfEntries = Object.entries(projectData.shfResult.fits).sort(
+							([a], [b]) => Number(a) - Number(b)
+						)}
+						{@const displayedShfEntries = isGlobalShfFit
+							? sortedShfEntries.slice(0, 1)
+							: sortedShfEntries}
 						<div class="overflow-x-auto border border-[var(--border-hairline)]">
 							<table class="w-full border-collapse text-left text-[11px]">
 								<thead class="bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
 									<tr class="h-6 border-b border-[var(--border-hairline)]">
-										<th class="px-1.5 font-semibold">RT</th>
+										<th class="px-1.5 font-semibold"
+											>{isGlobalShfFit ? 'Scope' : 'RT'}</th
+										>
 										<th class="px-1 text-right font-semibold">a</th>
 										<th class="px-1 text-right font-semibold">b</th>
 										{#if activeShfModel === 'skelt_harrison'}
@@ -1456,25 +1691,40 @@
 										{#if activeShfModel !== 'skelt_harrison'}
 											<th class="px-1 text-right font-semibold">R²</th>
 										{/if}
-										<th
-											class="px-1 text-center font-semibold"
-											title="Copy fit parameters from another Rock Type"
-											>Copy</th
-										>
+										{#if !isGlobalShfFit}
+											<th
+												class="px-1 text-center font-semibold"
+												title="Copy fit parameters from another Rock Type"
+												>Copy</th
+											>
+										{/if}
 									</tr>
 								</thead>
 								<tbody class="divide-y divide-[var(--border-hairline)]">
-									{#each Object.entries(projectData.shfResult.fits).sort(([a], [b]) => Number(a) - Number(b)) as [rf, fit]}
-										{@const rtColor = getRockTypeColor(Number(rf))}
+									{#each displayedShfEntries as [rf, fit]}
+										{@const rtColor = isGlobalShfFit
+											? '#0F172A'
+											: getRockTypeColor(Number(rf))}
 										{@const isNoSample = !fit.count || fit.count === 0}
 										{@const isNonRes =
+											!isGlobalShfFit &&
 											Number(rf) > projectData.activeDrtCutoffs.length}
 										<tr class="h-6 {isNoSample ? 'bg-amber-50/30' : ''}">
 											<td class="px-1.5 font-semibold whitespace-nowrap">
 												<span
 													class="mr-1 inline-block h-2 w-2 rounded-full"
 													style="background:{rtColor}"
-												></span>RT {rf}
+												></span
+												>{isGlobalShfFit
+													? 'Global'
+													: `RT ${rf}`}
+												{#if isGlobalShfFit}
+													<span
+														class="py-0.2 ml-1 rounded-xs bg-blue-100 px-1 text-[8.5px] font-medium text-blue-800"
+														title="Aggregated fit shared across all Rock Types (RT 1..{sortedShfEntries.length})"
+														>All RTs</span
+													>
+												{/if}
 												{#if isNoSample}
 													<span
 														class="py-0.2 ml-1 rounded-xs bg-amber-100 px-1 text-[8.5px] font-medium text-amber-800"
@@ -1566,26 +1816,28 @@
 														: '—'}
 												</td>
 											{/if}
-											<td class="px-1 text-center">
-												<select
-													class="h-4.5 rounded-xs border border-dashed border-slate-300 bg-white px-0.5 text-[9px] text-slate-700 hover:border-blue-400 focus:outline-none"
-													title="Copy J/Pc fit parameters from another Rock Type"
-													onchange={(e) => {
-														const src = e.currentTarget.value;
-														if (src) copyShfFitParams(rf, src);
-														e.currentTarget.value = '';
-													}}
-												>
-													<option value="">Copy...</option>
-													{#each Object.keys(projectData.shfResult.fits) as otherRf (otherRf)}
-														{#if otherRf !== rf}
-															<option value={otherRf}
-																>From RT {otherRf}</option
-															>
-														{/if}
-													{/each}
-												</select>
-											</td>
+											{#if !isGlobalShfFit}
+												<td class="px-1 text-center">
+													<select
+														class="h-4.5 rounded-xs border border-dashed border-slate-300 bg-white px-0.5 text-[9px] text-slate-700 hover:border-blue-400 focus:outline-none"
+														title="Copy J/Pc fit parameters from another Rock Type"
+														onchange={(e) => {
+															const src = e.currentTarget.value;
+															if (src) copyShfFitParams(rf, src);
+															e.currentTarget.value = '';
+														}}
+													>
+														<option value="">Copy...</option>
+														{#each Object.keys(projectData.shfResult.fits) as otherRf (otherRf)}
+															{#if otherRf !== rf}
+																<option value={otherRf}
+																	>From RT {otherRf}</option
+																>
+															{/if}
+														{/each}
+													</select>
+												</td>
+											{/if}
 										</tr>
 									{/each}
 								</tbody>
