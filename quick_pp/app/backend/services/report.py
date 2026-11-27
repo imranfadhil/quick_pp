@@ -3368,6 +3368,16 @@ def build_report_context(
                     if isinstance(saved_perm_entry, dict)
                     else None
                 ) or {}
+                saved_eq_type = (
+                    str(saved_perm_p.get("permTransformEquationType") or "power_law")
+                    .strip()
+                    .lower()
+                )
+                saved_fit_scope = (
+                    str(saved_perm_p.get("permTransformFitScope") or "per_rt")
+                    .strip()
+                    .lower()
+                )
                 manual_fits = (
                     saved_perm_p.get("fits")
                     if saved_perm_p.get("manualEdits")
@@ -3391,11 +3401,20 @@ def build_report_context(
                         "source": "insufficient data",
                     }
                     pf, kf = p_arr[m_f], k_arr[m_f]
-                    if str(rf_v) in manual_fits:
+                    fit_lookup_key = (
+                        "global"
+                        if saved_fit_scope == "global" and "global" in manual_fits
+                        else str(rf_v)
+                    )
+                    if fit_lookup_key in manual_fits:
                         try:
-                            row_f["a"] = float(manual_fits[str(rf_v)]["a"])
-                            row_f["b"] = float(manual_fits[str(rf_v)]["b"])
-                            row_f["source"] = "saved workbench fit (manual)"
+                            row_f["a"] = float(manual_fits[fit_lookup_key]["a"])
+                            row_f["b"] = float(manual_fits[fit_lookup_key]["b"])
+                            row_f["source"] = (
+                                "saved workbench fit (global manual)"
+                                if fit_lookup_key == "global"
+                                else "saved workbench fit (manual)"
+                            )
                         except (TypeError, ValueError, KeyError):
                             pass
                     if (
@@ -3403,21 +3422,28 @@ def build_report_context(
                         and n_f >= 3
                         and float(np.std(np.log10(pf))) > 1e-3
                     ):
-                        b_fit, log_a = np.polyfit(
-                            np.log10(np.clip(pf, 1e-6, None)),
-                            np.log10(np.clip(kf, 1e-6, None)),
-                            1,
-                        )
+                        if saved_eq_type in ("semilog_exp", "semilog", "exponential"):
+                            b_fit, log_a = np.polyfit(
+                                pf,
+                                np.log10(np.clip(kf, 1e-6, None)),
+                                1,
+                            )
+                        else:
+                            b_fit, log_a = np.polyfit(
+                                np.log10(np.clip(pf, 1e-6, None)),
+                                np.log10(np.clip(kf, 1e-6, None)),
+                                1,
+                            )
                         row_f["a"], row_f["b"] = float(10.0**log_a), float(b_fit)
                         row_f["source"] = "fitted on report samples"
                     if row_f["a"] is not None:
-                        pred = np.log10(
-                            np.clip(
-                                row_f["a"] * np.clip(pf, 1e-6, None) ** row_f["b"],
-                                1e-6,
-                                None,
+                        if saved_eq_type in ("semilog_exp", "semilog", "exponential"):
+                            pred_k = row_f["a"] * (
+                                10.0 ** np.clip(row_f["b"] * pf, -20.0, 20.0)
                             )
-                        )
+                        else:
+                            pred_k = row_f["a"] * np.clip(pf, 1e-6, None) ** row_f["b"]
+                        pred = np.log10(np.clip(pred_k, 1e-6, None))
                         obs = np.log10(np.clip(kf, 1e-6, None))
                         ss_t = float(np.sum((obs - obs.mean()) ** 2))
                         row_f["r2"] = (

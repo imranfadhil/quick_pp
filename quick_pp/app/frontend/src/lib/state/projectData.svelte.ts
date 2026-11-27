@@ -228,6 +228,15 @@ export interface SwirrApplyResult {
 	};
 }
 export type PhiKDataSource = 'core' | 'log';
+export type PermTransformFitScope = 'global' | 'per_rt';
+export type PermTransformEquationType = 'power_law' | 'semilog_exp';
+export interface PermTransformFitEntry {
+	a: number;
+	b: number;
+	r2: number | null;
+	rmse?: number | null;
+	count: number;
+}
 export type DrtMethod = 'fzi' | 'winland' | 'lucia';
 export type DrtCutoffMethod = 'gmm' | 'lorenz' | 'kmeans';
 export type GmmCriterion = 'combined' | 'bic' | 'silhouette';
@@ -262,6 +271,8 @@ class ProjectDataState {
 	inventorySelectedZone = $state<string>('');
 	drtDataSource = $state<PhiKDataSource>('core');
 	permTransformDataSource = $state<PhiKDataSource>('core');
+	permTransformFitScope = $state<PermTransformFitScope>('per_rt');
+	permTransformEquationType = $state<PermTransformEquationType>('power_law');
 	drtMethod = $state<DrtMethod>('fzi');
 	fziCutoffs = $state<number[]>([0.5, 1.2, 2.5, 5.0]);
 	winlandCutoffs = $state<number[]>([0.5, 2.0, 5.0, 10.0]);
@@ -443,11 +454,15 @@ class ProjectDataState {
 
 	permTransformResult = $state.raw<{
 		data_source?: PhiKDataSource;
+		fit_scope?: PermTransformFitScope;
+		equation_type?: PermTransformEquationType;
 		poro_label?: string;
 		perm_label?: string;
-		fits: Record<string, { a: number; b: number; r2: number | null; count: number }>;
+		global_fit?: PermTransformFitEntry | null;
+		fits: Record<string, PermTransformFitEntry>;
 		well_names: string[];
 		depths: number[];
+		zones?: (string | null)[];
 		phit: number[];
 		perm: number[];
 		log_phit?: (number | null)[];
@@ -942,14 +957,32 @@ class ProjectDataState {
 				return this.pickFields(ROCK_TYPING_PARAM_KEYS);
 			case 'perm-transform': {
 				const fits = this.permTransformResult?.fits;
+				const globalFit = this.permTransformResult?.global_fit;
+				const savedFits: Record<string, { a: number; b: number }> = {};
+				if (this.permTransformManualEdits) {
+					if (fits) {
+						for (const [k, v] of Object.entries(fits)) {
+							if (v && Number.isFinite(Number(v.a)) && Number.isFinite(Number(v.b))) {
+								savedFits[k] = { a: Number(v.a), b: Number(v.b) };
+							}
+						}
+					}
+					if (
+						globalFit &&
+						Number.isFinite(Number(globalFit.a)) &&
+						Number.isFinite(Number(globalFit.b))
+					) {
+						savedFits['global'] = { a: Number(globalFit.a), b: Number(globalFit.b) };
+					}
+				}
 				return {
 					permTransformDataSource: this.permTransformDataSource,
+					permTransformFitScope: this.permTransformFitScope,
+					permTransformEquationType: this.permTransformEquationType,
 					manualEdits: this.permTransformManualEdits,
 					fits:
-						this.permTransformManualEdits && fits
-							? Object.fromEntries(
-									Object.entries(fits).map(([k, v]) => [k, { a: Number(v.a), b: Number(v.b) }])
-								)
+						this.permTransformManualEdits && Object.keys(savedFits).length > 0
+							? savedFits
 							: null
 				};
 			}
@@ -994,7 +1027,10 @@ class ProjectDataState {
 				this.assignFields(ROCK_TYPING_PARAM_KEYS, p);
 				break;
 			case 'perm-transform':
-				this.assignFields(['permTransformDataSource'], p);
+				this.assignFields(
+					['permTransformDataSource', 'permTransformFitScope', 'permTransformEquationType'],
+					p
+				);
 				if (p.manualEdits && p.fits && typeof p.fits === 'object') {
 					this.permTransformSavedFits = clone(p.fits);
 					this.permTransformManualEdits = true;
@@ -1246,6 +1282,10 @@ class ProjectDataState {
 
 	/** Reset Perm Transform fits and optionally clear saved PERM_TRANS curves across wells. */
 	async resetPermTransform(clearWellCurves: boolean = false): Promise<void> {
+		this.permTransformFitScope = 'per_rt';
+		this.permTransformEquationType = 'power_law';
+		this.permTransformManualEdits = false;
+		this.permTransformSavedFits = null;
 		this.permTransformResult = null;
 		if (workbench.projectId) {
 			await projectParams.deleteAllForModule(workbench.projectId, 'perm-transform', this.projectModuleParams);
@@ -3372,6 +3412,9 @@ class ProjectDataState {
 			const defaultSrc: PhiKDataSource = hasCore || !hasLog ? 'core' : 'log';
 			this.drtDataSource = defaultSrc;
 			this.permTransformDataSource = defaultSrc;
+			this.permTransformFitScope = 'per_rt';
+			this.permTransformEquationType = 'power_law';
+			this.permTransformManualEdits = false;
 			// Saved multi-well parameters (applied on exact zone match) override these defaults
 			await this.loadProjectModuleParams(pidStr);
 			let targetWell =

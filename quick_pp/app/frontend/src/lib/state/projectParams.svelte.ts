@@ -21,7 +21,8 @@ export const MULTI_WELL_REGIONAL_DEFAULTS: Record<ProjectParamModuleKey, Record<
 		cutoffs: [1.0, 3.0]
 	},
 	'perm-transform': {
-		modelType: 'power',
+		modelType: 'power_law',
+		fitScope: 'per_rt',
 		defaultA: 1000.0,
 		defaultB: 3.5
 	},

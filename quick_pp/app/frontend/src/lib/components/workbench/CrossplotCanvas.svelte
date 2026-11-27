@@ -2671,51 +2671,112 @@
 				}
 			}
 
-			// Fitted power-law Perm Transform lines per Rock Type: K = a * phi^b (strictly reservoir DRTs >= 1)
-			if (workbench.scope === 'multi-well' && projectData.permTransformResult?.fits) {
-				for (const [rf, fit] of Object.entries(projectData.permTransformResult.fits)) {
-					if (
-						!fit ||
-						Number(rf) < 1 ||
-						!Number.isFinite(fit.a) ||
-						!Number.isFinite(fit.b)
-					)
-						continue;
-					const kFit = phiGrid.map((phi) => fit.a * Math.pow(phi, fit.b));
-					const rtCol = getRockTypeColor(rf);
-					// High-contrast dark casing halo behind the fitted line so it stands out over same-color points
-					traces.push({
-						type: 'scatter',
-						mode: 'lines',
-						name: `Fit RT ${rf} halo`,
-						x: phiGrid,
-						y: kFit,
-						showlegend: false,
-						hoverinfo: 'skip',
-						line: {
-							color: '#0F172A',
-							width: 5.5,
-							dash: 'solid'
-						}
-					});
-					traces.push({
-						type: 'scatter',
-						mode: 'lines+markers',
-						name: `Fit RT ${rf}`,
-						x: phiGrid,
-						y: kFit,
-						line: {
-							color: rtCol,
-							width: 2.8,
-							dash: 'solid'
-						},
-						marker: {
-							size: phiGrid.map((_, idx) => (idx % 6 === 0 ? 5.5 : 0)),
-							color: '#FFFFFF',
-							line: { color: rtCol, width: 1.8 }
-						},
-						hovertemplate: `RT ${rf} Fit (a=${fmtNum(fit.a, 1)}, b=${fmtNum(fit.b, 3)})<br>Φ: %{x:.3f}<br>K: %{y:.2f} mD<extra></extra>`
-					});
+			// Fitted Perm Transform curve(s): Global Fit (1 shared curve) or per Rock Type, using Power-Law or Semi-Log Exponential
+			if (workbench.scope === 'multi-well' && projectData.permTransformResult) {
+				const ptRes = projectData.permTransformResult;
+				const ptEq =
+					ptRes.equation_type ?? projectData.permTransformEquationType ?? 'power_law';
+				const isGlobalPt =
+					(ptRes.fit_scope ?? projectData.permTransformFitScope ?? 'per_rt') === 'global';
+				const evalPtCurve = (phi: number, a: number, b: number) =>
+					ptEq === 'semilog_exp'
+						? a * Math.pow(10, Math.max(-20, Math.min(20, b * phi)))
+						: a * Math.pow(phi, b);
+				const fmtA = (a: number) =>
+					Math.abs(a) >= 100
+						? fmtNum(a, 1)
+						: Math.abs(a) >= 1
+							? fmtNum(a, 3)
+							: Number(a.toPrecision(3)).toString();
+				const fmtEqLabel = (a: number, b: number) =>
+					ptEq === 'semilog_exp'
+						? `${fmtA(a)}·10^(${fmtNum(b, 2)}·Φ)`
+						: `${fmtA(a)}·Φ^${fmtNum(b, 2)}`;
+
+				if (isGlobalPt) {
+					const gFit =
+						ptRes.global_fit ??
+						Object.entries(ptRes.fits || {}).find(([k]) => Number(k) >= 1)?.[1];
+					if (gFit && Number.isFinite(gFit.a) && Number.isFinite(gFit.b)) {
+						const kFit = phiGrid.map((phi) => evalPtCurve(phi, gFit.a, gFit.b));
+						traces.push({
+							type: 'scatter',
+							mode: 'lines',
+							name: 'Global Fit halo',
+							x: phiGrid,
+							y: kFit,
+							showlegend: false,
+							hoverinfo: 'skip',
+							line: {
+								color: '#FFFFFF',
+								width: 5.5,
+								dash: 'solid'
+							}
+						});
+						traces.push({
+							type: 'scatter',
+							mode: 'lines+markers',
+							name: `Global Fit (${fmtEqLabel(gFit.a, gFit.b)})`,
+							x: phiGrid,
+							y: kFit,
+							line: {
+								color: '#0F172A',
+								width: 2.8,
+								dash: 'solid'
+							},
+							marker: {
+								size: phiGrid.map((_, idx) => (idx % 6 === 0 ? 5.5 : 0)),
+								color: '#FFFFFF',
+								line: { color: '#0F172A', width: 1.8 }
+							},
+							hovertemplate: `Global Fit (${fmtEqLabel(gFit.a, gFit.b)}, R²=${fmtNum(gFit.r2, 3)})<br>Φ: %{x:.3f}<br>K: %{y:.2f} mD<extra></extra>`
+						});
+					}
+				} else if (ptRes.fits) {
+					for (const [rf, fit] of Object.entries(ptRes.fits)) {
+						if (
+							!fit ||
+							!(Number(rf) >= 1) ||
+							!Number.isFinite(fit.a) ||
+							!Number.isFinite(fit.b)
+						)
+							continue;
+						const kFit = phiGrid.map((phi) => evalPtCurve(phi, fit.a, fit.b));
+						const rtCol = getRockTypeColor(rf);
+						// High-contrast dark casing halo behind the fitted line so it stands out over same-color points
+						traces.push({
+							type: 'scatter',
+							mode: 'lines',
+							name: `Fit RT ${rf} halo`,
+							x: phiGrid,
+							y: kFit,
+							showlegend: false,
+							hoverinfo: 'skip',
+							line: {
+								color: '#0F172A',
+								width: 5.5,
+								dash: 'solid'
+							}
+						});
+						traces.push({
+							type: 'scatter',
+							mode: 'lines+markers',
+							name: `Fit RT ${rf}`,
+							x: phiGrid,
+							y: kFit,
+							line: {
+								color: rtCol,
+								width: 2.8,
+								dash: 'solid'
+							},
+							marker: {
+								size: phiGrid.map((_, idx) => (idx % 6 === 0 ? 5.5 : 0)),
+								color: '#FFFFFF',
+								line: { color: rtCol, width: 1.8 }
+							},
+							hovertemplate: `RT ${rf} Fit (${fmtEqLabel(fit.a, fit.b)}, R²=${fmtNum(fit.r2, 3)})<br>Φ: %{x:.3f}<br>K: %{y:.2f} mD<extra></extra>`
+						});
+					}
 				}
 			}
 
@@ -7272,6 +7333,9 @@
 			void projectData.rockTypingResult;
 			void projectData.permTransformResult;
 			void projectData.permTransformResult?.fits;
+			void projectData.permTransformResult?.global_fit;
+			void projectData.permTransformFitScope;
+			void projectData.permTransformEquationType;
 			void projectData.shfResult;
 			void projectData.swirrConfig.excludedScalPointIds;
 			void projectData.selectedScalPointIds;

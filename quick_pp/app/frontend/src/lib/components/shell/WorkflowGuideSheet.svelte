@@ -1299,10 +1299,11 @@
 					</div>
 
 					<p>
-						Fits power-law porosity-permeability regressions partitioned by Discrete Rock
-						Type (ROCK_FLAG ≥ 1) on Core Data (CPORE, CPERM) or Calculated Logs (PHIT, PERM)
-						with interactive (a, b) editing, and propagates them (Cutoff-Only, Hybrid, or
-						Full ML) across all field wells to populate the continuous PERM_TRANS curve.
+						Fits Power-Law or Semi-Log Exponential porosity-permeability regressions either as
+						a single shared Global Fit across all reservoir samples or partitioned per Discrete
+						Rock Type (ROCK_FLAG ≥ 1) on Core Data (CPORE, CPERM) or Calculated Logs (PHIT,
+						PERM) with interactive (a, b) editing and parameter copying, propagating continuous
+						PERM_TRANS across all field wells.
 					</p>
 
 					<div
@@ -1314,8 +1315,9 @@
 							Core Equations
 						</div>
 						<div class="font-mono text-[11px] text-[var(--text-primary)]">
-							Power-Law RT Regression: k = a_k · φ^(b_k) &nbsp;&hArr;&nbsp; log10(k) = b_k · log10(φ) + log10(a_k)<br />
-							Applied Field Transform: PERM_TRANS = a_(ROCK_FLAG) · PHIT^(b_(ROCK_FLAG)) &nbsp;(masked for RT 0)
+							Power-Law Regression: k = a · φ^b &nbsp;&hArr;&nbsp; log10(k) = b · log10(φ) + log10(a)<br />
+							Semi-Log Exponential: k = a · 10^(b · φ) &nbsp;&hArr;&nbsp; log10(k) = b · φ + log10(a)<br />
+							Applied Field Transform: Global (shared a, b) or Per-RT (a_(ROCK_FLAG), b_(ROCK_FLAG)) &nbsp;(masked for RT 0)
 						</div>
 					</div>
 				</section>

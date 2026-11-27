@@ -546,6 +546,8 @@ export interface paths {
 				content: {
 					'application/json': {
 						cutoffs?: number[];
+						fit_scope?: 'global' | 'per_rt';
+						equation_type?: 'power_law' | 'semilog_exp';
 						fits?: Record<string, { a: number; b: number }> | null;
 						save?: boolean;
 					};
@@ -556,7 +558,25 @@ export interface paths {
 					content: {
 						'application/json': {
 							project_id: number;
-							fits: Record<string, { a: number; b: number; r2: number | null; count: number }>;
+							fit_scope?: 'global' | 'per_rt';
+							equation_type?: 'power_law' | 'semilog_exp';
+							global_fit?: {
+								a: number;
+								b: number;
+								r2: number | null;
+								rmse?: number | null;
+								count: number;
+							};
+							fits: Record<
+								string,
+								{
+									a: number;
+									b: number;
+									r2: number | null;
+									rmse?: number | null;
+									count: number;
+								}
+							>;
 							saved: boolean;
 							saved_wells: number;
 							data: {

@@ -240,12 +240,22 @@ def test_pc_lab_to_reservoir_and_correct_core_data_pipeline():
 
 
 def test_core_fitting_and_transforms():
-    """Verify Leverett-J, poroperm fitting, Skelt-Harrison, and Sw normalization."""
+    """Verify Leverett-J, poroperm fitting (power-law & semi-log), Skelt-Harrison, and Sw normalization."""
     poro = np.array([0.10, 0.15, 0.20, 0.25])
     perm = perm_transform(poro, 10000.0, 3.0)
     a, b = fit_poroperm_curve(poro, perm)
     np.testing.assert_allclose(a, 10000.0, rtol=1e-2)
     np.testing.assert_allclose(b, 3.0, rtol=1e-2)
+
+    perm_semi = perm_transform(poro, 0.02, 16.0, equation_type="semilog_exp")
+    a_semi, b_semi = fit_poroperm_curve(poro, perm_semi, equation_type="semilog_exp")
+    np.testing.assert_allclose(a_semi, 0.02, rtol=1e-2)
+    np.testing.assert_allclose(b_semi, 16.0, rtol=1e-2)
+    assert np.isclose(
+        perm_transform(0.20, a_semi, b_semi, equation_type="semilog_exp"),
+        0.02 * (10.0 ** (16.0 * 0.20)),
+        rtol=1e-2,
+    )
 
     sw = np.array([0.2, 0.4, 0.6, 0.8, 1.0])
     j_vals = 0.15 * (sw ** (-1.5))
@@ -277,7 +287,12 @@ def test_core_fitting_and_transforms():
     assert 0.0 < sh_sw < 1.0
 
     # Verify sw_shf_leverett_j and sw_skelt_harrison handle water zone (depth >= fwl) safely
-    assert sw_shf_leverett_j(100.0, 0.20, 8600.0, 8550.0, 30.0, 30.0, 1.05, 0.80, 0.15, 1.5) == 1.0
+    assert (
+        sw_shf_leverett_j(
+            100.0, 0.20, 8600.0, 8550.0, 30.0, 30.0, 1.05, 0.80, 0.15, 1.5
+        )
+        == 1.0
+    )
     assert sw_skelt_harrison(8600.0, 8550.0, 0.85, 35.0, 1.5, 2.0) == 1.0
 
     # Verify Skelt-Harrison and Cuddy curve fitting & auto-params per Rock Type
@@ -359,8 +374,16 @@ def _make_multi_well_contact_dataset(
     ift, theta, gw, ghc = 32.0, 30.0, 1.10, 0.82
 
     j_params = [
-        {"ROCK_FLAG": 1, "a": 0.12, "b": 1.65},  # High-quality rock (low entry pressure)
-        {"ROCK_FLAG": 2, "a": 0.28, "b": 1.35},  # Moderate-quality rock (higher entry pressure)
+        {
+            "ROCK_FLAG": 1,
+            "a": 0.12,
+            "b": 1.65,
+        },  # High-quality rock (low entry pressure)
+        {
+            "ROCK_FLAG": 2,
+            "a": 0.28,
+            "b": 1.35,
+        },  # Moderate-quality rock (higher entry pressure)
     ]
     sh_params = {
         1: {"a": 0.88, "b": 25.0, "c": 1.6, "d": 2.0},
@@ -405,10 +428,12 @@ def _make_multi_well_contact_dataset(
         # Add realistic small log measurement noise and compute corresponding RT log
         sw_noisy = np.clip(sw_true + rng.normal(0.0, 0.015, size=n), 0.02, 1.0)
         rw = 0.025
-        rt = rw / ((phit ** 2.0) * (sw_noisy ** 2.0))
+        rt = rw / ((phit**2.0) * (sw_noisy**2.0))
         w_df["RW"] = rw
         w_df["RT"] = rt
-        w_df["SWT"] = archie_saturation(rt, rw, phit, a=1.0, m=2.0, n=2.0).clip(0.0, 1.0)
+        w_df["SWT"] = archie_saturation(rt, rw, phit, a=1.0, m=2.0, n=2.0).clip(
+            0.0, 1.0
+        )
         dfs.append(w_df)
 
     multi_well_df = pd.concat(dfs, ignore_index=True)
@@ -480,7 +505,14 @@ def test_multi_well_fwl_optimizer_leverett_j_and_mdt_reconciliation():
 
     # Augmented DataFrame contains required columns and valid transition zone flags
     aug_df = opt["df"]
-    for col in ("SW_SHM", "BVW_LOG", "BVW_SHM", "HAFWL", "PC_RES", "TRANSITION_ZONE_FLAG"):
+    for col in (
+        "SW_SHM",
+        "BVW_LOG",
+        "BVW_SHM",
+        "HAFWL",
+        "PC_RES",
+        "TRANSITION_ZONE_FLAG",
+    ):
         assert col in aug_df.columns
     assert set(aug_df["TRANSITION_ZONE_FLAG"].unique()).issubset(
         {"FREE_WATER", "CAPILLARY_FRINGE", "TRANSITION_ZONE", "IRREDUCIBLE_HC"}
@@ -507,7 +539,9 @@ def test_contact_optimizer_class_and_skelt_harrison_multi_well():
         loss="huber",
         equal_well_weights=True,
     )
-    optimizer.fit(df, pressure_df=pressure_df, mdt_tolerance=80.0, mdt_penalty_weight=0.05)
+    optimizer.fit(
+        df, pressure_df=pressure_df, mdt_tolerance=80.0, mdt_penalty_weight=0.05
+    )
 
     np.testing.assert_allclose(optimizer.fwl_, true_fwl, atol=3.0)
     assert optimizer.ttz_ < optimizer.owc_ <= optimizer.fwl_
@@ -537,9 +571,7 @@ def test_contact_optimizer_class_and_skelt_harrison_multi_well():
         true_fwl=8450.0, model="leverett_j"
     )
     z1_df["ZONES"] = "UPPER_SAND"
-    z2_df, _, _ = _make_multi_well_contact_dataset(
-        true_fwl=8580.0, model="leverett_j"
-    )
+    z2_df, _, _ = _make_multi_well_contact_dataset(true_fwl=8580.0, model="leverett_j")
     z2_df["ZONES"] = "LOWER_SAND"
     stacked_df = pd.concat([z1_df, z2_df], ignore_index=True)
 

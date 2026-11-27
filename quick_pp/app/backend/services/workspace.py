@@ -2693,7 +2693,15 @@ class WorkspacePermTransformRequest(BaseModel):
     )
     data_source: str = Field(
         "core",
-        description="Input data source for fitting K = a * Phi^b per ROCK_FLAG: 'core' (CPORE & CPERM) or 'log' (PHIT & PERM)",
+        description="Input data source for fitting poro-perm curves: 'core' (CPORE & CPERM) or 'log' (PHIT & PERM)",
+    )
+    fit_scope: str = Field(
+        "per_rt",
+        description="Fit scope: 'per_rt' (separate regression per ROCK_FLAG >= 1) or 'global' (single shared curve across all reservoir samples)",
+    )
+    equation_type: str = Field(
+        "power_law",
+        description="Regression equation: 'power_law' (K = a * Phi^b) or 'semilog_exp' (K = a * 10^(b * Phi))",
     )
     method: str = Field(
         "fzi",
@@ -9769,13 +9777,152 @@ def workspace_perm_transform_compute(
                 )
             ]
 
+        fit_scope = (
+            "global"
+            if str(req.fit_scope or "per_rt").strip().lower() == "global"
+            else "per_rt"
+        )
+        equation_type = (
+            "semilog_exp"
+            if str(req.equation_type or "power_law").strip().lower()
+            in ("semilog_exp", "semilog", "exponential")
+            else "power_law"
+        )
+
+        def _eval_perm_eq(p_val: float, a_c: float, b_c: float) -> float:
+            if equation_type == "semilog_exp":
+                exp_arg = max(-20.0, min(20.0, b_c * float(p_val)))
+                return a_c * (10.0**exp_arg)
+            return a_c * (float(p_val) ** b_c)
+
+        def _eval_perm_arr(p_sub: np.ndarray, a_c: float, b_c: float) -> np.ndarray:
+            if equation_type == "semilog_exp":
+                return a_c * (10.0 ** np.clip(b_c * p_sub, -20.0, 20.0))
+            return a_c * (np.clip(p_sub, 1e-6, None) ** b_c)
+
+        def _fit_poroperm_subset(
+            mask_sub: np.ndarray,
+            custom_entry: Optional[Dict[str, float]] = None,
+        ) -> Dict[str, Any]:
+            count_n = int(mask_sub.sum())
+            p_sub = phit_arr[mask_sub]
+            k_sub = perm_arr[mask_sub]
+            if custom_entry is not None and "a" in custom_entry and "b" in custom_entry:
+                a_val = float(custom_entry["a"])
+                b_val = float(custom_entry["b"])
+            elif count_n >= 2:
+                try:
+                    log_k = np.log10(np.clip(k_sub, 1e-6, None))
+                    if equation_type == "semilog_exp":
+                        if float(np.std(p_sub)) <= 1e-8:
+                            a_val = float(f"{float(np.median(k_sub)):.4g}")
+                            b_val = 0.0
+                        else:
+                            b_slope, log10_a = np.polyfit(p_sub, log_k, 1)
+                            a_raw = float(np.clip(10.0**log10_a, 1e-8, 1e8))
+                            a_val = float(f"{a_raw:.4g}")
+                            b_val = round(float(b_slope), 3)
+                    else:
+                        log_p = np.log10(np.clip(p_sub, 1e-6, None))
+                        if float(np.std(log_p)) <= 1e-8:
+                            a_val = round(float(np.median(k_sub)), 2)
+                            b_val = 0.0
+                        else:
+                            b_log, log10_a = np.polyfit(log_p, log_k, 1)
+                            a_raw = float(10.0**log10_a)
+                            a_val = (
+                                round(a_raw, 2)
+                                if a_raw >= 1.0
+                                else float(f"{max(1e-8, a_raw):.4g}")
+                            )
+                            b_val = round(float(b_log), 3)
+                except Exception:
+                    try:
+                        a_fit, b_fit = fit_poroperm_curve(
+                            p_sub, k_sub, equation_type=equation_type
+                        )
+                        a_val = float(a_fit)
+                        b_val = float(b_fit)
+                    except Exception:
+                        a_val, b_val = (
+                            (0.05, 14.0)
+                            if equation_type == "semilog_exp"
+                            else (1.0, 1.0)
+                        )
+            elif count_n == 1:
+                a_val = float(f"{float(k_sub[0]):.4g}")
+                b_val = 0.0
+            else:
+                a_val, b_val = (
+                    (0.05, 14.0) if equation_type == "semilog_exp" else (1.0, 1.0)
+                )
+
+            r2_val: Optional[float] = None
+            rmse_val: Optional[float] = None
+            if count_n >= 2:
+                log_k_true = np.log10(np.clip(k_sub, 1e-6, None))
+                log_k_pred = np.log10(
+                    np.clip(_eval_perm_arr(p_sub, a_val, b_val), 1e-6, None)
+                )
+                ss_res = float(np.sum((log_k_true - log_k_pred) ** 2))
+                ss_tot = float(np.sum((log_k_true - np.mean(log_k_true)) ** 2))
+                r2_val = round(1.0 - ss_res / ss_tot, 4) if ss_tot > 1e-12 else 0.0
+                rmse_val = round(float(np.sqrt(ss_res / count_n)), 4)
+
+            return {
+                "a": a_val,
+                "b": b_val,
+                "r2": r2_val,
+                "rmse": rmse_val,
+                "count": count_n,
+            }
+
         unique_flags = sorted(
             {int(rf) for rf in rock_flags if rf is not None and int(rf) >= 1}
         )
-        if not unique_flags and not req.fits:
+        global_mask = np.array(
+            [
+                (
+                    (r is not None and int(r) >= 1)
+                    if unique_flags
+                    else (r is None or int(r) != 0)
+                )
+                and np.isfinite(p)
+                and (p > 0)
+                and np.isfinite(k)
+                and (k > 0)
+                and (
+                    not use_non_res
+                    or (
+                        p > float(req.non_res_phit_cutoff)
+                        and k > float(req.non_res_perm_cutoff)
+                        and int(c) == 0
+                    )
+                )
+                for r, p, k, c in zip(
+                    rock_flags, phit_arr, perm_arr, coal_arr_pt, strict=False
+                )
+            ],
+            dtype=bool,
+        )
+        if fit_scope == "per_rt" and not unique_flags and not req.fits:
             raise ValueError(
                 "No reservoir ROCK_FLAG (>= 1) values found in project wells. Run Rock Typing first."
             )
+        if fit_scope == "global" and int(global_mask.sum()) == 0 and not req.fits:
+            raise ValueError(
+                "No valid porosity-permeability samples found in project wells."
+            )
+
+        custom_global: Optional[Dict[str, float]] = None
+        if req.fits:
+            if "global" in req.fits:
+                custom_global = req.fits["global"]
+            elif fit_scope == "global":
+                first_custom = next(iter(req.fits.values()), None)
+                if isinstance(first_custom, dict):
+                    custom_global = first_custom
+        global_fit = _fit_poroperm_subset(global_mask, custom_global)
 
         fits: Dict[str, Dict[str, Any]] = {}
         target_flags = (
@@ -9792,54 +9939,26 @@ def workspace_perm_transform_compute(
             if req.fits
             else unique_flags
         )
-        for rf in target_flags:
-            rf_key = str(rf)
-            mask = np.array(
-                [
-                    (r == rf) and (p > 0) and (k > 0)
-                    for r, p, k in zip(rock_flags, phit_arr, perm_arr, strict=False)
-                ],
-                dtype=bool,
-            )
-            count_n = int(mask.sum())
-            if req.fits and rf_key in req.fits:
-                a_val = float(req.fits[rf_key]["a"])
-                b_val = float(req.fits[rf_key]["b"])
-            elif count_n >= 2:
-                try:
-                    log_p = np.log10(np.clip(phit_arr[mask], 1e-6, None))
-                    log_k = np.log10(np.clip(perm_arr[mask], 1e-6, None))
-                    b_log, log10_a = np.polyfit(log_p, log_k, 1)
-                    a_val = round(float(10.0**log10_a), 2)
-                    b_val = round(float(b_log), 3)
-                except Exception:
-                    try:
-                        a_fit, b_fit = fit_poroperm_curve(
-                            phit_arr[mask], perm_arr[mask]
-                        )
-                        a_val = float(a_fit)
-                        b_val = float(b_fit)
-                    except Exception:
-                        a_val, b_val = 1.0, 1.0
-            else:
-                a_val, b_val = 1.0, 1.0
-
-            r2_val: Optional[float] = None
-            if count_n >= 2:
-                log_k_true = np.log10(np.clip(perm_arr[mask], 1e-6, None))
-                log_k_pred = np.log10(
-                    np.clip(a_val * (phit_arr[mask] ** b_val), 1e-6, None)
+        if fit_scope == "global":
+            effective_flags = target_flags if target_flags else [1]
+            for rf in effective_flags:
+                fits[str(rf)] = dict(global_fit)
+        else:
+            for rf in target_flags:
+                rf_key = str(rf)
+                mask = np.array(
+                    [
+                        (r == rf)
+                        and np.isfinite(p)
+                        and (p > 0)
+                        and np.isfinite(k)
+                        and (k > 0)
+                        for r, p, k in zip(rock_flags, phit_arr, perm_arr, strict=False)
+                    ],
+                    dtype=bool,
                 )
-                ss_res = float(np.sum((log_k_true - log_k_pred) ** 2))
-                ss_tot = float(np.sum((log_k_true - np.mean(log_k_true)) ** 2))
-                r2_val = round(1.0 - ss_res / ss_tot, 4) if ss_tot > 1e-12 else 0.0
-
-            fits[rf_key] = {
-                "a": a_val,
-                "b": b_val,
-                "r2": r2_val,
-                "count": count_n,
-            }
+                custom_rf = req.fits.get(rf_key) if req.fits else None
+                fits[rf_key] = _fit_poroperm_subset(mask, custom_rf)
 
         core_lookup: Dict[
             Tuple[str, float],
@@ -10052,8 +10171,26 @@ def workspace_perm_transform_compute(
                     str(rf_clean) if (rf_clean is not None and rf_clean >= 1) else None
                 )
                 pt_val: Optional[float] = None
-                if rf_key and rf_key in fits and p_log is not None and p_log > 0:
-                    val = fits[rf_key]["a"] * (float(p_log) ** fits[rf_key]["b"])
+                if fit_scope == "global":
+                    if (
+                        rf_clean != 0
+                        and p_log is not None
+                        and p_log > 0
+                        and (
+                            not use_non_res
+                            or float(p_log) > float(req.non_res_phit_cutoff)
+                            or (rf_clean is not None and rf_clean >= 1)
+                        )
+                    ):
+                        val = _eval_perm_eq(
+                            float(p_log), global_fit["a"], global_fit["b"]
+                        )
+                        if math.isfinite(val):
+                            pt_val = round(float(val), 6)
+                elif rf_key and rf_key in fits and p_log is not None and p_log > 0:
+                    val = _eval_perm_eq(
+                        float(p_log), fits[rf_key]["a"], fits[rf_key]["b"]
+                    )
                     if math.isfinite(val):
                         pt_val = round(float(val), 6)
 
@@ -10084,10 +10221,19 @@ def workspace_perm_transform_compute(
                 rock_flags,
                 strict=False,
             ):
-                rf_key = str(rf_c) if rf_c is not None else None
+                rf_key = str(rf_c) if (rf_c is not None and int(rf_c) >= 1) else None
                 pt_val = None
-                if rf_key and rf_key in fits and p_c is not None and p_c > 0:
-                    val = fits[rf_key]["a"] * (float(p_c) ** fits[rf_key]["b"])
+                if fit_scope == "global":
+                    if rf_c != 0 and p_c is not None and p_c > 0:
+                        val = _eval_perm_eq(
+                            float(p_c), global_fit["a"], global_fit["b"]
+                        )
+                        if math.isfinite(val):
+                            pt_val = round(float(val), 6)
+                elif rf_key and rf_key in fits and p_c is not None and p_c > 0:
+                    val = _eval_perm_eq(
+                        float(p_c), fits[rf_key]["a"], fits[rf_key]["b"]
+                    )
                     if math.isfinite(val):
                         pt_val = round(float(val), 6)
                 out_well_names.append(str(wn_c))
@@ -10115,13 +10261,18 @@ def workspace_perm_transform_compute(
         return {
             "project_id": project_id,
             "data_source": data_source,
+            "fit_scope": fit_scope,
+            "equation_type": equation_type,
             "poro_label": poro_label,
             "perm_label": perm_label,
+            "global_fit": global_fit,
             "fits": fits,
             "saved": req.save,
             "saved_wells": saved_wells,
             "data": {
                 "data_source": data_source,
+                "fit_scope": fit_scope,
+                "equation_type": equation_type,
                 "poro_label": poro_label,
                 "perm_label": perm_label,
                 "well_names": out_well_names,

@@ -15,15 +15,21 @@ from quick_pp.database import objects as db_objects
 router = APIRouter(prefix="/database/projects/{project_id}", tags=["Perm Transform"])
 
 
-@router.get("/poroperm_fits", summary="Get poro-perm fits per rock flag")
-async def get_poroperm_fits(project_id: int):
-    """Return fitted a and b parameters for poro-perm curves per ROCK_FLAG.
+@router.get("/poroperm_fits", summary="Get poro-perm fits per rock flag or global")
+async def get_poroperm_fits(
+    project_id: int,
+    fit_scope: str = "per_rt",
+    equation_type: str = "power_law",
+):
+    """Return fitted a and b parameters for poro-perm curves per ROCK_FLAG or globally.
 
     Args:
         project_id: Project ID
+        fit_scope: 'per_rt' or 'global'
+        equation_type: 'power_law' or 'semilog_exp'
 
     Returns:
-        JSON with fits per rock_flag
+        JSON with fits per rock_flag and global_fit
     """
     try:
         with get_db() as session:
@@ -93,9 +99,44 @@ async def get_poroperm_fits(project_id: int):
             all_rock_flags.extend(crock.tolist())
 
         if not all_phit:
-            raise HTTPException(
-                status_code=404, detail="No data with ROCK_FLAG found"
+            raise HTTPException(status_code=404, detail="No data with ROCK_FLAG found")
+
+        eq_clean = (
+            "semilog_exp"
+            if str(equation_type or "power_law").strip().lower()
+            in ("semilog_exp", "semilog", "exponential")
+            else "power_law"
+        )
+        scope_clean = (
+            "global"
+            if str(fit_scope or "per_rt").strip().lower() == "global"
+            else "per_rt"
+        )
+        default_ab = (
+            {"a": 0.05, "b": 14.0} if eq_clean == "semilog_exp" else {"a": 1, "b": 1}
+        )
+
+        # Global fit across reservoir samples (exclude ROCK_FLAG == 0 if present)
+        res_pairs = [
+            (phit, perm)
+            for phit, perm, rf in zip(all_phit, all_perm, all_rock_flags, strict=True)
+            if (rf != 0) and phit > 0 and perm > 0
+        ]
+        if not res_pairs:
+            res_pairs = [
+                (phit, perm)
+                for phit, perm in zip(all_phit, all_perm, strict=True)
+                if phit > 0 and perm > 0
+            ]
+        try:
+            g_a, g_b = fit_poroperm_curve(
+                np.array([d[0] for d in res_pairs]),
+                np.array([d[1] for d in res_pairs]),
+                equation_type=eq_clean,
             )
+            global_fit = {"a": g_a, "b": g_b}
+        except Exception:
+            global_fit = dict(default_ab)
 
         # Group by rock_flag
         from collections import defaultdict
@@ -107,16 +148,26 @@ async def get_poroperm_fits(project_id: int):
         # Fit for each group
         fits = {}
         for rf, data in groups.items():
+            if scope_clean == "global":
+                fits[str(rf)] = dict(global_fit)
+                continue
             poro = [d[0] for d in data]
             perm = [d[1] for d in data]
             try:
-                a, b = fit_poroperm_curve(np.array(poro), np.array(perm))
+                a, b = fit_poroperm_curve(
+                    np.array(poro), np.array(perm), equation_type=eq_clean
+                )
                 fits[str(rf)] = {"a": a, "b": b}
             except Exception as e:
                 print(f"Failed to fit for ROCK_FLAG {rf}: {e}")
-                fits[str(rf)] = {"a": 1, "b": 1}
+                fits[str(rf)] = dict(default_ab)
 
-        return {"fits": fits}
+        return {
+            "fit_scope": scope_clean,
+            "equation_type": eq_clean,
+            "global_fit": global_fit,
+            "fits": fits,
+        }
 
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e

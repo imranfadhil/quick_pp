@@ -240,10 +240,20 @@ def _robust_fit_j_logspace(sw, j, dampen_outliers=True):
     # Fast path for exact or near-noiseless synthetic power-law curves
     slope_ols, intercept_ols = np.polyfit(x, y, 1)
     resid_ols = y - (intercept_ols + slope_ols * x)
-    if not dampen_outliers or len(sw_arr) <= 5 and float(np.max(np.abs(resid_ols))) < 0.05:
+    if (
+        not dampen_outliers
+        or len(sw_arr) <= 5
+        and float(np.max(np.abs(resid_ols))) < 0.05
+    ):
         a_ols = float(np.clip(np.exp(intercept_ols), 1e-4, 50.0))
         b_ols = float(np.clip(slope_ols, 0.02, 5.0))
-        return round(a_ols, 4), round(b_ols, 4), np.ones(len(sw_arr), dtype=float), sw_arr, j_arr
+        return (
+            round(a_ols, 4),
+            round(b_ols, 4),
+            np.ones(len(sw_arr), dtype=float),
+            sw_arr,
+            j_arr,
+        )
 
     # Dampen capillary asymptote pile-ups (Swn <= 0.055 at Swirr and Swn >= 0.90 below entry pressure)
     interior_mask = (sw_arr > 0.055) & (sw_arr < 0.90)
@@ -408,7 +418,9 @@ def fit_skelt_harrison_curve(sw, h):
         h_arr = h_arr[mask]
         if len(sw_arr) < 4:
             a_est = round(
-                float(np.clip(1.0 - np.nanmin(sw_arr) if len(sw_arr) else 0.85, 0.1, 0.98)),
+                float(
+                    np.clip(1.0 - np.nanmin(sw_arr) if len(sw_arr) else 0.85, 0.1, 0.98)
+                ),
                 3,
             )
             b_est = round(
@@ -492,40 +504,66 @@ def fit_cuddy_curve(bvw, pc):
         return 0.12, 0.35
 
 
-def perm_transform(poro, a, b):
+def perm_transform(poro, a, b, equation_type="power_law"):
     """Transform porosity to permeability using a and b constants.
 
     Args:
-        poro (float): Core porosity (frac).
-        a (float): a constant from the best-fit curve.
-        b (float): b constant from the best-fit curve.
+        poro (float or np.ndarray): Porosity (frac).
+        a (float): Multiplier constant from the best-fit curve.
+        b (float): Exponent or semi-log slope constant from the best-fit curve.
+        equation_type (str, optional): ``'power_law'`` (``a * poro**b``) or
+            ``'semilog_exp'`` (``a * 10**(b * poro)``). Defaults to ``'power_law'``.
 
     Returns:
-        float: Permeability (mD).
+        float or np.ndarray: Permeability (mD).
     """
+    eq = str(equation_type or "power_law").strip().lower()
+    if eq in ("semilog_exp", "semilog", "exponential"):
+        is_scalar = np.isscalar(poro)
+        exp_arg = np.clip(float(b) * np.asarray(poro, dtype=float), -20.0, 20.0)
+        res = float(a) * (10.0**exp_arg)
+        return float(res) if is_scalar else res
     return a * poro**b
 
 
-def fit_poroperm_curve(poro, perm):
+def fit_poroperm_curve(poro, perm, equation_type="power_law"):
     """Estimate a and b constants of best fit given core porosity and permeability values.
 
     Args:
-        poro (float): Core porosity (frac).
-        perm (float): Core permeability (mD).
+        poro (array-like): Core porosity (frac).
+        perm (array-like): Core permeability (mD).
+        equation_type (str, optional): ``'power_law'`` (``K = a * poro^b``) or
+            ``'semilog_exp'`` (``K = a * 10^(b * poro)``). Defaults to ``'power_law'``.
 
     Returns:
         tuple: a and b constants from the best-fit curve.
     """
     try:
-        # Filter out non-positive values which are invalid for logarithmic fitting
-        valid_data = (poro > 0) & (perm > 0)
+        poro_arr = np.asarray(poro, dtype=float)
+        perm_arr = np.asarray(perm, dtype=float)
+        valid_data = (
+            np.isfinite(poro_arr)
+            & np.isfinite(perm_arr)
+            & (poro_arr > 0)
+            & (perm_arr > 0)
+        )
         if not np.any(valid_data):
             logger.warning("No valid data points for poroperm curve fitting.")
             return 1, 1
 
-        popt, _ = curve_fit(
-            power_law_func, poro[valid_data], perm[valid_data], nan_policy="omit"
-        )
+        eq = str(equation_type or "power_law").strip().lower()
+        p_v = poro_arr[valid_data]
+        k_v = perm_arr[valid_data]
+        if eq in ("semilog_exp", "semilog", "exponential"):
+            if len(p_v) < 2 or float(np.std(p_v)) <= 1e-8:
+                return round(float(np.median(k_v)), 4), 0.0
+            b_slope, log10_a = np.polyfit(p_v, np.log10(np.clip(k_v, 1e-6, None)), 1)
+            a_raw = float(np.clip(10.0**log10_a, 1e-8, 1e8))
+            a_val = float(f"{a_raw:.4g}")
+            b_val = round(float(b_slope), 3)
+            return a_val, b_val
+
+        popt, _ = curve_fit(power_law_func, p_v, k_v, nan_policy="omit")
         a = [round(c) for c in popt][0]
         b = [round(c, 3) for c in popt][1]
         return a, b
@@ -1152,7 +1190,9 @@ def apply_autocorrelation_correction(data, shifted_core_data, replace_core_data=
     corrected_core_df.rename(columns={"DEPTH_CORRECTED": "DEPTH"}, inplace=True)
 
     corrected_core_df["REMARKS"] = corrected_core_df.apply(
-        lambda row: f"Corrected from {row['ORIGINAL_DEPTH']:.2f} (Shift: {row['DEPTH_SHIFT']:.2f})",
+        lambda row: (
+            f"Corrected from {row['ORIGINAL_DEPTH']:.2f} (Shift: {row['DEPTH_SHIFT']:.2f})"
+        ),
         axis=1,
     )
 
@@ -1758,7 +1798,9 @@ def auto_j_params(
             dtype=float,
         )
         rf_idx = np.arange(k_groups, dtype=float)
-        cov_rf_mu = float(np.sum((rf_idx - np.mean(rf_idx)) * (mu_vals - np.mean(mu_vals))))
+        cov_rf_mu = float(
+            np.sum((rf_idx - np.mean(rf_idx)) * (mu_vals - np.mean(mu_vals)))
+        )
 
         # Order from lowest J curve to highest J curve following physical rock-type progression
         if cov_rf_mu >= 0.0:
@@ -1766,7 +1808,9 @@ def auto_j_params(
         else:
             order = list(range(k_groups - 1, -1, -1))
 
-        sqrt_counts = np.array([np.sqrt(max(r["count"], 1)) for r in group_records], dtype=float)
+        sqrt_counts = np.array(
+            [np.sqrt(max(r["count"], 1)) for r in group_records], dtype=float
+        )
         b_raw = np.array([r["b"] for r in group_records], dtype=float)
         b_shared = float(
             np.clip(np.sum(sqrt_counts * b_raw) / np.sum(sqrt_counts), 0.15, 2.2)
@@ -1778,7 +1822,11 @@ def auto_j_params(
         # Initialize monotonic endpoints R_j (at Swn=1, u=0) and L_j (at Swn=0.01, u=u_max)
         mu_ordered = np.array([mu_vals[idx] for idx in order], dtype=float)
         mu_mono = np.zeros(k_groups, dtype=float)
-        mu_mono[0] = float(np.min(mu_ordered)) if mu_ordered[0] > np.median(mu_ordered) else float(mu_ordered[0])
+        mu_mono[0] = (
+            float(np.min(mu_ordered))
+            if mu_ordered[0] > np.median(mu_ordered)
+            else float(mu_ordered[0])
+        )
         for j_i in range(1, k_groups):
             mu_mono[j_i] = max(float(mu_ordered[j_i]), mu_mono[j_i - 1] + delta * 1.2)
         # Re-center monotonic mid-levels to match the empirical mean level
@@ -1932,7 +1980,9 @@ def auto_skelt_harrison_params(core_data, excluded_samples=None, cluster_by=None
 
     params_list = []
     for group_key, data in core_data.groupby(grouping_cols):
-        clean_data = data.dropna(subset=[sw_col, "H"]).query(f"{sw_col} >= 0 and H >= 0")
+        clean_data = data.dropna(subset=[sw_col, "H"]).query(
+            f"{sw_col} >= 0 and H >= 0"
+        )
         if len(clean_data) < 2:
             continue
 

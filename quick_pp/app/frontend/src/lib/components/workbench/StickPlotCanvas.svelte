@@ -638,11 +638,21 @@
 
 		// Estimate permeability from porosity using permTransformResult fits or Timur-Coates correlation
 		let permEst = Math.max(0.05, 0.15 * Math.pow(10, 12.5 * phit));
-		const ptFits = untrack(() => projectData.permTransformResult?.fits);
-		if (ptFits && Object.keys(ptFits).length > 0) {
-			const firstFit = Object.values(ptFits)[0];
-			if (firstFit && Number.isFinite(firstFit.a) && Number.isFinite(firstFit.b)) {
-				permEst = Math.max(0.01, Math.pow(10, firstFit.a * phit + firstFit.b));
+		const ptRes = untrack(() => projectData.permTransformResult);
+		const ptFits = ptRes?.fits;
+		if (ptRes && (ptRes.global_fit || (ptFits && Object.keys(ptFits).length > 0))) {
+			const isGlobalPt = (ptRes.fit_scope ?? 'per_rt') === 'global';
+			const activeFit = isGlobalPt
+				? (ptRes.global_fit ?? (ptFits ? Object.values(ptFits)[0] : undefined))
+				: (ptFits ? Object.values(ptFits)[0] : ptRes.global_fit);
+			if (activeFit && Number.isFinite(activeFit.a) && Number.isFinite(activeFit.b)) {
+				const rawPerm =
+					(ptRes.equation_type ?? 'power_law') === 'semilog_exp'
+						? activeFit.a * Math.pow(10, Math.max(-20, Math.min(20, activeFit.b * phit)))
+						: activeFit.a * Math.pow(Math.max(1e-4, phit), activeFit.b);
+				if (Number.isFinite(rawPerm) && rawPerm > 0) {
+					permEst = Math.max(0.01, rawPerm);
+				}
 			}
 		}
 

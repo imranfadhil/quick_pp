@@ -2533,3 +2533,98 @@ def test_environmental_corrections_endpoint_returns_qc_and_weights_inputs(
     assert phit_raw == r0.json()["data"].get("PHIT")
     assert phit_w[2] != phit_raw[2]
     assert np.isclose(phit_w[0], phit_raw[0], atol=1e-6)
+
+
+def test_workspace_perm_transform_global_and_semilog(client_and_project):
+    """Verify perm_transform/compute supports global vs per_rt scopes and power_law vs semilog_exp."""
+    client, pid = client_and_project
+
+    # First compute porosity and rock typing so multiple ROCK_FLAG bins exist
+    r_poro = client.post(
+        f"/quick_pp/workspace/projects/{pid}/wells/Well-A/porosity",
+        json={"method": "density", "save": True},
+    )
+    assert r_poro.status_code == 200
+
+    r_rt = client.post(
+        f"/quick_pp/workspace/projects/{pid}/rock_typing/compute",
+        json={"method": "fzi", "cutoffs": [1.5, 3.0], "save": True},
+    )
+    assert r_rt.status_code == 200
+
+    # 1. Global fit with Semi-Log Exponential: K = a * 10^(b * Phi)
+    r_glob_semi = client.post(
+        f"/quick_pp/workspace/projects/{pid}/perm_transform/compute",
+        json={
+            "fit_scope": "global",
+            "equation_type": "semilog_exp",
+            "save": False,
+        },
+    )
+    assert r_glob_semi.status_code == 200, r_glob_semi.text
+    b_semi = r_glob_semi.json()
+    assert b_semi["fit_scope"] == "global"
+    assert b_semi["equation_type"] == "semilog_exp"
+    assert "global_fit" in b_semi
+    gf_semi = b_semi["global_fit"]
+    assert gf_semi["count"] >= 4
+    assert gf_semi["a"] > 0
+    assert gf_semi["b"] > 0
+    assert gf_semi["r2"] is not None and gf_semi["r2"] > 0.85
+    assert gf_semi["rmse"] is not None and gf_semi["rmse"] >= 0.0
+    # In global scope, all RT entries in fits mirror the shared global fit
+    for fit_entry in b_semi["fits"].values():
+        assert fit_entry["a"] == gf_semi["a"]
+        assert fit_entry["b"] == gf_semi["b"]
+    # Predicted PERM_TRANS matches a * 10^(b * log_phit)
+    log_phit_arr = b_semi["data"]["log_phit"]
+    perm_pred_arr = b_semi["data"]["perm_pred"]
+    rf_arr = b_semi["data"]["rock_flags"]
+    checked = 0
+    for p_v, pt_v, rf_v in zip(log_phit_arr, perm_pred_arr, rf_arr, strict=False):
+        if rf_v != 0 and p_v is not None and p_v > 0 and pt_v is not None:
+            expected = gf_semi["a"] * (10.0 ** (gf_semi["b"] * p_v))
+            assert np.isclose(pt_v, expected, rtol=1e-4)
+            checked += 1
+    assert checked >= 5
+
+    # 2. Global fit with Power-Law and custom manual global override
+    r_glob_pow_custom = client.post(
+        f"/quick_pp/workspace/projects/{pid}/perm_transform/compute",
+        json={
+            "fit_scope": "global",
+            "equation_type": "power_law",
+            "fits": {"global": {"a": 12000.0, "b": 3.2}},
+            "save": False,
+        },
+    )
+    assert r_glob_pow_custom.status_code == 200, r_glob_pow_custom.text
+    b_pow = r_glob_pow_custom.json()
+    assert b_pow["fit_scope"] == "global"
+    assert b_pow["equation_type"] == "power_law"
+    assert b_pow["global_fit"]["a"] == 12000.0
+    assert b_pow["global_fit"]["b"] == 3.2
+    for p_v, pt_v, rf_v in zip(
+        b_pow["data"]["log_phit"],
+        b_pow["data"]["perm_pred"],
+        b_pow["data"]["rock_flags"],
+        strict=False,
+    ):
+        if rf_v != 0 and p_v is not None and p_v > 0 and pt_v is not None:
+            assert np.isclose(pt_v, 12000.0 * (p_v**3.2), rtol=1e-4)
+
+    # 3. Per-RT fit with Semi-Log Exponential also returns global_fit for Copy-from-Global support
+    r_rt_semi = client.post(
+        f"/quick_pp/workspace/projects/{pid}/perm_transform/compute",
+        json={
+            "fit_scope": "per_rt",
+            "equation_type": "semilog_exp",
+            "save": True,
+        },
+    )
+    assert r_rt_semi.status_code == 200, r_rt_semi.text
+    b_rt_semi = r_rt_semi.json()
+    assert b_rt_semi["fit_scope"] == "per_rt"
+    assert b_rt_semi["equation_type"] == "semilog_exp"
+    assert b_rt_semi["global_fit"]["count"] >= 4
+    assert b_rt_semi["saved_wells"] == 1
