@@ -3,6 +3,7 @@
 	import { api, getJson, postJson } from '$lib/api/client';
 	import { authState } from '$lib/state/auth.svelte';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
+	import InputConditioningBar from '$lib/components/workbench/InputConditioningBar.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
 	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
 	import VshCalibrationPanel from '$lib/components/workbench/VshCalibrationPanel.svelte';
@@ -452,10 +453,13 @@
 			min_depth: workbench.depthFilter?.min ?? null,
 			max_depth: workbench.depthFilter?.max ?? null,
 			zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
+			...workbench.qcInputFlags,
 			save: persist && !selectionMode
 		};
 
-		const activeOverrides = (lp.manualOverrides ?? []).filter((o) => o.enabled !== false);
+		const activeOverrides = lp.bypassManualOverrides
+			? []
+			: (lp.manualOverrides ?? []).filter((o) => o.enabled !== false);
 
 		const coalArgs = {
 			enable_coal_flagging: lp.enableCoalFlagging,
@@ -754,6 +758,7 @@
 					rh_shale: ts.rhShale,
 					theta: ts.theta,
 					use_enhanced_logs: workbench.enhanceParams.useEnhancedLogs,
+					...workbench.qcInputFlags,
 					min_depth: workbench.depthFilter?.min ?? null,
 					max_depth: workbench.depthFilter?.max ?? null,
 					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
@@ -957,11 +962,45 @@
 			wellData.isCalculating = false;
 		}
 	}
+	const ML_CONFORMAL_CURVES = [
+		'PHIT_P10',
+		'PHIT_P50',
+		'PHIT_P90',
+		'PHIE_P10',
+		'PHIE_P50',
+		'PHIE_P90',
+		'VCLAY_P10',
+		'VCLAY_P50',
+		'VCLAY_P90',
+		'PERM_P10',
+		'PERM_P50',
+		'PERM_P90',
+		'SW_P10',
+		'SW_P50',
+		'SW_P90'
+	];
+
+	let hasMlCurves = $derived(
+		mlSummary !== null || ML_CONFORMAL_CURVES.some((c) => Boolean(wellData.curves[c]))
+	);
+
+	async function revertMlInference() {
+		const present = ML_CONFORMAL_CURVES.filter((c) => Boolean(wellData.curves[c]));
+		if (present.length > 0) {
+			await wellData.clearCalculatedCurves({
+				scope: 'full',
+				curves: present,
+				persist: true
+			});
+		}
+		mlSummary = null;
+	}
 </script>
 
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
 	<div class="flex-1 overflow-y-auto">
 		<SavedParamsIndicator modules={['litho-poro']} />
+		<InputConditioningBar showCoreRhoMa={true} onchange={() => executeLithoPoro(false)} />
 		<ParameterSection title="Lithology & Porosity Model" badge={workbench.lithoParams.model.toUpperCase()}>
 			<div class="grid grid-cols-[1fr_118px] items-center gap-x-2 py-0.5">
 				<span class="text-xs font-medium text-[var(--text-primary)]">Lithology Model</span>
@@ -2289,6 +2328,23 @@
 					{#if (workbench.lithoParams.manualOverrides?.length ?? 0) > 0}
 						<button
 							type="button"
+							onclick={() => {
+								workbench.lithoParams.bypassManualOverrides =
+									!workbench.lithoParams.bypassManualOverrides;
+								executeLithoPoro(false);
+							}}
+							title={workbench.lithoParams.bypassManualOverrides
+								? 'Manual overrides are bypassed (turned off). Click to re-enable.'
+								: 'Temporarily turn off all manual overrides without deleting them'}
+							class="rounded-xs border px-2 py-1 text-[10px] font-semibold transition-colors {workbench
+								.lithoParams.bypassManualOverrides
+								? 'border-amber-400 bg-amber-100 text-amber-900'
+								: 'border-[var(--border-hairline)] bg-[var(--bg-app)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+						>
+							{workbench.lithoParams.bypassManualOverrides ? '○ Overrides Off' : '✓ Overrides On'}
+						</button>
+						<button
+							type="button"
 							onclick={clearAllOverrides}
 							title="Clear all manual overrides"
 							class="ml-auto text-[10px] font-medium text-red-600 hover:underline"
@@ -2710,20 +2766,33 @@
 				decimals={2}
 			/>
 
-			<button
-				type="button"
-				disabled={wellData.isCalculating}
-				onclick={() => executePretrainedMlInference(false)}
-				class="mt-1.5 h-7 w-full rounded-sm border border-indigo-600 bg-indigo-600 px-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
-			>
-				{#if wellData.isCalculating}
-					Running Conformal Inference...
-				{:else if mlModelsStatus && !mlModelsStatus.pretrained_available}
-					Run On-the-Fly Synthetic Conformal Inference
-				{:else}
-					Run Pre-Trained Conformal Inference
+			<div class="mt-1.5 flex items-center gap-1.5">
+				<button
+					type="button"
+					disabled={wellData.isCalculating}
+					onclick={() => executePretrainedMlInference(false)}
+					class="h-7 flex-1 rounded-sm border border-indigo-600 bg-indigo-600 px-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+				>
+					{#if wellData.isCalculating}
+						Running Conformal Inference...
+					{:else if mlModelsStatus && !mlModelsStatus.pretrained_available}
+						Run Synthetic Conformal Inference
+					{:else}
+						Run Pre-Trained Conformal Inference
+					{/if}
+				</button>
+				{#if hasMlCurves}
+					<button
+						type="button"
+						disabled={wellData.isCalculating}
+						onclick={revertMlInference}
+						title="Clear conformal uncertainty curves (*_P10 / *_P50 / *_P90)"
+						class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-xs font-medium text-[var(--text-secondary)] hover:bg-slate-100 disabled:opacity-50"
+					>
+						Reset
+					</button>
 				{/if}
-			</button>
+			</div>
 
 			{#if mlSummary}
 				<div class="mt-1.5 rounded-sm border border-indigo-200 bg-indigo-50/50 p-1.5 text-[10px]">

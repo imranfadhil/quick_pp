@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { postJson } from '$lib/api/client';
 	import ImputationControls from '$lib/components/modules/ImputationControls.svelte';
+	import InputConditioningBar from '$lib/components/workbench/InputConditioningBar.svelte';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
 	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
@@ -373,11 +374,115 @@
 		projectData.multiWellQaqcResult?.field_stats?.[workbench.selectedQaqcCurve] ?? null
 	);
 	let anomalies = $derived(projectData.multiWellQaqcResult?.anomalies ?? []);
+
+	let hasNormCurves = $derived(
+		availableCurves.some((c) => c.toUpperCase().endsWith('_NORM')) ||
+			projectData.stratNormReport.length > 0
+	);
+	let hasOriBackups = $derived(
+		availableCurves.some(
+			(c) =>
+				c.toUpperCase().endsWith('_ORI') &&
+				c.toUpperCase() !== 'CPORE_ORI' &&
+				c.toUpperCase() !== 'CPERM_ORI'
+		) || projectData.mwConditioningChanges.length > 0
+	);
+	let hasBatchBadhole = $derived(
+		availableCurves.some((c) => ['BADHOLE', 'BAD_HOLE', 'BAD_HOLE_FLAG'].includes(c.toUpperCase())) ||
+			projectData.mwBadholeSummaries.length > 0
+	);
+	let hasBatchEnvCorr = $derived(
+		availableCurves.some((c) => c.toUpperCase().endsWith('_ENV_CORR')) ||
+			envSummaryRows.length > 0
+	);
+
+	async function resetStratNormalization() {
+		const res = await projectData.resetProjectQaqc({
+			action: 'clear_curves',
+			wellNames: activeWellSubset(),
+			suffixes: ['_NORM'],
+			save: true
+		});
+		if (res) {
+			projectData.stratNormReport = [];
+			workbench.lithoParams.useNormalizedLogs = false;
+			if (workbench.mwQaqcCompareMode === 'norm') workbench.mwQaqcCompareMode = 'none';
+			await loadDistributions();
+			statusBanner = `Cleared ${res.cleared_curves.join(', ') || '*_NORM'} across ${res.wells_count} wells ✓`;
+		}
+	}
+
+	async function revertBatchConditioning() {
+		const res = await projectData.resetProjectQaqc({
+			action: 'restore_ori',
+			wellNames: activeWellSubset(),
+			dropOri: true,
+			save: true
+		});
+		if (res) {
+			projectData.mwConditioningChanges = [];
+			await loadDistributions();
+			statusBanner = `Restored ${res.restored_curves.join(', ') || 'raw curves'} from *_ORI across ${res.wells_count} wells ✓`;
+		}
+	}
+
+	async function resetBatchBadhole() {
+		const res = await projectData.resetProjectQaqc({
+			action: 'clear_curves',
+			wellNames: activeWellSubset(),
+			curves: [
+				'BADHOLE',
+				'BADHOLE_BASE',
+				'BAD_HOLE',
+				'BAD_HOLE_FLAG',
+				'BS',
+				'DCALI',
+				'CALI_FLAG',
+				'DRHO_FLAG',
+				'RUGOSITY_FLAG'
+			],
+			save: true
+		});
+		if (res) {
+			projectData.mwBadholeSummaries = [];
+			await loadDistributions();
+			statusBanner = `Cleared BADHOLE flags across ${res.wells_count} wells ✓`;
+		}
+	}
+
+	async function resetBatchEnvCorrections() {
+		const res = await projectData.resetProjectQaqc({
+			action: 'clear_curves',
+			wellNames: activeWellSubset(),
+			curves: [
+				'INVASION_FLAG',
+				'INVASION_PROFILE',
+				'RXO_EST',
+				'DI_EST',
+				'ENV_QC_REASON',
+				'HOLE_SEVERITY',
+				'ENV_TEMP_C',
+				'ENV_BS',
+				'ENV_RM',
+				'ENV_RMF',
+				'ENV_RW'
+			],
+			suffixes: ['_ENV_CORR', '_QC_CONF', '_QC_STATUS', '_SIGMA', '_CORR_DELTA'],
+			save: true
+		});
+		if (res) {
+			envSummaryRows = [];
+			if (workbench.mwQaqcCompareMode === 'corr') workbench.mwQaqcCompareMode = 'none';
+			await loadDistributions();
+			statusBanner = `Cleared environmental correction curves across ${res.wells_count} wells ✓`;
+		}
+	}
 </script>
 
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
 	<div class="flex-1 overflow-y-auto">
 		<SavedParamsIndicator modules={['mw-qaqc']} />
+		<InputConditioningBar scope="multi-well" />
 		<ImputationControls />
 		<!-- 1. Multi-Well Curve Distributions & Grouping -->
 		<ParameterSection
@@ -659,7 +764,34 @@
 				>
 					Save *_NORM
 				</button>
+				{#if hasNormCurves}
+					<button
+						type="button"
+						disabled={projectData.isComputingMultiWell}
+						onclick={resetStratNormalization}
+						title="Delete *_NORM curves across selected wells"
+						class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-xs font-medium text-[var(--text-secondary)] hover:bg-slate-100 disabled:opacity-50"
+					>
+						Reset
+					</button>
+				{/if}
 			</div>
+
+			<label
+				class="mt-1.5 flex cursor-pointer items-start gap-2 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-1.5"
+			>
+				<input
+					type="checkbox"
+					bind:checked={workbench.lithoParams.useNormalizedLogs}
+					class="mt-0.5 h-3.5 w-3.5 shrink-0 accent-purple-700"
+				/>
+				<span class="text-[10px] leading-snug text-[var(--text-secondary)]">
+					<span class="font-semibold text-[var(--text-primary)]">
+						Use normalized logs (*_NORM) downstream
+					</span>
+					— feed <span class="mono-num">*_NORM</span> into single-well and batch evaluations when present.
+				</span>
+			</label>
 
 			{#if projectData.stratNormReport.length > 0}
 				<div class="mt-1.5 max-h-44 overflow-y-auto border border-[var(--border-hairline)]">
@@ -938,6 +1070,23 @@
 					</div>
 				</div>
 			{/if}
+
+			{#if hasOriBackups}
+				<div class="mt-2 flex items-center justify-between gap-2 border-t border-[var(--border-hairline)] pt-1.5 text-[10px]">
+					<span class="text-[var(--text-secondary)]">
+						Original curves backed up as <strong class="mono-num">*_ORI</strong>
+					</span>
+					<button
+						type="button"
+						disabled={projectData.isComputingMultiWell}
+						onclick={revertBatchConditioning}
+						title="Restore overwritten curves across selected wells from *_ORI backups"
+						class="h-6 rounded-xs border border-amber-300 bg-amber-50 px-2 text-[10px] font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+					>
+						↺ Revert Edited (*_ORI)
+					</button>
+				</div>
+			{/if}
 		</ParameterSection>
 
 		<!-- 4. Batch Badhole Flagging Across Wells -->
@@ -1060,6 +1209,17 @@
 				>
 					Save BADHOLE
 				</button>
+				{#if hasBatchBadhole}
+					<button
+						type="button"
+						disabled={projectData.isComputingMultiWell}
+						onclick={resetBatchBadhole}
+						title="Clear BADHOLE, BS, and DCALI curves across selected wells"
+						class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-xs font-medium text-[var(--text-secondary)] hover:bg-slate-100 disabled:opacity-50"
+					>
+						Reset
+					</button>
+				{/if}
 			</div>
 
 			{#if projectData.mwBadholeSummaries.length > 0}
@@ -1160,6 +1320,36 @@
 				>
 					Save *_CORR
 				</button>
+				{#if hasBatchEnvCorr}
+					<button
+						type="button"
+						disabled={projectData.isComputingMultiWell}
+						onclick={resetBatchEnvCorrections}
+						title="Delete *_ENV_CORR, *_QC_CONF, and *_SIGMA curves across selected wells"
+						class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-xs font-medium text-[var(--text-secondary)] hover:bg-slate-100 disabled:opacity-50"
+					>
+						Reset
+					</button>
+				{/if}
+			</div>
+
+			<div class="mt-1.5 flex flex-col gap-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-1.5 text-[10px]">
+				<label class="flex cursor-pointer items-center gap-1.5 text-[var(--text-secondary)]">
+					<input
+						type="checkbox"
+						bind:checked={workbench.envCorrParams.useEnvCorrected}
+						class="h-3.5 w-3.5 shrink-0 accent-emerald-700"
+					/>
+					<span class="font-medium text-[var(--text-primary)]">Use *_ENV_CORR logs downstream</span>
+				</label>
+				<label class="flex cursor-pointer items-center gap-1.5 text-[var(--text-secondary)]">
+					<input
+						type="checkbox"
+						bind:checked={workbench.envCorrParams.confidenceWeighting}
+						class="h-3.5 w-3.5 shrink-0 accent-teal-700"
+					/>
+					<span class="font-medium text-[var(--text-primary)]">Weight washouts by *_QC_CONF</span>
+				</label>
 			</div>
 
 			{#if envSummaryRows.length > 0}

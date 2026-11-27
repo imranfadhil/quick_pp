@@ -168,11 +168,7 @@
 					projectData.resetShf();
 					break;
 				case 'perm-transform':
-					projectData.permTransformResult = null;
-					if (workbench.projectId) {
-						projectParams.deleteAllForModule(workbench.projectId, 'perm-transform', projectData.projectModuleParams);
-					}
-					appStatus.success('Perm transform reset to regional defaults');
+					void projectData.resetPermTransform(false);
 					break;
 				default:
 					appStatus.info(`Regional defaults applied for ${activeStepLabel}`);
@@ -286,22 +282,44 @@
 			{#if isMultiWell && (activeMultiModule === 'rock-typing' || activeMultiModule === 'rt-classifier')}
 				<button
 					type="button"
-					onclick={() => projectData.resetRockTyping()}
-					title="Reset rock typing DRT cutoffs to 3 clusters and purge trained classifier"
+					onclick={() => projectData.resetRockTyping(true)}
+					title="Reset rock typing DRT cutoffs and purge saved ROCK_FLAG / ROCK_FLAG_ML / FZI curves across wells"
 					class="flex h-6 items-center gap-1 rounded-xs bg-amber-500/10 px-2 text-[10.5px] font-medium text-amber-700 border border-amber-500/30 hover:bg-amber-500/20 transition-colors"
 				>
-					<span>Reset All Rock Types</span>
+					<span>Reset &amp; Clear DRT Curves</span>
 				</button>
 			{/if}
 
-			{#if isMultiWell && (activeMultiModule === 'swirr-corr' || activeMultiModule === 'shf')}
+			{#if isMultiWell && activeMultiModule === 'perm-transform'}
 				<button
 					type="button"
-					onclick={() => projectData.resetScalFits()}
-					title="Clear SCAL Swirr correlations, Leverett-J fits, and SWOF deck"
+					onclick={() => projectData.resetPermTransform(true)}
+					title="Reset poro-perm fits and delete saved PERM_TRANS curves across wells"
 					class="flex h-6 items-center gap-1 rounded-xs bg-amber-500/10 px-2 text-[10.5px] font-medium text-amber-700 border border-amber-500/30 hover:bg-amber-500/20 transition-colors"
 				>
-					<span>Reset SCAL Fits</span>
+					<span>Reset &amp; Clear PERM_TRANS</span>
+				</button>
+			{/if}
+
+			{#if isMultiWell && activeMultiModule === 'swirr-corr'}
+				<button
+					type="button"
+					onclick={() => projectData.resetScalFits(true)}
+					title="Clear SCAL Swirr correlations, SWOF deck, and saved SWIRR curves across wells"
+					class="flex h-6 items-center gap-1 rounded-xs bg-amber-500/10 px-2 text-[10.5px] font-medium text-amber-700 border border-amber-500/30 hover:bg-amber-500/20 transition-colors"
+				>
+					<span>Reset &amp; Clear SWIRR</span>
+				</button>
+			{/if}
+
+			{#if isMultiWell && activeMultiModule === 'shf'}
+				<button
+					type="button"
+					onclick={() => projectData.resetShf(true)}
+					title="Reset SHF model, FWL datum, and delete saved SHF / SW_SHF curves across wells"
+					class="flex h-6 items-center gap-1 rounded-xs bg-amber-500/10 px-2 text-[10.5px] font-medium text-amber-700 border border-amber-500/30 hover:bg-amber-500/20 transition-colors"
+				>
+					<span>Reset &amp; Clear SHF Curves</span>
 				</button>
 			{/if}
 

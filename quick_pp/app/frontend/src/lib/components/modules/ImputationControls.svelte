@@ -39,6 +39,86 @@
 			.sort()
 	);
 
+	let hasImpCurves = $derived(
+		(workbench.scope === 'single-well' ? wellData.availableCurves : projectData.allCurves).some(
+			(c) => c.toUpperCase().endsWith('_IMP')
+		)
+	);
+	let hasOriBackups = $derived(
+		workbench.scope === 'single-well'
+			? wellData.oriBackedUpCurves.length > 0
+			: (projectData.allCurves ?? []).some(
+					(c) =>
+						c.toUpperCase().endsWith('_ORI') &&
+						c.toUpperCase() !== 'CPORE_ORI' &&
+						c.toUpperCase() !== 'CPERM_ORI'
+				)
+	);
+
+	async function resetImputedCurves() {
+		if (!workbench.projectId) return;
+		busy = true;
+		error = '';
+		try {
+			const targetImp =
+				selected.length > 0 ? selected.map((c) => `${c}_IMP`) : undefined;
+			if (workbench.scope === 'single-well' && workbench.wellId) {
+				const toClear =
+					targetImp ??
+					wellData.availableCurves.filter((c) => c.toUpperCase().endsWith('_IMP'));
+				await wellData.clearCalculatedCurves({
+					scope: 'full',
+					curves: toClear,
+					persist: true
+				});
+			} else {
+				await projectData.resetProjectQaqc({
+					action: 'clear_curves',
+					wellNames: projectData.selectedWellNames.length
+						? projectData.selectedWellNames
+						: null,
+					curves: targetImp,
+					suffixes: targetImp ? undefined : ['_IMP'],
+					save: true
+				});
+			}
+			result = [];
+			workbench.missingMatrixRevision++;
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to clear imputed curves';
+		} finally {
+			busy = false;
+		}
+	}
+
+	async function revertReplacedCurves() {
+		if (!workbench.projectId) return;
+		busy = true;
+		error = '';
+		try {
+			const targetBases = selected.length > 0 ? selected : undefined;
+			if (workbench.scope === 'single-well' && workbench.wellId) {
+				await wellData.restoreMultipleCurvesFromOri(targetBases, true, true);
+			} else {
+				await projectData.resetProjectQaqc({
+					action: 'restore_ori',
+					wellNames: projectData.selectedWellNames.length
+						? projectData.selectedWellNames
+						: null,
+					curves: targetBases,
+					dropOri: true,
+					save: true
+				});
+			}
+			result = [];
+			workbench.missingMatrixRevision++;
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to restore original curves';
+		} finally {
+			busy = false;
+		}
+	}
+
 	$effect(() => {
 		const valid = selected.filter((curve) => curves.includes(curve));
 		if (valid.length !== selected.length) selected = valid;
@@ -165,22 +245,46 @@
 			>
 		{/each}
 	</div>
-	<button
-		type="button"
-		onclick={run}
-		disabled={busy ||
-			!workbench.projectId ||
-			(workbench.scope === 'single-well' && !workbench.wellId) ||
-			!selected.length ||
-			((method === 'knn' || method === 'iterative') && selected.length < 2)}
-		class="mt-1 rounded bg-blue-600 px-2 py-1 text-[11px] font-semibold text-white disabled:opacity-50"
-	>
-		{busy
-			? 'Imputing…'
-			: output === 'replace'
-				? 'Impute and replace curves'
-				: 'Impute and save'}
-	</button>
+	<div class="mt-1 flex flex-wrap gap-1.5">
+		<button
+			type="button"
+			onclick={run}
+			disabled={busy ||
+				!workbench.projectId ||
+				(workbench.scope === 'single-well' && !workbench.wellId) ||
+				!selected.length ||
+				((method === 'knn' || method === 'iterative') && selected.length < 2)}
+			class="flex-1 rounded bg-blue-600 px-2 py-1 text-[11px] font-semibold text-white disabled:opacity-50"
+		>
+			{busy
+				? 'Imputing…'
+				: output === 'replace'
+					? 'Impute and replace curves'
+					: 'Impute and save'}
+		</button>
+		{#if hasImpCurves}
+			<button
+				type="button"
+				disabled={busy}
+				onclick={resetImputedCurves}
+				title="Delete *_IMP curves (selected curves or all *_IMP if none selected)"
+				class="rounded border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 py-1 text-[10.5px] font-medium text-[var(--text-secondary)] hover:bg-slate-100 disabled:opacity-50"
+			>
+				↺ Reset *_IMP
+			</button>
+		{/if}
+		{#if hasOriBackups}
+			<button
+				type="button"
+				disabled={busy}
+				onclick={revertReplacedCurves}
+				title="Restore replaced curves from *_ORI backups"
+				class="rounded border border-amber-300 bg-amber-50 px-2 py-1 text-[10.5px] font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+			>
+				↺ Revert *_ORI
+			</button>
+		{/if}
+	</div>
 	{#if error}<p role="alert" class="text-[10px] text-red-700">{error}</p>{/if}
 	{#if result.length}
 		<div class="max-h-32 overflow-y-auto text-[10px]" role="status">

@@ -76,6 +76,7 @@ export const CALCULATED_CURVE_GROUPS: Record<
 		shortLabel: 'QAQC',
 		curves: [
 			'BADHOLE',
+			'BADHOLE_BASE',
 			'BAD_HOLE',
 			'BAD_HOLE_FLAG',
 			'BS',
@@ -105,6 +106,12 @@ export const CALCULATED_CURVE_GROUPS: Record<
 			]),
 			'GR_NORM',
 			'NPHI_NORM',
+			'RHOB_NORM',
+			'DTC_NORM',
+			'DT_NORM',
+			'RT_NORM',
+			'RD_NORM',
+			'CGR_NORM',
 			'NPHI_HC',
 			'RHOB_HC',
 			'HC_FLAG',
@@ -3240,31 +3247,149 @@ class WellDataState {
 		this.committedBaseCurves = { ...this.committedBaseCurves, [src]: [...this.curves[src]] };
 	}
 
-	async restoreCurveSnapshot(curveName: string, persist: boolean = false) {
+	get oriBackedUpCurves(): string[] {
+		const out: string[] = [];
+		for (const key of Object.keys(this.curves)) {
+			const up = key.trim().toUpperCase();
+			if (
+				up.endsWith('_ORI') &&
+				up !== 'CPORE_ORI' &&
+				up !== 'CPERM_ORI' &&
+				up.length > 4
+			) {
+				const base = up.slice(0, -4);
+				if (!['DEPTH', 'DEPT', 'WELL_NAME', 'ZONES'].includes(base)) {
+					out.push(base);
+				}
+			}
+		}
+		return out.sort();
+	}
+
+	async restoreCurveSnapshot(
+		curveName: string,
+		persist: boolean = false,
+		dropOri: boolean = true
+	) {
 		const src = curveName.trim().toUpperCase();
 		const oriName = src.endsWith('_ORI') ? null : `${src}_ORI`;
 		const orig = (oriName ? this.curves[oriName] : undefined) ?? this.originalCurves[src];
 		if (!orig) return;
 		const deptArr = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
-		this.curves = { ...this.curves, [src]: [...orig] };
-		this.committedBaseCurves = { ...this.committedBaseCurves, [src]: [...orig] };
-		this.stats = { ...this.stats, [src]: computeSummaryStats(orig, deptArr) };
+		const nextCurves = { ...this.curves, [src]: [...orig] };
+		const nextCommitted = { ...this.committedBaseCurves, [src]: [...orig] };
+		const nextStats = { ...this.stats, [src]: computeSummaryStats(orig, deptArr) };
+		if (dropOri && oriName && nextCurves[oriName]) {
+			delete nextCurves[oriName];
+			delete nextCommitted[oriName];
+			delete nextStats[oriName];
+		}
+		this.curves = nextCurves;
+		this.committedBaseCurves = nextCommitted;
+		this.stats = nextStats;
+
+		const clearSet = new Set([src, ...(oriName ? [oriName] : [])]);
+		const nextPending: Record<string, string[]> = {};
+		for (const [mKey, cols] of Object.entries(this.pendingModuleCurves)) {
+			const rem = cols.filter((col) => !clearSet.has(col));
+			if (rem.length > 0) nextPending[mKey] = rem;
+		}
+		this.pendingModuleCurves = nextPending;
 
 		if (persist && workbench.projectId && workbench.wellId) {
-			await postJson(
-				`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/wells/${encodeURIComponent(workbench.wellId)}/curve_edit`,
-				{
-					action: 'save_values',
-					curve: src,
-					target_curve: src,
-					depths: deptArr,
-					values: orig.map((v) => (Number.isFinite(v) ? v : null)),
-					save: true
-				}
-			);
+			if (oriName) {
+				await postJson(
+					`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/qaqc/reset`,
+					{
+						action: 'restore_ori',
+						well_names: [workbench.wellId],
+						curves: [src],
+						drop_ori: dropOri,
+						save: true
+					}
+				);
+			} else {
+				await postJson(
+					`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/wells/${encodeURIComponent(workbench.wellId)}/curve_edit`,
+					{
+						action: 'save_values',
+						curve: src,
+						target_curve: src,
+						depths: deptArr,
+						values: orig.map((v) => (Number.isFinite(v) ? v : null)),
+						save: true
+					}
+				);
+			}
 			this.lastSavedMessage = `Restored ${src} ✓`;
 		}
 		appStatus.info(`Restored original values for ${src}`, workbench.wellId ?? undefined);
+	}
+
+	async restoreMultipleCurvesFromOri(
+		curves?: string[],
+		persist: boolean = true,
+		dropOri: boolean = true
+	): Promise<string[]> {
+		const candidates =
+			curves && curves.length > 0
+				? curves.map((c) => c.trim().toUpperCase().replace(/_ORI$/, ''))
+				: this.oriBackedUpCurves;
+		const deptArr = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
+		const nextCurves = { ...this.curves };
+		const nextCommitted = { ...this.committedBaseCurves };
+		const nextStats = { ...this.stats };
+		const restored: string[] = [];
+
+		for (const base of candidates) {
+			const oriName = `${base}_ORI`;
+			const orig = nextCurves[oriName] ?? this.originalCurves[base];
+			if (!orig) continue;
+			nextCurves[base] = [...orig];
+			nextCommitted[base] = [...orig];
+			nextStats[base] = computeSummaryStats(orig, deptArr);
+			if (dropOri && nextCurves[oriName]) {
+				delete nextCurves[oriName];
+				delete nextCommitted[oriName];
+				delete nextStats[oriName];
+			}
+			restored.push(base);
+		}
+		if (restored.length === 0) return [];
+
+		this.curves = nextCurves;
+		this.committedBaseCurves = nextCommitted;
+		this.stats = nextStats;
+
+		const clearSet = new Set(restored.flatMap((b) => [b, `${b}_ORI`]));
+		const nextPending: Record<string, string[]> = {};
+		for (const [mKey, cols] of Object.entries(this.pendingModuleCurves)) {
+			const rem = cols.filter((col) => !clearSet.has(col));
+			if (rem.length > 0) nextPending[mKey] = rem;
+		}
+		this.pendingModuleCurves = nextPending;
+
+		if (persist && workbench.projectId && workbench.wellId) {
+			this.isCalculating = true;
+			try {
+				await postJson(
+					`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/qaqc/reset`,
+					{
+						action: 'restore_ori',
+						well_names: [workbench.wellId],
+						curves: restored,
+						drop_ori: dropOri,
+						save: true
+					}
+				);
+			} finally {
+				this.isCalculating = false;
+			}
+		}
+		const msg = `Restored ${restored.join(', ')} to raw baseline ✓`;
+		this.lastSavedMessage = msg;
+		appStatus.success(msg, workbench.wellId ?? undefined);
+		return restored;
 	}
 
 	/**

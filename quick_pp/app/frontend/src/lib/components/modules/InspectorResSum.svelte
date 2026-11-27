@@ -193,6 +193,7 @@
 						SWT: rp.swtMax,
 						...(rp.applyPermCutoff && rp.permMin != null ? { PERM: rp.permMin } : {})
 					},
+					perm_source: rp.permSource,
 					include_upscaling: rp.includeUpscaling,
 					cell_size: rp.cellSize,
 					by_zone: rp.byZone,
@@ -279,6 +280,23 @@
 
 	async function saveResSumFlags() {
 		await wellData.saveModuleComputed('ressum', 'Pay Flags Saved ✓');
+	}
+
+	const BLOCKED_CURVES = ['PHIT_BLK', 'PHIE_BLK', 'VCLAY_BLK', 'PERM_BLK', 'SWT_BLK'];
+	let hasBlockedCurves = $derived(BLOCKED_CURVES.some((c) => Boolean(wellData.curves[c])));
+	let hasPermTrans = $derived(Boolean(wellData.curves['PERM_TRANS']));
+
+	async function clearBlockedCurves() {
+		const present = BLOCKED_CURVES.filter((c) => Boolean(wellData.curves[c]));
+		if (present.length > 0) {
+			await wellData.clearCalculatedCurves({
+				scope: 'full',
+				curves: present,
+				persist: true
+			});
+		}
+		upscaledCellCount = null;
+		blockedCells = [];
 	}
 
 	async function runVolumetricMc() {
@@ -752,7 +770,51 @@
 						<span>By Zone</span>
 					</label>
 				{/if}
+				{#if hasBlockedCurves}
+					<button
+						type="button"
+						disabled={wellData.isCalculating}
+						onclick={clearBlockedCurves}
+						title="Clear saved blocked curves (*_BLK) from this well"
+						class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--text-secondary)] hover:bg-slate-100"
+					>
+						↺ Reset *_BLK
+					</button>
+				{/if}
 			</div>
+
+			{#if hasPermTrans}
+				<div class="mt-1 flex items-center justify-between text-[11px]">
+					<span class="text-[var(--text-secondary)]">Perm Curve Source:</span>
+					<div class="flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-0.5 text-[10px]">
+						<button
+							type="button"
+							onclick={() => {
+								rp.permSource = 'auto';
+								executeResSum(false);
+							}}
+							class="rounded-xs px-1.5 py-0.5 font-medium {rp.permSource !== 'perm'
+								? 'bg-[var(--bg-surface)] font-semibold text-[var(--accent-primary)] shadow-2xs'
+								: 'text-[var(--text-secondary)]'}"
+						>
+							PERM_TRANS (Core)
+						</button>
+						<button
+							type="button"
+							onclick={() => {
+								rp.permSource = 'perm';
+								executeResSum(false);
+							}}
+							title="Bypass PERM_TRANS and use log-evaluated PERM"
+							class="rounded-xs px-1.5 py-0.5 font-medium {rp.permSource === 'perm'
+								? 'bg-[var(--bg-surface)] font-semibold text-[var(--accent-primary)] shadow-2xs'
+								: 'text-[var(--text-secondary)]'}"
+						>
+							Log PERM
+						</button>
+					</div>
+				</div>
+			{/if}
 
 			{#if rp.includeUpscaling}
 				{#if !rp.byZone}

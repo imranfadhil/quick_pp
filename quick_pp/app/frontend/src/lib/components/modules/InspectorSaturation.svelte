@@ -2,6 +2,7 @@
 	import { untrack } from 'svelte';
 	import { api } from '$lib/api/client';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
+	import InputConditioningBar from '$lib/components/workbench/InputConditioningBar.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
 	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
 	import { depthDisplay } from '$lib/state/depthDisplay.svelte';
@@ -325,6 +326,7 @@
 		const sp = workbench.saturationParams;
 		const deptArr = wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [];
 		const rtArr =
+			(!workbench.lithoParams.useEditedLogs ? wellData.curves['RT_ORI'] : undefined) ??
 			wellData.curves['RT'] ??
 			wellData.curves['RDEEP'] ??
 			wellData.curves['RD'] ??
@@ -372,6 +374,7 @@
 						rwb: sp.rwb,
 						use_thomas_stieber: useTs,
 						use_enhanced_logs: workbench.enhanceParams.useEnhancedLogs,
+						...workbench.qcInputFlags,
 						depths: cleanArr(deptArr) as number[] | undefined,
 						rt: cleanArr(rtArr),
 						phit: cleanArr(phitArr),
@@ -397,10 +400,11 @@
 						continuous_m_model: sp.continuousMModel ?? 'calibrated',
 						water_leg_slope: sp.applyContinuousM ? sp.waterLegFitSlope : null,
 						water_leg_intercept: sp.applyContinuousM ? sp.waterLegFitIntercept : null,
-						manual_overrides: sp.manualOverrides?.filter((o) => o.enabled !== false)
-							.length
-							? sp.manualOverrides.filter((o) => o.enabled !== false)
-							: undefined,
+						manual_overrides:
+							!sp.bypassManualOverrides &&
+							sp.manualOverrides?.filter((o) => o.enabled !== false).length
+								? sp.manualOverrides.filter((o) => o.enabled !== false)
+								: undefined,
 						save: persist && !selectionMode
 					} as any
 				}
@@ -600,6 +604,7 @@
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
 	<div class="flex-1 overflow-y-auto">
 		<SavedParamsIndicator modules={['saturation']} />
+		<InputConditioningBar onchange={() => executeSaturation(false)} />
 		<ParameterSection
 			title="Water Saturation Model"
 			badge={saturationModelLabels[workbench.saturationParams.method]}
@@ -965,6 +970,23 @@
 					{/if}
 
 					{#if (workbench.saturationParams.manualOverrides?.length ?? 0) > 0}
+						<button
+							type="button"
+							onclick={() => {
+								workbench.saturationParams.bypassManualOverrides =
+									!workbench.saturationParams.bypassManualOverrides;
+								executeSaturation(false);
+							}}
+							title={workbench.saturationParams.bypassManualOverrides
+								? 'Manual overrides are bypassed (turned off). Click to re-enable.'
+								: 'Temporarily turn off all manual fluid/Sw overrides without deleting them'}
+							class="rounded-xs border px-2 py-1 text-[10px] font-semibold transition-colors {workbench
+								.saturationParams.bypassManualOverrides
+								? 'border-amber-400 bg-amber-100 text-amber-900'
+								: 'border-[var(--border-hairline)] bg-[var(--bg-app)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+						>
+							{workbench.saturationParams.bypassManualOverrides ? '○ Overrides Off' : '✓ Overrides On'}
+						</button>
 						<button
 							type="button"
 							onclick={clearAllOverrides}

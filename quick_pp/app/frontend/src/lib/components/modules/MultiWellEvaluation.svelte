@@ -3,6 +3,7 @@
 	import { PaneGroup, Pane, PaneResizer } from 'paneforge';
 	import { deleteJson, getJson, postJson } from '$lib/api/client';
 	import BatchEvaluationPlot from './BatchEvaluationPlot.svelte';
+	import InputConditioningBar from '$lib/components/workbench/InputConditioningBar.svelte';
 	import CompactDataGrid, {
 		type GridColumn
 	} from '$lib/components/workbench/CompactDataGrid.svelte';
@@ -204,7 +205,9 @@
 			coal_bridge_gap: Math.round(lp.coalBridgeGap ?? 2),
 			coal_adaptive_shoulder: lp.coalAdaptiveShoulder ?? true,
 			badhole_treatment: lp.badholeTreatment,
-			use_hc_corrected: corrected
+			use_hc_corrected: corrected,
+			use_enhanced_logs: workbench.enhanceParams.useEnhancedLogs,
+			...workbench.qcInputFlags
 		};
 		return {
 			well_names: [...wells],
@@ -253,7 +256,9 @@
 				rsh: sp.rsh,
 				swb: sp.swb,
 				rwb: sp.rwb,
-				use_thomas_stieber: ts.enabled && ts.useInSaturation
+				use_thomas_stieber: ts.enabled && ts.useInSaturation,
+				use_enhanced_logs: workbench.enhanceParams.useEnhancedLogs,
+				...workbench.qcInputFlags
 			},
 			hc_correction:
 				lp.logCorrectionMode === 'hc'
@@ -424,6 +429,9 @@
 				settings independently per well and zone. This is not a pooled calibration. Depth
 				filters and brushed selections are not applied.
 			</p>
+			<div class="-mx-2 mt-2">
+				<InputConditioningBar scope="multi-well" onchange={clearPreview} />
+			</div>
 			<div class="mt-3 grid gap-3">
 				<fieldset class="rounded border border-[var(--border-hairline)] p-2">
 					<legend class="font-semibold">Wells ({wells.length})</legend>

@@ -1473,7 +1473,7 @@ class WorkspaceFilterBase(BaseModel):
 
 
 class QcWeightedInputsMixin(BaseModel):
-    """Confidence-weighted input curves (only active once QC columns exist)."""
+    """Input conditioning & bypass flags (raw _ORI backups, *_NORM, *_ENV_CORR, and *_QC_CONF weighting)."""
 
     confidence_weighting: bool = Field(
         True,
@@ -1482,6 +1482,14 @@ class QcWeightedInputsMixin(BaseModel):
     use_env_corrected: bool = Field(
         True,
         description="Use <LOG>_ENV_CORR as the input curve when it exists",
+    )
+    use_raw_ori_logs: bool = Field(
+        False,
+        description="Bypass in-place curve edits by substituting <LOG>_ORI backup curves when present",
+    )
+    use_normalized_logs: bool = Field(
+        False,
+        description="Substitute stratigraphic normalized <LOG>_NORM curves when present",
     )
     qc_good_conf: float = Field(0.8, ge=0.0, le=1.0)
     qc_min_conf: float = Field(0.2, ge=0.0, le=1.0)
@@ -1494,57 +1502,105 @@ _QC_WEIGHTED_LOGS = {
     "RT": "RT",
     "DTC": "DT",
 }
+_PROTECTED_CORE_ORI_COLS = {"CPORE_ORI", "CPERM_ORI"}
+_NORMALIZABLE_LOGS = ("GR", "NPHI", "RHOB", "DTC", "DT", "RT", "RD", "CGR")
 
 
 def _apply_qc_weighted_inputs(df: pd.DataFrame, req: Any) -> pd.DataFrame:
-    """Replace raw input curves with environment-corrected, confidence-weighted curves.
+    """Apply non-destructive input curve conditioning / bypass switches on an in-memory copy.
 
-    For each log with a ``<QC>_QC_CONF`` column the input becomes
-    ``confidence_weighted_curve(base, conf)`` where ``base`` is ``<QC>_ENV_CORR``
-    (if ``use_env_corrected``) or the raw curve. RT is blended in log10 space.
-    Only the in-memory copy used for the computation is changed.
-    No-op when no QC columns are present or the request disables it.
+    1. ``use_raw_ori_logs``: Substitutes ``<CURVE>_ORI`` for ``<CURVE>`` (excluding core plug
+       backups ``CPORE_ORI``/``CPERM_ORI``) so downstream modules can bypass in-place edits.
+    2. ``use_normalized_logs``: Substitutes ``<LOG>_NORM`` when present (skipped if ``use_raw_ori_logs``).
+    3. ``use_env_corrected`` / ``confidence_weighting``: Substitutes ``<QC>_ENV_CORR`` and/or
+       blends by ``<QC>_QC_CONF`` (RT blended in log10 space).
     """
-    if not getattr(req, "confidence_weighting", False) and not getattr(
-        req, "use_env_corrected", False
-    ):
+    use_ori = bool(getattr(req, "use_raw_ori_logs", False))
+    use_norm = bool(getattr(req, "use_normalized_logs", False)) and not use_ori
+    use_conf = bool(getattr(req, "confidence_weighting", False))
+    use_env = bool(getattr(req, "use_env_corrected", False))
+
+    if not (use_ori or use_norm or use_conf or use_env):
         return df
-    from quick_pp.borehole_corrections import confidence_weighted_curve
 
     out = df
+    restored_ori: List[str] = []
+    if use_ori:
+        for col in list(df.columns):
+            ucol = str(col).upper()
+            if (
+                ucol.endswith("_ORI")
+                and ucol not in _PROTECTED_CORE_ORI_COLS
+                and len(ucol) > 4
+            ):
+                base_col = ucol[:-4]
+                ori_s = pd.to_numeric(df[col], errors="coerce")
+                if ori_s.notna().any():
+                    if out is df:
+                        out = df.copy()
+                    out[base_col] = ori_s
+                    restored_ori.append(base_col)
+        if restored_ori:
+            out.attrs["raw_ori_inputs"] = restored_ori
+
+    applied_norm: List[str] = []
+    if use_norm:
+        for log in _NORMALIZABLE_LOGS:
+            norm_col = f"{log}_NORM"
+            if norm_col not in out.columns:
+                continue
+            norm_s = pd.to_numeric(out[norm_col], errors="coerce")
+            if not norm_s.notna().any():
+                continue
+            if out is df:
+                out = df.copy()
+            if log in out.columns:
+                raw_s = pd.to_numeric(out[log], errors="coerce")
+                out[log] = norm_s.fillna(raw_s)
+            else:
+                out[log] = norm_s
+            applied_norm.append(log)
+        if applied_norm:
+            out.attrs["normalized_inputs"] = applied_norm
+
+    if not use_conf and not use_env:
+        return out
+
+    from quick_pp.borehole_corrections import confidence_weighted_curve
+
     applied: List[str] = []
-    depth = df["DEPTH"].to_numpy(dtype=float) if "DEPTH" in df.columns else None
+    depth = out["DEPTH"].to_numpy(dtype=float) if "DEPTH" in out.columns else None
     for log, qc in _QC_WEIGHTED_LOGS.items():
-        if log not in df.columns:
+        if log in restored_ori or log not in out.columns:
             continue
         conf_col, corr_col = f"{qc}_QC_CONF", f"{qc}_ENV_CORR"
         has_conf = (
-            conf_col in df.columns
-            and pd.to_numeric(df[conf_col], errors="coerce").notna().any()
+            conf_col in out.columns
+            and pd.to_numeric(out[conf_col], errors="coerce").notna().any()
         )
         has_corr = (
-            corr_col in df.columns
-            and pd.to_numeric(df[corr_col], errors="coerce").notna().any()
+            corr_col in out.columns
+            and pd.to_numeric(out[corr_col], errors="coerce").notna().any()
         )
-        if not has_conf and not (has_corr and req.use_env_corrected):
+        if not has_conf and not (has_corr and use_env):
             continue
-        raw = pd.to_numeric(df[log], errors="coerce")
+        raw = pd.to_numeric(out[log], errors="coerce")
         base = raw
-        if req.use_env_corrected and has_corr:
-            base = pd.to_numeric(df[corr_col], errors="coerce").fillna(raw)
-        if req.confidence_weighting and has_conf:
-            conf = pd.to_numeric(df[conf_col], errors="coerce").fillna(1.0)
+        if use_env and has_corr:
+            base = pd.to_numeric(out[corr_col], errors="coerce").fillna(raw)
+        if use_conf and has_conf:
+            conf = pd.to_numeric(out[conf_col], errors="coerce").fillna(1.0)
             if log == "RT":
                 lb = np.log10(base.clip(lower=1e-3))
                 blended = confidence_weighted_curve(
                     lb, conf, depth, req.qc_good_conf, req.qc_min_conf
                 )
-                new = pd.Series(10.0 ** blended.to_numpy(), index=df.index)
+                new = pd.Series(10.0 ** blended.to_numpy(), index=out.index)
             else:
                 new = confidence_weighted_curve(
                     base, conf, depth, req.qc_good_conf, req.qc_min_conf
                 )
-                new.index = df.index
+                new.index = out.index
         else:
             new = base
         if out is df:
@@ -1730,7 +1786,9 @@ class WorkspaceHCCorrectionRequest(
     )
 
 
-class WorkspaceDenCorrectionRequest(WorkspaceFilterBase, GammaParameters):
+class WorkspaceDenCorrectionRequest(
+    WorkspaceFilterBase, GammaParameters, QcWeightedInputsMixin
+):
     dry_sand_point: Tuple[float, float] = Field((-0.02, 2.65))
     dry_clay_point: Tuple[float, float] = Field((0.33, 2.7))
     rho_water: float = Field(1.0, description="Water density (g/cc)")
@@ -2039,7 +2097,7 @@ class WorkspacePorosityRequest(
     )
 
 
-class WorkspaceThomasStieberRequest(WorkspaceFilterBase):
+class WorkspaceThomasStieberRequest(WorkspaceFilterBase, QcWeightedInputsMixin):
     use_hc_corrected: bool = Field(
         True, description="Use NPHI_HC and RHOB_HC curves if present"
     )
@@ -2368,6 +2426,10 @@ class WorkspaceReservoirSummaryRequest(WorkspaceFilterBase):
     cut_offs: Dict[str, float] = Field(
         default_factory=lambda: {"VSHALE": 0.4, "PHIT": 0.05, "SWT": 0.8}
     )
+    perm_source: Literal["auto", "perm_trans", "perm"] = Field(
+        "auto",
+        description="Permeability curve preference: 'auto' (PERM_TRANS then PERM), 'perm_trans', or 'perm' (bypass PERM_TRANS)",
+    )
     include_upscaling: bool = Field(False)
     cell_size: float = Field(1.0)
     by_zone: bool = Field(True)
@@ -2422,6 +2484,10 @@ class WorkspaceMultiWellVolumetricsRequest(WorkspaceFilterBase):
     saturation_method: str = Field(
         "log_average",
         description="Water saturation calculation method: 'log_average' (lumped log distribution) or 'shf' (1D Hypsometric Saturation-Height Function)",
+    )
+    perm_source: Literal["auto", "perm_trans", "perm"] = Field(
+        "auto",
+        description="Permeability curve source: 'auto' (PERM_TRANS then PERM), 'perm_trans', or 'perm' (bypass PERM_TRANS)",
     )
     fwl_uncertainty: float = Field(
         5.0,
@@ -3952,6 +4018,7 @@ def workspace_den_correction(
         df = _get_filtered_well_df(
             project_id, well_name, req.min_depth, req.max_depth, req.zones
         )
+        df = _apply_qc_weighted_inputs(df, req)
         nphi, rhob = _select_nphi_rhob(df, use_hc_corrected=False)
         valid_mask = nphi.notna() & rhob.notna()
         if not valid_mask.any():
@@ -5680,6 +5747,7 @@ def workspace_thomas_stieber(
         df = _get_filtered_well_df(
             project_id, well_name, req.min_depth, req.max_depth, req.zones
         )
+        df = _apply_qc_weighted_inputs(df, req)
         dry_sand_poro = max(0.05, min(float(req.dry_sand_poro), 0.50))
         dry_shale_poro = max(0.01, min(float(req.dry_shale_poro), 0.45))
 
@@ -8076,11 +8144,24 @@ def workspace_reservoir_summary(
             if "SWT" in df.columns
             else pd.Series(np.nan, index=df.index, dtype=float)
         )
-        perm_col = (
-            "PERM_TRANS"
-            if ("PERM_TRANS" in df.columns and df["PERM_TRANS"].notna().any())
-            else "PERM"
-        )
+        if req.perm_source == "perm":
+            perm_col = (
+                "PERM"
+                if ("PERM" in df.columns and df["PERM"].notna().any())
+                else "PERM_TRANS"
+            )
+        elif req.perm_source == "perm_trans":
+            perm_col = (
+                "PERM_TRANS"
+                if ("PERM_TRANS" in df.columns and df["PERM_TRANS"].notna().any())
+                else "PERM"
+            )
+        else:
+            perm_col = (
+                "PERM_TRANS"
+                if ("PERM_TRANS" in df.columns and df["PERM_TRANS"].notna().any())
+                else "PERM"
+            )
         perm = (
             pd.to_numeric(df[perm_col], errors="coerce")
             if perm_col in df.columns
@@ -14180,6 +14261,9 @@ def workspace_multi_well_conditioning(
                             }
                         )
                 if modified_cols:
+                    _preserve_ori_backups_for_well(
+                        project_id, wn, modified_cols, save=req.save
+                    )
                     sub_df = cleaned[["DEPTH"] + modified_cols]
                     if req.save:
                         _save_curves_to_well(project_id, wn, sub_df)
@@ -14197,6 +14281,7 @@ def workspace_multi_well_conditioning(
                 s = pd.to_numeric(wdf[src], errors="coerce")
                 if not s.notna().any():
                     continue
+                _preserve_ori_backups_for_well(project_id, wn, [dst], save=req.save)
                 s_scaled = s * float(req.scale) + float(req.offset)
                 sub_df = pd.DataFrame({"DEPTH": wdf["DEPTH"], dst: s_scaled})
                 if req.save:
@@ -14207,7 +14292,7 @@ def workspace_multi_well_conditioning(
                 changes.append(
                     {
                         "WELL_NAME": wn,
-                        "ACTION": f"SCALE (Ã—{req.scale:g}{f' +{req.offset:g}' if req.offset else ''})",
+                        "ACTION": f"SCALE (×{req.scale:g}{f' +{req.offset:g}' if req.offset else ''})",
                         "SOURCE": src,
                         "TARGET": dst,
                         "COUNT": int(s_scaled.notna().sum()),
@@ -14229,6 +14314,274 @@ def workspace_multi_well_conditioning(
         raise HTTPException(
             status_code=500, detail=f"Batch conditioning failed: {e}"
         ) from e
+
+
+def _preserve_ori_backups_for_well(
+    project_id: int, well_name: str, cols: List[str], save: bool = False
+) -> List[str]:
+    """Ensure full-well <CURVE>_ORI backups exist before overwriting raw curves in-place."""
+    protected = {"DEPTH", "DEPT", "WELL_NAME", "ZONES", "CPORE", "CPERM"}
+    full_df = _get_merged_dataframe_sync(project_id, well_name)
+    if full_df.empty or "DEPTH" not in full_df.columns:
+        return []
+    backup_cols: Dict[str, pd.Series] = {}
+    for raw_c in cols:
+        c = str(raw_c).strip().upper()
+        if not c or c.endswith("_ORI") or c in protected:
+            continue
+        ori_col = f"{c}_ORI"
+        if c in full_df.columns and ori_col not in full_df.columns:
+            s_orig = pd.to_numeric(full_df[c], errors="coerce")
+            if s_orig.notna().any():
+                backup_cols[ori_col] = s_orig
+    if not backup_cols:
+        return []
+    b_df = pd.DataFrame({"DEPTH": full_df["DEPTH"], **backup_cols})
+    if save:
+        _save_curves_to_well(project_id, well_name, b_df)
+    else:
+        _update_in_memory_well_cache(project_id, well_name, b_df)
+    return sorted(backup_cols.keys())
+
+
+def _drop_columns_from_well(
+    project_id: int, well_name: str, cols_to_drop: List[str], save: bool = True
+) -> List[str]:
+    """Drop non-protected curve columns from memory caches, ephemeral state, and optionally DB."""
+    from sqlalchemy import bindparam, text
+
+    protected = {"DEPTH", "DEPT", "WELL_NAME", "ZONES"}
+    clean_cols = sorted(
+        {
+            str(c).strip().upper()
+            for c in cols_to_drop
+            if str(c).strip() and str(c).strip().upper() not in protected
+        }
+    )
+    if not clean_cols:
+        return []
+
+    for key, (_, cdf) in list(_merged_data_cache.items()):
+        if key.startswith(f"{project_id}_{well_name}_"):
+            updated = cdf.drop(columns=clean_cols, errors="ignore")
+            _merged_data_cache[key] = (time.time(), updated)
+
+    eph_proj = _ephemeral_wells.get(project_id, {})
+    if well_name in eph_proj:
+        eph_entry = eph_proj[well_name]
+        if isinstance(eph_entry, pd.DataFrame):
+            eph_proj[well_name] = eph_entry.drop(columns=clean_cols, errors="ignore")
+        elif isinstance(eph_entry, dict) and isinstance(
+            eph_entry.get("data"), pd.DataFrame
+        ):
+            eph_entry["data"] = eph_entry["data"].drop(
+                columns=clean_cols, errors="ignore"
+            )
+
+    if save and not is_demo_mode():
+        db_name = resolve_db_well_name(project_id, well_name)
+        with get_db() as session:
+            well_orm = session.scalar(
+                select(db_models.Well).filter_by(project_id=project_id, name=db_name)
+            )
+            if well_orm:
+                target_set = set(clean_cols)
+                cids = [
+                    c.curve_id
+                    for c in well_orm.curves
+                    if str(c.mnemonic).upper() in target_set and c.curve_id is not None
+                ]
+                if cids:
+                    session.execute(
+                        text(
+                            "DELETE FROM curve_data WHERE curve_id IN :cids"
+                        ).bindparams(bindparam("cids", expanding=True)),
+                        {"cids": cids},
+                    )
+                    session.execute(
+                        text("DELETE FROM curves WHERE curve_id IN :cids").bindparams(
+                            bindparam("cids", expanding=True)
+                        ),
+                        {"cids": cids},
+                    )
+                    session.flush()
+        invalidate_well_cache(project_id=project_id, well_name=well_name)
+
+    return clean_cols
+
+
+class WorkspaceQaqcResetRequest(BaseModel):
+    action: Literal["restore_ori", "clear_curves"] = Field(
+        ...,
+        description="'restore_ori' restores edited curves from *_ORI backups; 'clear_curves' drops calculated/conditioned curves",
+    )
+    well_names: Optional[List[str]] = Field(
+        None, description="Target well names (None = all project wells)"
+    )
+    curves: Optional[List[str]] = Field(
+        None,
+        description="Base curve names to restore (for restore_ori) or explicit curve mnemonics to drop (for clear_curves)",
+    )
+    suffixes: Optional[List[str]] = Field(
+        None,
+        description="Curve suffixes to match for clear_curves (e.g. ['_NORM'], ['_IMP'], ['_ENV_CORR'])",
+    )
+    groups: Optional[List[str]] = Field(
+        None,
+        description="Calculated curve groups to clear (e.g. ['qaqc', 'perm'])",
+    )
+    drop_ori: bool = Field(
+        True,
+        description="Drop *_ORI backup columns after restoring base curves so curves return to clean Raw state",
+    )
+    save: bool = Field(True, description="Persist reset to database")
+
+
+@router.post(
+    "/qaqc/reset",
+    summary="Restore raw curves from *_ORI backups or clear conditioned/calculated curves across wells",
+)
+@router.post(
+    "/multi_well_qaqc/reset",
+    include_in_schema=False,
+)
+def workspace_qaqc_reset(
+    project_id: int, req: WorkspaceQaqcResetRequest
+) -> Dict[str, Any]:
+    """Unified reset endpoint for single-well and multi-well QAQC & downstream modules."""
+    try:
+        if req.well_names:
+            target_wells = [str(w).strip() for w in req.well_names if str(w).strip()]
+        else:
+            proj_summary = get_project_summary(project_id)
+            target_wells = [
+                str(w["name"]) for w in proj_summary.get("wells", []) if w.get("name")
+            ]
+
+        protected = {"DEPTH", "DEPT", "WELL_NAME", "ZONES"}
+        well_summaries: List[Dict[str, Any]] = []
+        affected_wells = 0
+
+        if req.action == "restore_ori":
+            req_bases = (
+                {
+                    str(c).strip().upper().removesuffix("_ORI")
+                    for c in req.curves
+                    if str(c).strip()
+                }
+                if req.curves
+                else None
+            )
+            all_restored: set[str] = set()
+            for wn in target_wells:
+                full_df = _get_merged_dataframe_sync(project_id, wn)
+                if full_df.empty or "DEPTH" not in full_df.columns:
+                    continue
+                restored_map: Dict[str, pd.Series] = {}
+                ori_cols_used: List[str] = []
+                for col in list(full_df.columns):
+                    ucol = str(col).strip().upper()
+                    if (
+                        not ucol.endswith("_ORI")
+                        or ucol in _PROTECTED_CORE_ORI_COLS
+                        or len(ucol) <= 4
+                    ):
+                        continue
+                    base_col = ucol[:-4]
+                    if base_col in protected:
+                        continue
+                    if req_bases is not None and base_col not in req_bases:
+                        continue
+                    ori_s = pd.to_numeric(full_df[col], errors="coerce")
+                    restored_map[base_col] = ori_s
+                    ori_cols_used.append(ucol)
+
+                if restored_map:
+                    sub_df = pd.DataFrame({"DEPTH": full_df["DEPTH"], **restored_map})
+                    if req.save:
+                        _save_curves_to_well(project_id, wn, sub_df)
+                    else:
+                        _update_in_memory_well_cache(project_id, wn, sub_df)
+                    dropped_ori: List[str] = []
+                    if req.drop_ori and ori_cols_used:
+                        dropped_ori = _drop_columns_from_well(
+                            project_id, wn, ori_cols_used, save=req.save
+                        )
+                    affected_wells += 1
+                    all_restored.update(restored_map.keys())
+                    well_summaries.append(
+                        {
+                            "well_name": wn,
+                            "restored_curves": sorted(restored_map.keys()),
+                            "dropped_ori": dropped_ori,
+                        }
+                    )
+            return {
+                "project_id": project_id,
+                "action": "restore_ori",
+                "saved": req.save,
+                "affected_wells": affected_wells,
+                "restored_curves": sorted(all_restored),
+                "well_summaries": well_summaries,
+            }
+
+        # action == "clear_curves"
+        explicit_set: set[str] = set()
+        if req.curves:
+            for c in req.curves:
+                uc = str(c).strip().upper()
+                if uc and uc not in protected:
+                    explicit_set.add(uc)
+        if req.groups:
+            for g in req.groups:
+                g_key = str(g).strip().lower().replace("-", "_")
+                for col in CALCULATED_CURVES_BY_GROUP.get(g_key, ()):
+                    explicit_set.add(col)
+        suffixes_tup = tuple(
+            str(s).strip().upper() for s in (req.suffixes or []) if str(s).strip()
+        )
+        all_cleared: set[str] = set()
+
+        for wn in target_wells:
+            full_df = _get_merged_dataframe_sync(project_id, wn)
+            matched: List[str] = []
+            if not full_df.empty:
+                for col in list(full_df.columns):
+                    ucol = str(col).strip().upper()
+                    if ucol in protected:
+                        continue
+                    if ucol in explicit_set:
+                        matched.append(ucol)
+                    elif (
+                        suffixes_tup
+                        and not ucol.endswith("_ORI")
+                        and ucol.endswith(suffixes_tup)
+                    ):
+                        matched.append(ucol)
+            elif explicit_set:
+                matched = sorted(explicit_set)
+
+            if matched:
+                dropped = _drop_columns_from_well(
+                    project_id, wn, matched, save=req.save
+                )
+                if dropped:
+                    affected_wells += 1
+                    all_cleared.update(dropped)
+                    well_summaries.append({"well_name": wn, "cleared_curves": dropped})
+
+        return {
+            "project_id": project_id,
+            "action": "clear_curves",
+            "saved": req.save,
+            "affected_wells": affected_wells,
+            "cleared_curves": sorted(all_cleared),
+            "well_summaries": well_summaries,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"QAQC reset failed: {e}") from e
 
 
 @router.post(
@@ -16215,6 +16568,7 @@ def workspace_save_multi_well_computed_curves(
 CALCULATED_CURVES_BY_GROUP: Dict[str, Tuple[str, ...]] = {
     "qaqc": (
         "BADHOLE",
+        "BADHOLE_BASE",
         "BAD_HOLE",
         "BAD_HOLE_FLAG",
         "BS",
@@ -16226,8 +16580,29 @@ CALCULATED_CURVES_BY_GROUP: Dict[str, Tuple[str, ...]] = {
         "CALI_ENV_CORR",
         "DT_ENV_CORR",
         "INVASION_FLAG",
+        "INVASION_PROFILE",
+        "RXO_EST",
+        "DI_EST",
+        "ENV_QC_REASON",
+        "HOLE_SEVERITY",
+        "ENV_TEMP_C",
+        "ENV_BS",
+        "ENV_RM",
+        "ENV_RMF",
+        "ENV_RW",
+        *(
+            f"{log}_{sfx}"
+            for log in ("GR", "NPHI", "RHOB", "RT", "DT")
+            for sfx in ("QC_CONF", "QC_STATUS", "SIGMA", "CORR_DELTA")
+        ),
         "GR_NORM",
         "NPHI_NORM",
+        "RHOB_NORM",
+        "DTC_NORM",
+        "DT_NORM",
+        "RT_NORM",
+        "RD_NORM",
+        "CGR_NORM",
         "NPHI_HC",
         "RHOB_HC",
         "HC_FLAG",
@@ -18442,19 +18817,33 @@ def workspace_multi_well_volumetrics(
                 else pd.Series(np.nan, index=wdf.index, dtype=float)
             )
 
-            # Robust Permeability curve detection (picks up saved curve from Perm Transform step)
-            perm_candidates = (
-                "PERM_TRANS",
-                "PERM",
-                "PERM_COMP",
-                "PERM_TIMUR",
-                "PERM_COATES",
-                "KLOGH",
-                "PERMEABILITY",
-                "K",
-                "CPERM",
-                "CORE_PERM",
-            )
+            # Robust Permeability curve detection (honors req.perm_source so PERM_TRANS can be bypassed)
+            if getattr(req, "perm_source", "auto") == "perm":
+                perm_candidates = (
+                    "PERM",
+                    "PERM_COMP",
+                    "PERM_TIMUR",
+                    "PERM_COATES",
+                    "KLOGH",
+                    "PERMEABILITY",
+                    "K",
+                    "PERM_TRANS",
+                    "CPERM",
+                    "CORE_PERM",
+                )
+            else:
+                perm_candidates = (
+                    "PERM_TRANS",
+                    "PERM",
+                    "PERM_COMP",
+                    "PERM_TIMUR",
+                    "PERM_COATES",
+                    "KLOGH",
+                    "PERMEABILITY",
+                    "K",
+                    "CPERM",
+                    "CORE_PERM",
+                )
             perm_col = _find_curve(perm_candidates, wdf)
             if perm_col is not None:
                 perm = pd.to_numeric(wdf[perm_col], errors="coerce")

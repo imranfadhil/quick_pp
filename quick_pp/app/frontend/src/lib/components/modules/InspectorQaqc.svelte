@@ -8,6 +8,7 @@
 	import { untrack } from 'svelte';
 	import { postJson } from '$lib/api/client';
 	import ImputationControls from '$lib/components/modules/ImputationControls.svelte';
+	import InputConditioningBar from '$lib/components/workbench/InputConditioningBar.svelte';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
 	import ParameterSection from '$lib/components/workbench/ParameterSection.svelte';
 	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
@@ -751,15 +752,27 @@
 		const src = workbench.selectedQaqcCurve;
 		if (!src) return;
 		try {
-			await wellData.restoreCurveSnapshot(src, true);
+			await wellData.restoreCurveSnapshot(src, true, true);
 			if (editOp === 'add' || editOp === 'subtract' || editOp === 'depth_shift') {
 				editValue = 0;
 			} else if (editOp === 'multiply' || editOp === 'divide') {
 				editValue = 1;
 			}
-			editStatusMsg = `Restored ${src} from ${src}_ORI ✓`;
+			editStatusMsg = `Restored ${src} to raw baseline ✓`;
 		} catch (e: any) {
 			wellData.lastError = e?.message || 'Failed to restore curve';
+		}
+	}
+
+	async function handleRestoreAllEditedCurves() {
+		try {
+			const restored = await wellData.restoreMultipleCurvesFromOri(undefined, true, true);
+			if (restored.length > 0) {
+				workbench.lithoParams.useEditedLogs = true;
+				editStatusMsg = `Restored ${restored.join(', ')} to raw baseline ✓`;
+			}
+		} catch (e: any) {
+			wellData.lastError = e?.message || 'Failed to restore edited curves';
 		}
 	}
 
@@ -1031,6 +1044,31 @@
 		await wellData.saveModuleComputed('qaqc-badhole', 'Badhole Flags Saved ✓');
 	}
 
+	const BADHOLE_CURVES = [
+		'BADHOLE',
+		'BADHOLE_BASE',
+		'BAD_HOLE',
+		'BAD_HOLE_FLAG',
+		'BS',
+		'DCALI',
+		'CALI_FLAG',
+		'DRHO_FLAG',
+		'RUGOSITY_FLAG'
+	];
+
+	async function revertBadholeFlagging() {
+		const present = BADHOLE_CURVES.filter((c) => Boolean(wellData.curves[c]));
+		if (present.length > 0) {
+			const persist = !wellData.hasPendingComputed('qaqc-badhole');
+			await wellData.clearCalculatedCurves({
+				scope: 'full',
+				curves: present,
+				persist
+			});
+		}
+		badholeSummary = null;
+	}
+
 	function selectFlaggedBadholeInLasso() {
 		const bh =
 			wellData.curves['BADHOLE'] ??
@@ -1107,6 +1145,51 @@
 
 	async function saveEnvCorrections() {
 		await wellData.saveModuleComputed('qaqc-env', 'Env Corrections Saved ✓');
+	}
+
+	const ENV_CORRECTION_CURVES = [
+		'GR_ENV_CORR',
+		'NPHI_ENV_CORR',
+		'RHOB_ENV_CORR',
+		'RT_ENV_CORR',
+		'CALI_ENV_CORR',
+		'DT_ENV_CORR',
+		'INVASION_FLAG',
+		'INVASION_PROFILE',
+		'RXO_EST',
+		'DI_EST',
+		'ENV_QC_REASON',
+		'HOLE_SEVERITY',
+		'ENV_TEMP_C',
+		'ENV_BS',
+		'ENV_RM',
+		'ENV_RMF',
+		'ENV_RW',
+		...['GR', 'NPHI', 'RHOB', 'RT', 'DT'].flatMap((l) => [
+			`${l}_QC_CONF`,
+			`${l}_QC_STATUS`,
+			`${l}_SIGMA`,
+			`${l}_CORR_DELTA`
+		])
+	];
+
+	let hasEnvCorrCurves = $derived(
+		ENV_CORRECTION_CURVES.some((c) => Boolean(wellData.curves[c]))
+	);
+
+	async function revertEnvCorrections() {
+		const present = ENV_CORRECTION_CURVES.filter((c) => Boolean(wellData.curves[c]));
+		if (present.length > 0) {
+			const persist = !wellData.hasPendingComputed('qaqc-env');
+			await wellData.clearCalculatedCurves({
+				scope: 'full',
+				curves: present,
+				persist
+			});
+		}
+		envQcSummary = null;
+		envAssumptions = [];
+		envInfo = null;
 	}
 
 	// --- Inter-Log Depth Alignment QC & Conditioning ---
@@ -1223,11 +1306,29 @@
 			alignStatusMsg = 'Saved aligned curves to well ✓';
 		}
 	}
+
+	let alignedOriCurves = $derived(
+		liveDepthAlign.rows
+			.map((r) => r.CURVE)
+			.filter((c) => Boolean(wellData.curves[`${c}_ORI`]))
+	);
+
+	async function revertDepthAlignment() {
+		const targets =
+			alignedOriCurves.length > 0 ? alignedOriCurves : wellData.oriBackedUpCurves;
+		if (targets.length === 0) return;
+		const persist = !wellData.hasPendingComputed('qaqc-align');
+		const restored = await wellData.restoreMultipleCurvesFromOri(targets, persist, true);
+		if (restored.length > 0) {
+			alignStatusMsg = `Restored ${restored.join(', ')} to unaligned raw depth ✓`;
+		}
+	}
 </script>
 
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
 	<div class="flex-1 overflow-y-auto">
 		<SavedParamsIndicator modules={['qaqc-badhole', 'qaqc-env', 'qaqc-enhance']} />
+		<InputConditioningBar />
 		<ParameterSection
 			title="Working Depth Interval (Well Focus)"
 			badge={`${wellData.visibleIndices.length} / ${wellData.totalDepthRows} rows`}
@@ -1603,6 +1704,16 @@
 						class="h-7 shrink-0 rounded-sm border border-amber-300 bg-amber-50 px-2 text-[10px] font-semibold text-amber-800 hover:bg-amber-100"
 					>
 						↺ Revert
+					</button>
+				{/if}
+				{#if wellData.oriBackedUpCurves.length > 1}
+					<button
+						type="button"
+						onclick={handleRestoreAllEditedCurves}
+						title="Restore all edited curves ({wellData.oriBackedUpCurves.join(', ')}) from *_ORI backups"
+						class="h-7 shrink-0 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-[10px] font-medium text-[var(--text-secondary)] hover:bg-slate-100"
+					>
+						↺ All ({wellData.oriBackedUpCurves.length})
 					</button>
 				{/if}
 			</div>
@@ -2384,6 +2495,28 @@
 					{editStatusMsg}
 				</div>
 			{/if}
+
+			{#if wellData.oriBackedUpCurves.length > 0}
+				<label
+					class="mt-2 flex cursor-pointer items-start gap-2 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-2"
+				>
+					<input
+						type="checkbox"
+						bind:checked={workbench.lithoParams.useEditedLogs}
+						class="mt-0.5 h-3.5 w-3.5 shrink-0 accent-blue-600"
+					/>
+					<span class="text-[10px] leading-snug text-[var(--text-secondary)]">
+						<span class="font-semibold text-[var(--text-primary)]">
+							Use edited / aligned curves downstream
+						</span>
+						<br />
+						Uncheck to non-destructively bypass in-place edits and evaluate Lithology, Porosity,
+						and Saturation on raw <span class="mono-num">*_ORI</span> backups ({wellData.oriBackedUpCurves.join(
+							', '
+						)}).
+					</span>
+				</label>
+			{/if}
 		</ParameterSection>
 
 		<ParameterSection
@@ -2922,6 +3055,17 @@
 				>
 					{wellData.isSaving ? 'Saving...' : 'Save'}
 				</button>
+				{#if activeBadholeStats.present || wellData.hasPendingComputed('qaqc-badhole')}
+					<button
+						type="button"
+						disabled={wellData.isCalculating || wellData.isSaving}
+						onclick={revertBadholeFlagging}
+						title="Clear BADHOLE, BS, and DCALI curves from this well"
+						class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-xs font-medium text-[var(--text-secondary)] hover:bg-slate-100 disabled:opacity-50"
+					>
+						Reset
+					</button>
+				{/if}
 			</div>
 		</ParameterSection>
 
@@ -3137,6 +3281,17 @@
 				>
 					{wellData.isSaving ? 'Saving...' : 'Save'}
 				</button>
+				{#if alignedOriCurves.length > 0 || wellData.hasPendingComputed('qaqc-align')}
+					<button
+						type="button"
+						disabled={wellData.isCalculating || wellData.isSaving}
+						onclick={revertDepthAlignment}
+						title="Restore depth-shifted curves ({alignedOriCurves.join(', ')}) from *_ORI backups"
+						class="h-6 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-[11px] font-medium text-[var(--text-secondary)] hover:bg-slate-100 disabled:opacity-50"
+					>
+						Reset
+					</button>
+				{/if}
 				<button
 					type="button"
 					onclick={() => {
@@ -3166,7 +3321,11 @@
 
 		<ParameterSection
 			title="Borehole Environmental Corrections"
-			badge={envQcSummary ? 'GR / NPHI / RHOB / RT / DT · Run' : 'GR / NPHI / RHOB / RT / DT'}
+			badge={hasEnvCorrCurves || envQcSummary
+				? ep.useEnvCorrected
+					? 'Corrected · In Use'
+					: 'Corrected · Off'
+				: 'GR / NPHI / RHOB / RT / DT'}
 			defaultOpen={false}
 		>
 			<div
@@ -3530,6 +3689,17 @@
 				>
 					{wellData.isSaving ? 'Saving...' : 'Save'}
 				</button>
+				{#if hasEnvCorrCurves || envQcSummary || wellData.hasPendingComputed('qaqc-env')}
+					<button
+						type="button"
+						disabled={wellData.isCalculating || wellData.isSaving}
+						onclick={revertEnvCorrections}
+						title="Remove *_ENV_CORR, *_QC_CONF, and *_SIGMA curves and revert downstream modules to raw logs"
+						class="h-6 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-[11px] font-medium text-[var(--text-secondary)] hover:bg-slate-100 disabled:opacity-50"
+					>
+						Reset
+					</button>
+				{/if}
 				<button
 					type="button"
 					onclick={() => {
@@ -3651,6 +3821,39 @@
 					</ul>
 				</div>
 			{/if}
+
+			<div class="mt-2 space-y-1.5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-2">
+				<label class="flex cursor-pointer items-start gap-2">
+					<input
+						type="checkbox"
+						bind:checked={ep.useEnvCorrected}
+						class="mt-0.5 h-3.5 w-3.5 shrink-0 accent-emerald-700"
+					/>
+					<span class="text-[10px] leading-snug text-[var(--text-secondary)]">
+						<span class="font-semibold text-[var(--text-primary)]">
+							Use environmental-corrected logs downstream
+						</span>
+						<br />
+						Feed <span class="mono-num">*_ENV_CORR</span> into lithology, porosity, and saturation
+						when present. Uncheck to turn off environmental corrections without deleting curves.
+					</span>
+				</label>
+				<label class="flex cursor-pointer items-start gap-2 border-t border-[var(--border-hairline)] pt-1.5">
+					<input
+						type="checkbox"
+						bind:checked={ep.confidenceWeighting}
+						class="mt-0.5 h-3.5 w-3.5 shrink-0 accent-teal-700"
+					/>
+					<span class="text-[10px] leading-snug text-[var(--text-secondary)]">
+						<span class="font-semibold text-[var(--text-primary)]">
+							Weight washouts by QC confidence
+						</span>
+						<br />
+						Blend low-confidence intervals toward local clean trends via
+						<span class="mono-num">*_QC_CONF</span>.
+					</span>
+				</label>
+			</div>
 		</ParameterSection>
 
 		<ParameterSection

@@ -23,10 +23,15 @@ export function comparisonRequest(kind: 'porosity' | 'permeability') {
 		save: false
 	};
 	if (kind === 'porosity') {
+		const activeOverrides = lp.bypassManualOverrides
+			? []
+			: (lp.manualOverrides ?? []).filter((o) => o.enabled !== false);
 		return {
 			method: lp.porosityMethod,
 			lithology_model: lp.model,
 			use_hc_corrected: lp.logCorrectionMode !== 'none',
+			use_enhanced_logs: workbench.enhanceParams.useEnhancedLogs,
+			...workbench.qcInputFlags,
 			dry_sand_point: [lp.drySandNphi, lp.drySandRhob],
 			dry_silt_point: [lp.drySiltNphi, lp.drySiltRhob],
 			dry_clay_point: [lp.dryClayNphi, lp.dryClayRhob],
@@ -45,6 +50,7 @@ export function comparisonRequest(kind: 'porosity' | 'permeability') {
 			coal_bridge_gap: Math.round(lp.coalBridgeGap ?? 2),
 			coal_adaptive_shoulder: lp.coalAdaptiveShoulder ?? true,
 			badhole_treatment: lp.badholeTreatment,
+			manual_overrides: activeOverrides.length ? activeOverrides : undefined,
 			...filter
 		};
 	}
@@ -87,6 +93,11 @@ export function comparisonKey(kind: 'porosity' | 'permeability') {
 					Object.entries(wellData.curves).filter(
 						([name]) =>
 							name.startsWith('V') ||
+							name.endsWith('_ORI') ||
+							name.endsWith('_ENV_CORR') ||
+							name.endsWith('_QC_CONF') ||
+							name.endsWith('_NORM') ||
+							name.endsWith('_ENH') ||
 							[
 								'DEPT',
 								'DEPTH',

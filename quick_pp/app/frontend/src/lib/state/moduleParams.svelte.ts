@@ -22,6 +22,8 @@ export const SINGLE_WELL_REGIONAL_DEFAULTS: Record<ParamModuleKey, Record<string
 		caliSpikeThreshold: 0.5
 	},
 	'qaqc-env': {
+		useEnvCorrected: true,
+		confidenceWeighting: true,
 		useHoleSections: true,
 		bitsizeDefault: 8.5,
 		mudWeight: 9.5,
@@ -61,6 +63,9 @@ export const SINGLE_WELL_REGIONAL_DEFAULTS: Record<ParamModuleKey, Record<string
 			porosityMethod: 'den',
 			sonicFluidDt: 190,
 			logCorrectionMode: 'none',
+			useEditedLogs: true,
+			useNormalizedLogs: false,
+			bypassManualOverrides: false,
 			grClean: 20.0,
 			grClay: 120.0,
 			drySandNphi: -0.02,
@@ -102,6 +107,7 @@ export const SINGLE_WELL_REGIONAL_DEFAULTS: Record<ParamModuleKey, Record<string
 		swb: 0.2,
 		rwb: 0.1,
 		fwl: 0,
+		bypassManualOverrides: false,
 		useTsInSaturation: false
 	},
 	scal: {
@@ -132,6 +138,7 @@ export const SINGLE_WELL_REGIONAL_DEFAULTS: Record<ParamModuleKey, Record<string
 		vclCutoff: 0.4,
 		phieCutoff: 0.08,
 		swCutoff: 0.6,
+		permSource: 'auto',
 		applyPermCutoff: false,
 		permMin: 1.0
 	}

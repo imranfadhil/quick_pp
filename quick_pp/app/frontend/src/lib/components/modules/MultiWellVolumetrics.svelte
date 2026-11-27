@@ -335,6 +335,7 @@
 				gwc: isInherit ? null : mv.gwc,
 				contacts_by_zone: mv.contactsByZone,
 				saturation_method: mv.saturationMethod,
+				perm_source: mv.permSource,
 				fwl_uncertainty: mv.fwlUncertainty,
 				crest_depth: mv.crestDepth,
 				hypsometry_model: mv.hypsometryModel,
@@ -601,6 +602,32 @@
 						onclick={() => (mv.saturationMethod = 'shf')}
 					>
 						SHF Physics
+					</button>
+				</div>
+			</div>
+
+			<div class="flex items-center justify-between py-1 text-xs">
+				<span class="font-medium text-[var(--text-secondary)]">Perm Source:</span>
+				<div class="flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-0.5 text-[10.5px]">
+					<button
+						type="button"
+						title="Prefer core-calibrated PERM_TRANS when saved on wells, falling back to log PERM"
+						class="rounded-xs px-2 py-0.5 font-medium transition-colors {mv.permSource !== 'perm'
+							? 'bg-[var(--bg-surface)] font-semibold text-[var(--accent-primary)] shadow-xs'
+							: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+						onclick={() => (mv.permSource = 'auto')}
+					>
+						Auto (PERM_TRANS)
+					</button>
+					<button
+						type="button"
+						title="Bypass PERM_TRANS and evaluate permeability statistics on log-derived PERM"
+						class="rounded-xs px-2 py-0.5 font-medium transition-colors {mv.permSource === 'perm'
+							? 'bg-[var(--bg-surface)] font-semibold text-[var(--accent-primary)] shadow-xs'
+							: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+						onclick={() => (mv.permSource = 'perm')}
+					>
+						Log PERM Only
 					</button>
 				</div>
 			</div>

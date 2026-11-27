@@ -117,6 +117,12 @@ export interface LithoEndpointParams {
 	logCorrectionMode: 'none' | 'hc' | 'den';
 	useHcCorrected: boolean;
 	enableHcCorrection: boolean;
+	/** When false, downstream calculations bypass in-place edits and use *_ORI raw backups. */
+	useEditedLogs: boolean;
+	/** When true, downstream calculations prefer stratigraphically normalized *_NORM curves. */
+	useNormalizedLogs: boolean;
+	/** Temporarily bypass all manual coal/badhole interval overrides without deleting them. */
+	bypassManualOverrides?: boolean;
 	rhoWater: number;
 	rhoHc: number;
 	hiHc: number;
@@ -277,6 +283,7 @@ export interface SaturationModelParams {
 	waterLegFitIntercept: number | null;
 	continuousMModel: 'calibrated' | 'borai' | 'shell_lucia';
 	applyContinuousM: boolean;
+	bypassManualOverrides?: boolean;
 	manualOverrides?: FluidSwtOverride[];
 }
 
@@ -384,6 +391,10 @@ export interface ScalComputedResult {
 }
 
 export interface EnvCorrectionParams {
+	/** Feed <LOG>_ENV_CORR into downstream Litho, Porosity & Saturation when present. */
+	useEnvCorrected: boolean;
+	/** Blend logs toward high-confidence trend by <LOG>_QC_CONF in washouts. */
+	confidenceWeighting: boolean;
 	useHoleSections: boolean;
 	bitsizeDefault: number;
 	mudWeight: number;
@@ -435,6 +446,7 @@ export interface ResSumParams {
 	vshMax: number;
 	phitMin: number;
 	swtMax: number;
+	permSource: 'auto' | 'perm_trans' | 'perm';
 	applyPermCutoff: boolean;
 	permMin: number;
 	includeUpscaling: boolean;
@@ -731,6 +743,7 @@ export interface MultiWellVolumetricsState {
 	gwc: number;
 	contactsByZone: Record<string, { owc?: number | null; goc?: number | null; gwc?: number | null }>;
 	saturationMethod: 'log_average' | 'shf';
+	permSource: 'auto' | 'perm_trans' | 'perm';
 	fwlUncertainty: number;
 	crestDepth: number | null;
 	hypsometryModel: 'structural_dome' | 'well_tracks';
@@ -842,6 +855,16 @@ class WorkbenchState {
 
 	get effectiveCrossplot(): CrossplotId | null {
 		return resolveCrossplot(this.crossplotContext, this.crossplotTemplateOverride);
+	}
+
+	/** Shared backend payload flags for non-destructive upstream log conditioning / bypass toggles. */
+	get qcInputFlags() {
+		return {
+			use_env_corrected: this.envCorrParams.useEnvCorrected,
+			confidence_weighting: this.envCorrParams.confidenceWeighting,
+			use_raw_ori_logs: !this.lithoParams.useEditedLogs,
+			use_normalized_logs: this.lithoParams.useNormalizedLogs
+		};
 	}
 
 	// Active curve selected in QAQC for histogram / multi-well distribution inspection
@@ -966,6 +989,9 @@ class WorkbenchState {
 		logCorrectionMode: 'none',
 		useHcCorrected: false,
 		enableHcCorrection: false,
+		useEditedLogs: true,
+		useNormalizedLogs: false,
+		bypassManualOverrides: false,
 		rhoWater: 1.0,
 		rhoHc: 0.8,
 		hiHc: 0.9,
@@ -1119,6 +1145,7 @@ class WorkbenchState {
 		waterLegFitIntercept: null,
 		continuousMModel: 'calibrated',
 		applyContinuousM: false,
+		bypassManualOverrides: false,
 		manualOverrides: []
 	});
 
@@ -1200,6 +1227,8 @@ class WorkbenchState {
 	scalResult = $state<ScalComputedResult | null>(null);
 
 	envCorrParams = $state<EnvCorrectionParams>({
+		useEnvCorrected: true,
+		confidenceWeighting: true,
 		useHoleSections: true,
 		bitsizeDefault: 8.5,
 		mudWeight: 9.5,
@@ -1248,6 +1277,7 @@ class WorkbenchState {
 		vshMax: 0.4,
 		phitMin: 0.05,
 		swtMax: 0.75,
+		permSource: 'auto',
 		applyPermCutoff: false,
 		permMin: 1.0,
 		includeUpscaling: true,
@@ -1279,6 +1309,7 @@ class WorkbenchState {
 		gwc: -2500,
 		contactsByZone: {},
 		saturationMethod: 'log_average',
+		permSource: 'auto',
 		fwlUncertainty: 5.0,
 		crestDepth: null,
 		hypsometryModel: 'structural_dome',

@@ -1142,18 +1142,102 @@ class ProjectDataState {
 		}
 	}
 
-	/** Reset rock typing and classifier results and saved parameters to defaults. */
-	async resetRockTyping(): Promise<void> {
+	/** Execute a project-wide or subset QA/QC curve reset (restore *_ORI backups or clear derived curves). */
+	async resetProjectQaqc(opts: {
+		action: 'restore_ori' | 'clear_curves';
+		wellNames?: string[] | null;
+		curves?: string[];
+		suffixes?: string[];
+		groups?: string[];
+		dropOri?: boolean;
+		save?: boolean;
+		successMessage?: string;
+	}): Promise<{
+		affected_wells: string[];
+		wells_count: number;
+		restored_curves: string[];
+		cleared_curves: string[];
+	} | null> {
+		const pid = workbench.projectId;
+		if (!pid) return null;
+		this.isComputingMultiWell = true;
+		this.error = null;
+		try {
+			const res = await postJson<{
+				affected_wells: string[];
+				wells_count: number;
+				restored_curves: string[];
+				cleared_curves: string[];
+			}>(`/quick_pp/workspace/projects/${encodeURIComponent(pid)}/qaqc/reset`, {
+				action: opts.action,
+				well_names: opts.wellNames ?? null,
+				curves: opts.curves ?? null,
+				suffixes: opts.suffixes ?? null,
+				groups: opts.groups ?? null,
+				drop_ori: opts.dropOri ?? true,
+				save: opts.save ?? true
+			});
+			await this.refreshSummary(pid);
+			if (workbench.wellId) {
+				await wellData.loadWellBundle(pid, workbench.wellId);
+			}
+			const msg =
+				opts.successMessage ??
+				(opts.action === 'restore_ori'
+					? `Restored ${res.restored_curves.join(', ') || 'raw curves'} across ${res.wells_count} well(s) ✓`
+					: `Cleared ${res.cleared_curves.join(', ') || 'derived curves'} across ${res.wells_count} well(s) ✓`);
+			wellData.lastSavedMessage = msg;
+			appStatus.success(msg);
+			return res;
+		} catch (e: any) {
+			this.error = e?.message || 'Reset failed';
+			appStatus.error(this.error ?? 'Reset failed');
+			return null;
+		} finally {
+			this.isComputingMultiWell = false;
+		}
+	}
+
+	/** Reset rock typing and classifier results and saved parameters to defaults (optionally clearing saved DRT curves). */
+	async resetRockTyping(clearWellCurves: boolean = false): Promise<void> {
 		this.rockTypingResult = null;
+		this.drtClassifierPropagated = false;
 		if (workbench.projectId) {
 			await projectParams.deleteAllForModule(workbench.projectId, 'rock-typing', this.projectModuleParams);
 			await projectParams.deleteAllForModule(workbench.projectId, 'rt-classifier', this.projectModuleParams);
+			if (clearWellCurves) {
+				await this.resetProjectQaqc({
+					action: 'clear_curves',
+					curves: ['ROCK_FLAG', 'ROCK_FLAG_ML', 'FZI', 'R35', 'RFN'],
+					save: true,
+					successMessage: 'Rock typing parameters and saved DRT curves cleared ✓'
+				});
+				return;
+			}
 		}
 		appStatus.success('Rock typing and classifier reset to regional defaults');
 	}
 
-	/** Reset SCAL plug fittings, Swirr correlation, and SWOF simulation deck. */
-	async resetScalFits(): Promise<void> {
+	/** Reset Perm Transform fits and optionally clear saved PERM_TRANS curves across wells. */
+	async resetPermTransform(clearWellCurves: boolean = false): Promise<void> {
+		this.permTransformResult = null;
+		if (workbench.projectId) {
+			await projectParams.deleteAllForModule(workbench.projectId, 'perm-transform', this.projectModuleParams);
+			if (clearWellCurves) {
+				await this.resetProjectQaqc({
+					action: 'clear_curves',
+					curves: ['PERM_TRANS'],
+					save: true,
+					successMessage: 'Perm transform reset and PERM_TRANS cleared across wells ✓'
+				});
+				return;
+			}
+		}
+		appStatus.success('Perm transform reset to regional defaults');
+	}
+
+	/** Reset SCAL plug fittings, Swirr correlation, and SWOF simulation deck (optionally clearing SWIRR curves). */
+	async resetScalFits(clearWellCurves: boolean = false): Promise<void> {
 		this.swirrConfig.referencePcPsi = 100.0;
 		this.swirrConfig.extractionMode = 'cutoff_pc';
 		this.swirrConfig.equationType = 'rqi_power';
@@ -1161,17 +1245,27 @@ class ProjectDataState {
 		this.swirrConfig.excludedPlugIds = [];
 		this.swirrConfig.excludedScalPointIds = [];
 		this.swirrResult = null;
+		this.swirrApplyResult = null;
 		workbench.scalResult = null;
 		this.focusedScalPlugId = null;
 		this.selectedScalPointIds = [];
 		if (workbench.projectId) {
 			await projectParams.deleteAllForModule(workbench.projectId, 'swirr-corr', this.projectModuleParams);
+			if (clearWellCurves) {
+				await this.resetProjectQaqc({
+					action: 'clear_curves',
+					curves: ['SWIRR'],
+					save: true,
+					successMessage: 'SCAL fits reset and SWIRR curves cleared across wells ✓'
+				});
+				return;
+			}
 		}
 		appStatus.success('SCAL & Swirr fittings reset to regional defaults');
 	}
 
-	/** Reset SHF model parameters, Leverett-J fits, and FWL datum. */
-	async resetShf(): Promise<void> {
+	/** Reset SHF model parameters, Leverett-J fits, and FWL datum (optionally clearing SHF / SW_SHF curves). */
+	async resetShf(clearWellCurves: boolean = false): Promise<void> {
 		this.shfParams.model = 'leverett_j';
 		this.shfParams.jSatMode = 'swn';
 		this.shfParams.swirrSource = 'lab_min';
@@ -1191,6 +1285,15 @@ class ProjectDataState {
 		this.shfSavedFits = null;
 		if (workbench.projectId) {
 			await projectParams.deleteAllForModule(workbench.projectId, 'shf', this.projectModuleParams);
+			if (clearWellCurves) {
+				await this.resetProjectQaqc({
+					action: 'clear_curves',
+					curves: ['SHF', 'SW_SHF'],
+					save: true,
+					successMessage: 'SHF model reset and SHF / SW_SHF curves cleared across wells ✓'
+				});
+				return;
+			}
 		}
 		appStatus.success('SHF model and FWL reset to regional defaults');
 	}
