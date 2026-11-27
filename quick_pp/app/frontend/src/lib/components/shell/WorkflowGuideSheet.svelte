@@ -49,36 +49,36 @@
 		{
 			id: 'sw-step-4-perm',
 			num: 'Step 4',
-			title: 'Permeability Estimation (Choo, Coates, FZI)',
+			title: 'Permeability Estimation (Choo, Kozeny-Carman, Timur, Tixier, Coates)',
 			stepId: 'perm',
 			isStandalone: false
 		},
 		{
 			id: 'sw-step-5-saturation',
 			num: 'Step 5',
-			title: 'Fluid Saturation (Archie, Waxman-Smits, Dual Water)',
+			title: 'Saturation & Fluid Typing (Archie, WS, Simandoux, Indonesian, DW)',
 			stepId: 'saturation',
 			isStandalone: false
 		},
 		{
 			id: 'sw-step-6-ressum',
 			num: 'Step 6',
-			title: 'Reservoir Summary, Net Pay Cutoffs & Upscaling',
+			title: 'Reservoir Summary, Cutoff Sensitivity & Log Blocking',
 			stepId: 'ressum',
 			isStandalone: false
 		},
 		{
 			id: 'sw-step-7-report',
 			num: 'Step 7',
-			title: 'Computer Processed Interpretation (CPI) Report',
+			title: 'Well CPI Dossier & Subsurface Gate Checks',
 			stepId: 'report',
 			isStandalone: false
 		},
-		// Standalone Module
+		// Standalone Modules
 		{
 			id: 'sw-standalone-core-pc',
 			num: 'Standalone',
-			title: 'Core & Pc Prep (Depth Shift, Stress & Lab-to-Res Pc)',
+			title: 'Core & Pc Prep (Depth Shift, Stress, Lab Pc & Grain Density)',
 			stepId: 'scal',
 			isStandalone: true
 		},
@@ -116,35 +116,35 @@
 		{
 			id: 'mw-step-3-rock-typing',
 			num: 'Step 3',
-			title: 'Core Rock Typing (FZI, Winland r35, Lucia RFN)',
+			title: 'Discrete Rock Typing (Amaefule FZI, Winland r35, Lucia RFN)',
 			stepId: 'rock-typing',
 			isStandalone: false
 		},
 		{
 			id: 'mw-step-4-perm-transform',
 			num: 'Step 4',
-			title: 'Field Permeability Transforms & RT Regressions',
+			title: 'Field Permeability Transforms (Power-Law PERM_TRANS)',
 			stepId: 'perm-transform',
 			isStandalone: false
 		},
 		{
 			id: 'mw-step-5-shf',
 			num: 'Step 5',
-			title: 'Saturation-Height Function (SHF) & Reconciliation',
+			title: 'Saturation-Height (SHF), Stick Plot & Fluid Contacts',
 			stepId: 'shf',
 			isStandalone: false
 		},
 		{
 			id: 'mw-step-6-volumetrics',
 			num: 'Step 6',
-			title: 'Probabilistic Volumetrics & Uncertainty (LHS)',
+			title: 'Probabilistic Volumetrics, Hypsometric SHF & Cutoff Sensitivity',
 			stepId: 'volumetrics',
 			isStandalone: false
 		},
 		{
 			id: 'mw-step-7-report',
 			num: 'Step 7',
-			title: 'Field Development Plan (FDP) Synthesis Report',
+			title: 'Field Development Plan (FDP) Dossier & Gate Checks',
 			stepId: 'report',
 			isStandalone: false
 		},
@@ -329,7 +329,9 @@
 						{s.num === 'Overview'
 							? 'Overview'
 							: s.isStandalone
-								? 'LAB'
+								? s.id.includes('source')
+									? 'TOC'
+									: 'LAB'
 								: s.num.replace('Step ', '#')}
 					</button>
 				{/each}
@@ -345,13 +347,15 @@
 						{s.num === 'Overview'
 							? 'Overview'
 							: s.isStandalone
-								? s.id.includes('scal')
-									? 'SCAL'
-									: s.id.includes('fpt')
-										? 'FPT'
-										: s.id.includes('classifier')
-											? 'DRT'
-											: 'PIML'
+								? s.id.includes('batch')
+									? 'BATCH'
+									: s.id.includes('scal')
+										? 'SCAL'
+										: s.id.includes('fpt')
+											? 'FPT'
+											: s.id.includes('classifier')
+												? 'DRT'
+												: 'PIML'
 								: s.num.replace('Step ', '#')}
 					</button>
 				{/each}
@@ -381,10 +385,12 @@
 					</span>
 				</div>
 				<p class="text-[11px] text-[var(--text-muted)]">
-					Single-well petrophysics executes a rigorous 7-step sequential pipeline from
-					bad-hole curve repair to automated CPI reporting, complemented by a standalone
-					Core & Pc Preparation module for core depth shifting, stress compaction, and
-					lab-to-reservoir capillary scaling.
+					Single-well petrophysics executes a rigorous 7-step sequential pipeline—starting
+					with Well Header, Hole Sections & Minimum Curvature Trajectory setup, followed by
+					borehole environmental/invasion QC, mineral/porosity evaluation, empirical
+					permeability, fluid saturation, cutoff sensitivity & upscaling, and automated CPI
+					reporting—complemented by two standalone modules for Core & Pc Preparation
+					(including multi-log grain density) and Source Rock (TOC) evaluation.
 				</p>
 
 				<!-- Visual Step Path Progression -->
@@ -432,35 +438,56 @@
 						<div
 							class="text-[10px] font-bold tracking-wider text-[var(--text-muted)] uppercase"
 						>
-							Standalone Module
+							Standalone Specialized Modules
 						</div>
-						<div
-							class="mt-1 flex items-center justify-between rounded-xs border border-purple-200 bg-purple-50/50 p-2"
-						>
-							<div class="flex items-center gap-2">
-								<span
-									class="rounded-xs bg-purple-200 px-1 py-0.5 text-[9px] font-bold text-purple-900"
-									>LAB</span
-								>
-								<span class="text-[10.5px] font-semibold text-purple-950">
-									Core Depth Shift, Stress Compaction & Lab-to-Reservoir Pc
-									Scaling
-								</span>
-							</div>
-							<button
-								type="button"
-								onclick={() => handleJumpToWorkbenchStep('single-well', 'scal')}
-								class="text-[9px] font-semibold text-purple-700 hover:underline"
+						<div class="mt-1 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+							<div
+								class="flex items-center justify-between rounded-xs border border-purple-200 bg-purple-50/50 p-2"
 							>
-								Go ➔
-							</button>
+								<div class="flex items-center gap-1.5 overflow-hidden">
+									<span
+										class="shrink-0 rounded-xs bg-purple-200 px-1 py-0.5 text-[9px] font-bold text-purple-900"
+										>LAB</span
+									>
+									<span class="truncate text-[10px] font-semibold text-purple-950" title="Core Depth Shift, Stress Compaction, Lab Pc Scaling & Grain Density">
+										Core &amp; Pc Prep (Shift, Stress, Pc &amp; ρ_ma)
+									</span>
+								</div>
+								<button
+									type="button"
+									onclick={() => handleJumpToWorkbenchStep('single-well', 'scal')}
+									class="ml-1 shrink-0 text-[9px] font-semibold text-purple-700 hover:underline"
+								>
+									Go ➔
+								</button>
+							</div>
+							<div
+								class="flex items-center justify-between rounded-xs border border-emerald-200 bg-emerald-50/50 p-2"
+							>
+								<div class="flex items-center gap-1.5 overflow-hidden">
+									<span
+										class="shrink-0 rounded-xs bg-emerald-200 px-1 py-0.5 text-[9px] font-bold text-emerald-900"
+										>TOC</span
+									>
+									<span class="truncate text-[10px] font-semibold text-emerald-950" title="Source Rock & TOC (Passey ΔlogR, Hood LOM & Core Calibration)">
+										Source Rock &amp; TOC (Passey ΔlogR &amp; LOM)
+									</span>
+								</div>
+								<button
+									type="button"
+									onclick={() => handleJumpToWorkbenchStep('single-well', 'toc')}
+									class="ml-1 shrink-0 text-[9px] font-semibold text-emerald-700 hover:underline"
+								>
+									Go ➔
+								</button>
+							</div>
 						</div>
 					</div>
 				</div>
 			</div>
 
 			<!-- SW STEP 1: WELL & ANCILLARY -->
-			{#if matchesSearch('well header hole sections mud weight bit size ancillary tops trajectory minimum curvature tvd tvdss core')}
+			{#if matchesSearch('well header hole sections mud weight bit size rmf salinity bht ancillary tops contacts core scal fpt mobility trajectory minimum curvature tvd tvdss')}
 				<section
 					id="sw-step-1-ancillary"
 					class="space-y-2.5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-3.5 shadow-2xs"
@@ -472,7 +499,7 @@
 								>1</span
 							>
 							<h4 class="text-xs font-bold text-[var(--text-primary)]">
-								Step 1: Well Header, Hole Sections, Tops & Minimum Curvature Trajectory
+								Step 1: Well Header, Hole Sections, Tops &amp; Minimum Curvature Trajectory
 								(InspectorAncillary)
 							</h4>
 						</div>
@@ -486,10 +513,11 @@
 					</div>
 
 					<p>
-						Establishes well header metadata (KB/DF datum, BHT, mud filtrate properties),
-						depth-zoned Hole Sections (Bit Size, Mud Type, Mud Weight, Mud Salinity, Rmf),
-						formation tops, fluid contacts, core data, and computes True Vertical Depth (TVD / TVDSS)
-						from directional surveys using the SPE Minimum Curvature Method (MCM).
+						Establishes well header metadata (KB/DF/GL datum, water depth, BHT records, mud
+						system, bidirectional Rmf &harr; filtrate salinity sync), depth-zoned Hole Sections
+						(Bit Size, Mud Type, Mud Weight, Mud Salinity, Rmf), formation tops, fluid contacts,
+						RCA core, SCAL Pc, FPT pressure/mobility points, and computes True Vertical Depth
+						(TVD / TVDSS) from directional surveys via the SPE Minimum Curvature Method (MCM).
 					</p>
 
 					<div
@@ -501,29 +529,27 @@
 							Core Equations
 						</div>
 						<div class="font-mono text-[11px] text-[var(--text-primary)]">
-							Dogleg Severity (DL): cos(DL) = cos(I₂ - I₁) - sin(I₁) · sin(I₂) · (1 -
-							cos(A₂ - A₁))<br />
-							Ratio Factor (RF): RF = (2 / DL) · tan(DL / 2)<br />
-							ΔTVD = (ΔMD / 2) · [cos(I₁) + cos(I₂)] · RF<br />
-							TVDSS = TVD - Elevation_KB
+							Dogleg Angle (β): cos(β) = cos(I₁)·cos(I₂) + sin(I₁)·sin(I₂)·cos(A₂ - A₁)<br />
+							Ratio Factor (RF): RF = (2 / β) · tan(β / 2) &nbsp;(RF &rarr; 1 as β &rarr; 0)<br />
+							ΔTVD = (ΔMD / 2) · [cos(I₁) + cos(I₂)] · RF, &nbsp;TVDSS = TVD - Elevation_KB
 						</div>
 					</div>
 
 					<div class="grid grid-cols-2 gap-2 text-[10px]">
 						<div>
-							<span class="font-bold text-[var(--text-primary)]">Inputs:</span> Header Datum,
-							Hole Sections (BS, MW, Salinity, Rmf), Tops, Survey (MD, Inc, Azim)
+							<span class="font-bold text-[var(--text-primary)]">Inputs:</span> Header Datum &amp;
+							Rmf, Hole Sections (BS, MW, Salinity, Rmf), Tops, Core/SCAL/FPT, Survey (MD, Inc, Azim)
 						</div>
 						<div>
-							<span class="font-bold text-[var(--text-primary)]">Outputs:</span> BS, TVD, TVDSS,
-							DX, DY, Closure, Dogleg Severity
+							<span class="font-bold text-[var(--text-primary)]">Outputs:</span> Synthesized BS &amp;
+							Mud Program, TVD, TVDSS, DX, DY, Dogleg Severity, ZONES
 						</div>
 					</div>
 				</section>
 			{/if}
 
 			<!-- SW STEP 2: QAQC -->
-			{#if matchesSearch('qaqc bad hole caliper bit size limits repair environmental correction')}
+			{#if matchesSearch('qaqc bad hole caliper drho bit size rugosity environmental correction invasion rxo di sigma confidence p&t temperature pressure deconvolution imputation splice')}
 				<section
 					id="sw-step-2-qaqc"
 					class="space-y-2.5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-3.5 shadow-2xs"
@@ -535,7 +561,8 @@
 								>2</span
 							>
 							<h4 class="text-xs font-bold text-[var(--text-primary)]">
-								Step 2: Log QA/QC, Bad-Hole Flagging & Environmental Corrections (InspectorQaqc)
+								Step 2: Log QA/QC, Bad-Hole Flagging, Borehole Env &amp; Invasion Corrections
+								(InspectorQaqc)
 							</h4>
 						</div>
 						<button
@@ -548,9 +575,12 @@
 					</div>
 
 					<p>
-						Flags borehole washouts, mudcake buildup, and casing intervals using Hole Section
-						bit sizes and mud properties (with optional manual override), applies borehole
-						environmental corrections, and performs curve editing/splicing.
+						Executes 4-criterion bad-hole flagging using Hole Section bit sizes (or change-point
+						auto-BS), applies WL/LWD borehole environmental and 2/3-curve radial invasion
+						corrections with perturbation-propagated uncertainty (σ) and sensor confidence
+						(inspected via Borehole Env QC, Invasion Profile &amp; P&amp;T Profile views),
+						harmonizes vertical resolution via 1D Huber deconvolution, and performs missing-data
+						imputation, curve editing, and multi-run splicing.
 					</p>
 
 					<div
@@ -559,32 +589,32 @@
 						<div
 							class="text-[10px] font-bold tracking-wider text-[var(--text-muted)] uppercase"
 						>
-							Core Equations
+							Core Equations &amp; Physics
 						</div>
 						<div class="font-mono text-[11px] text-[var(--text-primary)]">
-							ΔCALI = CALI - BS &nbsp;(Washout: ΔCALI &gt; +2.5 in, Mudcake: ΔCALI
-							&lt; -0.5 in)<br />
-							DRHO flag: |DRHO| &gt; 0.05 g/cm³ (mudcake / standoff contamination)<br
-							/>
-							BAD_HOLE = (ΔCALI &gt; ΔCALI_washout) ∨ (|DRHO| &gt; 0.05) ∨ (ROBB &lt; 1.5)
+							BADHOLE = (|CALI - BS| ≥ τ_cali) ∨ (|DRHO| &gt; τ_drho) ∨ (RHOB/NPHI bounds) ∨ (Rugosity spike)<br />
+							GR Mud Attenuation: GR_corr = GR · exp(μ · 1.27 · g · [ρ_m(d_h - d_t) - ρ_ref(d_ref - d_t)]) - 16·K%·A_ann<br />
+							Radial Step Invasion: C_k = [1 - J_k(d_i)]·C_t + J_k(d_i)·C_xo, &nbsp;J_k = 1 - exp(-(d_i / r_k)²)<br />
+							Invasion Profile: log10(Rxo / Rt) vs log10(Rmf / Rw) &rarr; Water / Movable HC / Tight / Anomalous<br />
+							1D Bounded Deconv: min ½||W(Hx - y)||₂² + λ∑φ_δ(D₁x) + ½λ_v||H_v(x - y)||₂² &nbsp;s.t. l ≤ x ≤ u
 						</div>
 					</div>
 
 					<div class="grid grid-cols-2 gap-2 text-[10px]">
 						<div>
-							<span class="font-bold text-[var(--text-primary)]">Inputs:</span> CALI, BS,
-							RHOB, DRHO, NPHI, GR, RT, DTC, Hole Sections
+							<span class="font-bold text-[var(--text-primary)]">Inputs:</span> CALI, BS, GR,
+							RHOB, DRHO, NPHI, RT, RMED, RXO, DTC, Hole Sections &amp; Header Env
 						</div>
 						<div>
-							<span class="font-bold text-[var(--text-primary)]">Outputs:</span> BADHOLE,
-							DCALI, *_ENV_CORR, *_QC_CONF
+							<span class="font-bold text-[var(--text-primary)]">Outputs:</span> BADHOLE, DCALI,
+							*_ENV_CORR, *_SIGMA, *_QC_CONF, INVASION_PROFILE, DI_IN, *_ENH, *_IMP, *_ORI
 						</div>
 					</div>
 				</section>
 			{/if}
 
 			<!-- SW STEP 3: LITHO-PORO -->
-			{#if matchesSearch('lithology porosity vsh vclay ssc slsqp mineral phie phit')}
+			{#if matchesSearch('lithology porosity vsh vclay ssc thomas stieber slsqp mineral phie phit rho_fl fluid density coal manual override')}
 				<section
 					id="sw-step-3-litho-poro"
 					class="space-y-2.5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-3.5 shadow-2xs"
@@ -596,7 +626,7 @@
 								>3</span
 							>
 							<h4 class="text-xs font-bold text-[var(--text-primary)]">
-								Step 3: Lithology & Porosity Evaluation (InspectorLithoPoro)
+								Step 3: Lithology &amp; Porosity Evaluation (InspectorLithoPoro)
 							</h4>
 						</div>
 						<button
@@ -609,9 +639,11 @@
 					</div>
 
 					<p>
-						Calculates volume of shale (Vsh), solves mineral endmembers (Sand-Silt-Clay
-						/ Quartz-Calcite-Dolomite) via linear/SLSQP matrix inversion, and derives
-						Total Porosity (PHIT) and Effective Porosity (PHIE).
+						Calculates shale volume (GR/CGR/SGR/CGR_SYN), solves matrix-relative mineral
+						endmembers (Sand-Silt-Clay, Thomas-Stieber laminated/dispersed/structural thin
+						beds, or selectable-log SLSQP multi-mineral inversion), and derives Total &amp;
+						Effective Porosity (PHIT, PHIE) with continuous apparent fluid density (RHO_FL),
+						coal seam detection, and reversible interval manual overrides for coal &amp; badhole.
 					</p>
 
 					<div
@@ -623,29 +655,29 @@
 							Core Equations
 						</div>
 						<div class="font-mono text-[11px] text-[var(--text-primary)]">
-							Linear Vsh: I_GR = (GR - GR_clean) / (GR_shale - GR_clean)<br />
-							Larionov (Tertiary): Vsh = 0.083 · (2^(3.7 · I_GR) - 1)<br />
-							Density Porosity: φ_D = (ρ_ma - RHOB) / (ρ_ma - ρ_fl)<br />
+							Linear Vsh: I_GR = clip((GR - GR_clean) / (GR_shale - GR_clean), 0, 1)<br />
+							Larionov (Tertiary): Vsh = 0.083 · (2^(3.7 · I_GR) - 1) &nbsp;|&nbsp; Older: 0.33 · (2^(2 · I_GR) - 1)<br />
+							Density / Sonic Porosity: φ_D = (ρ_ma - RHOB) / (ρ_ma - ρ_fl), &nbsp;φ_S = (Δt - Δt_ma) / (Δt_fl - Δt_ma)<br />
 							Effective Porosity: φ_e = max(0, φ_t - V_clay · φ_clay)<br />
-							Matrix Inversion: min ||A·V - L||² s.t. ∑ V_i = 1, V_i ≥ 0
+							Multi-Mineral SLSQP: min ∑ w_j((A·v - b)_j / σ_j)² &nbsp;s.t. ∑ v_i = 1, 0 ≤ v_i ≤ 1
 						</div>
 					</div>
 
 					<div class="grid grid-cols-2 gap-2 text-[10px]">
 						<div>
-							<span class="font-bold text-[var(--text-primary)]">Inputs:</span> GR, RHOB,
-							NPHI, PEF, DTC
+							<span class="font-bold text-[var(--text-primary)]">Inputs:</span> GR/CGR/SGR, RHOB,
+							NPHI, PEF, DTC, THOR, POTA, URAN, Header Rmf
 						</div>
 						<div>
-							<span class="font-bold text-[var(--text-primary)]">Outputs:</span> VSH, VCLAY,
-							VSAND, VSILT, PHIT, PHIE
+							<span class="font-bold text-[var(--text-primary)]">Outputs:</span> VSHALE, VSAND,
+							VSILT, VCLAY, VCALC, VDOLO, PHIT, PHIE, RHOM, COAL_FLAG, RHO_FL
 						</div>
 					</div>
 				</section>
 			{/if}
 
 			<!-- SW STEP 4: PERMEABILITY -->
-			{#if matchesSearch('permeability choo timur coates tixier morris biggs fzi perm')}
+			{#if matchesSearch('permeability choo kozeny carman timur coates tixier thomas stieber perm cperm')}
 				<section
 					id="sw-step-4-perm"
 					class="space-y-2.5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-3.5 shadow-2xs"
@@ -657,7 +689,7 @@
 								>4</span
 							>
 							<h4 class="text-xs font-bold text-[var(--text-primary)]">
-								Step 4: Continuous Permeability Estimation (InspectorPerm)
+								Step 4: Continuous Empirical Permeability Estimation (InspectorPerm)
 							</h4>
 						</div>
 						<button
@@ -670,9 +702,11 @@
 					</div>
 
 					<p>
-						Derives continuous absolute permeability profiles using classic empirical
-						formulations (Choo, Coates, Timur, Tixier) calibrated against core plug
-						measurements.
+						Derives continuous single-well absolute permeability (PERM) using five empirical
+						models (Choo, Kozeny-Carman, Timur, Tixier, Coates-Dumanoir) with optional
+						Thomas-Stieber thin-bed sand-lamina weighting and core plug (CPERM) parity
+						calibration. Rock-type Hydraulic Flow Units (Amaefule FZI, Winland r35, Lucia RFN)
+						and power-law PERM_TRANS regressions live in Multi-Well Steps 3 &amp; 4.
 					</p>
 
 					<div
@@ -684,30 +718,30 @@
 							Core Equations
 						</div>
 						<div class="font-mono text-[11px] text-[var(--text-primary)]">
-							Timur-Coates: k = a · φ_e^b · ((1 - Swirr) / Swirr)^c &nbsp;(a=10000,
-							b=4, c=2)<br />
-							Choo Model: k = a · (φ_e / (1 - φ_e))^b · (1 - V_clay)^c<br />
-							Amaefule Flow Zone Indicator: k = 1014 · FZI² · (φ_e³ / (1 - φ_e)²)<br
-							/>
-							Tixier: k = 100 · (φ_e³ / Swirr²)
+							Choo (Sand-Silt-Clay): k = A · φ_t^B / 10^(6·V_clay + 3·V_silt), &nbsp;B = m·((2 / C) + 1) + 2<br />
+							Kozeny-Carman: k = φ_t³ / (5 · S² · (1 - φ_t)²)<br />
+							Timur (1968): k = 0.136 · φ_t^4.4 / Swirr²<br />
+							Tixier (1949): k = 62.5 · φ_t⁶ / Swirr²<br />
+							Coates (1974): k = ((φ² / a) · (1 - Swirr) / Swirr)² &nbsp;(a = 1)<br />
+							Thin-Bed Option (TS): k_h = (1 - V_sh,lam) · k_sand(φ_t,sand, V_sh,dis)
 						</div>
 					</div>
 
 					<div class="grid grid-cols-2 gap-2 text-[10px]">
 						<div>
-							<span class="font-bold text-[var(--text-primary)]">Inputs:</span> PHIE, SWIRR,
-							VCLAY, Core plugs (K_core, PHI_core)
+							<span class="font-bold text-[var(--text-primary)]">Inputs:</span> PHIT, VCLAY,
+							VSILT (or VSHALE), Swirr, optional TS (PHIT_SAND, VSH_LAM, VSH_DIS), CPERM
 						</div>
 						<div>
-							<span class="font-bold text-[var(--text-primary)]">Outputs:</span> PERM (mD),
-							Permeability Confidence Intervals
+							<span class="font-bold text-[var(--text-primary)]">Outputs:</span> PERM (mD), Core
+							Metrics (log₁₀ RMSE, MAE, Factor Error, R²), 5-Method Comparison Plot
 						</div>
 					</div>
 				</section>
 			{/if}
 
 			<!-- SW STEP 5: SATURATION -->
-			{#if matchesSearch('saturation archie waxman smits dual water indonesian swt swe m calibration water leg fluid typing')}
+			{#if matchesSearch('saturation archie waxman smits simandoux dual water indonesian swt swe m calibration water leg fluid typing manual override')}
 				<section
 					id="sw-step-5-saturation"
 					class="space-y-2.5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-3.5 shadow-2xs"
@@ -719,7 +753,7 @@
 								>5</span
 							>
 							<h4 class="text-xs font-bold text-[var(--text-primary)]">
-								Step 5: Water Saturation & Fluid Typing (InspectorSaturation)
+								Step 5: Water Saturation &amp; Fluid Typing (InspectorSaturation)
 							</h4>
 						</div>
 						<button
@@ -732,11 +766,11 @@
 					</div>
 
 					<p>
-						Solves for Total Water Saturation (SWT) and Effective Water Saturation
-						(SWE). In shaly sands, accounts for excess electrical conduction via clay
-						counter-ion mobility (Waxman-Smits) or dual water conductivity. Supports
-						water-leg m calibration, continuous empirical m(φ) models (Borai,
-						Shell/Lucia), and multi-criteria reservoir fluid typing with manual
+						Solves for Total Water Saturation (SWT) and Effective Water Saturation (SWE) via
+						Archie, Waxman-Smits (Qv from CEC, Juhasz Qvn, or crossplot), Simandoux,
+						Indonesian, or Dual Water models (with optional Thomas-Stieber RSAND_TS tensor
+						inputs). Supports water-leg m calibration, continuous empirical m(φ) models (Borai,
+						Shell/Lucia), gravity-segregated reservoir fluid typing, and well-scoped manual
 						overrides.
 					</p>
 
@@ -750,33 +784,29 @@
 						</div>
 						<div class="font-mono text-[11px] text-[var(--text-primary)]">
 							Arps Rw(T): Rw(T) = Rw(T_ref) · (T_ref + 21.5) / (T + 21.5)<br />
-							Archie: Sw = (a · Rw / (φ^m · Rt))^(1 / n)<br />
-							Waxman-Smits: 1 / Rt = (φ_t^m* · Swt^n* / a*) · (1 / Rw + B · Qv / Swt)<br
-							/>
-							&nbsp;&nbsp;where Qv = CEC · (1 - φ_t) · ρ_ma · V_clay / φ_t<br />
-							Effective Saturation: Swe = clip((Swt · φ_t - V_clay · φ_clay) / φ_e, 0, 1)<br
-							/>
-							Water-Leg m: m = ln(Rw / Rt) / ln(φ_t) &nbsp;(Sw = 1.0)<br />
-							Borai (1987) m(φ): m = 2.2 - 0.035 / (φ_t + 0.042)<br />
-							Bulk Volume Water: BVW = φ_e · Swe &nbsp;(Irreducible: BVW_irr)
+							Archie: Swt = (a · Rw / (φ_t^m · Rt))^(1 / n)<br />
+							Waxman-Smits: 1 / Rt = (φ_t^m* · Swt^n* / a*) · (1 / Rw + B · Qv / Swt)<br />
+							Simandoux: 1 / Rt = (V_sh / R_sh)·Sw + (φ_e^m / (a·Rw))·Sw^n<br />
+							Indonesian: 1 / √Rt = [√(V_sh^(2 - V_sh) / R_sh) + √(φ_e^m / (a·Rw))] · Sw^(n/2)<br />
+							Water-Leg m &amp; Borai (1987): m = ln(Rw / Rt) / ln(φ_t) &nbsp;|&nbsp; m = 2.2 - 0.035 / (φ_t + 0.042)
 						</div>
 					</div>
 
 					<div class="grid grid-cols-2 gap-2 text-[10px]">
 						<div>
-							<span class="font-bold text-[var(--text-primary)]">Inputs:</span> RT, PHIT,
-							VSH, VCLAY, Formation Temp, NPHI, RHOB. Optional: DTC, DTS, Mud-gas
+							<span class="font-bold text-[var(--text-primary)]">Inputs:</span> RT, PHIT, PHIE,
+							VSHALE, VCLAY, TVDSS/TVD, NPHI, RHOB, optional RSAND_TS, DTC, DTS, C1–NC5
 						</div>
 						<div>
 							<span class="font-bold text-[var(--text-primary)]">Outputs:</span> SWT, SWE,
-							BVW, BVW_IRR, M_CALC, FLUID_TYPE, HC/GAS/OIL_FLAG, BVHC
+							BVW, BVW_IRR, M_CALC, FLUID_TYPE, HC/GAS/OIL/UNC_FLAG, BVHC
 						</div>
 					</div>
 				</section>
 			{/if}
 
 			<!-- SW STEP 6: RESSUM & BLOCKING -->
-			{#if matchesSearch('ressum summary cutoffs blocking upscaling net pay ntg')}
+			{#if matchesSearch('ressum summary cutoffs sensitivity prms hcpv blocking upscaling cardwell parsons net pay ntg uncertainty')}
 				<section
 					id="sw-step-6-ressum"
 					class="space-y-2.5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-3.5 shadow-2xs"
@@ -788,7 +818,7 @@
 								>6</span
 							>
 							<h4 class="text-xs font-bold text-[var(--text-primary)]">
-								Step 6: Reservoir Summary, Net Pay Cutoffs & Upscaling
+								Step 6: Reservoir Summary, Cutoff Sensitivity &amp; Log Blocking
 								(InspectorResSum)
 							</h4>
 						</div>
@@ -802,9 +832,10 @@
 					</div>
 
 					<p>
-						Applies quantitative cutoffs to distinguish Net Reservoir and Net Pay,
-						integrates zonal property averages (NTG, Phie_avg, Sw_avg, HCPV), and
-						upscales fine logs into coarse simulation layers.
+						Applies Vsh, porosity, Sw, and optional permeability cutoffs, runs PRMS 95% HCPV
+						empirical cutoff sensitivity sweeps, computes thickness- and pore-volume-weighted
+						zonal averages, propagates stochastic log uncertainty (P10/P50/P90), and upscales
+						fine logs onto coarse cellular grids.
 					</p>
 
 					<div
@@ -816,30 +847,29 @@
 							Core Equations
 						</div>
 						<div class="font-mono text-[11px] text-[var(--text-primary)]">
-							RES_FLAG = (Vsh ≤ Vsh_cut) ∧ (φ_e ≥ φ_cut) ∧ (k ≥ k_cut)<br />
-							PAY_FLAG = RES_FLAG ∧ (Swe ≤ Sw_cut)<br />
-							H_net = ∑ PAY_FLAG_i · ΔTVD_i, &nbsp;NTG = H_net / H_gross<br />
-							φ_e,avg = ∑ (φ_e · ΔTVD) / H_net<br />
-							Sw,avg = ∑ (Sw · φ_e · ΔTVD) / ∑ (φ_e · ΔTVD)<br />
-							Blocking Laws: Arithmetic (φ, Vsh), Geometric (k_h), Harmonic (k_v)
+							RES_FLAG = (Vsh ≤ Vsh_cut) ∧ (φ_t ≥ φ_cut) ∧ (k ≥ k_cut if enabled)<br />
+							PAY_FLAG = RES_FLAG ∧ (Swt ≤ Sw_cut)<br />
+							H_net = ∑ PAY_FLAG_i · h_i, &nbsp;NTG = H_net / H_gross, &nbsp;φ_avg = ∑(φ_t · h) / H_net<br />
+							Sw,avg = ∑(Swt · φ_t · h) / ∑(φ_t · h), &nbsp;BVHC_avg = ∑(φ_t · (1 - Swt) · h) / H_net<br />
+							Cardwell-Parsons Perm: Arithmetic (ω=1), Geometric (ω&rarr;0), Harmonic (ω=-1), Power-Law (∑h·k^ω / ∑h)^(1/ω)
 						</div>
 					</div>
 
 					<div class="grid grid-cols-2 gap-2 text-[10px]">
 						<div>
-							<span class="font-bold text-[var(--text-primary)]">Cutoffs:</span> Vsh_max
-							(0.40), Phie_min (0.08), Sw_max (0.60), Perm_min (1.0 mD)
+							<span class="font-bold text-[var(--text-primary)]">Inputs &amp; Cutoffs:</span> VCLAY/VSHALE,
+							PHIT, SWT, PERM_TRANS/PERM (optional k_min), PRMS 95% HCPV Sensitivity
 						</div>
 						<div>
 							<span class="font-bold text-[var(--text-primary)]">Outputs:</span> RES_FLAG,
-							PAY_FLAG, Zonal Rollup Table, Blocked Logs
+							PAY_FLAG, Zonal Rollup Table, Sensitivity Curves, Blocked Logs, P10–P90 Bands
 						</div>
 					</div>
 				</section>
 			{/if}
 
 			<!-- SW STEP 7: REPORT -->
-			{#if matchesSearch('report cpi dossier fdp markdown pdf')}
+			{#if matchesSearch('report cpi dossier fdp gate check audit anomaly markdown pdf')}
 				<section
 					id="sw-step-7-report"
 					class="space-y-2.5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-3.5 shadow-2xs"
@@ -851,7 +881,7 @@
 								>7</span
 							>
 							<h4 class="text-xs font-bold text-[var(--text-primary)]">
-								Step 7: Computer Processed Interpretation (CPI) Report
+								Step 7: Single-Well CPI Dossier &amp; Gate-Check Audit
 								(InspectorReport)
 							</h4>
 						</div>
@@ -865,15 +895,16 @@
 					</div>
 
 					<p>
-						Compiles all continuous evaluations, crossplots, cutoffs, and zonal metrics
-						into an automated, publishable single-well CPI report in Markdown, PDF, and
-						interactive HTML.
+						Compiles continuous evaluations, Hole Section &amp; borehole environmental/invasion
+						QC audits (*_SIGMA, *_QC_CONF, Rxo/Rt), core parity plots, cutoffs, zonal metrics,
+						and automated subsurface QA/QC gate checks (CHK-01+) with anomaly remediation notes
+						into a publishable CPI dossier in Markdown, interactive preview, and A4 PDF.
 					</p>
 				</section>
 			{/if}
 
 			<!-- SW STANDALONE: CORE & PC PREP -->
-			{#if matchesSearch('scal core depth shift overburden klinkenberg stress pc scaling lab')}
+			{#if matchesSearch('scal core depth shift overburden klinkenberg stress pc scaling grain density rhom ridge huber lab')}
 				<section
 					id="sw-standalone-core-pc"
 					class="space-y-2.5 rounded-sm border border-purple-200 bg-purple-50/30 p-3.5 shadow-2xs"
@@ -886,7 +917,7 @@
 								LAB
 							</span>
 							<h4 class="text-xs font-bold text-purple-950">
-								Standalone: Core & Pc Prep (InspectorScal)
+								Standalone: Core &amp; Pc Prep (InspectorScal)
 							</h4>
 						</div>
 						<button
@@ -899,11 +930,11 @@
 					</div>
 
 					<p>
-						Aligns core depths with continuous wireline logs via cross-correlation,
-						corrects routine core plug porosity and air permeability for in-situ net
-						overburden stress compaction and Klinkenberg gas slippage, and converts
-						laboratory mercury injection / porous plate capillary pressure curves to
-						reservoir conditions.
+						Aligns core depths with wireline logs, corrects routine core porosity and air
+						permeability for in-situ overburden stress (scalar or log-integrated SV_EST /
+						NCS_EST) and Klinkenberg slippage, scales lab MICP / porous-plate / centrifuge Pc
+						curves to reservoir conditions, and calibrates multi-log Huber/ridge core grain
+						density (ρ_ma &rarr; RHOM) correlations.
 					</p>
 
 					<div class="space-y-1.5 rounded-xs border border-purple-200 bg-white/70 p-2.5">
@@ -911,22 +942,21 @@
 							Core Equations
 						</div>
 						<div class="font-mono text-[11px] text-[var(--text-primary)]">
-							Overburden Porosity: φ_res = φ_amb · (1 - C_φ · σ_net)<br />
-							Overburden Permeability: k_res = k_amb · exp(-C_k · σ_net)<br />
-							Klinkenberg Slippage: k_air = k_liq · (1 + b_k / P_mean)<br />
-							Lab-to-Res Pc Scaling: P_c,res = P_c,lab · ((σ_res · cos θ_res) / (σ_lab ·
-							cos θ_lab))
+							Overburden Stress: φ_res = φ_amb · (1 - C_φ · σ_net), &nbsp;k_res = k_amb · exp(-C_k · σ_net)<br />
+							Klinkenberg Slippage: k_liq = k_air / (1 + b_k / P_mean)<br />
+							Lab-to-Res Pc Scaling: P_c,res = P_c,lab · ((σ_res · cos θ_res) / (σ_lab · cos θ_lab))<br />
+							Multi-Log Grain Density: ρ_ma(z) = b₀ + ∑ β_j · ((log_j(z) - c_j) / s_j) &nbsp;(Ridge / Huber IRLS)
 						</div>
 					</div>
 
 					<div class="grid grid-cols-2 gap-2 text-[10px]">
 						<div>
 							<span class="font-bold text-[var(--text-primary)]">Inputs:</span> Core plugs
-							(MD, k_air, φ_amb), Net Overburden Stress, Fluid IFT & Contact Angles
+							(MD, CPORE, CPERM, CGD), Net Overburden Stress, Lab/Res IFT &amp; Contact Angles, Driver Logs
 						</div>
 						<div>
-							<span class="font-bold text-[var(--text-primary)]">Outputs:</span> Corrected
-							Core Porosity, In-Situ Permeability, Scaled Reservoir Pc Curves
+							<span class="font-bold text-[var(--text-primary)]">Outputs:</span> Shifted &amp;
+							Stress-Corrected Core, SV_EST/NCS_EST, Scaled Pc Curves, Calibrated RHOM
 						</div>
 					</div>
 				</section>
@@ -1142,7 +1172,7 @@
 			{/if}
 
 			<!-- MW STEP 2: FIELD QA/QC & NORMALIZATION -->
-			{#if matchesSearch('normalization quantile marker key well drift')}
+			{#if matchesSearch('normalization quantile marker key well drift badhole environmental conditioning imputation missing matrix')}
 				<section
 					id="mw-step-2-qaqc"
 					class="space-y-2.5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-3.5 shadow-2xs"
@@ -1154,7 +1184,7 @@
 								>2</span
 							>
 							<h4 class="text-xs font-bold text-[var(--text-primary)]">
-								Step 2: Field QA/QC & Stratigraphic Normalization (MultiWellQaqc)
+								Step 2: Field QA/QC, Conditioning &amp; Stratigraphic Normalization (MultiWellQaqc)
 							</h4>
 						</div>
 						<button
@@ -1167,9 +1197,10 @@
 					</div>
 
 					<p>
-						Eliminates tool vintage calibration drift across drilling campaigns using a
-						cored Key Well within a regionally extensive marker formation (marine shale
-						or clean aquifer).
+						Executes batch multi-well bad-hole flagging and WL/LWD borehole environmental
+						conditioning, pooled/per-well missing-data imputation (*_IMP / *_ORI), and
+						eliminates tool vintage calibration drift across drilling campaigns using a
+						cored Key Well within a regionally extensive marker formation.
 					</p>
 
 					<div
@@ -1190,7 +1221,7 @@
 			{/if}
 
 			<!-- MW STEP 3: ROCK TYPING -->
-			{#if matchesSearch('rock typing fzi winland r35 lucia rfn lorenz flow units')}
+			{#if matchesSearch('rock typing fzi rqi winland r35 lucia rfn gmm lorenz flow units rock_flag cpore cperm')}
 				<section
 					id="mw-step-3-rock-typing"
 					class="space-y-2.5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-3.5 shadow-2xs"
@@ -1202,7 +1233,7 @@
 								>3</span
 							>
 							<h4 class="text-xs font-bold text-[var(--text-primary)]">
-								Step 3: Core Rock Typing & Hydraulic Flow Units
+								Step 3: Discrete Rock Typing &amp; Hydraulic Flow Units
 								(MultiWellRockTyping)
 							</h4>
 						</div>
@@ -1216,9 +1247,11 @@
 					</div>
 
 					<p>
-						Groups cored plugs into discrete Petrophysical Rock Types (RT) using Flow
-						Zone Units (FZI), pore-throat apical opening (Winland r35), or Lucia rock
-						fabric numbers for carbonates.
+						Partitions multi-well Core Plugs (CPORE, CPERM) or Calculated Logs (PHIT, PERM)
+						into discrete Petrophysical Rock Types (ROCK_FLAG: RT 1..K plus optional RT 0
+						Non-Reservoir) using Amaefule Flow Zone Indicator (FZI), Winland r35 pore-throat
+						radius, or Lucia carbonate Rock Fabric Number (RFN), with GMM, Modified Lorenz,
+						or K-Means cutoff discovery.
 					</p>
 
 					<div
@@ -1230,19 +1263,17 @@
 							Core Equations
 						</div>
 						<div class="font-mono text-[11px] text-[var(--text-primary)]">
-							Amaefule: log10(RQI) = log10(φ_z) + log10(FZI)<br />
-							Winland: log10(r35) = 0.732 + 0.588 · log10(k) - 0.864 · log10(φ_%)<br
-							/>
-							Lucia (Carbonates): log10(k) = (9.80 - 12.08 log10 RFN) + (8.67 - 8.30 log10
-							RFN) log10(φ_ip)<br />
-							Modified Lorenz: Flow Capacity Fm vs Storage Capacity Φm
+							Amaefule FZI: RQI = 0.0314·√(k / φ), &nbsp;φ_z = φ / (1 - φ), &nbsp;FZI = RQI / φ_z<br />
+							FZI Permeability Relation: k = 1014 · FZI² · (φ³ / (1 - φ)²)<br />
+							Winland r35: log10(r35) = 0.732 + 0.588 · log10(k) - 0.864 · log10(100·φ)<br />
+							Lucia (Carbonates): log10(k) = (9.80 - 12.08 log10 RFN) + (8.67 - 8.30 log10 RFN) log10(φ_ip)
 						</div>
 					</div>
 				</section>
 			{/if}
 
 			<!-- MW STEP 4: PERM TRANSFORMS -->
-			{#if matchesSearch('perm transform permeability rt regression continuous')}
+			{#if matchesSearch('perm transform perm_trans power law permeability rt regression continuous cpore cperm')}
 				<section
 					id="mw-step-4-perm-transform"
 					class="space-y-2.5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-3.5 shadow-2xs"
@@ -1268,9 +1299,10 @@
 					</div>
 
 					<p>
-						Fits distinct porosity-permeability trends partitioned by Petrophysical Rock
-						Type and applies them across all field wells to populate the continuous
-						PERM_FIELD curve.
+						Fits power-law porosity-permeability regressions partitioned by Discrete Rock
+						Type (ROCK_FLAG ≥ 1) on Core Data (CPORE, CPERM) or Calculated Logs (PHIT, PERM)
+						with interactive (a, b) editing, and propagates them (Cutoff-Only, Hybrid, or
+						Full ML) across all field wells to populate the continuous PERM_TRANS curve.
 					</p>
 
 					<div
@@ -1282,15 +1314,15 @@
 							Core Equations
 						</div>
 						<div class="font-mono text-[11px] text-[var(--text-primary)]">
-							RT Regressions: log10(k) = a_k · φ_e + b_k<br />
-							FZI Transform: k = 1014 · FZI_k² · (φ_e³ / (1 - φ_e)²)
+							Power-Law RT Regression: k = a_k · φ^(b_k) &nbsp;&hArr;&nbsp; log10(k) = b_k · log10(φ) + log10(a_k)<br />
+							Applied Field Transform: PERM_TRANS = a_(ROCK_FLAG) · PHIT^(b_(ROCK_FLAG)) &nbsp;(masked for RT 0)
 						</div>
 					</div>
 				</section>
 			{/if}
 
 			<!-- MW STEP 5: SHF -->
-			{#if matchesSearch('shf saturation height leverett skelt harrison cuddy fwl')}
+			{#if matchesSearch('shf saturation height leverett skelt harrison stick plot contacts fwl goc owc gwc')}
 				<section
 					id="mw-step-5-shf"
 					class="space-y-2.5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-3.5 shadow-2xs"
@@ -1302,7 +1334,7 @@
 								>5</span
 							>
 							<h4 class="text-xs font-bold text-[var(--text-primary)]">
-								Step 5: Saturation-Height Function (SHF) & Reconciliation
+								Step 5: Saturation-Height Function (SHF), Stick Plot &amp; Contacts
 								(MultiWellShf)
 							</h4>
 						</div>
@@ -1316,9 +1348,10 @@
 					</div>
 
 					<p>
-						Models capillary equilibrium water saturation as a function of height above
-						FWL (h) and rock quality (k/φ), and reconciles against resistivity-derived
-						log water saturation.
+						Models capillary equilibrium water saturation above global or per-zone FWL using
+						PERM_TRANS/PERM and porosity, correlates structural zones, GR/Coal tracks, and
+						fluid limits on the Multi-Well TVDSS Stick Plot, and reconciles against
+						resistivity-derived log saturation.
 					</p>
 
 					<div
@@ -1330,18 +1363,18 @@
 							Core Equations
 						</div>
 						<div class="font-mono text-[11px] text-[var(--text-primary)]">
-							Capillary Pressure: Pc = 0.433527 · (ρ_w - ρ_hc) · h<br />
-							Leverett J: J = (0.2166 · Pc / (σ · cos θ)) · √(k / φ_e)<br />
+							Capillary Pressure: Pc = 0.433527 · (ρ_w - ρ_hc) · h, &nbsp;h = max(0, z_FWL - TVDSS)<br />
+							Leverett J: J = (0.2166 · Pc / (σ · cos θ)) · √(k / φ)<br />
 							Inversion: Sw_SHF = Swirr + (1 - Swirr) · (J / A_J)^(-1 / B_J)<br />
 							Skelt-Harrison: Sw_SHF(h) = 1 - A · exp(- (B / (h + D))^C)<br />
-							Fluid Limits & Contacts: GUT, GDT, GOC, GWC | OUT, ODT, OWC | WUT, FWL
+							Fluid Limits &amp; Contacts: GUT, GDT, GOC, GWC | OUT, ODT, OWC | WUT, FWL
 						</div>
 					</div>
 				</section>
 			{/if}
 
 			<!-- MW STEP 6: VOLUMETRICS & UNCERTAINTY -->
-			{#if matchesSearch('volumetrics monte carlo lhs latin hypercube stoiip giip p90 p50 p10 tornado')}
+			{#if matchesSearch('volumetrics monte carlo lhs latin hypercube stoiip giip area grv hypsometric shf cutoffs sensitivity p90 p50 p10 tornado')}
 				<section
 					id="mw-step-6-volumetrics"
 					class="space-y-2.5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-3.5 shadow-2xs"
@@ -1353,7 +1386,7 @@
 								>6</span
 							>
 							<h4 class="text-xs font-bold text-[var(--text-primary)]">
-								Step 6: Probabilistic Volumetrics & Uncertainty
+								Step 6: Probabilistic Volumetrics, Hypsometric SHF &amp; Cutoffs
 								(MultiWellVolumetrics)
 							</h4>
 						</div>
@@ -1367,10 +1400,11 @@
 					</div>
 
 					<p>
-						Combines multi-well zonal net-pay rollups with structural area distributions
-						and PVT parameters in a Latin Hypercube Sampling (LHS) Monte Carlo
-						simulation to compute P90/P50/P10 reserves and rank drivers on a Tornado
-						sensitivity chart.
+						Runs pooled PRMS 95% HCPV cutoff sensitivity sweeps, inherits Step 5 SHF / FPT
+						fluid contacts (OWC, GOC, GWC, FWL), supports AREA or GRV geometry and
+						Log-Average vs. 1D Hypsometric SHF saturation integration, and executes Iman-Conover
+						Latin Hypercube Monte Carlo simulation for P90/P50/P10 Oil &amp; Gas reserves and
+						Tornado sensitivity ranking.
 					</p>
 
 					<div
@@ -1382,9 +1416,9 @@
 							Core Equations
 						</div>
 						<div class="font-mono text-[11px] text-[var(--text-primary)]">
-							STOIIP (bbl) = 7758 · A · H_gross · NTG · φ_e · (1 - Sw) / Bo<br />
-							GIIP (scf) = 43560 · A · H_gross · NTG · φ_e · (1 - Sw) / Bg<br />
-							Metric V (m³) = 10⁶ · A_km² · H_net · φ_e · (1 - Sw) / B<br />
+							STOIIP (bbl) = 7758 · A · H_gross · NTG · φ · (1 - Sw) / Bo<br />
+							GIIP (scf) = 43560 · A · H_gross · NTG · φ · (1 - Sw) / Bg<br />
+							GRV Mode (m³) = 10⁶ · GRV_(10⁶m³) · NTG · φ · (1 - Sw) / B<br />
 							PRMS Exceedance: P90 (Proven / 1P), P50 (Probable / 2P), P10 (Possible / 3P)
 						</div>
 					</div>
@@ -1392,7 +1426,7 @@
 			{/if}
 
 			<!-- MW STEP 7: FDP REPORT -->
-			{#if matchesSearch('report fdp synthesis executive summary dossier')}
+			{#if matchesSearch('report fdp synthesis executive summary dossier gate check audit qaqc_summary ressum_only pdf')}
 				<section
 					id="mw-step-7-report"
 					class="space-y-2.5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-3.5 shadow-2xs"
@@ -1404,7 +1438,7 @@
 								>7</span
 							>
 							<h4 class="text-xs font-bold text-[var(--text-primary)]">
-								Step 7: Field Development Plan (FDP) Report (InspectorReport)
+								Step 7: Field Development Plan (FDP) Dossier &amp; Gate Checks (InspectorReport)
 							</h4>
 						</div>
 						<button
@@ -1417,9 +1451,11 @@
 					</div>
 
 					<p>
-						Assembles all field-scale analyses—including multi-well log cross-sections,
-						normalization diagnostics, fluid contacts, rock typing distributions, and
-						volumetric exceedance curves—into a cohesive Field Development Plan dossier.
+						Assembles field-scale inventory, borehole environmental/invasion QC audits,
+						stratigraphic normalization, FZI/r35/RFN rock typing, PERM_TRANS regressions,
+						FPT &amp; SHF fluid contacts, LHS volumetric exceedance curves, and automated
+						subsurface QA/QC gate checks (CHK-01+) into FDP_FULL, QAQC_SUMMARY, or
+						RESSUM_ONLY dossiers with print-ready A4 PDF export.
 					</p>
 				</section>
 			{/if}
@@ -1461,7 +1497,7 @@
 			{/if}
 
 			<!-- MW STANDALONE 1: SCAL & RELPERM -->
-			{#if matchesSearch('scal swirr relative permeability corey let swof relperm fractional flow eclipse')}
+			{#if matchesSearch('scal swirr ptsd pore throat prt relative permeability corey let swof relperm fractional flow eclipse')}
 				<section
 					id="mw-standalone-scal-relperm"
 					class="space-y-2.5 rounded-sm border border-amber-200 bg-amber-50/30 p-3.5 shadow-2xs"
@@ -1474,7 +1510,7 @@
 								SCAL
 							</span>
 							<h4 class="text-xs font-bold text-amber-950">
-								Standalone: SCAL & Dynamic Relative Permeability (MultiWellSwirr)
+								Standalone: SCAL &amp; Dynamic Relative Permeability (MultiWellSwirr)
 							</h4>
 						</div>
 						<button
@@ -1487,11 +1523,11 @@
 					</div>
 
 					<p>
-						Fits field-wide Irreducible Water Saturation (Swirr) correlations against
-						porosity, permeability, and rock types from capillary pressure plug data.
-						Models dynamic relative permeability curves (Brooks-Corey, Modified Corey,
-						and LET models), computes fractional flow, and exports ECLIPSE simulation
-						SWOF keyword tables.
+						Converts MICP, porous-plate, and centrifuge Pc curves using explicit lab/reservoir
+						IFT &amp; contact angles, fits PRT-synchronized Swirr and Leverett J/Pc models,
+						plots Washburn Pore-Throat Size Distributions by PRT, models dynamic relative
+						permeability (Brooks-Corey, Modified Corey, LET) and fractional flow, and exports
+						ECLIPSE SWOF decks.
 					</p>
 
 					<div class="space-y-1.5 rounded-xs border border-amber-200 bg-white/70 p-2.5">
@@ -1499,7 +1535,7 @@
 							Core Equations
 						</div>
 						<div class="font-mono text-[11px] text-[var(--text-primary)]">
-							Swirr Correlation: Swirr = c₁ · φ_e^c₂ · k^c₃ &nbsp;∨&nbsp; 1 - 1/(a +
+							Swirr Correlation: Swirr = c₁ · φ^c₂ · k^c₃ &nbsp;∨&nbsp; 1 - 1/(a +
 							b·FZI^-c)<br />
 							Normalized Saturation: Swn = (Sw - Swirr) / (1 - Swirr - Sor)<br />
 							Brooks-Corey: Krw = Krw,max · Swn^nw, &nbsp;Kro = Kro,max · (1 - Swn)^no<br
@@ -1512,19 +1548,19 @@
 					<div class="grid grid-cols-2 gap-2 text-[10px]">
 						<div>
 							<span class="font-bold text-[var(--text-primary)]">Inputs:</span> Multi-well
-							SCAL capillary pressure curves, Endpoints (Swirr, Sor, Krw_max, Kro_max),
-							Fluid viscosities
+							SCAL Pc curves, PRT assignments, Endpoints (Swirr, Sor, Krw_max, Kro_max),
+							Fluid viscosities &amp; IFT
 						</div>
 						<div>
-							<span class="font-bold text-[var(--text-primary)]">Outputs:</span> Calibrated
-							Swirr Model, Dynamic Kr curves, Fractional flow fw, ECLIPSE SWOF decks
+							<span class="font-bold text-[var(--text-primary)]">Outputs:</span> Continuous
+							SWIRR curves, Persisted J/Pc fits, PRT PTSD, Kr &amp; fw curves, ECLIPSE SWOF decks
 						</div>
 					</div>
 				</section>
 			{/if}
 
 			<!-- MW STANDALONE 2: FPT & CONTACTS -->
-			{#if matchesSearch('fpt pressure mdt rft fwl owc goc gwc gradient excess contact')}
+			{#if matchesSearch('fpt pressure mdt rft tvdss zone fwl owc goc gwc gradient excess contact')}
 				<section
 					id="mw-standalone-fpt"
 					class="space-y-2.5 rounded-sm border border-rose-200 bg-rose-50/30 p-3.5 shadow-2xs"
@@ -1537,7 +1573,7 @@
 								FPT
 							</span>
 							<h4 class="text-xs font-bold text-rose-950">
-								Standalone: Formation Pressure Testing & Contacts (MultiWellFpt)
+								Standalone: Formation Pressure Testing &amp; Contacts (MultiWellFpt)
 							</h4>
 						</div>
 						<button
@@ -1550,9 +1586,10 @@
 					</div>
 
 					<p>
-						Regresses phase pressure gradients vs TVDSS to compute in-situ fluid
-						densities, excess pressure profiles, and locates the Free Water Level (FWL),
-						GOC, and OWC with uncertainty covariance bounds.
+						Regresses zone-filtered MDT/RFT/RCI phase pressure gradients against true survey
+						TVDSS (with persisted per-zone regression settings) to compute in-situ fluid
+						densities, excess pressure profiles, and equilibrium contacts (FWL, GOC, GWC, OWC)
+						with covariance ±1σ uncertainty bounds.
 					</p>
 
 					<div class="space-y-1.5 rounded-xs border border-rose-200 bg-white/70 p-2.5">
