@@ -72,7 +72,7 @@ router = APIRouter(prefix="/database", tags=["Database"])
 # Maps key "{project_id}_{well_name}_{tolerance}" -> (timestamp, pd.DataFrame)
 _merged_data_cache: Dict[str, tuple[float, pd.DataFrame]] = {}
 _cache_ttl = 1800  # 30 minutes
-_cache_max_entries = 50
+_cache_max_entries = 12 if os.environ.get("QPP_DEMO_MODE", "").lower() in ("1", "true", "yes") else 50
 _merge_locks: Dict[str, threading.Lock] = {}
 _merge_locks_guard = threading.Lock()
 MAX_DEMO_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB cap per file in demo mode
@@ -121,6 +121,15 @@ def _safe_cache_token(val: Any) -> str:
 
 def write_shared_well_cache(project_id: int, well_name: str, df: pd.DataFrame) -> None:
     """Persist an updated in-memory merged well DataFrame to shared temp storage so all worker processes see it."""
+    if is_demo_mode():
+        # Demo container runs a single Uvicorn worker (--workers 1); skip /tmp pickle disk writes
+        try:
+            from quick_pp.app.backend.services.demo_guard import mark_demo_state_dirty
+
+            mark_demo_state_dirty()
+        except Exception:
+            pass
+        return
     try:
         _SHARED_CACHE_DIR.mkdir(parents=True, exist_ok=True)
         w_tok = _safe_cache_token(well_name)
@@ -193,6 +202,15 @@ async def create_project(payload: dict, request: Request):
     name = payload.get("name") if isinstance(payload, dict) else None
     if not name:
         raise HTTPException(status_code=400, detail="Project name is required")
+
+    if is_demo_mode():
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Creating new database projects is disabled in the read-only live demo. "
+                "Select one of the pre-seeded showcase projects to import or evaluate logs."
+            ),
+        )
 
     description = payload.get("description") if isinstance(payload, dict) else ""
     current_user = get_current_user_optional(request)
@@ -301,6 +319,12 @@ async def update_project(project_id: int, payload: dict, request: Request):
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Invalid payload")
 
+    if is_demo_mode():
+        raise HTTPException(
+            status_code=403,
+            detail="Renaming pre-seeded showcase projects is disabled in the shared live demo.",
+        )
+
     new_name = (payload.get("name") or "").strip()
     new_desc = payload.get("description")
     if not new_name and new_desc is None:
@@ -373,6 +397,11 @@ async def update_project(project_id: int, payload: dict, request: Request):
 @router.delete("/projects/{project_id}", summary="Delete a project and all its wells")
 def delete_project(project_id: int, request: Request):
     """Delete a project and all associated wells, curves, and cache entries."""
+    if is_demo_mode():
+        raise HTTPException(
+            status_code=403,
+            detail="Deleting pre-seeded showcase projects is disabled in the shared live demo.",
+        )
     try:
         with get_db() as session:
             orm_proj = session.get(db_models.Project, project_id)
@@ -481,6 +510,15 @@ async def rename_well(project_id: int, well_name: str, payload: dict, request: R
                     detail=f"Well '{well_name}' not found in project {project_id}",
                 )
 
+            if is_demo_mode() and target_orm_well is not None:
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        "Renaming pre-seeded showcase wells is disabled in the shared live demo. "
+                        "Only ephemerally uploaded wells can be renamed."
+                    ),
+                )
+
             if any(
                 n.lower() == new_name.lower() and n != well_name for n in active_names
             ):
@@ -575,6 +613,15 @@ def delete_well(project_id: int, well_name: str, request: Request):
                 raise HTTPException(
                     status_code=404,
                     detail=f"Well '{well_name}' not found in project {project_id}",
+                )
+
+            if is_demo_mode() and target_orm_well is not None:
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        "Deleting pre-seeded showcase wells is disabled in the shared live demo. "
+                        "Use 'Reset Demo' to restore curve edits."
+                    ),
                 )
 
             if in_eph:
@@ -1476,6 +1523,20 @@ def project_read_las(
                         time.time(),
                         merged_ldf.copy(),
                     )
+                # Tier 1 cleanup: immediately remove raw uploaded files from disk after loading into RAM
+                for p in saved_paths:
+                    try:
+                        Path(p).unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                try:
+                    from quick_pp.app.backend.services.demo_guard import (
+                        mark_demo_state_dirty,
+                    )
+
+                    mark_demo_state_dirty()
+                except Exception:
+                    pass
             else:
                 proj.read_las(saved_paths, depth_uom=depth_uom)
 
@@ -2773,6 +2834,11 @@ def commit_handover_package_endpoint(
     overwrite_existing: bool = Form(True),
 ):
     """Import a complete Petrophysical Handover Package (.zip) into database."""
+    if is_demo_mode():
+        raise HTTPException(
+            status_code=403,
+            detail="Importing full database handover archives is disabled in the read-only live demo.",
+        )
     from quick_pp.handover import import_handover_archive
 
     try:

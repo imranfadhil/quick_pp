@@ -2,6 +2,7 @@
 	import { onMount, untrack } from 'svelte';
 	import logo from '$lib/assets/logo.png';
 	import { authState } from '$lib/state/auth.svelte';
+	import { demoSession } from '$lib/state/demoSession.svelte';
 	import { projectData } from '$lib/state/projectData.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { depthDisplay } from '$lib/state/depthDisplay.svelte';
@@ -319,6 +320,25 @@
 				>
 					LIVE DEMO
 				</span>
+				<span
+					title={demoSession.lagWarning
+						? `${demoSession.onlineUsers}/${demoSession.maxUsers} visitors online (${demoSession.activeComputeJobs} compute active). Shared 1-vCPU demo server may feel slightly laggy during simultaneous calculations.`
+						: `${demoSession.onlineUsers}/${demoSession.maxUsers} visitors currently online on the shared demo server (idle sessions pause after ${Math.round(demoSession.idleTimeoutSeconds / 60)} min).`}
+					class="mono-num inline-flex items-center gap-1 rounded-xs border px-1.5 py-0.5 text-[9px] font-semibold {demoSession.lagWarning
+						? 'border-amber-300 bg-amber-50 text-amber-900'
+						: 'border-slate-200 bg-slate-50 text-slate-700'}"
+				>
+					<span
+						class="inline-block h-1.5 w-1.5 rounded-full {demoSession.lagWarning
+							? 'animate-pulse bg-amber-500'
+							: 'bg-emerald-500'}"
+					></span>
+					<span>
+						{demoSession.onlineUsers} online{demoSession.lagWarning
+							? ' · Shared CPU (may lag)'
+							: ''}
+					</span>
+				</span>
 			{/if}
 		</div>
 
@@ -346,38 +366,40 @@
 					</option>
 				{/each}
 			</select>
-			<button
-				type="button"
-				title="Create New Project"
-				onclick={() => {
-					showManageProjectPopover = false;
-					showNewProjectPopover = !showNewProjectPopover;
-				}}
-				class="flex h-7 w-7 items-center justify-center rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] text-xs font-semibold text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
-			>
-				+
-			</button>
-			{#if workbench.projectId}
+			{#if !authState.isDemoMode}
 				<button
 					type="button"
-					title="Manage Project (Rename / Delete)"
-					onclick={openManageProjectPopover}
-					class="flex h-7 w-7 items-center justify-center rounded-sm border text-xs transition-colors {showManageProjectPopover
-						? 'border-[var(--accent-primary)] bg-blue-50 text-[var(--accent-primary)]'
-						: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]'}"
+					title="Create New Project"
+					onclick={() => {
+						showManageProjectPopover = false;
+						showNewProjectPopover = !showNewProjectPopover;
+					}}
+					class="flex h-7 w-7 items-center justify-center rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] text-xs font-semibold text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]"
 				>
-					✎
+					+
+				</button>
+				{#if workbench.projectId}
+					<button
+						type="button"
+						title="Manage Project (Rename / Delete)"
+						onclick={openManageProjectPopover}
+						class="flex h-7 w-7 items-center justify-center rounded-sm border text-xs transition-colors {showManageProjectPopover
+							? 'border-[var(--accent-primary)] bg-blue-50 text-[var(--accent-primary)]'
+							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]'}"
+					>
+						✎
+					</button>
+				{/if}
+				<button
+					type="button"
+					title="Import Petrophysical Handover Package (.zip)"
+					onclick={() => workbench.openImporter('handover')}
+					class="flex h-7 items-center gap-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] hover:text-[var(--text-primary)]"
+				>
+					<span class="text-xs">📦</span>
+					<span class="hidden sm:inline">Import Package</span>
 				</button>
 			{/if}
-			<button
-				type="button"
-				title="Import Petrophysical Handover Package (.zip)"
-				onclick={() => workbench.openImporter('handover')}
-				class="flex h-7 items-center gap-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] hover:text-[var(--text-primary)]"
-			>
-				<span class="text-xs">📦</span>
-				<span class="hidden sm:inline">Import Package</span>
-			</button>
 
 			{#if showNewProjectPopover}
 				<div
@@ -577,7 +599,7 @@
 				>
 					►
 				</button>
-				{#if workbench.wellId}
+				{#if workbench.wellId && !authState.isDemoMode}
 					<button
 						type="button"
 						title="Manage Active Well (Rename / Delete)"

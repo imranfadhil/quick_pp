@@ -6,17 +6,35 @@ services:
       context: ../..
       dockerfile: deploy/demo/Dockerfile
     restart: unless-stopped
-    # Enforce hard memory ceiling on the public demo container (default 2 GB)
+    # Enforce hard memory, CPU, PID, and privilege ceilings (protects shared droplets)
     mem_limit: ${DEMO_MEM_LIMIT:-2g}
     memswap_limit: ${DEMO_MEM_LIMIT:-2g}
+    cpus: ${DEMO_CPU_LIMIT:-0.85}
+    pids_limit: 128
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       - QPP_DEMO_MODE=true
       - QPP_DISABLE_TRAINING=true
       - QPP_DATABASE_URL=sqlite:////code/data/quick_pp.db
       - QPP_PRETRAINED_MODELS_PATH=/code/data/seed/pretrained_models.joblib
+      - QPP_DEMO_MAX_USERS=${DEMO_MAX_USERS:-6}
+      - QPP_DEMO_LAG_WARNING_USERS=${DEMO_LAG_WARNING_USERS:-3}
+      - QPP_DEMO_IDLE_TIMEOUT_SECONDS=${DEMO_IDLE_TIMEOUT_SECONDS:-600}
+      - QPP_DEMO_HIDDEN_IDLE_TIMEOUT_SECONDS=${DEMO_HIDDEN_IDLE_TIMEOUT_SECONDS:-300}
+      - QPP_DEMO_MAX_CONCURRENT_COMPUTE=${DEMO_MAX_CONCURRENT_COMPUTE:-2}
       - PUBLIC_URL=${PUBLIC_URL:-}
     # Bound to localhost by default so public access goes through Cloudflare Tunnel
-    # or an existing host Nginx/Caddy reverse proxy. Set DEMO_BIND=0.0.0.0 to expose directly.
+    # or an existing host Nginx/Caddy reverse proxy. Keep 127.0.0.1 when trusting CF-Connecting-IP.
     ports:
       - "${DEMO_BIND:-127.0.0.1}:${DEMO_PORT:-7860}:7860"
     networks:
@@ -30,6 +48,13 @@ services:
     restart: unless-stopped
     depends_on:
       - qpp-demo
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       - TUNNEL_TOKEN=${CF_TUNNEL_TOKEN:-}
     command:
@@ -42,4 +67,3 @@ services:
 networks:
   qpp-demo-network:
     driver: bridge
-

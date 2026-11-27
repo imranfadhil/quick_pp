@@ -1,6 +1,6 @@
 <script lang="ts">
 	import './layout.css';
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import favicon from '$lib/assets/favicon.ico';
@@ -8,15 +8,25 @@
 	import WorkflowStepper from '$lib/components/shell/WorkflowStepper.svelte';
 	import StatusBar from '$lib/components/shell/StatusBar.svelte';
 	import BulkImporterModal from '$lib/components/shell/BulkImporterModal.svelte';
+	import DemoSessionOverlays from '$lib/components/shell/DemoSessionOverlays.svelte';
 	import PetrophysicalAssistantDrawer from '$lib/components/shell/PetrophysicalAssistantDrawer.svelte';
 	import UamConsoleModal from '$lib/components/shell/UamConsoleModal.svelte';
 	import WorkflowGuideSheet from '$lib/components/shell/WorkflowGuideSheet.svelte';
 	import { authState } from '$lib/state/auth.svelte';
+	import { demoSession } from '$lib/state/demoSession.svelte';
 	import { workbench } from '$lib/state/workbench.svelte';
 
 	let { children } = $props();
 
 	let isLoginRoute = $derived(page.url.pathname.startsWith('/login'));
+
+	$effect(() => {
+		const activeDemo = authState.isDemoMode && !isLoginRoute;
+		if (activeDemo) {
+			untrack(() => demoSession.start());
+			return () => untrack(() => demoSession.stop());
+		}
+	});
 
 	onMount(async () => {
 		if (!page.url.pathname.startsWith('/login')) {
@@ -66,5 +76,6 @@
 
 		<BulkImporterModal />
 		<UamConsoleModal />
+		<DemoSessionOverlays />
 	</div>
 {/if}

@@ -1,4 +1,6 @@
+import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 from importlib import resources
 
@@ -70,9 +72,26 @@ async def lifespan(app: "FastAPI"):
     except Exception as e:
         logging.getLogger(__name__).exception("Failed to initialize DBConnector: %s", e)
 
+    cleanup_task: asyncio.Task | None = None
     try:
+        from quick_pp.app.backend.utils.auth import is_demo_mode
+
+        if is_demo_mode():
+            from quick_pp.app.backend.services.demo_guard import (
+                demo_periodic_cleanup_loop,
+                run_periodic_demo_cleanup,
+            )
+
+            run_periodic_demo_cleanup()
+            cleanup_task = asyncio.create_task(demo_periodic_cleanup_loop())
         yield
     finally:
+        if cleanup_task is not None:
+            cleanup_task.cancel()
+            try:
+                await cleanup_task
+            except asyncio.CancelledError:
+                pass
         global _db_connector_instance
         try:
             if _db_connector_instance is not None:
@@ -85,6 +104,12 @@ async def lifespan(app: "FastAPI"):
             )
 
 
+_initial_demo_mode = os.environ.get("QPP_DEMO_MODE", "false").lower() in (
+    "1",
+    "true",
+    "yes",
+)
+
 app = FastAPI(
     title="quick_pp API",
     version=__version__,
@@ -96,7 +121,7 @@ app = FastAPI(
     },
     swagger_ui_parameters={"defaultModelsExpandDepth": -1},
     openapi_tags=tags_metadata,
-    debug=True,
+    debug=not _initial_demo_mode,
     lifespan=lifespan,
 )
 
@@ -123,6 +148,77 @@ app.include_router(api_router)
 app.include_router(report_v1_router, prefix="/api/v1", include_in_schema=False)
 app.include_router(import_logs_router, prefix="/api/v1", include_in_schema=False)
 app.include_router(import_ancillary_router, prefix="/api/v1", include_in_schema=False)
+
+
+@app.middleware("http")
+async def demo_session_and_compute_guard_middleware(request: Request, call_next):
+    from quick_pp.app.backend.utils.auth import is_demo_mode
+
+    if not is_demo_mode():
+        return await call_next(request)
+
+    from quick_pp.app.backend.services.demo_guard import (
+        DEMO_SESSION_HEADER,
+        acquire_compute_slot_sync,
+        is_heavy_demo_compute_request,
+        normalize_session_id,
+        register_or_touch_session,
+        release_compute_slot_sync,
+        reset_current_demo_session_id,
+        set_current_demo_session_id,
+    )
+
+    path = request.url.path
+    sid = normalize_session_id(request.headers.get(DEMO_SESSION_HEADER))
+    ctx_token = set_current_demo_session_id(sid)
+    acquired_compute = False
+
+    try:
+        # Enforce soft capacity gate when a browser tab presents X-Demo-Session-Id
+        if sid and not path.startswith(
+            ("/quick_pp/demo/", "/quick_pp/auth/", "/static/")
+        ):
+            client_ip = (
+                request.headers.get("cf-connecting-ip")
+                or request.headers.get("x-real-ip")
+                or (request.client.host if request.client else "")
+            )
+            snap = register_or_touch_session(sid, client_ip=client_ip)
+            if not snap.get("admitted", True):
+                return JSONResponse(
+                    status_code=429,
+                    content={
+                        "detail": (
+                            f"Live demo is currently at capacity "
+                            f"({snap['online_users']}/{snap['max_users']} active users). "
+                            "Waiting for an open slot..."
+                        ),
+                        "code": "DEMO_AT_CAPACITY",
+                        "online_users": snap["online_users"],
+                        "max_users": snap["max_users"],
+                    },
+                )
+
+        # Enforce hard concurrency semaphore on CPU/RAM-heavy compute & report routes
+        if is_heavy_demo_compute_request(request.method, path):
+            acquired_compute = await asyncio.to_thread(acquire_compute_slot_sync)
+            if not acquired_compute:
+                return JSONResponse(
+                    status_code=429,
+                    content={
+                        "detail": (
+                            "Demo compute server is busy processing other visitors' "
+                            "calculations. Please retry in a few seconds."
+                        ),
+                        "code": "DEMO_COMPUTE_BUSY",
+                    },
+                )
+
+        return await call_next(request)
+    finally:
+        if acquired_compute:
+            release_compute_slot_sync()
+        reset_current_demo_session_id(ctx_token)
 
 
 @app.get("/favicon.ico", include_in_schema=False)
@@ -154,14 +250,22 @@ async def qpp_assistant(request: Request):
 
 
 @app.exception_handler(Exception)
-async def internal_server_exception_handler(exc: Exception):
+async def internal_server_exception_handler(request: Request, exc: Exception):
+    from quick_pp.app.backend.utils.auth import is_demo_mode
+
+    msg = return_exception_message(exc)
+    if is_demo_mode():
+        return JSONResponse(
+            status_code=500,
+            content={"message": msg, "detail": msg},
+        )
     return JSONResponse(
         status_code=500,
-        content={"message": return_exception_message(exc), "detail": f"{repr(exc)}"},
+        content={"message": msg, "detail": f"{repr(exc)}"},
     )
 
 
-if FastApiMCP is not None:
+if FastApiMCP is not None and not _initial_demo_mode:
     try:
         mcp = FastApiMCP(
             app,

@@ -10,7 +10,11 @@ Because Hugging Face Spaces now requires a paid plan for Docker SDK Spaces, this
 
 Unlike the full production stack (which runs PostgreSQL 17, persistent volumes, and live `npm run build` on container start), the **Live Demo stack** ([`deploy/demo/docker-compose.yaml`](./docker-compose.yaml)) is self-contained and lightweight:
 - **No PostgreSQL or Celery containers**: Uses the pre-seeded read-only SQLite database (`quick_pp.db`, `chmod 444`) + pre-trained Conformal PIML bundle (`pretrained_models.joblib`).
-- **Single Application Container (`qpp-demo-app`)**: Bundles Nginx (`:7860`), FastAPI (`127.0.0.1:6312`), and the pre-built SvelteKit Node server (`127.0.0.1:5469`). Steady-state RAM usage is **~220–280 MB**, with a hard Docker memory ceiling (`DEMO_MEM_LIMIT=2g`) and built-in Nginx rate limiting (`60 req/min` per visitor IP via `CF-Connecting-IP`).
+- **Single Application Container (`qpp-demo-app`)**: Bundles Nginx (`:7860`), FastAPI (`127.0.0.1:6312`), and the pre-built SvelteKit Node server (`127.0.0.1:5469`). Steady-state RAM usage is **~220–280 MB**, with hard Docker resource ceilings (`DEMO_MEM_LIMIT=2g`, `DEMO_CPU_LIMIT=0.85`, `pids_limit=128`, `cap_drop=ALL`, 256 MB `/tmp` tmpfs, rotated `3×10m` container logs) and tiered Nginx rate limiting (`60 req/min` general, `10 req/min` heavy compute/LLM/PDF).
+- **Live Occupancy, Idle Pause, & 3-Tier Storage Cleanup**:
+  - Displays a real-time **online users badge** in the top bar (amber lag warning at `3+` concurrent visitors) and enforces a soft active-session gate (`DEMO_MAX_USERS=6`) plus a `2`-job heavy-compute semaphore.
+  - Pauses inactive browser tabs (`10 min` idle / `5 min` hidden tab) to release capacity for other visitors.
+  - Automatically purges committed log uploads immediately after parsing, removes session reports/staged files on tab exit, and runs a 5-minute TTL + ring-buffer sweep so disk usage stays bounded.
 - **Complete Isolation on Shared Droplets**:
   - Remote folder: `/opt/quick_pp_demo` (never touches `/opt/quick_pp`)
   - Compose project: `quick_pp_demo` (`qpp-demo-app` & `qpp-demo-tunnel`)

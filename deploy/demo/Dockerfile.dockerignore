@@ -35,12 +35,13 @@ quick_pp/app/frontend/.svelte-kit/
 quick_pp/app/frontend/.output/
 quick_pp/app/frontend/build/
 
-# Data, outputs, ML runs (very large)
+# Data, outputs, ML runs, local dev reports (very large / local-only)
 data/
 mlruns/
 uploads/
 output/
 outputs/
+quick_pp/app/backend/static/reports/**
 notebooks/**
 !notebooks/data/01_raw/36_7-3.las
 !notebooks/data/01_raw/formation_pressure_data.csv

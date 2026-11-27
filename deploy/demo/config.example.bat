@@ -43,8 +43,14 @@ set DEMO_PORT=7860
 REM Bind to 127.0.0.1 when using Cloudflare Tunnel or host Nginx reverse proxy.
 REM Set to 0.0.0.0 if you want http://<PUBLIC_IP>:7860 accessible directly.
 set DEMO_BIND=127.0.0.1
-REM Hard container memory limit for qpp-demo-app (protects shared droplets from OOM)
+REM Hard container memory & CPU limits for qpp-demo-app (protects shared droplets from OOM/starvation)
 set DEMO_MEM_LIMIT=2g
+set DEMO_CPU_LIMIT=0.85
+REM Concurrent active visitor cap, lag-indicator threshold, and browser idle pause (seconds)
+set DEMO_MAX_USERS=6
+set DEMO_LAG_WARNING_USERS=3
+set DEMO_IDLE_TIMEOUT_SECONDS=600
+set DEMO_MAX_CONCURRENT_COMPUTE=2
 REM Custom domain for the public demo in Cloudflare (e.g. demo.example.com)
 set DOMAIN=
 REM Cloudflare Zero Trust Named Tunnel token (Networks -> Tunnels -> <tunnel> -> Token).

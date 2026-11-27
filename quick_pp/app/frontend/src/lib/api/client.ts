@@ -22,6 +22,49 @@ function resolveApiBase(): string {
 
 export const API_BASE = resolveApiBase();
 export const TOKEN_STORAGE_KEY = 'qpp_access_token';
+export const DEMO_SESSION_STORAGE_KEY = 'qpp_demo_session_id';
+
+let cachedDemoSessionId: string | null = null;
+let onDemoCapacityCallback: ((online: number, max: number) => void) | null = null;
+let onClientActivityCallback: (() => void) | null = null;
+
+export function registerDemoClientHooks(hooks: {
+	onCapacityReached?: (online: number, max: number) => void;
+	onActivity?: () => void;
+}): void {
+	onDemoCapacityCallback = hooks.onCapacityReached ?? null;
+	onClientActivityCallback = hooks.onActivity ?? null;
+}
+
+export function getDemoSessionId(): string {
+	if (cachedDemoSessionId) return cachedDemoSessionId;
+	if (typeof window === 'undefined') return '';
+	try {
+		const existing = sessionStorage.getItem(DEMO_SESSION_STORAGE_KEY);
+		if (existing && /^[A-Za-z0-9_-]{6,64}$/.test(existing)) {
+			cachedDemoSessionId = existing;
+			return existing;
+		}
+		const bytes = new Uint8Array(12);
+		if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+			crypto.getRandomValues(bytes);
+		} else {
+			for (let i = 0; i < bytes.length; i++) {
+				bytes[i] = Math.floor(Math.random() * 256);
+			}
+		}
+		const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+		const generated = `demo_${hex}`;
+		sessionStorage.setItem(DEMO_SESSION_STORAGE_KEY, generated);
+		cachedDemoSessionId = generated;
+		return generated;
+	} catch {
+		if (!cachedDemoSessionId) {
+			cachedDemoSessionId = `demo_${Math.random().toString(36).slice(2, 14)}`;
+		}
+		return cachedDemoSessionId;
+	}
+}
 
 export function getStoredToken(): string | null {
 	if (typeof window === 'undefined') return null;
@@ -42,6 +85,10 @@ export function authHeaders(extra: Record<string, string> = {}): Record<string, 
 	const token = getStoredToken();
 	if (token) {
 		headers['Authorization'] = `Bearer ${token}`;
+	}
+	const demoSid = getDemoSessionId();
+	if (demoSid) {
+		headers['X-Demo-Session-Id'] = demoSid;
 	}
 	return headers;
 }
@@ -75,6 +122,9 @@ export function describeApiEndpoint(method: string, rawUrl: string): EndpointSta
 	}
 	if (path.includes('/auth/')) {
 		return { active: 'Authenticating...', done: 'Authenticated', silent: true };
+	}
+	if (path.includes('/quick_pp/demo/') || path.endsWith('/demo/heartbeat') || path.endsWith('/demo/status') || path.endsWith('/demo/leave')) {
+		return { active: 'Syncing demo session...', done: 'Demo session synced', silent: true };
 	}
 	if (path.endsWith('/assistant/providers')) {
 		return { active: 'Checking AI providers...', done: 'Providers loaded', silent: true };
@@ -482,6 +532,13 @@ api.use({
 		if (token) {
 			request.headers.set('Authorization', `Bearer ${token}`);
 		}
+		const demoSid = getDemoSessionId();
+		if (demoSid) {
+			request.headers.set('X-Demo-Session-Id', demoSid);
+		}
+		if (!request.url.includes('/quick_pp/demo/')) {
+			onClientActivityCallback?.();
+		}
 		const desc = describeApiEndpoint(request.method, request.url);
 		if (!desc.silent) {
 			const taskId = appStatus.startTask(desc.active, desc.detail);
@@ -529,6 +586,12 @@ async function parseErrorResponse(res: Response, fallbackMsg: string): Promise<E
 	if (rawText) {
 		try {
 			const jsonErr = JSON.parse(rawText);
+			if (res.status === 429 && jsonErr?.code === 'DEMO_AT_CAPACITY') {
+				onDemoCapacityCallback?.(
+					Number(jsonErr.online_users || 0),
+					Number(jsonErr.max_users || 6)
+				);
+			}
 			errText = jsonErr?.detail
 				? typeof jsonErr.detail === 'string'
 					? jsonErr.detail

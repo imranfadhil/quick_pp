@@ -744,9 +744,7 @@ def _build_shf_reconciliation_sentence(shf_p: Dict[str, Any]) -> str:
             "FWL and fluid densities are revisited. "
         )
     if not shf_p.get("uses_saved_fit"):
-        text += (
-            "No saved per-rock-type SHF fit was applied, so the curve uses a generic fallback J-function. "
-        )
+        text += "No saved per-rock-type SHF fit was applied, so the curve uses a generic fallback J-function. "
     return text
 
 
@@ -771,7 +769,11 @@ def _build_rock_typing_narrative(
             f"**{rt_sum['dominant_share_pct']:.1f}%** of samples and **{rt_sum['dominant_kh_pct']:.1f}%** of "
             f"cumulative permeability-thickness ($\\sum K\\cdot h$). "
         )
-    weak = [r["name"].split("—")[0].strip() for r in rock_types if r.get("fit_status") != "fitted"]
+    weak = [
+        r["name"].split("—")[0].strip()
+        for r in rock_types
+        if r.get("fit_status") != "fitted"
+    ]
     if weak:
         parts.append(
             f"No porosity-permeability regression is reported for {', '.join(weak)} because fewer than "
@@ -1013,7 +1015,9 @@ def _gather_and_analyze_fpt_data(
                 zone_label = (
                     ", ".join(fit_zones)
                     if fit_zones
-                    else (", ".join(target_zones) if target_zones else "Target Reservoir")
+                    else (
+                        ", ".join(target_zones) if target_zones else "Target Reservoir"
+                    )
                 )
 
                 fpt_gradient_rows.append(
@@ -1052,7 +1056,9 @@ def _gather_and_analyze_fpt_data(
                 p_contact = _safe_float(c_dict.get("pressure_at_contact"), 0.0)
                 delta_log = round(p50_tvdss - ref_fwl, 1)
                 if not fwl_is_committed:
-                    status_str = "INDICATIVE (no committed contact to reconcile against)"
+                    status_str = (
+                        "INDICATIVE (no committed contact to reconcile against)"
+                    )
                 elif abs(delta_log) <= 2.0:
                     status_str = "✓ RECONCILED (< 2.0 m)"
                 else:
@@ -1365,7 +1371,9 @@ def build_report_context(
         for c in raw_curves_only:
             try:
                 raw_coverage[c] = round(
-                    100.0 * float(pd.to_numeric(w_df[c], errors="coerce").notna().sum()) / n_rows_w,
+                    100.0
+                    * float(pd.to_numeric(w_df[c], errors="coerce").notna().sum())
+                    / n_rows_w,
                     0,
                 )
             except Exception:
@@ -2564,7 +2572,9 @@ def build_report_context(
                         "rock_flag": rf_v,
                         "n_samples": n_f,
                         "share_pct": round(100.0 * n_f / n_rf_tot, 1),
-                        "kh_pct": round(100.0 * float(np.sum(k_arr[m_f])) / kh_total, 1),
+                        "kh_pct": round(
+                            100.0 * float(np.sum(k_arr[m_f])) / kh_total, 1
+                        ),
                         "a": None,
                         "b": None,
                         "r2": None,
@@ -2578,7 +2588,11 @@ def build_report_context(
                             row_f["source"] = "saved workbench fit (manual)"
                         except (TypeError, ValueError, KeyError):
                             pass
-                    if row_f["a"] is None and n_f >= 3 and float(np.std(np.log10(pf))) > 1e-3:
+                    if (
+                        row_f["a"] is None
+                        and n_f >= 3
+                        and float(np.std(np.log10(pf))) > 1e-3
+                    ):
                         b_fit, log_a = np.polyfit(
                             np.log10(np.clip(pf, 1e-6, None)),
                             np.log10(np.clip(kf, 1e-6, None)),
@@ -2588,7 +2602,11 @@ def build_report_context(
                         row_f["source"] = "fitted on report samples"
                     if row_f["a"] is not None:
                         pred = np.log10(
-                            np.clip(row_f["a"] * np.clip(pf, 1e-6, None) ** row_f["b"], 1e-6, None)
+                            np.clip(
+                                row_f["a"] * np.clip(pf, 1e-6, None) ** row_f["b"],
+                                1e-6,
+                                None,
+                            )
                         )
                         obs = np.log10(np.clip(kf, 1e-6, None))
                         ss_t = float(np.sum((obs - obs.mean()) ** 2))
@@ -2678,7 +2696,9 @@ def build_report_context(
                     "basis": "Insufficient core/log data for rock typing (< 8 valid samples)",
                 }
             )
-        rt_basis_source = "Insufficient core/log data for rock typing (< 8 valid samples)"
+        rt_basis_source = (
+            "Insufficient core/log data for rock typing (< 8 valid samples)"
+        )
 
     if model_params and isinstance(model_params, dict):
         merged_configs.update({k: v for k, v in model_params.items() if v is not None})
@@ -3301,7 +3321,11 @@ def build_report_context(
         inner = saved_fits_blob.get("fits")
         if isinstance(inner, dict):
             for k, v in inner.items():
-                if isinstance(v, dict) and v.get("a") is not None and v.get("b") is not None:
+                if (
+                    isinstance(v, dict)
+                    and v.get("a") is not None
+                    and v.get("b") is not None
+                ):
                     saved_fits[str(k)] = v
     use_saved_fits = bool(saved_fits) and saved_fit_model == "leverett_j"
     if use_saved_fits:
@@ -3355,9 +3379,9 @@ def build_report_context(
                 a_arr = np.full(len(full_df), 0.22, dtype=float)
                 b_arr = np.full(len(full_df), -0.50, dtype=float)
                 if use_saved_fits and "ROCK_FLAG" in full_df.columns:
-                    rf_arr = pd.to_numeric(full_df["ROCK_FLAG"], errors="coerce").to_numpy(
-                        dtype=float
-                    )
+                    rf_arr = pd.to_numeric(
+                        full_df["ROCK_FLAG"], errors="coerce"
+                    ).to_numpy(dtype=float)
                     for rf_key, fit in saved_fits.items():
                         try:
                             rf_int = int(rf_key)
@@ -3372,7 +3396,9 @@ def build_report_context(
                     first_fit = next(iter(saved_fits.values()))
                     a_arr[:] = float(first_fit["a"])
                     b_arr[:] = float(first_fit["b"])
-                    shf_fit_source += " (single global pair; no ROCK_FLAG curve on data)"
+                    shf_fit_source += (
+                        " (single global pair; no ROCK_FLAG curve on data)"
+                    )
 
                 shf_calc = sw_shf_leverett_j(
                     perm=k_arr,
@@ -3430,7 +3456,9 @@ def build_report_context(
                 if "ROCK_FLAG" in full_df.columns
                 else None
             )
-            for rf_key in sorted(saved_fits, key=lambda k: (not str(k).isdigit(), str(k))):
+            for rf_key in sorted(
+                saved_fits, key=lambda k: (not str(k).isdigit(), str(k))
+            ):
                 fit = saved_fits[rf_key]
                 row = {
                     "rock_flag": rf_key,
@@ -4544,9 +4572,7 @@ def validate_fdp_report_payload(context: Dict[str, Any]) -> List[Dict[str, str]]
     else:
         chk08_status = "QA ALERT"
         chk08_measured = "SHF vs log Sw reconciliation could not be computed (insufficient overlapping samples)"
-        chk08_note = (
-            "No SHF reconciliation statistic is reported; run the SHF module for the target zones."
-        )
+        chk08_note = "No SHF reconciliation statistic is reported; run the SHF module for the target zones."
 
     checks.append(
         {
@@ -4645,7 +4671,9 @@ def validate_fdp_report_payload(context: Dict[str, Any]) -> List[Dict[str, str]]
             chk11_note = "Contacts derived from pressure are indicative only."
         else:
             chk11_status = "PASS"
-            chk11_measured = "Gradients physical and reconciled against committed contact."
+            chk11_measured = (
+                "Gradients physical and reconciled against committed contact."
+            )
             chk11_note = "Pressure regime consistent with the fluid model."
         checks.append(
             {
@@ -4669,8 +4697,12 @@ _GATE_REVIEW_STATUSES = {"REVIEW"}
 
 def summarize_gate_checks(checks: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     """Collapse the gate list into counts and the items that must be visible in the executive summary."""
-    blocking = [c for c in checks if str(c.get("status", "")).upper() in _GATE_BLOCKING_STATUSES]
-    review = [c for c in checks if str(c.get("status", "")).upper() in _GATE_REVIEW_STATUSES]
+    blocking = [
+        c for c in checks if str(c.get("status", "")).upper() in _GATE_BLOCKING_STATUSES
+    ]
+    review = [
+        c for c in checks if str(c.get("status", "")).upper() in _GATE_REVIEW_STATUSES
+    ]
     if blocking:
         overall = "NOT READY"
     elif review:
@@ -4683,11 +4715,21 @@ def summarize_gate_checks(checks: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         "n_blocking": len(blocking),
         "n_review": len(review),
         "blocking": [
-            {"id": c.get("id"), "rule": c.get("rule"), "measured": c.get("measured"), "action": c.get("action_note")}
+            {
+                "id": c.get("id"),
+                "rule": c.get("rule"),
+                "measured": c.get("measured"),
+                "action": c.get("action_note"),
+            }
             for c in blocking
         ],
         "review": [
-            {"id": c.get("id"), "rule": c.get("rule"), "measured": c.get("measured"), "action": c.get("action_note")}
+            {
+                "id": c.get("id"),
+                "rule": c.get("rule"),
+                "measured": c.get("measured"),
+                "action": c.get("action_note"),
+            }
             for c in review
         ],
     }
@@ -5047,18 +5089,18 @@ def synthesize_domain_ai_commentary(
         )
 
         if prov in ("openrouter", "ollama", "openai"):
-            b_url = (
-                base_url
-                or (
-                    os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
-                    if prov == "ollama"
-                    else os.getenv(
-                        "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
-                    )
-                )
-            ).rstrip("/")
-            key = api_key or (
-                "ollama" if prov == "ollama" else os.getenv("OPENROUTER_API_KEY", "")
+            from quick_pp.app.backend.services.demo_guard import (
+                validate_external_llm_target,
+            )
+
+            b_url, key = validate_external_llm_target(
+                provider=prov,
+                caller_base_url=base_url,
+                caller_api_key=api_key,
+                env_openrouter_url=os.getenv(
+                    "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
+                ),
+                env_openrouter_key=os.getenv("OPENROUTER_API_KEY", ""),
             )
             mdl = model or (
                 "qwen2.5:7b" if prov == "ollama" else "deepseek/deepseek-chat"
@@ -5269,7 +5311,9 @@ def _generate_all_report_plots(
             output_dir=out_dir,
             url_prefix=url_prefix,
         )
-        if context.get("fpt_summary", {}).get("has_data") and context.get("_fpt_points"):
+        if context.get("fpt_summary", {}).get("has_data") and context.get(
+            "_fpt_points"
+        ):
             try:
                 assets["fpt_pressure_plot"] = report_plots.generate_fpt_pressure_plot(
                     fpt_points=context.get("_fpt_points", []),
@@ -5708,7 +5752,20 @@ def _render_markdown_body_to_html(md_text: str) -> str:
 
 
 def _persist_report_state(report_data: Dict[str, Any]) -> None:
+    import time
+
+    from quick_pp.app.backend.services.demo_guard import (
+        enforce_report_storage_limits,
+        get_current_demo_session_id,
+        mark_demo_state_dirty,
+    )
+    from quick_pp.app.backend.utils.auth import is_demo_mode
+
     report_id = report_data["report_id"]
+    report_data.setdefault("_created_ts", time.time())
+    sid = get_current_demo_session_id()
+    if sid and not report_data.get("_demo_session_id"):
+        report_data["_demo_session_id"] = sid
     report_data["html_content"] = _render_markdown_body_to_html(
         report_data.get("markdown_content", "")
     )
@@ -5722,6 +5779,9 @@ def _persist_report_state(report_data: Dict[str, Any]) -> None:
     (out_dir / "report.md").write_text(
         report_data.get("markdown_content", ""), encoding="utf-8"
     )
+    if is_demo_mode():
+        mark_demo_state_dirty()
+        enforce_report_storage_limits()
 
 
 def get_latest_project_report(project_id: Union[int, str]) -> Optional[Dict[str, Any]]:
@@ -6164,12 +6224,8 @@ def _find_browser_executable() -> Optional[str]:
         os.environ.get("LOCALAPPDATA"),
     ):
         if base:
-            candidates.append(
-                str(Path(base) / "Google/Chrome/Application/chrome.exe")
-            )
-            candidates.append(
-                str(Path(base) / "Microsoft/Edge/Application/msedge.exe")
-            )
+            candidates.append(str(Path(base) / "Google/Chrome/Application/chrome.exe"))
+            candidates.append(str(Path(base) / "Microsoft/Edge/Application/msedge.exe"))
     candidates += [
         "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
         "/usr/bin/chromium",
@@ -6529,6 +6585,11 @@ def _job_path(job_id: str) -> Path:
 
 
 def _save_job(job_id: str, state: Dict[str, Any]) -> None:
+    from quick_pp.app.backend.services.demo_guard import get_current_demo_session_id
+
+    sid = get_current_demo_session_id()
+    if sid and not state.get("demo_session_id"):
+        state["demo_session_id"] = sid
     _REPORT_JOBS[job_id] = state
     try:
         _REPORT_JOBS_DIR.mkdir(parents=True, exist_ok=True)

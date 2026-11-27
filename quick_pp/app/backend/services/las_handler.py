@@ -133,7 +133,9 @@ def _inspect_single_log_file_worker(
 
     if ext == ".parquet":
         df_pq = pd.read_parquet(p)
-        raw_cols = [str(c) for c in df_pq.columns if str(c).upper() not in ("WELL_NAME", "UWI")]
+        raw_cols = [
+            str(c) for c in df_pq.columns if str(c).upper() not in ("WELL_NAME", "UWI")
+        ]
         col_map = mnemonic_mapper(raw_cols)
         w_name = (
             str(df_pq["WELL_NAME"].dropna().iloc[0])
@@ -146,7 +148,9 @@ def _inspect_single_log_file_worker(
                 raw_mnemonic=c,
                 target_mnemonic=col_map.get(c, c.upper()),
                 raw_unit="",
-                target_unit=Config.VARS.get(col_map.get(c, c.upper()), {}).get("unit", ""),
+                target_unit=Config.VARS.get(col_map.get(c, c.upper()), {}).get(
+                    "unit", ""
+                ),
                 include=True,
             )
             for c in raw_cols
@@ -188,10 +192,21 @@ def _inspect_single_log_file_worker(
         target_u = raw_u
         auto_conv = None
         u_up = raw_u.upper()
-        if target_m in ("DEPTH", "TVD", "TVDSS") and u_up in ("FT", "F", "FEET", "0.1 IN", "0.1IN"):
+        if target_m in ("DEPTH", "TVD", "TVDSS") and u_up in (
+            "FT",
+            "F",
+            "FEET",
+            "0.1 IN",
+            "0.1IN",
+        ):
             target_u = "m"
             auto_conv = f"{raw_u} -> m"
-        elif target_m in ("NPHI", "PHIT", "PHIE", "CPORE", "CPOR") and u_up in ("%", "PU", "P.U.", "PCT"):
+        elif target_m in ("NPHI", "PHIT", "PHIE", "CPORE", "CPOR") and u_up in (
+            "%",
+            "PU",
+            "P.U.",
+            "PCT",
+        ):
             target_u = "v/v"
             auto_conv = f"{raw_u} -> v/v"
         elif target_m == "RHOB" and u_up in ("KG/M3", "KGM3"):
@@ -216,7 +231,9 @@ def _inspect_single_log_file_worker(
         )
 
     if meta.step is not None and meta.step <= 0:
-        qaqc_warnings.append("Non-uniform or zero STEP detected in LAS header; regularization recommended.")
+        qaqc_warnings.append(
+            "Non-uniform or zero STEP detected in LAS header; regularization recommended."
+        )
 
     elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 2)
     return LogInspectFileResult(
@@ -279,13 +296,21 @@ def _parse_single_log_file_worker(task_spec: Dict[str, Any]) -> Dict[str, Any]:
             std_units.update(s_units)
 
         df = (
-            splice_and_regularize_runs(frame_dfs, step=0.1524, conflict_mode="keep_last")
+            splice_and_regularize_runs(
+                frame_dfs, step=0.1524, conflict_mode="keep_last"
+            )
             if len(frame_dfs) > 1
             else (frame_dfs[0] if frame_dfs else pd.DataFrame())
         )
         header_df = pd.DataFrame(
             [
-                {"section": "Well", "mnemonic": k.upper(), "unit": "", "value": v, "descr": k}
+                {
+                    "section": "Well",
+                    "mnemonic": k.upper(),
+                    "unit": "",
+                    "value": v,
+                    "descr": k,
+                }
                 for k, v in meta_dict.items()
                 if not isinstance(v, (dict, list)) and v is not None
             ]
@@ -312,17 +337,27 @@ def _parse_single_log_file_worker(task_spec: Dict[str, Any]) -> Dict[str, Any]:
                 filename=original_filename,
             )
             frame_dfs.append(frame_df)
-            meta_dict.update({key: value for key, value in frame_meta.items() if value is not None})
+            meta_dict.update(
+                {key: value for key, value in frame_meta.items() if value is not None}
+            )
             std_units.update(frame_units)
 
         df = (
-            splice_and_regularize_runs(frame_dfs, step=0.1524, conflict_mode="keep_last")
+            splice_and_regularize_runs(
+                frame_dfs, step=0.1524, conflict_mode="keep_last"
+            )
             if len(frame_dfs) > 1
             else (frame_dfs[0] if frame_dfs else pd.DataFrame())
         )
         header_df = pd.DataFrame(
             [
-                {"section": "Well", "mnemonic": key.upper(), "unit": "", "value": value, "descr": key}
+                {
+                    "section": "Well",
+                    "mnemonic": key.upper(),
+                    "unit": "",
+                    "value": value,
+                    "descr": key,
+                }
                 for key, value in meta_dict.items()
                 if not isinstance(value, (dict, list)) and value is not None
             ]
@@ -342,7 +377,15 @@ def _parse_single_log_file_worker(task_spec: Dict[str, Any]) -> Dict[str, Any]:
         )
         meta_dict = WellHeaderMetadata(well_name=w_name, uwi=w_name).model_dump()
         header_df = pd.DataFrame(
-            [{"section": "Well", "mnemonic": "WELL", "unit": "", "value": w_name, "descr": "WELL"}]
+            [
+                {
+                    "section": "Well",
+                    "mnemonic": "WELL",
+                    "unit": "",
+                    "value": w_name,
+                    "descr": "WELL",
+                }
+            ]
         )
     else:
         # LAS 2.0 / 3.0 fast hybrid parser
@@ -364,12 +407,24 @@ def _parse_single_log_file_worker(task_spec: Dict[str, Any]) -> Dict[str, Any]:
         first_col = str(raw_df.columns[0]).strip().upper()
         if first_col != index_mnemonic:
             raw_units[first_col] = raw_units.get(index_mnemonic, "")
-            custom_upper = {str(k).strip().upper(): v for k, v in custom_mnemonic_map.items()}
+            custom_upper = {
+                str(k).strip().upper(): v for k, v in custom_mnemonic_map.items()
+            }
             if index_mnemonic in custom_upper:
-                custom_mnemonic_map = {**custom_mnemonic_map, first_col: custom_upper[index_mnemonic]}
+                custom_mnemonic_map = {
+                    **custom_mnemonic_map,
+                    first_col: custom_upper[index_mnemonic],
+                }
         # Ensure first curve is mapped to DEPTH if it's the index curve
-        if first_col not in custom_mnemonic_map and Config.resolve_mnemonic_alias(first_col) == "DEPTH":
-            custom_mnemonic_map = {"DEPTH": "DEPTH", first_col: "DEPTH", **custom_mnemonic_map}
+        if (
+            first_col not in custom_mnemonic_map
+            and Config.resolve_mnemonic_alias(first_col) == "DEPTH"
+        ):
+            custom_mnemonic_map = {
+                "DEPTH": "DEPTH",
+                first_col: "DEPTH",
+                **custom_mnemonic_map,
+            }
 
         df, std_units, _ = standardize_curve_units(
             raw_df,
@@ -381,7 +436,9 @@ def _parse_single_log_file_worker(task_spec: Dict[str, Any]) -> Dict[str, Any]:
         if first_col != index_mnemonic:
             for entry in curve_lineage:
                 if entry["source_mnemonic"].upper() == first_col:
-                    entry["source_mnemonic"] = str(las_header.curves[0].mnemonic).strip()
+                    entry["source_mnemonic"] = str(
+                        las_header.curves[0].mnemonic
+                    ).strip()
                     break
         header_df = _las_header_to_dataframe(las_header)
 
@@ -394,27 +451,54 @@ def _parse_single_log_file_worker(task_spec: Dict[str, Any]) -> Dict[str, Any]:
                 for idx_r, r in core_df.iterrows():
                     d_v = pd.to_numeric(r.get(d_col), errors="coerce")
                     if pd.notna(d_v):
-                        por_c = c_cols.get("CPOR") or c_cols.get("CPORE") or c_cols.get("POR")
-                        perm_c = c_cols.get("CKHG") or c_cols.get("CPERM") or c_cols.get("PERM")
-                        por_v = pd.to_numeric(r.get(por_c), errors="coerce") if por_c else np.nan
+                        por_c = (
+                            c_cols.get("CPOR")
+                            or c_cols.get("CPORE")
+                            or c_cols.get("POR")
+                        )
+                        perm_c = (
+                            c_cols.get("CKHG")
+                            or c_cols.get("CPERM")
+                            or c_cols.get("PERM")
+                        )
+                        por_v = (
+                            pd.to_numeric(r.get(por_c), errors="coerce")
+                            if por_c
+                            else np.nan
+                        )
                         if pd.notna(por_v) and por_v > 1.5:
                             por_v = por_v / 100.0
-                        perm_v = pd.to_numeric(r.get(perm_c), errors="coerce") if perm_c else np.nan
-                        sname_c = c_cols.get("SAMPLE") or c_cols.get("SAMPLE_ID") or c_cols.get("SAMPLE_NAME")
+                        perm_v = (
+                            pd.to_numeric(r.get(perm_c), errors="coerce")
+                            if perm_c
+                            else np.nan
+                        )
+                        sname_c = (
+                            c_cols.get("SAMPLE")
+                            or c_cols.get("SAMPLE_ID")
+                            or c_cols.get("SAMPLE_NAME")
+                        )
                         sname = str(r.get(sname_c) if sname_c else f"LAS3-{idx_r + 1}")
                         embedded_core_rows.append(
                             {
                                 "sample_name": sname,
                                 "depth": float(d_v),
                                 "porosity": float(por_v) if pd.notna(por_v) else None,
-                                "permeability": float(perm_v) if pd.notna(perm_v) else None,
+                                "permeability": float(perm_v)
+                                if pd.notna(perm_v)
+                                else None,
                             }
                         )
 
         tops_df = getattr(las_header, "_las3_tops_df", pd.DataFrame())
         if isinstance(tops_df, pd.DataFrame) and not tops_df.empty:
             t_cols = {str(c).upper(): c for c in tops_df.columns}
-            n_col = t_cols.get("TOP") or t_cols.get("TOP_NAME") or t_cols.get("NAME") or t_cols.get("ZONE")
+            n_col = (
+                t_cols.get("TOP")
+                or t_cols.get("TOP_NAME")
+                or t_cols.get("NAME")
+                or t_cols.get("ZONE")
+            )
             d_col = t_cols.get("DEPTH") or t_cols.get("MD") or t_cols.get("DEPT")
             if n_col and d_col:
                 for _, r in tops_df.iterrows():
@@ -433,23 +517,21 @@ def _parse_single_log_file_worker(task_spec: Dict[str, Any]) -> Dict[str, Any]:
         .replace("/", "-")
         .replace(" ", "-")
     )
-    uwi = (
-        str(meta_dict.get("uwi") or well_name)
-        .replace("/", "-")
-        .replace(" ", "-")
-    )
+    uwi = str(meta_dict.get("uwi") or well_name).replace("/", "-").replace(" ", "-")
     meta_dict["well_name"] = well_name
     meta_dict["uwi"] = uwi
 
     # Drop excluded curves (never drop DEPTH)
     if excluded_curves:
         excluded_targets = {
-            entry["stored_curve"] for entry in curve_lineage
+            entry["stored_curve"]
+            for entry in curve_lineage
             if entry["source_mnemonic"].upper() in excluded_curves
             or entry["stored_curve"].upper() in excluded_curves
         }
         retained_targets = {
-            entry["stored_curve"] for entry in curve_lineage
+            entry["stored_curve"]
+            for entry in curve_lineage
             if entry["source_mnemonic"].upper() not in excluded_curves
             and entry["stored_curve"].upper() not in excluded_curves
         }
@@ -461,11 +543,14 @@ def _parse_single_log_file_worker(task_spec: Dict[str, Any]) -> Dict[str, Any]:
                 if entry["raw_curve"]:
                     df = df.drop(columns=[entry["raw_curve"]], errors="ignore")
         df = df.drop(
-            columns=[c for c in excluded_targets - retained_targets if c.upper() != "DEPTH"],
+            columns=[
+                c for c in excluded_targets - retained_targets if c.upper() != "DEPTH"
+            ],
             errors="ignore",
         )
         curve_lineage = [
-            entry for entry in curve_lineage
+            entry
+            for entry in curve_lineage
             if entry["stored_curve"].upper() == "DEPTH"
             or (
                 entry["source_mnemonic"].upper() not in excluded_curves
@@ -522,9 +607,7 @@ async def _run_tasks_in_pool(worker_fn, task_args_list: List[Any]) -> List[Any]:
     max_workers = min(os.cpu_count() or 4, 8, len(task_args_list))
     loop = asyncio.get_running_loop()
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        tasks = [
-            loop.run_in_executor(pool, worker_fn, arg) for arg in task_args_list
-        ]
+        tasks = [loop.run_in_executor(pool, worker_fn, arg) for arg in task_args_list]
         return list(await asyncio.gather(*tasks))
 
 
@@ -558,6 +641,11 @@ async def inspect_log_files(files: List[UploadFile] = File(...)) -> LogInspectRe
                     detail=f"File '{safe_name}' exceeds 5.0 MB demo upload limit.",
                 )
 
+        from quick_pp.app.backend.services.demo_guard import (
+            enforce_upload_storage_limits,
+            get_current_demo_session_id,
+        )
+
         fid = uuid4().hex[:12]
         staged_path = STAGING_DIR / f"{fid}_{safe_name}"
         save_upload_file(f, staged_path)
@@ -566,7 +654,10 @@ async def inspect_log_files(files: List[UploadFile] = File(...)) -> LogInspectRe
             "path": str(staged_path),
             "filename": orig_name,
             "created_at": time.time(),
+            "demo_session_id": get_current_demo_session_id(),
         }
+        if is_demo_mode():
+            enforce_upload_storage_limits()
 
         try:
             inspected_dict = _inspect_single_log_file_worker(
@@ -612,22 +703,44 @@ async def commit_log_files(request: Request) -> Dict[str, Any]:
         form = await request.form()
         raw_json = form.get("commit_request_json")
         if not raw_json:
-            raise HTTPException(status_code=400, detail="Missing commit_request_json in form data")
+            raise HTTPException(
+                status_code=400, detail="Missing commit_request_json in form data"
+            )
         payload = LogCommitRequest(**json.loads(str(raw_json)))
         STAGING_DIR.mkdir(parents=True, exist_ok=True)
+        from quick_pp.app.backend.services.demo_guard import (
+            enforce_upload_storage_limits,
+            get_current_demo_session_id,
+        )
+
         for item in form.getlist("files"):
             if hasattr(item, "filename") and hasattr(item, "file"):
                 orig_name = str(item.filename or "upload.las")
+                validate_file_extension(orig_name)
+                safe_item_name = sanitize_filename(orig_name)
+                if is_demo_mode():
+                    item.file.seek(0, 2)
+                    fsize = item.file.tell()
+                    item.file.seek(0)
+                    if fsize > MAX_DEMO_UPLOAD_BYTES:
+                        item.file.close()
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"File '{safe_item_name}' exceeds 5.0 MB demo upload limit.",
+                        )
                 fid = uuid4().hex[:12]
-                staged_path = STAGING_DIR / f"{fid}_{sanitize_filename(orig_name)}"
+                staged_path = STAGING_DIR / f"{fid}_{safe_item_name}"
                 save_upload_file(item, staged_path)
                 _STAGED_FILES[fid] = {
                     "file_id": fid,
                     "path": str(staged_path),
                     "filename": orig_name,
                     "created_at": time.time(),
+                    "demo_session_id": get_current_demo_session_id(),
                 }
                 uploaded_by_name[orig_name] = fid
+        if is_demo_mode():
+            enforce_upload_storage_limits()
     else:
         body_dict = await request.json()
         payload = LogCommitRequest(**body_dict)
@@ -638,7 +751,9 @@ async def commit_log_files(request: Request) -> Dict[str, Any]:
     splicing_mode = payload.splice_overlap_mode or payload.splicing_mode or "keep_last"
     task_specs: List[Dict[str, Any]] = []
     for f_cfg in payload.files:
-        fid_lookup = f_cfg.file_id or (uploaded_by_name.get(f_cfg.filename or "") if f_cfg.filename else None)
+        fid_lookup = f_cfg.file_id or (
+            uploaded_by_name.get(f_cfg.filename or "") if f_cfg.filename else None
+        )
         staged = _STAGED_FILES.get(fid_lookup) if fid_lookup else None
         file_path_str: Optional[str] = None
         orig_filename = f_cfg.filename or f_cfg.file_id or "upload.las"
@@ -687,7 +802,9 @@ async def commit_log_files(request: Request) -> Dict[str, Any]:
 
     t0 = time.perf_counter()
     try:
-        parsed_results = await _run_tasks_in_pool(_parse_single_log_file_worker, task_specs)
+        parsed_results = await _run_tasks_in_pool(
+            _parse_single_log_file_worker, task_specs
+        )
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Parallel log ingestion failed: {e}"
@@ -782,12 +899,18 @@ async def commit_log_files(request: Request) -> Dict[str, Any]:
                     )
                     resolved = step_summary.get("resolved_curves", {})
                     for entry in r.get("curve_lineage", []):
-                        lineage.append({
-                            **entry,
-                            "filename": r["filename"],
-                            "stored_curve": resolved.get(entry["stored_curve"], entry["stored_curve"]),
-                            "raw_curve": resolved.get(entry["raw_curve"], entry["raw_curve"]),
-                        })
+                        lineage.append(
+                            {
+                                **entry,
+                                "filename": r["filename"],
+                                "stored_curve": resolved.get(
+                                    entry["stored_curve"], entry["stored_curve"]
+                                ),
+                                "raw_curve": resolved.get(
+                                    entry["raw_curve"], entry["raw_curve"]
+                                ),
+                            }
+                        )
                     batch_appended.extend(step_summary.get("appended_curves", []))
                     if idx > 0:
                         batch_skipped.extend(step_summary.get("skipped_curves", []))
@@ -831,8 +954,12 @@ async def commit_log_files(request: Request) -> Dict[str, Any]:
                         final_renamed.update(demo_summary.get("renamed_curves", {}))
                         resolved = demo_summary.get("resolved_curves", {})
                         for entry in lineage:
-                            entry["stored_curve"] = resolved.get(entry["stored_curve"], entry["stored_curve"])
-                            entry["raw_curve"] = resolved.get(entry["raw_curve"], entry["raw_curve"])
+                            entry["stored_curve"] = resolved.get(
+                                entry["stored_curve"], entry["stored_curve"]
+                            )
+                            entry["raw_curve"] = resolved.get(
+                                entry["raw_curve"], entry["raw_curve"]
+                            )
                         final_curves = [
                             c
                             for c in spliced_df.columns
@@ -848,7 +975,9 @@ async def commit_log_files(request: Request) -> Dict[str, Any]:
                     for mk, mv in primary_meta.items():
                         if mv is not None or mk not in merged_demo_hdr:
                             merged_demo_hdr[mk] = mv
-                    merged_demo_hdr["curve_lineage"] = list(merged_demo_hdr.get("curve_lineage") or []) + lineage
+                    merged_demo_hdr["curve_lineage"] = (
+                        list(merged_demo_hdr.get("curve_lineage") or []) + lineage
+                    )
                     _ephemeral_well_headers[(project_id, well_name)] = merged_demo_hdr
                     _merged_data_cache[f"{project_id}_{well_name}_0.16"] = (
                         time.time(),
@@ -882,8 +1011,12 @@ async def commit_log_files(request: Request) -> Dict[str, Any]:
                         )
                         resolved = db_merge_summary.get("resolved_curves", {})
                         for entry in lineage:
-                            entry["stored_curve"] = resolved.get(entry["stored_curve"], entry["stored_curve"])
-                            entry["raw_curve"] = resolved.get(entry["raw_curve"], entry["raw_curve"])
+                            entry["stored_curve"] = resolved.get(
+                                entry["stored_curve"], entry["stored_curve"]
+                            )
+                            entry["raw_curve"] = resolved.get(
+                                entry["raw_curve"], entry["raw_curve"]
+                            )
                         appended = set(db_merge_summary.get("appended_curves", []))
                         for curve in well_obj._orm_well.curves:
                             if curve.mnemonic not in appended:
@@ -896,7 +1029,9 @@ async def commit_log_files(request: Request) -> Dict[str, Any]:
                                     curve.unit = entry["stored_unit"]
                                     break
                         header = dict(well_obj.header_data or {})
-                        header["curve_lineage"] = list(header.get("curve_lineage") or []) + lineage
+                        header["curve_lineage"] = (
+                            list(header.get("curve_lineage") or []) + lineage
+                        )
                         well_obj.header_data = header
                         if is_existing_well and isinstance(db_merge_summary, dict):
                             final_appended = list(
@@ -923,7 +1058,11 @@ async def commit_log_files(request: Request) -> Dict[str, Any]:
                     _ephemeral_well_headers.pop((project_id, well_name), None)
                     invalidate_well_cache(project_id=project_id, well_name=well_name)
 
-            if len(well_runs) == 1 and not payload.regularize_grid and well_runs[0].get("qaqc"):
+            if (
+                len(well_runs) == 1
+                and not payload.regularize_grid
+                and well_runs[0].get("qaqc")
+            ):
                 merged_qaqc = well_runs[0]["qaqc"]
             else:
                 merged_qaqc = compute_curve_qaqc(spliced_df, curve_units=merged_units)
@@ -952,30 +1091,36 @@ async def commit_log_files(request: Request) -> Dict[str, Any]:
 
     try:
         committed_wells = await asyncio.to_thread(_commit_wells_to_db_sync)
+        if is_demo_mode():
+            from quick_pp.app.backend.services.demo_guard import mark_demo_state_dirty
+
+            mark_demo_state_dirty()
     except db_objects.WellIdentityConflictError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
-
-    # Clean up staged files after commit
-    for spec in task_specs:
-        fp = spec.get("file_path")
-        fid = spec.get("file_id")
-        if fid and fid in _STAGED_FILES:
-            _STAGED_FILES.pop(fid, None)
-        if fp and os.path.exists(fp) and "import_staging" in str(fp):
-            try:
-                os.remove(fp)
-            except Exception:
-                pass
+    finally:
+        # Clean up staged files immediately after commit (even on conflict in demo mode)
+        for spec in task_specs:
+            fp = spec.get("file_path")
+            fid = spec.get("file_id")
+            if fid and fid in _STAGED_FILES:
+                _STAGED_FILES.pop(fid, None)
+            if fp and os.path.exists(fp) and "import_staging" in str(fp):
+                try:
+                    os.remove(fp)
+                except Exception:
+                    pass
 
     elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 2)
-    return sanitize_json_primitives({
-        "status": "success",
-        "project_id": project_id,
-        "wells_committed": len(committed_wells),
-        "wells": committed_wells,
-        "wells_imported": committed_wells,
-        "elapsed_ms": elapsed_ms,
-    })
+    return sanitize_json_primitives(
+        {
+            "status": "success",
+            "project_id": project_id,
+            "wells_committed": len(committed_wells),
+            "wells": committed_wells,
+            "wells_imported": committed_wells,
+            "elapsed_ms": elapsed_ms,
+        }
+    )
 
 
 @router.post(
@@ -985,6 +1130,11 @@ async def commit_log_files(request: Request) -> Dict[str, Any]:
 )
 async def process_las_file(files: List[UploadFile] = File(...)):
     """Asynchronously processes a list of uploaded LAS files by saving the raw files and converting them to Parquet."""
+    if is_demo_mode():
+        raise HTTPException(
+            status_code=403,
+            detail="Disk-persisted LAS-to-Parquet batch conversion is disabled in the live demo. Use the interactive log importer.",
+        )
     processed_file_paths = []
     for file in files:
         try:
