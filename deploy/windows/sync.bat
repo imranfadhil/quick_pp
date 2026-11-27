@@ -17,7 +17,7 @@ set DEPLOY_DIR=%CD%
 if not exist "config.bat" (
   echo [sync] config.bat not found - seeding from .env via config.example.bat
   call "%DEPLOY_DIR%\seed-config.bat"
-  echo [sync] Review deploy\config.bat, then re-run.
+  echo [sync] Review deploy\windows\config.bat, then re-run.
   exit /b 1
 )
 call config.bat
@@ -54,7 +54,7 @@ REM -- Package code (exclude heavy local folders, venv, notebooks, data) --
 echo [1/5] Packaging project...
 set "TAR_TMP=%TEMP%\%PROJECT_NAME%.tar"
 if defined PROJECT_NAME if exist "%TAR_TMP%" del "%TAR_TMP%"
-pushd "%~dp0.."
+pushd "%~dp0..\.."
 tar -cf "%TAR_TMP%" ^
     --exclude="node_modules" ^
     --exclude=".svelte-kit" ^
@@ -120,7 +120,7 @@ if %ERRORLEVEL% neq 0 (
 )
 
 set "ENV_TMP=%TEMP%\%PROJECT_NAME%-configure-env.sh"
-powershell -NoProfile -Command "(Get-Content -Raw '%DEPLOY_DIR%\configure-env.sh') -replace [char]13, '' | Set-Content -NoNewline '%ENV_TMP%' -Encoding ascii"
+powershell -NoProfile -Command "(Get-Content -Raw '%DEPLOY_DIR%\..\common\configure-env.sh') -replace [char]13, '' | Set-Content -NoNewline '%ENV_TMP%' -Encoding ascii"
 if not exist "%ENV_TMP%" (
     echo [ERROR] Could not prepare configure-env.sh.
     exit /b 1

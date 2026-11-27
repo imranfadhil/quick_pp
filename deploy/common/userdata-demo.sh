@@ -27,4 +27,3 @@ if ! docker compose version >/dev/null 2>&1; then
 fi
 
 echo "Droplet ready for quick_pp_demo sync."
-

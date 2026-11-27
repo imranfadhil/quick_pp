@@ -1,7 +1,7 @@
 #!/bin/sh
-# Configure the droplet's .env from deploy/config.bat.
+# Configure the droplet's .env from deploy/{linux,windows}/config.{sh,bat}.
 #
-# Piped over stdin by sync.bat (`ssh ... "bash -s -- <args>" < configure-env.sh`)
+# Piped over stdin by sync.sh / sync.bat (`ssh ... "bash -s -- <args>" < configure-env.sh`)
 # so cmd.exe never has to quote the shell code. Values arrive as positional
 # args, so tokens containing ':' or '+' are never re-parsed by cmd.exe.
 #

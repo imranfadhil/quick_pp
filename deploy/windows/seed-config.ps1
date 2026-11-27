@@ -17,7 +17,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $deployDir = $PSScriptRoot
-$envFile   = Join-Path $deployDir '..\.env'
+$envFile   = Join-Path $deployDir '..\..\.env'
 $template  = Join-Path $deployDir 'config.example.bat'
 $outFile   = Join-Path $deployDir 'config.bat'
 

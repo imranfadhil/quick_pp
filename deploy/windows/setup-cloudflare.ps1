@@ -3,11 +3,11 @@
   Zero Trust Access policy, and WAF Rate Limiting from local config.bat files.
 
   Reads Account ID, Tunnel IDs, DOMAIN, and ALLOWED_EMAIL directly from:
-    - deploy\config.bat       (gitignored private app settings)
-    - deploy\demo\config.bat  (gitignored demo app settings)
+    - deploy\windows\config.bat       (gitignored private app settings)
+    - deploy\windows\demo\config.bat  (gitignored demo app settings)
 
   Usage:
-    powershell -ExecutionPolicy Bypass -File deploy\setup-cloudflare.ps1 [-AllowedEmail you@example.com]
+    powershell -ExecutionPolicy Bypass -File deploy\windows\setup-cloudflare.ps1 [-AllowedEmail you@example.com]
 #>
 [CmdletBinding()]
 param(
@@ -63,8 +63,8 @@ $demoInfo    = Get-TunnelInfoFromConfig -ConfigPath (Join-Path $deployDir 'demo\
 if ([string]::IsNullOrWhiteSpace($PrivateHostname)) { $PrivateHostname = $privateInfo.Domain }
 if ([string]::IsNullOrWhiteSpace($DemoHostname))    { $DemoHostname    = $demoInfo.Domain }
 if ([string]::IsNullOrWhiteSpace($AllowedEmail))    { $AllowedEmail    = $privateInfo.Email }
-if ([string]::IsNullOrWhiteSpace($PrivateHostname)) { throw 'DOMAIN is empty in deploy\config.bat.' }
-if ([string]::IsNullOrWhiteSpace($DemoHostname))    { throw 'DOMAIN is empty in deploy\demo\config.bat.' }
+if ([string]::IsNullOrWhiteSpace($PrivateHostname)) { throw 'DOMAIN is empty in deploy\windows\config.bat.' }
+if ([string]::IsNullOrWhiteSpace($DemoHostname))    { throw 'DOMAIN is empty in deploy\windows\demo\config.bat.' }
 if ([string]::IsNullOrWhiteSpace($ZoneName)) {
   $parts = $PrivateHostname.Split('.')
   if ($parts.Length -ge 2) {
@@ -81,7 +81,7 @@ if ([string]::IsNullOrWhiteSpace($AllowedEmail)) {
 }
 
 if ($privateInfo.AccountId -ne $demoInfo.AccountId) {
-  throw "Account ID mismatch between deploy\config.bat ($($privateInfo.AccountId)) and deploy\demo\config.bat ($($demoInfo.AccountId))."
+  throw "Account ID mismatch between deploy\windows\config.bat ($($privateInfo.AccountId)) and deploy\windows\demo\config.bat ($($demoInfo.AccountId))."
 }
 
 $accountId       = $privateInfo.AccountId

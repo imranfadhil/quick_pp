@@ -21,7 +21,7 @@ set DEPLOY_DIR=%CD%
 if not exist "config.bat" (
   echo [sync-demo] config.bat not found - generating from config.example.bat
   call "%DEPLOY_DIR%\seed-config.bat"
-  echo [sync-demo] Review deploy\demo\config.bat, then re-run.
+  echo [sync-demo] Review deploy\windows\demo\config.bat, then re-run.
   exit /b 1
 )
 call config.bat
@@ -60,7 +60,7 @@ REM -- Package code + minimal Volve/Costa seed files -------------------
 echo [1/5] Packaging demo project and Volve/Costa seed files...
 set "TAR_TMP=%TEMP%\%PROJECT_NAME%.tar"
 if defined PROJECT_NAME if exist "%TAR_TMP%" del "%TAR_TMP%"
-pushd "%~dp0..\.."
+pushd "%~dp0..\..\.."
 tar -cf "%TAR_TMP%" ^
     --exclude="node_modules" ^
     --exclude=".svelte-kit" ^
