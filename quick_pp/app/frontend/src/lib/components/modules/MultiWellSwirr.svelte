@@ -22,9 +22,8 @@
 	let relpermPendingSave = $state(false);
 
 	onMount(() => {
-		if (!projectData.swirrResult) {
-			void projectData.ensureSwirrDataLoaded();
-		}
+		// Ensure fresh multi-well SCAL plugs are loaded across all project wells
+		void projectData.ensureSwirrDataLoaded(true);
 	});
 	// Manual override flags live in shared project state so they are saved/restored with project params
 
@@ -266,6 +265,7 @@
 					min_depth: workbench.depthFilter?.min ?? null,
 					max_depth: workbench.depthFilter?.max ?? null,
 					extraction_mode: cfg.extractionMode,
+					pc_domain: cfg.pcDomain ?? 'lab',
 					reference_pc_psi: cfg.referencePcPsi,
 					equation_type: cfg.equationType,
 					fit_scope: cfg.fitScope,
@@ -282,8 +282,8 @@
 			);
 			projectData.swirrConfig.rules = res.rules || {};
 			projectData.swirrResult = res;
-			projectData.recomputeScalFitsFromPlugs(!projectData.shfManualFitOverride);
-			void projectData.persistProjectParams([], ['swirr-corr']);
+			projectData.recomputeSwirrClientSide(autoFit);
+			void projectData.persistProjectParams([], ['swirr-corr', 'shf']);
 		} catch (e: any) {
 			projectData.error = e?.message || 'Swirr correlation fit failed';
 		} finally {
@@ -309,6 +309,7 @@
 					min_depth: workbench.depthFilter?.min ?? null,
 					max_depth: workbench.depthFilter?.max ?? null,
 					extraction_mode: cfg.extractionMode,
+					pc_domain: cfg.pcDomain ?? 'lab',
 					reference_pc_psi: cfg.referencePcPsi,
 					equation_type: cfg.equationType,
 					fit_scope: cfg.fitScope,
@@ -325,7 +326,7 @@
 			);
 			projectData.swirrConfig.rules = fitRes.rules || {};
 			projectData.swirrResult = fitRes;
-			projectData.recomputeScalFitsFromPlugs(!projectData.shfManualFitOverride);
+			projectData.recomputeSwirrClientSide(!projectData.swirrManualRuleOverride);
 
 			const applyRes = await postJson<SwirrApplyResult>(
 				`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/swirr/apply`,
@@ -345,7 +346,7 @@
 			);
 			projectData.swirrApplyResult = applyRes;
 			projectData.markMultiWellComputed('swirr-corr');
-			void projectData.persistProjectParams([], ['swirr-corr']);
+			void projectData.persistProjectParams([], ['swirr-corr', 'shf']);
 			applyActiveWellSwirrCurve(applyRes);
 		} catch (e: any) {
 			projectData.error = e?.message || 'Failed to compute Swirr & Pc fit';
@@ -358,6 +359,14 @@
 	async function saveAllWells() {
 		if (!workbench.projectId || !projectData.hasPendingMultiWell('swirr-corr')) return;
 		await projectData.saveMultiWellComputed('swirr-corr');
+		await projectData.persistProjectParams([], ['swirr-corr', 'shf']);
+	}
+
+	function setPcDomain(domain: 'lab' | 'reservoir') {
+		if ((projectData.swirrConfig.pcDomain ?? 'lab') === domain) return;
+		projectData.swirrConfig.pcDomain = domain;
+		projectData.swirrManualRuleOverride = false;
+		void projectData.ensureSwirrDataLoaded(true);
 	}
 
 	function setExtractionMode(mode: SwirrExtractionMode) {
@@ -396,6 +405,60 @@
 		projectData.recomputeSwirrClientSide(false);
 	}
 
+	function copyRuleParams(targetScope: string, sourceScope: string) {
+		const rules = projectData.swirrConfig.rules || {};
+		const src = rules[sourceScope];
+		if (!src) return;
+		projectData.swirrManualRuleOverride = true;
+		const curTarget = rules[targetScope] || { scope: targetScope, a: 0.28, b: 0.35, count: 0 };
+		projectData.swirrConfig.rules = {
+			...rules,
+			[targetScope]: {
+				...curTarget,
+				a: src.a,
+				b: src.b,
+				c: src.c ?? null,
+				scope: targetScope,
+				count: curTarget.count ?? 0
+			}
+		};
+		workbench.swirrCrossplotTab = 'swirr-corr';
+		projectData.recomputeSwirrClientSide(false);
+	}
+
+	function copyShfFitParams(targetRf: string, sourceRf: string) {
+		const fits = projectData.shfResult?.fits || {};
+		const src = fits[sourceRf];
+		if (!src || !projectData.shfResult) return;
+		projectData.shfManualFitOverride = true;
+		const curTarget = fits[targetRf] || { a: 0.1, b: 1.5, count: 0 };
+		const nextFits = {
+			...fits,
+			[targetRf]: {
+				...curTarget,
+				a: src.a,
+				b: src.b,
+				c: src.c,
+				d: src.d,
+				count: curTarget.count ?? 0
+			}
+		};
+		const isSwMode = (projectData.shfParams.jSatMode ?? 'swn') === 'sw';
+		projectData.shfResult = {
+			...projectData.shfResult,
+			fits: nextFits,
+			fits_swn: isSwMode ? projectData.shfResult.fits_swn : nextFits,
+			fits_sw: isSwMode ? nextFits : projectData.shfResult.fits_sw
+		};
+		projectData.shfSavedFits = {
+			model: projectData.shfParams.model,
+			j_sat_mode: projectData.shfParams.jSatMode ?? 'swn',
+			fits: { ...nextFits }
+		};
+		workbench.swirrCrossplotTab = 'scal-fit';
+		void projectData.persistProjectParams([], ['swirr-corr', 'shf']);
+	}
+
 	function selectShfModel(m: 'leverett_j' | 'skelt_harrison' | 'cuddy') {
 		projectData.shfParams.model = m;
 		projectData.shfManualFitOverride = false;
@@ -421,7 +484,13 @@
 			fits_swn: isSwMode ? projectData.shfResult.fits_swn : nextFits,
 			fits_sw: isSwMode ? nextFits : projectData.shfResult.fits_sw
 		};
+		projectData.shfSavedFits = {
+			model: projectData.shfParams.model,
+			j_sat_mode: projectData.shfParams.jSatMode ?? 'swn',
+			fits: { ...nextFits }
+		};
 		workbench.swirrCrossplotTab = 'scal-fit';
+		void projectData.persistProjectParams([], ['swirr-corr', 'shf']);
 	}
 
 	function clearExcludedPlugs() {
@@ -506,6 +575,28 @@
 					<span
 						class="mb-1 block text-[10px] font-semibold tracking-wider text-[var(--text-muted)] uppercase"
 					>
+						Capillary Pressure Domain
+					</span>
+					<div class="grid grid-cols-2 gap-1">
+						{#each [['lab', 'Lab Pc (Measured)'], ['reservoir', 'Reservoir Pc (Converted)']] as [dKey, dLbl]}
+							<button
+								type="button"
+								onclick={() => setPcDomain(dKey as 'lab' | 'reservoir')}
+								class="h-6 rounded-sm border text-[10px] font-medium transition-colors {(projectData
+									.swirrConfig.pcDomain ?? 'lab') === dKey
+									? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
+									: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-50'}"
+							>
+								{dLbl}
+							</button>
+						{/each}
+					</div>
+				</div>
+
+				<div class="mb-2">
+					<span
+						class="mb-1 block text-[10px] font-semibold tracking-wider text-[var(--text-muted)] uppercase"
+					>
 						Extraction Method
 					</span>
 					<div class="grid grid-cols-2 gap-1">
@@ -528,7 +619,7 @@
 					label="Reference / Cutoff Pc"
 					unit="psi"
 					min={5}
-					max={500}
+					max={5000}
 					step={5}
 					decimals={1}
 					bind:value={projectData.swirrConfig.referencePcPsi}
@@ -586,6 +677,39 @@
 						: 'a·φ^b / k^c'}
 				defaultOpen={false}
 			>
+				<div
+					class="mb-2 rounded-xs border border-blue-200 bg-blue-50/70 p-1.5 text-[10px] text-blue-950"
+				>
+					<div class="flex items-center justify-between font-semibold">
+						<span>DRT Method: {projectData.drtMethod.toUpperCase()}</span>
+						<button
+							type="button"
+							onclick={() => (workbench.swirrCrossplotTab = 'scal-drt')}
+							class="text-[9.5px] font-bold text-blue-700 underline hover:text-blue-900"
+							title="View SCAL plugs on Porosity vs. Permeability crossplot with DRT cutoff lines"
+						>
+							Poro-Perm Crossplot →
+						</button>
+					</div>
+					<div class="mt-0.5 text-[9.5px] text-blue-800">
+						{#if projectData.activeDrtCutoffs.length > 0}
+							{@const sortedCutoffs = [...projectData.activeDrtCutoffs].sort(
+								(a, b) => a - b
+							)}
+							Cutoffs: [{sortedCutoffs.join(', ')}]
+							{#if projectData.drtMethod === 'lucia'}
+								· RT 1: &lt;{sortedCutoffs[0]} | RT {sortedCutoffs.length + 1} (Non-Res):
+								≥{sortedCutoffs[sortedCutoffs.length - 1]}
+							{:else}
+								· RT 1: ≥{sortedCutoffs[sortedCutoffs.length - 1]} | RT {sortedCutoffs.length +
+									1} (Non-Res): &lt;{sortedCutoffs[0]}
+							{/if}
+						{:else}
+							Cutoffs: []
+						{/if}
+					</div>
+				</div>
+
 				<div class="mb-2">
 					<label
 						for="swirr-eq-select"
@@ -679,8 +803,12 @@
 									{#if projectData.swirrConfig.equationType === 'timur'}
 										<th class="px-1 text-right font-semibold">c</th>
 									{/if}
-									<th class="px-1.5 text-right font-semibold">RMSE</th>
-									<th class="px-1.5 text-right font-semibold">R²</th>
+									<th class="px-1 text-right font-semibold">RMSE</th>
+									<th class="px-1 text-right font-semibold">R²</th>
+									<th
+										class="px-1 text-center font-semibold"
+										title="Copy parameters from another RT or Global">Copy</th
+									>
 								</tr>
 							</thead>
 							<tbody class="divide-y divide-[var(--border-hairline)]">
@@ -689,12 +817,31 @@
 									{@const rtColor = isGlobal
 										? '#0F172A'
 										: getRockTypeColor(Number(scopeKey))}
-									<tr class="h-6">
+									{@const isNoSample =
+										!isGlobal && (!rule.count || rule.count === 0)}
+									{@const isNonRes =
+										!isGlobal &&
+										Number(scopeKey) > projectData.activeDrtCutoffs.length}
+									<tr class="h-6 {isNoSample ? 'bg-amber-50/30' : ''}">
 										<td class="px-1.5 font-semibold whitespace-nowrap">
 											<span
 												class="mr-1 inline-block h-2 w-2 rounded-full"
 												style="background:{rtColor}"
 											></span>{isGlobal ? 'Global' : `RT ${scopeKey}`}
+											{#if isNoSample}
+												<span
+													class="py-0.2 ml-1 rounded-xs bg-amber-100 px-1 text-[8.5px] font-medium text-amber-800"
+													title="No SCAL samples in this RT. You can manually adjust parameters or copy from another RT."
+													>n=0</span
+												>
+											{/if}
+											{#if isNonRes}
+												<span
+													class="ml-0.5 text-[8px] font-medium text-slate-400"
+													title="Sub-cutoff Non-Reservoir Rock Type"
+													>Non-Res</span
+												>
+											{/if}
 										</td>
 										<td class="px-1 text-right">
 											<input
@@ -740,12 +887,41 @@
 												/>
 											</td>
 										{/if}
-										<td class="mono-num px-1.5 text-right text-[10px]"
-											>{fmtNum(rule.rmse, 3)}</td
-										>
-										<td class="mono-num px-1.5 text-right text-[10px]"
-											>{fmtNum(rule.r2, 3)}</td
-										>
+										<td class="mono-num px-1 text-right text-[10px]">
+											{rule.rmse != null && rule.count && rule.count > 0
+												? fmtNum(rule.rmse, 3)
+												: '—'}
+										</td>
+										<td class="mono-num px-1 text-right text-[10px]">
+											{rule.r2 != null && rule.count && rule.count > 0
+												? fmtNum(rule.r2, 3)
+												: '—'}
+										</td>
+										<td class="px-1 text-center">
+											<select
+												class="h-4.5 rounded-xs border border-dashed border-slate-300 bg-white px-0.5 text-[9px] text-slate-700 hover:border-blue-400 focus:outline-none"
+												title="Copy fitted parameters from another Rock Type or Global"
+												onchange={(e) => {
+													const src = e.currentTarget.value;
+													if (src) copyRuleParams(scopeKey, src);
+													e.currentTarget.value = '';
+												}}
+											>
+												<option value="">Copy...</option>
+												{#if !isGlobal}
+													<option value="global">From Global</option>
+												{/if}
+												{#each displayedRules as [otherKey] (otherKey)}
+													{#if otherKey !== scopeKey}
+														<option value={otherKey}
+															>From {otherKey === 'global'
+																? 'Global'
+																: `RT ${otherKey}`}</option
+														>
+													{/if}
+												{/each}
+											</select>
+										</td>
 									</tr>
 								{/each}
 							</tbody>
@@ -1276,21 +1452,43 @@
 											<th class="px-1 text-right font-semibold">c</th>
 											<th class="px-1 text-right font-semibold">d</th>
 										{/if}
-										<th class="px-1.5 text-right font-semibold">RMSE</th>
+										<th class="px-1 text-right font-semibold">RMSE</th>
 										{#if activeShfModel !== 'skelt_harrison'}
-											<th class="px-1.5 text-right font-semibold">R²</th>
+											<th class="px-1 text-right font-semibold">R²</th>
 										{/if}
+										<th
+											class="px-1 text-center font-semibold"
+											title="Copy fit parameters from another Rock Type"
+											>Copy</th
+										>
 									</tr>
 								</thead>
 								<tbody class="divide-y divide-[var(--border-hairline)]">
-									{#each Object.entries(projectData.shfResult.fits) as [rf, fit]}
+									{#each Object.entries(projectData.shfResult.fits).sort(([a], [b]) => Number(a) - Number(b)) as [rf, fit]}
 										{@const rtColor = getRockTypeColor(Number(rf))}
-										<tr class="h-6">
+										{@const isNoSample = !fit.count || fit.count === 0}
+										{@const isNonRes =
+											Number(rf) > projectData.activeDrtCutoffs.length}
+										<tr class="h-6 {isNoSample ? 'bg-amber-50/30' : ''}">
 											<td class="px-1.5 font-semibold whitespace-nowrap">
 												<span
 													class="mr-1 inline-block h-2 w-2 rounded-full"
 													style="background:{rtColor}"
 												></span>RT {rf}
+												{#if isNoSample}
+													<span
+														class="py-0.2 ml-1 rounded-xs bg-amber-100 px-1 text-[8.5px] font-medium text-amber-800"
+														title="No SCAL samples in this RT. You can manually adjust parameters or copy from another RT."
+														>n=0</span
+													>
+												{/if}
+												{#if isNonRes}
+													<span
+														class="ml-0.5 text-[8px] font-medium text-slate-400"
+														title="Sub-cutoff Non-Reservoir Rock Type"
+														>Non-Res</span
+													>
+												{/if}
 											</td>
 											<td class="px-1 text-right">
 												<input
@@ -1356,14 +1554,38 @@
 													/>
 												</td>
 											{/if}
-											<td class="mono-num px-1.5 text-right text-[10px]"
-												>{fmtNum(fit.rmse, 3)}</td
-											>
+											<td class="mono-num px-1 text-right text-[10px]">
+												{fit.rmse != null && fit.count && fit.count > 0
+													? fmtNum(fit.rmse, 3)
+													: '—'}
+											</td>
 											{#if activeShfModel !== 'skelt_harrison'}
-												<td class="mono-num px-1.5 text-right text-[10px]"
-													>{fmtNum(fit.r2, 3)}</td
-												>
+												<td class="mono-num px-1 text-right text-[10px]">
+													{fit.r2 != null && fit.count && fit.count > 0
+														? fmtNum(fit.r2, 3)
+														: '—'}
+												</td>
 											{/if}
+											<td class="px-1 text-center">
+												<select
+													class="h-4.5 rounded-xs border border-dashed border-slate-300 bg-white px-0.5 text-[9px] text-slate-700 hover:border-blue-400 focus:outline-none"
+													title="Copy J/Pc fit parameters from another Rock Type"
+													onchange={(e) => {
+														const src = e.currentTarget.value;
+														if (src) copyShfFitParams(rf, src);
+														e.currentTarget.value = '';
+													}}
+												>
+													<option value="">Copy...</option>
+													{#each Object.keys(projectData.shfResult.fits) as otherRf (otherRf)}
+														{#if otherRf !== rf}
+															<option value={otherRf}
+																>From RT {otherRf}</option
+															>
+														{/if}
+													{/each}
+												</select>
+											</td>
 										</tr>
 									{/each}
 								</tbody>

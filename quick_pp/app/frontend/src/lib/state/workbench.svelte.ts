@@ -1,8 +1,10 @@
 import { resolveCrossplot, type CrossplotContext, type CrossplotId } from '../utils/crossplots';
+import type { EnvQcTrackFilter, EnvQcViewMode } from '../utils/envCorrQc';
+import type { PressureDisplayUnit, TempDisplayUnit } from '../utils/tempPressureProfile';
 
 export type SingleWellStep =
-	| 'qaqc'
 	| 'ancillary'
+	| 'qaqc'
 	| 'litho-poro'
 	| 'perm'
 	| 'saturation'
@@ -77,6 +79,7 @@ export type BadholeTreatmentMode = 'none' | 'vsh_gr' | 'interpolate' | 'ignore';
 export interface BadholeFlaggingParams {
 	useCali: boolean;
 	caliThreshold: number;
+	useHoleSections: boolean;
 	autoBitsize: boolean;
 	bitsizeDefault: number;
 	useDrho: boolean;
@@ -166,6 +169,7 @@ export interface LithoEndpointParams {
 	badholeTreatment: BadholeTreatmentMode;
 	/** Continuous apparent fluid density (RHO_FL) engine mode. */
 	fluidDensityMode: 'static' | 'zonal_coupled' | 'iterative_sxo';
+	fluidDensityUseHoleSections: boolean;
 	fluidDensityMudType: 'WBM' | 'OBM' | 'SBM';
 	fluidDensitySalinityPpm: number;
 	fluidDensityRmf: number;
@@ -379,11 +383,27 @@ export interface ScalComputedResult {
 }
 
 export interface EnvCorrectionParams {
+	useHoleSections: boolean;
 	bitsizeDefault: number;
 	mudWeight: number;
 	surfaceTemp: number;
 	tempGrad: number;
+	/** Borehole mud salinity (ppm NaCl); ignored for OBM/SBM. */
 	salinityPpm: number;
+	toolType: 'WL' | 'LWD';
+	mudType: 'WBM' | 'OBM' | 'SBM';
+	resTool: 'auto' | 'induction' | 'laterolog' | 'propagation';
+	depthUnit: 'auto' | 'm' | 'ft';
+	offshore: boolean;
+	/** Water depth in the log depth unit (offshore only). */
+	waterDepth: number;
+	seabedTempC: number;
+	/** 0 = not provided (estimated from salinity). */
+	rmf: number;
+	rmfTempC: number;
+	formationSalinityPpm: number;
+	rhoMudcake: number;
+	washoutThold: number;
 }
 
 export interface PermModelParams {
@@ -595,17 +615,31 @@ export interface MultiWellVolumetricResult {
 	well_summary: Array<{
 		well_name: string;
 		zone: string;
+		flag?: 'ALL' | 'ROCK' | 'RES' | 'PAY';
 		top: number;
 		bottom: number;
 		gross: number;
+		net?: number;
+		ntg?: number;
 		net_res: number;
 		ntg_res: number;
 		net_pay: number;
 		ntg_pay: number;
+		net_oil_pay?: number;
+		net_gas_pay?: number;
+		phit?: number;
 		phie: number;
 		sw: number;
+		sw_shf?: number | null;
 		perm_geom: number;
 		hcpt: number;
+		curves_used?: {
+			vsh?: string;
+			phi?: string;
+			sw?: string;
+			perm?: string;
+			shf?: string | null;
+		};
 	}>;
 	zonal_summary: ZonalVolumetricSummary[];
 	field_totals: FieldVolumetricTotals;
@@ -616,6 +650,37 @@ export interface MultiWellVolumetricResult {
 		source: string;
 	};
 	assumptions_register?: AssumptionsRegister;
+	cutoffs_sensitivity?: {
+		optimal_cutoffs: {
+			vshale: number;
+			phit: number;
+			swt: number;
+		};
+		percentile: number;
+		total_gross: number;
+		total_hcpv: number;
+		vsh_sensitivity: Array<{
+			cutoff: number;
+			hcpv: number;
+			hcpv_pct: number;
+			net_pay: number;
+			ntg: number;
+		}>;
+		phi_sensitivity: Array<{
+			cutoff: number;
+			hcpv: number;
+			hcpv_pct: number;
+			net_pay: number;
+			ntg: number;
+		}>;
+		sw_sensitivity: Array<{
+			cutoff: number;
+			hcpv: number;
+			hcpv_pct: number;
+			net_pay: number;
+			ntg: number;
+		}>;
+	};
 }
 
 export interface VolumetricZoneParamConfig {
@@ -707,7 +772,10 @@ class WorkbenchState {
 	projectId = $state<string | null>(null);
 	wellId = $state<string | null>(null);
 	scope = $state<'single-well' | 'multi-well'>('single-well');
-	singleWellStep = $state<SingleWellStep>('qaqc');
+	singleWellStep = $state<SingleWellStep>('ancillary');
+	ancillarySubTab = $state<
+		'hole_sections' | 'tops' | 'contacts' | 'perfs' | 'core' | 'scal' | 'pressure' | 'survey'
+	>('hole_sections');
 	multiWellStep = $state<MultiWellStep>('inventory');
 	batchEvaluationAffectedProjects = $state<string[]>([]);
 
@@ -738,6 +806,16 @@ class WorkbenchState {
 	/** Curve focused by the 'enhanced-vs-raw' crossplot; null shows every enhanced curve. */
 	enhanceCompareCurve = $state<string | null>(null);
 
+	/** Controls for the 'env-corr-qc' Borehole Environmental Correction QC multi-track view. */
+	envQcViewMode = $state<EnvQcViewMode>('overlay');
+	envQcTrackFilter = $state<EnvQcTrackFilter>('all');
+	envQcShowSigma = $state<boolean>(true);
+	envQcShowFluidRes = $state<boolean>(false);
+
+	/** Display units for the 'temp-pressure' Temperature & Pressure Profile plot. */
+	tempPlotUnit = $state<TempDisplayUnit>('degC');
+	presPlotUnit = $state<PressureDisplayUnit>('psi');
+
 	get crossplotContext(): CrossplotContext {
 		return this.scope === 'single-well'
 			? { scope: 'single-well', step: this.singleWellStep }
@@ -761,7 +839,9 @@ class WorkbenchState {
 		kind: 'math' | 'splice';
 	} | null>(null);
 	scalSubMode = $state<'static' | 'relperm'>('static');
-	swirrCrossplotTab = $state<'swirr-corr' | 'pc-qc' | 'scal-fit' | 'pore-throat' | 'relperm'>('swirr-corr');
+	swirrCrossplotTab = $state<
+		'swirr-corr' | 'pc-qc' | 'scal-fit' | 'pore-throat' | 'scal-drt' | 'relperm'
+	>('swirr-corr');
 	coreQcView = $state<'dual' | 'poro' | 'perm' | 'depth-error'>('dual');
 	vshQcView = $state<'dual' | 'gr-fit' | 'depth-error'>('dual');
 	vshCalibScope = $state<'shale_sand' | 'shale_only' | 'all' | 'brushed'>('shale_sand');
@@ -793,6 +873,7 @@ class WorkbenchState {
 	importerOpen = $state<boolean>(false);
 	importerTab = $state<
 		| 'las'
+		| 'hole_sections'
 		| 'formation_tops'
 		| 'fluid_contacts'
 		| 'perforations'
@@ -821,6 +902,7 @@ class WorkbenchState {
 	openImporter(
 		tab?:
 			| 'las'
+			| 'hole_sections'
 			| 'formation_tops'
 			| 'fluid_contacts'
 			| 'perforations'
@@ -915,6 +997,7 @@ class WorkbenchState {
 		coalAdaptiveShoulder: true,
 		badholeTreatment: 'vsh_gr',
 		fluidDensityMode: 'static',
+		fluidDensityUseHoleSections: true,
 		fluidDensityMudType: 'WBM',
 		fluidDensitySalinityPpm: 30000,
 		fluidDensityRmf: 0.5,
@@ -956,6 +1039,7 @@ class WorkbenchState {
 	badholeParams = $state<BadholeFlaggingParams>({
 		useCali: true,
 		caliThreshold: 2.0,
+		useHoleSections: true,
 		autoBitsize: true,
 		bitsizeDefault: 8.5,
 		useDrho: true,
@@ -1098,11 +1182,24 @@ class WorkbenchState {
 	scalResult = $state<ScalComputedResult | null>(null);
 
 	envCorrParams = $state<EnvCorrectionParams>({
+		useHoleSections: true,
 		bitsizeDefault: 8.5,
 		mudWeight: 9.5,
 		surfaceTemp: 75.0,
 		tempGrad: 1.5,
-		salinityPpm: 30000.0
+		salinityPpm: 30000.0,
+		toolType: 'WL',
+		mudType: 'WBM',
+		resTool: 'auto',
+		depthUnit: 'auto',
+		offshore: false,
+		waterDepth: 0,
+		seabedTempC: 4.0,
+		rmf: 0,
+		rmfTempC: 25.0,
+		formationSalinityPpm: 35000,
+		rhoMudcake: 1.5,
+		washoutThold: 2.0
 	});
 
 	permParams = $state<PermModelParams>({
@@ -1267,8 +1364,16 @@ class WorkbenchState {
 				custom_notes: ''
 			},
 			{
+				section_id: 'gate_checks',
+				title: '10. Petrophysical QA/QC Gate-Check & Audit Log',
+				enabled: true,
+				include_plots: false,
+				include_tables: true,
+				custom_notes: ''
+			},
+			{
 				section_id: 'appendix_cpi',
-				title: '10. Appendices (Well CPI Plots & Audit Trail)',
+				title: 'Appendix A: Composite Petrophysical Evaluation Logs (CPI)',
 				enabled: true,
 				include_plots: true,
 				include_tables: true,
@@ -1277,7 +1382,7 @@ class WorkbenchState {
 		]
 	});
 
-	// Single-Well CPI Dossier Configuration (streamlined 6 chapters)
+	// Single-Well CPI Dossier Configuration (7 chapters including QA/QC Gate-Check Audit)
 	singleWellReportConfig = $state<ReportConfigParams>({
 		reportType: 'SINGLE_WELL_CPI',
 		reportTitle: 'Single-Well Petrophysical CPI & Evaluation Dossier',
@@ -1332,6 +1437,14 @@ class WorkbenchState {
 				title: '6. 6-Track Composite CPI Log',
 				enabled: true,
 				include_plots: true,
+				include_tables: true,
+				custom_notes: ''
+			},
+			{
+				section_id: 'gate_checks',
+				title: '7. QA/QC Gate-Check & Peer-Review Audit Log',
+				enabled: true,
+				include_plots: false,
 				include_tables: true,
 				custom_notes: ''
 			}

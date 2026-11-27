@@ -2408,3 +2408,72 @@ def test_workspace_save_computed_curves_with_fluid_type(client_and_project):
     assert body["saved"] is True
     assert "FLUID_TYPE" in body["saved_curves"]
     assert "SWT" in body["saved_curves"]
+
+
+def test_environmental_corrections_endpoint_returns_qc_and_weights_inputs(
+    client_and_project,
+):
+    """Env corrections return QC/sigma/assumptions; downstream porosity uses weighted inputs."""
+    client, pid = client_and_project
+    cali_vals = [8.5, 8.5, 14.0, 8.5, 8.5, 8.5, 8.5, 8.5, 8.5, 8.5]
+    drho_vals = [0.01, 0.01, 0.30, 0.02, 0.01, 0.01, 0.02, 0.01, 0.01, 0.01]
+    r_put = client.put(
+        f"/quick_pp/database/projects/{pid}/wells/Well-A/data",
+        json={
+            "data": {
+                "DEPTH": list(np.linspace(1000.0, 1009.0, 10)),
+                "BS": [8.5] * 10,
+                "CALI": cali_vals,
+                "DRHO": drho_vals,
+            }
+        },
+    )
+    assert r_put.status_code == 200
+
+    base = f"/quick_pp/workspace/projects/{pid}/wells/Well-A"
+    r0 = client.post(f"{base}/porosity", json={"method": "density", "save": False})
+    assert r0.status_code == 200, r0.text
+
+    r = client.post(
+        f"{base}/environmental_corrections",
+        json={
+            "tool_type": "LWD",
+            "mud_type": "OBM",
+            "depth_unit": "m",
+            "water_depth": 300.0,
+            "save": True,
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    data = body["data"]
+    for col in (
+        "RHOB_ENV_CORR",
+        "RHOB_QC_CONF",
+        "RHOB_SIGMA",
+        "RHOB_QC_STATUS",
+        "ENV_QC_REASON",
+        "HOLE_SEVERITY",
+        "ENV_TEMP_C",
+        "RT_ENV_CORR",
+    ):
+        assert col in data, col
+    assert data["RHOB_QC_CONF"][2] < data["RHOB_QC_CONF"][0]
+    assert body["environment"]["offshore"] is True
+    assert body["environment"]["mud_type"] == "OBM"
+    assert body["qc_summary"]["RHOB"]["samples"] == 10
+    assert isinstance(body["assumptions"], list) and body["assumptions"]
+
+    # Downstream: weighted density at the washout differs from the raw-input result
+    r1 = client.post(f"{base}/porosity", json={"method": "density", "save": False})
+    r2 = client.post(
+        f"{base}/porosity",
+        json={"method": "density", "save": False, "confidence_weighting": False, "use_env_corrected": False},
+    )
+    assert r1.status_code == 200 and r2.status_code == 200, (r1.text, r2.text)
+    phit_w = r1.json()["data"].get("PHIT")
+    phit_raw = r2.json()["data"].get("PHIT")
+    assert phit_w is not None and phit_raw is not None
+    assert phit_raw == r0.json()["data"].get("PHIT")
+    assert phit_w[2] != phit_raw[2]
+    assert np.isclose(phit_w[0], phit_raw[0], atol=1e-6)

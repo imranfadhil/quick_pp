@@ -6,7 +6,7 @@ Batch scripts that provision and manage the `quick_pp` UI & Backend stack on a D
 
 The Docker Compose stack ([`quick_pp/app/docker/docker-compose.yaml`](../quick_pp/app/docker/docker-compose.yaml)) runs:
 - **`web` (Nginx)**: Unified reverse proxy on port `8080` (and internal `:80`). Routes `/quick_pp/*` to `qpp-backend:6312` and `/` to `qpp-frontend:5469` with a `100 MB` upload limit for LAS files.
-- **`quicktunnel` (Cloudflare)**: Runs `cloudflared tunnel --url http://web:80` and prints a free `https://<words>.trycloudflare.com` URL at the end of `sync.bat`.
+- **`quicktunnel` (Cloudflare Tunnel)**: Runs `cloudflared` outbound to Cloudflare's edge. Supports a permanent **Named Tunnel** (`https://<DOMAIN>` + Cloudflare Zero Trust Access when `CF_TUNNEL_TOKEN` is set in `config.bat`), or falls back to a free `https://<words>.trycloudflare.com` Quick Tunnel when `CF_TUNNEL_TOKEN` is blank.
 - **`qpp-frontend` (SvelteKit / Node 20)**: Builds and serves the SvelteKit UI on `:5469` using relative API paths (`VITE_BACKEND_URL=""`).
 - **`qpp-backend` (FastAPI / Gunicorn)**: Serves the petrophysical API on `:6312` with in-memory caching for merged well logs.
 - **`postgres` (pgvector/pg17)**: PostgreSQL 17 database.

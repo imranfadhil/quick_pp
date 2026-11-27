@@ -27,6 +27,7 @@
 	import { depthDisplay } from '$lib/state/depthDisplay.svelte';
 	import { depthFromMeters, depthToMeters } from '$lib/utils/depthUnits';
 	import { selectSpliceInterval, type SpliceInterval } from '$lib/utils/spliceIntervals';
+	import { salinityFromRmf } from '$lib/utils/fluidUnits';
 
 	const REQUIRED_STANDARD = ['GR', 'RT', 'NPHI', 'RHOB', 'CALI', 'DTC', 'PEF'];
 	const EVALUATED_CURVES = ALL_CALCULATED_CURVE_MNEMONICS;
@@ -364,15 +365,20 @@
 				gapSpan: null as number | null,
 				combinedTop: null as number | null,
 				combinedBottom: null as number | null,
-				suggestedSpliceDepth: Number(((wellData.depthRange.min + wellData.depthRange.max) / 2).toFixed(1))
+				suggestedSpliceDepth: Number(
+					((wellData.depthRange.min + wellData.depthRange.max) / 2).toFixed(1)
+				)
 			};
 		}
 
 		const target = (spliceTargetName.trim() || validCols[0]).toUpperCase().replace(/\s+/g, '_');
 		const selectedRuns = validCols.map((c) => {
-			const values = c === target
-				? ((!c.endsWith('_ORI') ? wellData.curves[`${c}_ORI`] : undefined) ?? wellData.originalCurves[c] ?? wellData.curves[c])
-				: wellData.curves[c];
+			const values =
+				c === target
+					? ((!c.endsWith('_ORI') ? wellData.curves[`${c}_ORI`] : undefined) ??
+						wellData.originalCurves[c] ??
+						wellData.curves[c])
+					: wellData.curves[c];
 			const selected = selectSpliceInterval(dept, values ?? [], spliceIntervals[c]);
 			let top = Infinity;
 			let bottom = -Infinity;
@@ -439,7 +445,9 @@
 					? Number(((gapTop + gapBottom) / 2).toFixed(1))
 					: Number.isFinite(combTop) && Number.isFinite(combBot)
 						? Number(((combTop + combBot) / 2).toFixed(1))
-						: Number(((wellData.depthRange.min + wellData.depthRange.max) / 2).toFixed(1));
+						: Number(
+								((wellData.depthRange.min + wellData.depthRange.max) / 2).toFixed(1)
+							);
 
 		return {
 			validCols,
@@ -489,7 +497,9 @@
 		const candidate =
 			curveName && curveList.includes(curveName)
 				? curveName
-				: (curveList.find((c) => !used.has(c) && !c.endsWith('_ORI')) ?? curveList[0] ?? '');
+				: (curveList.find((c) => !used.has(c) && !c.endsWith('_ORI')) ??
+					curveList[0] ??
+					'');
 		if (!candidate) return;
 		if (curveName && spliceRuns.includes(curveName)) return;
 		spliceRuns = [...spliceRuns, candidate];
@@ -560,7 +570,13 @@
 	$effect(() => {
 		const active = workbench.selectedQaqcCurve;
 		const st = wellData.stats[active];
-		if (st && st.min !== null && st.min !== undefined && st.max !== null && st.max !== undefined) {
+		if (
+			st &&
+			st.min !== null &&
+			st.min !== undefined &&
+			st.max !== null &&
+			st.max !== undefined
+		) {
 			clipMin = Number(st.min.toFixed(4));
 			clipMax = Number(st.max.toFixed(4));
 		}
@@ -582,14 +598,10 @@
 		}
 	}
 
-	let missingStandardCurves = $derived(
-		REQUIRED_STANDARD.filter((m) => !curveList.includes(m))
-	);
+	let missingStandardCurves = $derived(REQUIRED_STANDARD.filter((m) => !curveList.includes(m)));
 
 	let customOrExtraCurves = $derived(
-		curveList.filter(
-			(c) => !REQUIRED_STANDARD.includes(c) && !EVALUATED_CURVES.includes(c)
-		)
+		curveList.filter((c) => !REQUIRED_STANDARD.includes(c) && !EVALUATED_CURVES.includes(c))
 	);
 
 	let activeOriCurveName = $derived.by(() => {
@@ -600,11 +612,17 @@
 
 	let canRevertActiveCurve = $derived.by(() => {
 		const c = workbench.selectedQaqcCurve;
-		const orig = (c && !c.endsWith('_ORI') ? wellData.curves[`${c}_ORI`] : undefined) ?? wellData.originalCurves[c];
+		const orig =
+			(c && !c.endsWith('_ORI') ? wellData.curves[`${c}_ORI`] : undefined) ??
+			wellData.originalCurves[c];
 		const cur = wellData.curves[c];
 		if (!orig || !cur || orig.length !== cur.length) return false;
 		for (let i = 0; i < orig.length; i += Math.max(1, Math.floor(orig.length / 50))) {
-			if (Number.isFinite(orig[i]) && Number.isFinite(cur[i]) && Math.abs(orig[i] - cur[i]) > 1e-7) {
+			if (
+				Number.isFinite(orig[i]) &&
+				Number.isFinite(cur[i]) &&
+				Math.abs(orig[i] - cur[i]) > 1e-7
+			) {
 				return true;
 			}
 			if (Number.isFinite(orig[i]) !== Number.isFinite(cur[i])) {
@@ -672,11 +690,7 @@
 		}
 	}
 
-	async function applyQuickPreset(
-		op: CurveEditOperation,
-		val: number,
-		persist: boolean = false
-	) {
+	async function applyQuickPreset(op: CurveEditOperation, val: number, persist: boolean = false) {
 		if (op !== editOp && workbench.selectedQaqcCurve) {
 			wellData.commitCurveEditBase(workbench.selectedQaqcCurve);
 			editOp = op;
@@ -756,8 +770,12 @@
 	$effect(() => {
 		const dr = wellData.depthRange;
 		const df = workbench.depthFilter;
-		workingTopDepth = Number(depthFromMeters(df ? df.min : dr.min, depthDisplay.unit).toFixed(4));
-		workingBottomDepth = Number(depthFromMeters(df ? df.max : dr.max, depthDisplay.unit).toFixed(4));
+		workingTopDepth = Number(
+			depthFromMeters(df ? df.min : dr.min, depthDisplay.unit).toFixed(4)
+		);
+		workingBottomDepth = Number(
+			depthFromMeters(df ? df.max : dr.max, depthDisplay.unit).toFixed(4)
+		);
 	});
 
 	async function applyWorkingDepthInterval(persist: boolean = true) {
@@ -791,26 +809,64 @@
 	// switches and are restored per zone / depth interval from saved well config.
 	const ep = workbench.envCorrParams;
 
-	// Well Header & Metadata Editor state
-	let editingWellHeader = $state(false);
-	let savingWellHeader = $state(false);
-	let headerDraft = $state<Record<string, any>>({});
+	function seedManualFromHoleSections() {
+		const sections = wellData.holeSections;
+		if (!sections || sections.length === 0) return;
+		const deepest = [...sections].sort((a, b) => b.bottom - a.bottom)[0];
+		if (!deepest) return;
+		if (deepest.bit_size != null && Number.isFinite(deepest.bit_size) && deepest.bit_size > 0) {
+			ep.bitsizeDefault = deepest.bit_size;
+			workbench.badholeParams.bitsizeDefault = deepest.bit_size;
+		}
+		if (
+			deepest.mud_type === 'WBM' ||
+			deepest.mud_type === 'OBM' ||
+			deepest.mud_type === 'SBM'
+		) {
+			ep.mudType = deepest.mud_type;
+		}
+		if (
+			deepest.mud_weight != null &&
+			Number.isFinite(deepest.mud_weight) &&
+			deepest.mud_weight > 0
+		) {
+			ep.mudWeight = deepest.mud_weight;
+		}
+		if (
+			deepest.mud_salinity != null &&
+			Number.isFinite(deepest.mud_salinity) &&
+			deepest.mud_salinity >= 0
+		) {
+			ep.salinityPpm = deepest.mud_salinity;
+		}
+		if (deepest.rmf != null && Number.isFinite(deepest.rmf) && deepest.rmf > 0) {
+			ep.rmf = deepest.rmf;
+		}
+		if (deepest.rmf_temp != null && Number.isFinite(deepest.rmf_temp) && deepest.rmf_temp > 0) {
+			ep.rmfTempC = deepest.rmf_temp;
+		}
+	}
 
-	let lastSyncedWellGen = -1;
+	function jumpToHoleSections() {
+		workbench.ancillarySubTab = 'hole_sections';
+		workbench.singleWellStep = 'ancillary';
+	}
+
 	$effect(() => {
 		const gen = wellData.wellLoadGeneration;
 		const hdr = wellData.header || {};
-		if (gen !== lastSyncedWellGen && Object.keys(hdr).length > 0) {
-			lastSyncedWellGen = gen;
-			editingWellHeader = false;
-		}
-		// Seed env-correction defaults from the well header once per well load, unless saved
+		// Seed env-correction defaults from the well header / hole sections once per well load, unless saved
 		// parameters were restored for the active zone / depth selection.
-		if (gen !== lastEnvHeaderSyncGen && Object.keys(hdr).length > 0) {
+		if (gen !== lastEnvHeaderSyncGen && (Object.keys(hdr).length > 0 || wellData.holeSections.length > 0)) {
 			lastEnvHeaderSyncGen = gen;
 			if (untrack(() => moduleParams.status['qaqc-env']?.matched)) return;
-			if (typeof hdr.bit_size === 'number' && Number.isFinite(hdr.bit_size) && hdr.bit_size > 0) {
+			if (
+				typeof hdr.bit_size === 'number' &&
+				Number.isFinite(hdr.bit_size) &&
+				hdr.bit_size > 0
+			) {
 				ep.bitsizeDefault = hdr.bit_size;
+				workbench.badholeParams.bitsizeDefault = hdr.bit_size;
 			}
 			if (
 				typeof hdr.mud_density === 'number' &&
@@ -826,55 +882,40 @@
 			) {
 				ep.surfaceTemp = hdr.surface_temp;
 			}
+			if (wellData.holeSections.length > 0) {
+				seedManualFromHoleSections();
+			}
 		}
 	});
 
-	function openHeaderEditor() {
-		const h = wellData.header || {};
-		headerDraft = {
-			uwi: h.uwi ?? workbench.wellId ?? '',
-			company: h.company ?? '',
-			field: h.field ?? '',
-			country: h.country ?? '',
-			location: h.location ?? '',
-			province: h.province ?? '',
-			service_company: h.service_company ?? '',
-			log_date: h.log_date ?? '',
-			spud_date: h.spud_date ?? '',
-			latitude: h.latitude ?? null,
-			longitude: h.longitude ?? null,
-			x_coord: h.x_coord ?? null,
-			y_coord: h.y_coord ?? null,
-			crs: h.crs ?? '',
-			datum_unit: h.datum_unit || 'm',
-			kb_elev: h.kb_elev ?? null,
-			df_elev: h.df_elev ?? null,
-			gl_elev: h.gl_elev ?? null,
-			water_depth: h.water_depth ?? null,
-			bht: h.bht ?? null,
-			bht_unit: h.bht_unit || 'degC',
-			bit_size: h.bit_size ?? null,
-			rmf: h.rmf ?? null,
-			mud_density: h.mud_density ?? null,
-			mud_filtrate_salinity: h.mud_filtrate_salinity ?? null,
-			mud_filtrate_density: h.mud_filtrate_density ?? null,
-			mud_type: h.mud_type ?? '',
-			obm_base_density: h.obm_base_density ?? null
-		};
-		editingWellHeader = true;
-	}
-
-	async function saveHeaderDraft() {
-		savingWellHeader = true;
-		try {
-			await wellData.saveWellHeader(headerDraft, true);
-			editingWellHeader = false;
-		} catch (e: any) {
-			wellData.lastError = e?.message || 'Failed to save well header';
-		} finally {
-			savingWellHeader = false;
-		}
-	}
+	// Environmental correction QC outputs (per-curve reliability, assumed inputs, resolved environment)
+	type EnvQcCurveSummary = {
+		samples: number;
+		good_pct: number;
+		corrected_pct: number;
+		unreliable_pct: number;
+		mean_conf: number | null;
+		mean_abs_delta: number | null;
+		p95_abs_delta: number | null;
+	};
+	let envQcSummary = $state<Record<string, EnvQcCurveSummary> | null>(null);
+	let envAssumptions = $state<string[]>([]);
+	let envInfo = $state<{
+		tool_type: string;
+		depth_unit: string;
+		offshore: boolean;
+		top_temp_c: number;
+		gradient_c_per_km: number;
+		mud_type: string;
+		mud_weight_ppg: number;
+	} | null>(null);
+	const ENV_DELTA_UNITS: Record<string, string> = {
+		GR: 'API',
+		NPHI: 'v/v',
+		RHOB: 'g/cc',
+		RT: 'dec',
+		DT: 'us/ft'
+	};
 
 	// Badhole Flagging diagnostics summary
 	let badholeSummary = $state<{
@@ -925,6 +966,7 @@
 				{
 					use_cali: bp.useCali,
 					cali_threshold: bp.caliThreshold,
+					use_hole_sections: bp.useHoleSections && wellData.holeSections.length > 0,
 					auto_bitsize: bp.autoBitsize,
 					bitsize_default: bp.bitsizeDefault,
 					use_drho: bp.useDrho,
@@ -998,11 +1040,23 @@
 			const res = await postJson<any>(
 				`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/wells/${encodeURIComponent(workbench.wellId)}/environmental_corrections`,
 				{
+					use_hole_sections: ep.useHoleSections && wellData.holeSections.length > 0,
 					bitsize_default: ep.bitsizeDefault,
 					mud_weight: ep.mudWeight,
-					surface_temp: ep.surfaceTemp,
+					surface_temp: ep.offshore ? null : ep.surfaceTemp,
 					temp_grad: ep.tempGrad,
-					salinity_ppm: ep.salinityPpm,
+					salinity_ppm: ep.mudType === 'WBM' ? ep.salinityPpm : 0,
+					rho_mudcake: ep.rhoMudcake,
+					tool_type: ep.toolType,
+					mud_type: ep.mudType,
+					res_tool: ep.resTool === 'auto' ? null : ep.resTool,
+					depth_unit: ep.depthUnit === 'auto' ? null : ep.depthUnit,
+					water_depth: ep.offshore && ep.waterDepth > 0 ? ep.waterDepth : null,
+					seabed_temp_c: ep.offshore ? ep.seabedTempC : null,
+					rmf: ep.mudType === 'WBM' && ep.rmf > 0 ? ep.rmf : null,
+					rmf_temp_c: ep.mudType === 'WBM' && ep.rmf > 0 ? ep.rmfTempC : null,
+					formation_salinity_ppm: ep.formationSalinityPpm,
+					washout_thold: ep.washoutThold,
 					min_depth: workbench.depthFilter?.min ?? null,
 					max_depth: workbench.depthFilter?.max ?? null,
 					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
@@ -1013,6 +1067,9 @@
 				wellData.mergeComputedCurves(res.data, res.stats, selectionIndices);
 				wellData.markModuleComputed('qaqc-env', res.data);
 			}
+			envQcSummary = res.qc_summary ?? null;
+			envAssumptions = Array.isArray(res.assumptions) ? res.assumptions : [];
+			envInfo = res.environment ?? null;
 			if (persist) {
 				if (selectionMode) {
 					await wellData.saveModuleComputed('qaqc-env', 'Env Corrections Saved ✓');
@@ -1036,391 +1093,37 @@
 	<div class="flex-1 overflow-y-auto">
 		<SavedParamsIndicator modules={['qaqc-badhole', 'qaqc-env', 'qaqc-enhance']} />
 		<ParameterSection
-			title="Well Header & Metadata"
-			badge={wellData.header?.uwi ? `UWI: ${wellData.header.uwi}` : (workbench.wellId ?? '')}
-		>
-			{@const hdr = wellData.header || {}}
-			{@const dUnit = hdr.datum_unit || 'm'}
-			<div class="mb-1.5 flex flex-wrap items-center justify-between gap-1">
-				<div class="flex flex-wrap items-center gap-1 text-[10px]">
-					{#if hdr.company}
-						<span class="rounded-xs bg-blue-50 px-1.5 py-0.5 font-semibold text-blue-800">
-							{hdr.company}
-						</span>
-					{/if}
-					{#if hdr.field}
-						<span class="rounded-xs bg-indigo-50 px-1.5 py-0.5 font-semibold text-indigo-800">
-							{hdr.field}
-						</span>
-					{/if}
-					{#if hdr.country}
-						<span class="rounded-xs bg-emerald-50 px-1.5 py-0.5 font-semibold text-emerald-800">
-							{hdr.country}
-						</span>
-					{/if}
-					{#if hdr.crs}
-						<span class="rounded-xs bg-slate-100 px-1.5 py-0.5 font-mono text-[9.5px] text-[var(--text-secondary)]">
-							CRS: {hdr.crs}
-						</span>
-					{/if}
-				</div>
-				<button
-					type="button"
-					onclick={() => (editingWellHeader ? (editingWellHeader = false) : openHeaderEditor())}
-					class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--text-secondary)] hover:bg-slate-200 hover:text-[var(--text-primary)]"
-				>
-					{editingWellHeader ? 'Cancel' : 'Edit Header'}
-				</button>
-			</div>
-
-			{#if !editingWellHeader}
-				<div class="grid grid-cols-2 gap-1.5 text-[10.5px]">
-					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1">
-						<div class="text-[9.5px] text-[var(--text-muted)]">Well Name / UWI</div>
-						<div class="truncate font-semibold text-[var(--text-primary)]" title={`${hdr.well_name || workbench.wellId || '—'} (${hdr.uwi || '—'})`}>
-							{hdr.well_name || workbench.wellId || '—'}
-							<span class="font-mono text-[10px] font-normal text-[var(--text-secondary)]">
-								({hdr.uwi || hdr.api || '—'})
-							</span>
-						</div>
-					</div>
-					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1">
-						<div class="text-[9.5px] text-[var(--text-muted)]">Company / Operator</div>
-						<div class="truncate font-semibold text-[var(--text-primary)]" title={hdr.company || '—'}>
-							{hdr.company || '—'}
-						</div>
-					</div>
-					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1">
-						<div class="text-[9.5px] text-[var(--text-muted)]">Field / Block</div>
-						<div class="truncate font-semibold text-[var(--text-primary)]" title={`${hdr.field || '—'}${hdr.location ? ` • ${hdr.location}` : ''}`}>
-							{hdr.field || '—'}{hdr.location ? ` • ${hdr.location}` : ''}
-						</div>
-					</div>
-					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1">
-						<div class="text-[9.5px] text-[var(--text-muted)]">Country / Province</div>
-						<div class="truncate font-semibold text-[var(--text-primary)]" title={`${hdr.country || '—'}${hdr.province ? ` (${hdr.province})` : ''}`}>
-							{hdr.country || '—'}{hdr.province ? ` (${hdr.province})` : ''}
-						</div>
-					</div>
-					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1">
-						<div class="text-[9.5px] text-[var(--text-muted)]">Latitude</div>
-						<div class="mono-num truncate font-semibold text-[var(--text-primary)]" title={hdr.latitude_raw || String(hdr.latitude ?? '—')}>
-							{hdr.latitude != null ? `${Number(hdr.latitude).toFixed(6)}°` : '—'}
-							{#if hdr.latitude_raw && hdr.latitude_raw !== String(hdr.latitude)}
-								<span class="text-[9.5px] font-normal text-[var(--text-muted)]">({hdr.latitude_raw})</span>
-							{/if}
-						</div>
-					</div>
-					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1">
-						<div class="text-[9.5px] text-[var(--text-muted)]">Longitude</div>
-						<div class="mono-num truncate font-semibold text-[var(--text-primary)]" title={hdr.longitude_raw || String(hdr.longitude ?? '—')}>
-							{hdr.longitude != null ? `${Number(hdr.longitude).toFixed(6)}°` : '—'}
-							{#if hdr.longitude_raw && hdr.longitude_raw !== String(hdr.longitude)}
-								<span class="text-[9.5px] font-normal text-[var(--text-muted)]">({hdr.longitude_raw})</span>
-							{/if}
-						</div>
-					</div>
-					{#if hdr.x_coord != null || hdr.y_coord != null}
-						<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1">
-							<div class="text-[9.5px] text-[var(--text-muted)]">X / Easting</div>
-							<div class="mono-num truncate font-semibold text-[var(--text-primary)]">
-								{hdr.x_coord != null ? fmtNum(hdr.x_coord, 2) : '—'}
-							</div>
-						</div>
-						<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1">
-							<div class="text-[9.5px] text-[var(--text-muted)]">Y / Northing</div>
-							<div class="mono-num truncate font-semibold text-[var(--text-primary)]">
-								{hdr.y_coord != null ? fmtNum(hdr.y_coord, 2) : '—'}
-							</div>
-						</div>
-					{/if}
-					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1">
-						<div class="text-[9.5px] text-[var(--text-muted)]">KB / DF Elevation</div>
-						<div class="mono-num truncate font-semibold text-[var(--text-primary)]">
-							KB: {hdr.kb_elev != null ? `${hdr.kb_elev} ${dUnit}` : '—'}
-							{#if hdr.df_elev != null}
-								• DF: {hdr.df_elev} {dUnit}
-							{/if}
-						</div>
-					</div>
-					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1">
-						<div class="text-[9.5px] text-[var(--text-muted)]">GL / Water Depth</div>
-						<div class="mono-num truncate font-semibold text-[var(--text-primary)]">
-							GL: {hdr.gl_elev != null ? `${hdr.gl_elev} ${dUnit}` : '—'}
-							{#if hdr.water_depth != null}
-								• WD: {hdr.water_depth} {dUnit}
-							{/if}
-						</div>
-					</div>
-					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1">
-						<div class="text-[9.5px] text-[var(--text-muted)]">Service Co. / Date</div>
-						<div class="truncate font-semibold text-[var(--text-primary)]" title={`${hdr.service_company || '—'} • ${hdr.log_date || hdr.spud_date || '—'}`}>
-							{hdr.service_company || '—'}
-							{#if hdr.log_date || hdr.spud_date}
-								<span class="font-normal text-[var(--text-secondary)]">• {hdr.log_date || hdr.spud_date}</span>
-							{/if}
-						</div>
-					</div>
-					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1">
-						<div class="text-[9.5px] text-[var(--text-muted)]">BHT / Bit Size / Rmf</div>
-						<div class="mono-num truncate font-semibold text-[var(--text-primary)]">
-							{hdr.bht != null ? `${hdr.bht}°` : '—'} • {hdr.bit_size != null ? `${hdr.bit_size}"` : '—'} • {hdr.rmf != null ? `${hdr.rmf} Ωm` : '—'}
-						</div>
-					</div>
-					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1">
-						<div class="text-[9.5px] text-[var(--text-muted)]">Mud Filtrate Density / Salinity</div>
-						<div class="mono-num truncate font-semibold text-[var(--text-primary)]">
-							{hdr.mud_filtrate_density != null ? `${fmtNum(hdr.mud_filtrate_density, 3)} g/cc` : '—'} • {hdr.mud_filtrate_salinity != null ? `${fmtNum(hdr.mud_filtrate_salinity, 0)} ppm` : '—'} • {hdr.mud_type ? hdr.mud_type : '—'}
-						</div>
-					</div>
-				</div>
-
-				{#if Array.isArray(hdr.curve_lineage) && hdr.curve_lineage.length > 0}
-					<details class="mt-1.5 text-[10px] text-[var(--text-secondary)]">
-						<summary class="cursor-pointer font-semibold hover:text-[var(--text-primary)]">
-							Imported LAS curve lineage ({hdr.curve_lineage.length})
-						</summary>
-						<div class="mt-1 max-h-40 space-y-0.5 overflow-y-auto rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
-							{#each hdr.curve_lineage as entry}
-								<div>
-									{entry.filename}: {entry.source_mnemonic}{entry.source_unit ? ` (${entry.source_unit})` : ''}
-									→ {entry.stored_curve}{entry.raw_curve ? ` (raw: ${entry.raw_curve})` : ''}
-								</div>
-							{/each}
-						</div>
-					</details>
-				{/if}
-				{#if (hdr.raw_well_header && Object.keys(hdr.raw_well_header).length > 0) || (hdr.raw_parameters && Object.keys(hdr.raw_parameters).length > 0)}
-					<details class="mt-1.5 text-[10px] text-[var(--text-secondary)]">
-						<summary class="cursor-pointer font-semibold hover:text-[var(--text-primary)]">
-							Raw LAS/DLIS Header Tags ({Object.keys(hdr.raw_well_header || {}).length} ~Well, {Object.keys(hdr.raw_parameters || {}).length} ~Parameter)
-						</summary>
-						<div class="mt-1 grid max-h-40 grid-cols-2 gap-x-2 gap-y-0.5 overflow-y-auto rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 font-mono text-[9.5px]">
-							{#each Object.entries({ ...(hdr.raw_well_header || {}), ...(hdr.raw_parameters || {}) }) as [rk, rv]}
-								<div class="truncate" title={`${rk}: ${rv}`}>
-									<span class="font-semibold text-[var(--text-secondary)]">{rk}:</span>
-									<span class="text-[var(--text-primary)]">{rv ?? '—'}</span>
-								</div>
-							{/each}
-						</div>
-					</details>
-				{/if}
-			{:else}
-				<div class="space-y-1.5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-2 text-[10.5px]">
-					<div class="grid grid-cols-2 gap-1.5">
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">UWI / API</span>
-							<input
-								type="text"
-								bind:value={headerDraft.uwi}
-								class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">Company / Operator</span>
-							<input
-								type="text"
-								bind:value={headerDraft.company}
-								class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">Field</span>
-							<input
-								type="text"
-								bind:value={headerDraft.field}
-								class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">Country</span>
-							<input
-								type="text"
-								bind:value={headerDraft.country}
-								class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">Location / Block</span>
-							<input
-								type="text"
-								bind:value={headerDraft.location}
-								class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">Province / State</span>
-							<input
-								type="text"
-								bind:value={headerDraft.province}
-								class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">Latitude (°)</span>
-							<input
-								type="number"
-								step="0.000001"
-								bind:value={headerDraft.latitude}
-								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">Longitude (°)</span>
-							<input
-								type="number"
-								step="0.000001"
-								bind:value={headerDraft.longitude}
-								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">KB Elevation ({headerDraft.datum_unit || 'm'})</span>
-							<input
-								type="number"
-								step="0.1"
-								bind:value={headerDraft.kb_elev}
-								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">DF Elevation ({headerDraft.datum_unit || 'm'})</span>
-							<input
-								type="number"
-								step="0.1"
-								bind:value={headerDraft.df_elev}
-								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">GL / Seabed Elev ({headerDraft.datum_unit || 'm'})</span>
-							<input
-								type="number"
-								step="0.1"
-								bind:value={headerDraft.gl_elev}
-								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">Service Company</span>
-							<input
-								type="text"
-								bind:value={headerDraft.service_company}
-								class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">Log Date</span>
-							<input
-								type="text"
-								bind:value={headerDraft.log_date}
-								class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">BHT ({headerDraft.bht_unit || 'degC'})</span>
-							<input
-								type="number"
-								step="0.1"
-								bind:value={headerDraft.bht}
-								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">Bit Size (in)</span>
-							<input
-								type="number"
-								step="0.125"
-								bind:value={headerDraft.bit_size}
-								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">Mud Filtrate Salinity (ppm)</span>
-							<input
-								type="number"
-								min="0"
-								step="1000"
-								bind:value={headerDraft.mud_filtrate_salinity}
-								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">Mud Filtrate Density (g/cc)</span>
-							<input
-								type="number"
-								min="0.1"
-								max="2"
-								step="0.01"
-								bind:value={headerDraft.mud_filtrate_density}
-								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">Mud Type</span>
-							<select
-								bind:value={headerDraft.mud_type}
-								class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							>
-								<option value="">—</option>
-								<option value="WBM">WBM (Water-Based)</option>
-								<option value="OBM">OBM (Oil-Based)</option>
-								<option value="SBM">SBM (Synthetic-Based)</option>
-							</select>
-						</label>
-						<label class="flex flex-col gap-0.5">
-							<span class="text-[9.5px] font-medium text-[var(--text-muted)]">OBM Base Oil Density (g/cc)</span>
-							<input
-								type="number"
-								min="0.65"
-								max="0.95"
-								step="0.01"
-								bind:value={headerDraft.obm_base_density}
-								class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
-							/>
-						</label>
-					</div>
-					<div class="flex justify-end gap-1.5 pt-1">
-						<button
-							type="button"
-							onclick={() => (editingWellHeader = false)}
-							class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-[10.5px] font-medium text-[var(--text-secondary)]"
-						>
-							Cancel
-						</button>
-						<button
-							type="button"
-							disabled={savingWellHeader}
-							onclick={saveHeaderDraft}
-							class="h-6 rounded-xs bg-[var(--accent-primary)] px-2.5 text-[10.5px] font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
-						>
-							{savingWellHeader ? 'Saving...' : 'Save Header'}
-						</button>
-					</div>
-				</div>
-			{/if}
-		</ParameterSection>
-
-		<ParameterSection
 			title="Working Depth Interval (Well Focus)"
 			badge={`${wellData.visibleIndices.length} / ${wellData.totalDepthRows} rows`}
 		>
-			<div class="mb-1.5 flex items-center justify-between text-[10.5px] text-[var(--text-muted)]">
+			<div
+				class="mb-1.5 flex items-center justify-between text-[10.5px] text-[var(--text-muted)]"
+			>
 				<span>
 					Full Log Range:
 					<strong class="mono-num text-[var(--text-secondary)]">
-						{fmtDepth(depthFromMeters(wellData.depthRange.min, depthDisplay.unit), depthDisplay.unit)} – {fmtDepth(depthFromMeters(wellData.depthRange.max, depthDisplay.unit), depthDisplay.unit)}
+						{fmtDepth(
+							depthFromMeters(wellData.depthRange.min, depthDisplay.unit),
+							depthDisplay.unit
+						)} – {fmtDepth(
+							depthFromMeters(wellData.depthRange.max, depthDisplay.unit),
+							depthDisplay.unit
+						)}
 					</strong>
 				</span>
 				{#if hasCustomWorkingInterval}
-					<span class="rounded-xs bg-blue-50 px-1.5 py-0.2 text-[9.5px] font-semibold text-blue-700">
+					<span
+						class="py-0.2 rounded-xs bg-blue-50 px-1.5 text-[9.5px] font-semibold text-blue-700"
+					>
 						Saved for {workbench.wellId}
 					</span>
 				{/if}
 			</div>
 
 			<div class="grid grid-cols-2 gap-2">
-				<label class="block rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
+				<label
+					class="block rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5"
+				>
 					<span class="mb-0.5 block text-[10px] font-medium text-[var(--text-muted)]">
 						Top Depth ({depthDisplay.unit})
 					</span>
@@ -1433,7 +1136,9 @@
 						class="mono-num h-6 w-full rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-xs font-semibold text-[var(--text-primary)]"
 					/>
 				</label>
-				<label class="block rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
+				<label
+					class="block rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5"
+				>
 					<span class="mb-0.5 block text-[10px] font-medium text-[var(--text-muted)]">
 						Bottom Depth ({depthDisplay.unit})
 					</span>
@@ -1455,7 +1160,7 @@
 						<button
 							type="button"
 							onclick={() => selectZoneDepthInterval(idx)}
-							class="mono-num rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-1.5 py-0.2 text-[9.5px] font-medium text-[var(--text-secondary)] hover:border-blue-400 hover:bg-blue-50 hover:text-blue-800"
+							class="mono-num py-0.2 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-1.5 text-[9.5px] font-medium text-[var(--text-secondary)] hover:border-blue-400 hover:bg-blue-50 hover:text-blue-800"
 							title="Set working Top & Bottom depth to {t.name}"
 						>
 							{t.name}
@@ -1497,15 +1202,16 @@
 							? workbench.selectedQaqcCurve === mnem
 								? 'border-blue-600 bg-blue-600 text-white'
 								: 'border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
-							: 'border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed'}"
+							: 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400'}"
 					>
-						{present ? '✓' : '✕'} {mnem}
+						{present ? '✓' : '✕'}
+						{mnem}
 					</button>
 				{/each}
 			</div>
 
 			<div class="mt-1.5 flex items-center justify-between">
-				<span class="text-[10px] font-semibold uppercase text-[var(--text-muted)]">
+				<span class="text-[10px] font-semibold text-[var(--text-muted)] uppercase">
 					Computed & Custom Curves
 				</span>
 				{#if wellData.calculatedCurvesPresent.length > 0}
@@ -1525,14 +1231,18 @@
 						class="rounded-sm border border-red-200 bg-red-50 px-1.5 py-0.5 text-[9.5px] font-semibold text-red-700 hover:bg-red-100"
 						title="Clear calculated curves top-to-bottom or by formation"
 					>
-						{showClearCalcPanel ? 'Close Clear ✕' : `Clear Calc (${wellData.calculatedCurvesPresent.length})`}
+						{showClearCalcPanel
+							? 'Close Clear ✕'
+							: `Clear Calc (${wellData.calculatedCurvesPresent.length})`}
 					</button>
 				{/if}
 			</div>
 			{#if showClearCalcPanel && wellData.calculatedCurvesPresent.length > 0}
-				<div class="my-1.5 flex flex-col gap-1.5 rounded-sm border border-red-200 bg-red-50/40 p-2">
+				<div
+					class="my-1.5 flex flex-col gap-1.5 rounded-sm border border-red-200 bg-red-50/40 p-2"
+				>
 					<div class="flex items-center justify-between">
-						<span class="text-[10px] font-bold uppercase tracking-wider text-red-900">
+						<span class="text-[10px] font-bold tracking-wider text-red-900 uppercase">
 							Clear Calculated Curves
 						</span>
 						<span class="mono-num text-[9.5px] text-red-700">
@@ -1582,7 +1292,8 @@
 						</button>
 						<button
 							type="button"
-							disabled={workbench.selectedZones.length === 0 && workbench.depthFilter === null}
+							disabled={workbench.selectedZones.length === 0 &&
+								workbench.depthFilter === null}
 							onclick={() => {
 								clearCalcScope = 'filtered';
 								confirmClearCalc = false;
@@ -1600,7 +1311,8 @@
 						<div class="flex flex-col gap-1">
 							<div class="flex items-center justify-between">
 								<span class="text-[9.5px] font-semibold text-red-900">
-									Select Formations ({clearCalcFormations.length}/{wellData.availableZones.length})
+									Select Formations ({clearCalcFormations.length}/{wellData
+										.availableZones.length})
 								</span>
 								<div class="flex items-center gap-1.5 text-[9.5px]">
 									<button
@@ -1625,7 +1337,9 @@
 									</button>
 								</div>
 							</div>
-							<div class="flex max-h-24 flex-wrap gap-1 overflow-y-auto rounded-xs border border-red-200 bg-white p-1">
+							<div
+								class="flex max-h-24 flex-wrap gap-1 overflow-y-auto rounded-xs border border-red-200 bg-white p-1"
+							>
 								{#each wellData.availableZones as zone (zone)}
 									{@const active = clearCalcFormations.includes(zone)}
 									<button
@@ -1654,7 +1368,8 @@
 									? 'border-blue-600 bg-blue-50 text-blue-800'
 									: 'border-slate-200 bg-white text-slate-400'}"
 							>
-								{active ? '✓' : ''} {grp.label}
+								{active ? '✓' : ''}
+								{grp.label}
 							</button>
 						{/each}
 					</div>
@@ -1664,7 +1379,8 @@
 						<button
 							type="button"
 							disabled={isClearingCalc ||
-								(clearCalcScope === 'formation' && clearCalcFormations.length === 0)}
+								(clearCalcScope === 'formation' &&
+									clearCalcFormations.length === 0)}
 							onclick={() => (confirmClearCalc = true)}
 							class="h-6 w-full rounded-xs bg-red-600 text-[10.5px] font-semibold text-white hover:bg-red-700 disabled:opacity-40"
 						>
@@ -1696,7 +1412,7 @@
 				</div>
 			{/if}
 			<div class="flex flex-wrap gap-1">
-				{#each [...EVALUATED_CURVES.filter((m) => curveList.includes(m)), ...customOrExtraCurves] as mnem (mnem)}
+				{#each [...EVALUATED_CURVES.filter( (m) => curveList.includes(m) ), ...customOrExtraCurves] as mnem (mnem)}
 					<button
 						type="button"
 						onclick={() => (workbench.selectedQaqcCurve = mnem)}
@@ -1728,14 +1444,17 @@
 			</button>
 			<!-- Target Curve Picker + Revert Button -->
 			<div class="flex items-center gap-1.5">
-				<span class="shrink-0 text-[11px] font-medium text-[var(--text-secondary)]">Curve:</span>
+				<span class="shrink-0 text-[11px] font-medium text-[var(--text-secondary)]"
+					>Curve:</span
+				>
 				<select
 					bind:value={workbench.selectedQaqcCurve}
 					class="mono-num h-7 min-w-0 flex-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 py-0 text-xs font-semibold text-[var(--text-primary)]"
 				>
 					{#each curveList as c (c)}
 						<option value={c}>
-							{c} {getCurveUnit(c) ? `(${getCurveUnit(c)})` : ''}
+							{c}
+							{getCurveUnit(c) ? `(${getCurveUnit(c)})` : ''}
 						</option>
 					{/each}
 				</select>
@@ -1743,7 +1462,8 @@
 					<button
 						type="button"
 						onclick={handleRestoreCurve}
-						title="Restore curve from original backup ({activeOriCurveName || 'original'})"
+						title="Restore curve from original backup ({activeOriCurveName ||
+							'original'})"
 						class="h-7 shrink-0 rounded-sm border border-amber-300 bg-amber-50 px-2 text-[10px] font-semibold text-amber-800 hover:bg-amber-100"
 					>
 						↺ Revert
@@ -1751,11 +1471,20 @@
 				{/if}
 			</div>
 			{#if activeOriCurveName}
-				<div class="mt-1 flex items-center justify-between rounded-xs border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] text-slate-600">
-					<span>Original backup preserved as <strong class="mono-num text-slate-800">{activeOriCurveName}</strong></span>
+				<div
+					class="mt-1 flex items-center justify-between rounded-xs border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] text-slate-600"
+				>
+					<span
+						>Original backup preserved as <strong class="mono-num text-slate-800"
+							>{activeOriCurveName}</strong
+						></span
+					>
 					<button
 						type="button"
-						onclick={() => { if (activeOriCurveName) workbench.selectedQaqcCurve = activeOriCurveName; }}
+						onclick={() => {
+							if (activeOriCurveName)
+								workbench.selectedQaqcCurve = activeOriCurveName;
+						}}
 						class="font-semibold text-blue-700 hover:underline"
 					>
 						View {activeOriCurveName}
@@ -1770,7 +1499,8 @@
 				<button
 					type="button"
 					onclick={() => (editorMode = 'math')}
-					class="h-6 rounded-xs text-[10.5px] font-medium transition-colors {editorMode === 'math'
+					class="h-6 rounded-xs text-[10.5px] font-medium transition-colors {editorMode ===
+					'math'
 						? 'bg-[var(--bg-surface)] font-semibold text-[var(--accent-primary)] shadow-2xs'
 						: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
 				>
@@ -1779,7 +1509,8 @@
 				<button
 					type="button"
 					onclick={() => (editorMode = 'splice')}
-					class="h-6 rounded-xs text-[10.5px] font-medium transition-colors {editorMode === 'splice'
+					class="h-6 rounded-xs text-[10.5px] font-medium transition-colors {editorMode ===
+					'splice'
 						? 'bg-[var(--bg-surface)] font-semibold text-[var(--accent-primary)] shadow-2xs'
 						: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
 				>
@@ -1788,7 +1519,8 @@
 				<button
 					type="button"
 					onclick={() => (editorMode = 'manage')}
-					class="h-6 rounded-xs text-[10.5px] font-medium transition-colors {editorMode === 'manage'
+					class="h-6 rounded-xs text-[10.5px] font-medium transition-colors {editorMode ===
+					'manage'
 						? 'bg-[var(--bg-surface)] font-semibold text-[var(--accent-primary)] shadow-2xs'
 						: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
 				>
@@ -1804,7 +1536,8 @@
 						<button
 							type="button"
 							onclick={() => (editScope = 'full')}
-							class="rounded-xs border px-1.5 py-0.5 text-[10px] font-medium {editScope === 'full'
+							class="rounded-xs border px-1.5 py-0.5 text-[10px] font-medium {editScope ===
+							'full'
 								? 'border-blue-600 bg-blue-50 font-semibold text-blue-800'
 								: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)]'}"
 						>
@@ -1840,7 +1573,10 @@
 					<span class="text-xs font-medium text-[var(--text-primary)]">Operation</span>
 					<select
 						value={editOp}
-						onchange={(e) => handleOpChange((e.currentTarget as HTMLSelectElement).value as CurveEditOperation)}
+						onchange={(e) =>
+							handleOpChange(
+								(e.currentTarget as HTMLSelectElement).value as CurveEditOperation
+							)}
 						class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
 					>
 						<option value="add">Bulk Shift (+ / −)</option>
@@ -2007,7 +1743,8 @@
 					</button>
 					<button
 						type="button"
-						disabled={wellData.isCalculating || !wellData.hasPendingComputed('qaqc-edit')}
+						disabled={wellData.isCalculating ||
+							!wellData.hasPendingComputed('qaqc-edit')}
 						onclick={saveCurveEdit}
 						title={wellData.hasPendingComputed('qaqc-edit')
 							? 'Save edited curve directly to the well without re-applying transform'
@@ -2020,9 +1757,13 @@
 			{:else if editorMode === 'splice'}
 				<!-- Curve Splicing Mode: Merge Multiple Log Runs Across Depth Intervals -->
 				<div class="mt-1.5 space-y-2">
-					<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-2">
+					<div
+						class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-2"
+					>
 						<div class="mb-1.5 flex items-center justify-between">
-							<span class="text-[10px] font-semibold uppercase text-[var(--text-muted)]">
+							<span
+								class="text-[10px] font-semibold text-[var(--text-muted)] uppercase"
+							>
 								Log Runs to Splice ({spliceRuns.length})
 							</span>
 							<div class="flex items-center gap-1">
@@ -2047,7 +1788,8 @@
 
 						<div class="space-y-1.5">
 							<p class="text-[9.5px] text-[var(--text-muted)]">
-								Set inclusive depth limits in metres for each run. Leave blank for the full interval.
+								Set inclusive depth limits in metres for each run. Leave blank for
+								the full interval.
 							</p>
 							{#each spliceRuns as runCol, idx (idx)}
 								{@const runSt = wellData.stats[runCol]}
@@ -2060,13 +1802,19 @@
 									<select
 										value={runCol}
 										onchange={(e) =>
-											updateSpliceRunAt(idx, (e.currentTarget as HTMLSelectElement).value)}
+											updateSpliceRunAt(
+												idx,
+												(e.currentTarget as HTMLSelectElement).value
+											)}
 										class="mono-num h-6 min-w-0 flex-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-[11px] font-semibold text-[var(--text-primary)]"
 									>
 										{#each curveList as c (c)}
 											{@const cst = wellData.stats[c]}
 											<option value={c}>
-												{c} [{fmtNum(cst?.top, 1)}–{fmtNum(cst?.bottom, 1)}m]
+												{c} [{fmtNum(cst?.top, 1)}–{fmtNum(
+													cst?.bottom,
+													1
+												)}m]
 											</option>
 										{/each}
 									</select>
@@ -2092,9 +1840,15 @@
 									{/if}
 								</div>
 								{#if runSt}
-									<div class="flex items-center justify-between pl-12 text-[9.5px] text-[var(--text-muted)]">
+									<div
+										class="flex items-center justify-between pl-12 text-[9.5px] text-[var(--text-muted)]"
+									>
 										<span>
-											Interval: <strong class="mono-num text-[var(--text-secondary)]">{fmtNum(runSt.top, 1)} – {fmtNum(runSt.bottom, 1)} m</strong> ({runSt.count} pts)
+											Interval: <strong
+												class="mono-num text-[var(--text-secondary)]"
+												>{fmtNum(runSt.top, 1)} – {fmtNum(runSt.bottom, 1)} m</strong
+											>
+											({runSt.count} pts)
 										</span>
 										<span class="mono-num">
 											μ={fmtNum(runSt.mean, 2)} | σ={fmtNum(runSt.std, 2)}
@@ -2102,7 +1856,9 @@
 									</div>
 								{/if}
 								<div class="grid grid-cols-2 gap-2 pl-12">
-									<label class="flex items-center gap-1 text-[9.5px] text-[var(--text-muted)]">
+									<label
+										class="flex items-center gap-1 text-[9.5px] text-[var(--text-muted)]"
+									>
 										Top
 										<input
 											type="number"
@@ -2110,11 +1866,18 @@
 											aria-label={`Run ${idx + 1} top depth (m)`}
 											placeholder="Full"
 											value={spliceIntervals[runCol]?.top ?? ''}
-											oninput={(e) => updateSpliceInterval(runCol, 'top', e.currentTarget)}
+											oninput={(e) =>
+												updateSpliceInterval(
+													runCol,
+													'top',
+													e.currentTarget
+												)}
 											class="mono-num h-6 min-w-0 flex-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-[10px]"
 										/>
 									</label>
-									<label class="flex items-center gap-1 text-[9.5px] text-[var(--text-muted)]">
+									<label
+										class="flex items-center gap-1 text-[9.5px] text-[var(--text-muted)]"
+									>
 										Bottom
 										<input
 											type="number"
@@ -2122,7 +1885,12 @@
 											aria-label={`Run ${idx + 1} bottom depth (m)`}
 											placeholder="Full"
 											value={spliceIntervals[runCol]?.bottom ?? ''}
-											oninput={(e) => updateSpliceInterval(runCol, 'bottom', e.currentTarget)}
+											oninput={(e) =>
+												updateSpliceInterval(
+													runCol,
+													'bottom',
+													e.currentTarget
+												)}
 											class="mono-num h-6 min-w-0 flex-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1 text-[10px]"
 										/>
 									</label>
@@ -2131,21 +1899,39 @@
 						</div>
 
 						<!-- Overlap / Gap Diagnostics Banner -->
-						<p class="mt-1 text-[9.5px] text-[var(--text-muted)]">Diagnostics compare the selected intervals of the first two runs.</p>
-						<div class="mt-2 rounded-xs border border-slate-200 bg-[var(--bg-surface)] px-2 py-1 text-[10px]">
+						<p class="mt-1 text-[9.5px] text-[var(--text-muted)]">
+							Diagnostics compare the selected intervals of the first two runs.
+						</p>
+						<div
+							class="mt-2 rounded-xs border border-slate-200 bg-[var(--bg-surface)] px-2 py-1 text-[10px]"
+						>
 							{#if spliceDiagnostics.hasOverlap}
 								<div class="flex items-center justify-between text-blue-800">
 									<span>
-										Overlap: <strong class="mono-num">{fmtNum(spliceDiagnostics.overlapTop, 1)} – {fmtNum(spliceDiagnostics.overlapBottom, 1)} m</strong> ({spliceDiagnostics.overlapCount} pts)
+										Overlap: <strong class="mono-num"
+											>{fmtNum(spliceDiagnostics.overlapTop, 1)} – {fmtNum(
+												spliceDiagnostics.overlapBottom,
+												1
+											)} m</strong
+										>
+										({spliceDiagnostics.overlapCount} pts)
 									</span>
 									<span class="mono-num font-semibold">
-										ΔMean: {spliceDiagnostics.overlapDeltaMean !== null && spliceDiagnostics.overlapDeltaMean >= 0 ? '+' : ''}{fmtNum(spliceDiagnostics.overlapDeltaMean, 3)}
+										ΔMean: {spliceDiagnostics.overlapDeltaMean !== null &&
+										spliceDiagnostics.overlapDeltaMean >= 0
+											? '+'
+											: ''}{fmtNum(spliceDiagnostics.overlapDeltaMean, 3)}
 									</span>
 								</div>
 							{:else if spliceDiagnostics.gapSpan !== null}
 								<div class="flex items-center justify-between text-amber-800">
 									<span>
-										Unlogged Gap: <strong class="mono-num">{fmtNum(spliceDiagnostics.gapTop, 1)} – {fmtNum(spliceDiagnostics.gapBottom, 1)} m</strong>
+										Unlogged Gap: <strong class="mono-num"
+											>{fmtNum(spliceDiagnostics.gapTop, 1)} – {fmtNum(
+												spliceDiagnostics.gapBottom,
+												1
+											)} m</strong
+										>
 									</span>
 									<span class="mono-num font-semibold">
 										{fmtNum(spliceDiagnostics.gapSpan, 1)} m gap
@@ -2153,7 +1939,13 @@
 								</div>
 							{:else}
 								<div class="text-[var(--text-muted)]">
-									Combined Interval: <strong class="mono-num text-[var(--text-secondary)]">{fmtNum(spliceDiagnostics.combinedTop, 1)} – {fmtNum(spliceDiagnostics.combinedBottom, 1)} m</strong>
+									Combined Interval: <strong
+										class="mono-num text-[var(--text-secondary)]"
+										>{fmtNum(spliceDiagnostics.combinedTop, 1)} – {fmtNum(
+											spliceDiagnostics.combinedBottom,
+											1
+										)} m</strong
+									>
 								</div>
 							{/if}
 						</div>
@@ -2161,7 +1953,9 @@
 
 					<!-- Overlap Resolution Mode -->
 					<div class="grid grid-cols-[1fr_155px] items-center gap-x-2">
-						<span class="text-xs font-medium text-[var(--text-primary)]">Overlap Mode</span>
+						<span class="text-xs font-medium text-[var(--text-primary)]"
+							>Overlap Mode</span
+						>
 						<select
 							bind:value={spliceOverlapMode}
 							class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
@@ -2186,14 +1980,25 @@
 								decimals={1}
 							/>
 							{#if spliceDiagnostics.hasOverlap}
-								<div class="flex items-center justify-between text-[9.5px] text-[var(--text-muted)]">
-									<span>Uses shallow run ≤ {fmtNum(spliceDepth, 1)}m, deep run &gt; {fmtNum(spliceDepth, 1)}m</span>
+								<div
+									class="flex items-center justify-between text-[9.5px] text-[var(--text-muted)]"
+								>
+									<span
+										>Uses shallow run ≤ {fmtNum(spliceDepth, 1)}m, deep run &gt; {fmtNum(
+											spliceDepth,
+											1
+										)}m</span
+									>
 									<button
 										type="button"
-										onclick={() => (spliceDepth = spliceDiagnostics.suggestedSpliceDepth)}
+										onclick={() =>
+											(spliceDepth = spliceDiagnostics.suggestedSpliceDepth)}
 										class="mono-num font-semibold text-blue-700 hover:underline"
 									>
-										Midpoint ({fmtNum(spliceDiagnostics.suggestedSpliceDepth, 1)}m)
+										Midpoint ({fmtNum(
+											spliceDiagnostics.suggestedSpliceDepth,
+											1
+										)}m)
 									</button>
 								</div>
 							{/if}
@@ -2201,8 +2006,12 @@
 					{/if}
 
 					<!-- Conditioning Options During Splice -->
-					<div class="space-y-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[11px]">
-						<label class="flex cursor-pointer items-center gap-1.5 text-[var(--text-secondary)]">
+					<div
+						class="space-y-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[11px]"
+					>
+						<label
+							class="flex cursor-pointer items-center gap-1.5 text-[var(--text-secondary)]"
+						>
 							<input
 								type="checkbox"
 								bind:checked={spliceAutoLevel}
@@ -2210,7 +2019,9 @@
 							/>
 							<span>Auto-level secondary run to match mean in overlap</span>
 						</label>
-						<label class="flex cursor-pointer items-center gap-1.5 text-[var(--text-secondary)]">
+						<label
+							class="flex cursor-pointer items-center gap-1.5 text-[var(--text-secondary)]"
+						>
 							<input
 								type="checkbox"
 								bind:checked={spliceInterpGaps}
@@ -2219,7 +2030,7 @@
 							<span>Interpolate small gaps between runs (≤ {spliceMaxGapM} m)</span>
 						</label>
 						{#if spliceInterpGaps}
-							<div class="pl-5 pt-0.5">
+							<div class="pt-0.5 pl-5">
 								<NumericScrubber
 									label="Max Gap to Bridge"
 									bind:value={spliceMaxGapM}
@@ -2236,7 +2047,9 @@
 					<!-- Target Output Curve Name -->
 					<div class="space-y-1">
 						<div class="flex items-center gap-1.5">
-							<span class="shrink-0 text-[10px] text-[var(--text-muted)]">Output Curve:</span>
+							<span class="shrink-0 text-[10px] text-[var(--text-muted)]"
+								>Output Curve:</span
+							>
 							<input
 								type="text"
 								placeholder={`Overwrite ${spliceRuns[0] || workbench.selectedQaqcCurve} (or type new name)`}
@@ -2245,13 +2058,16 @@
 							/>
 						</div>
 						<div class="flex flex-wrap items-center gap-1">
-							<span class="text-[9.5px] text-[var(--text-muted)]">Standard Target:</span>
+							<span class="text-[9.5px] text-[var(--text-muted)]"
+								>Standard Target:</span
+							>
 							{#each REQUIRED_STANDARD as stdMnem}
 								<button
 									type="button"
 									onclick={() => (spliceTargetName = stdMnem)}
-									class="mono-num rounded-xs border px-1.5 py-0.2 text-[9.5px] font-semibold {spliceTargetName.trim().toUpperCase() ===
-									stdMnem
+									class="mono-num py-0.2 rounded-xs border px-1.5 text-[9.5px] font-semibold {spliceTargetName
+										.trim()
+										.toUpperCase() === stdMnem
 										? 'border-blue-600 bg-blue-600 text-white'
 										: 'border-[var(--border-hairline)] bg-[var(--bg-app)] text-[var(--text-secondary)] hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700'}"
 								>
@@ -2265,7 +2081,8 @@
 					<div class="flex gap-1.5">
 						<button
 							type="button"
-							disabled={wellData.isCalculating || spliceDiagnostics.validCols.length < 2}
+							disabled={wellData.isCalculating ||
+								spliceDiagnostics.validCols.length < 2}
 							onclick={() => applyCurveSplice(false)}
 							class="h-7 flex-1 rounded-sm bg-[var(--accent-primary)] px-2 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
 						>
@@ -2273,7 +2090,8 @@
 						</button>
 						<button
 							type="button"
-							disabled={wellData.isCalculating || !wellData.hasPendingComputed('qaqc-edit')}
+							disabled={wellData.isCalculating ||
+								!wellData.hasPendingComputed('qaqc-edit')}
 							onclick={saveCurveEdit}
 							title={wellData.hasPendingComputed('qaqc-edit')
 								? 'Save spliced curve directly to the well'
@@ -2288,9 +2106,15 @@
 				<!-- Curve Management Mode: Duplicate, Rename, Delete -->
 				<div class="mt-1.5 space-y-2">
 					<!-- Duplicate Curve -->
-					<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-2">
-						<div class="mb-1 text-[10px] font-semibold uppercase text-[var(--text-muted)]">
-							Duplicate <span class="mono-num text-[var(--text-primary)]">{workbench.selectedQaqcCurve}</span> As
+					<div
+						class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-2"
+					>
+						<div
+							class="mb-1 text-[10px] font-semibold text-[var(--text-muted)] uppercase"
+						>
+							Duplicate <span class="mono-num text-[var(--text-primary)]"
+								>{workbench.selectedQaqcCurve}</span
+							> As
 						</div>
 						<div class="flex items-center gap-1.5">
 							<input
@@ -2311,9 +2135,15 @@
 					</div>
 
 					<!-- Rename Curve -->
-					<div class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-2">
-						<div class="mb-1 text-[10px] font-semibold uppercase text-[var(--text-muted)]">
-							Rename <span class="mono-num text-[var(--text-primary)]">{workbench.selectedQaqcCurve}</span> To
+					<div
+						class="rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-2"
+					>
+						<div
+							class="mb-1 text-[10px] font-semibold text-[var(--text-muted)] uppercase"
+						>
+							Rename <span class="mono-num text-[var(--text-primary)]"
+								>{workbench.selectedQaqcCurve}</span
+							> To
 						</div>
 						<div class="flex items-center gap-1.5">
 							<input
@@ -2324,11 +2154,10 @@
 							/>
 							<button
 								type="button"
-								disabled={
-									wellData.isCalculating ||
+								disabled={wellData.isCalculating ||
 									!renameTargetName.trim() ||
-									renameTargetName.trim().toUpperCase() === workbench.selectedQaqcCurve
-								}
+									renameTargetName.trim().toUpperCase() ===
+										workbench.selectedQaqcCurve}
 								onclick={handleRenameCurve}
 								class="h-6 shrink-0 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2.5 text-[11px] font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:opacity-50"
 							>
@@ -2337,12 +2166,14 @@
 						</div>
 						{#if missingStandardCurves.length > 0}
 							<div class="mt-1.5 flex flex-wrap items-center gap-1">
-								<span class="text-[9.5px] text-[var(--text-muted)]">Map to missing standard:</span>
+								<span class="text-[9.5px] text-[var(--text-muted)]"
+									>Map to missing standard:</span
+								>
 								{#each missingStandardCurves as stdMnem}
 									<button
 										type="button"
 										onclick={() => (renameTargetName = stdMnem)}
-										class="mono-num rounded-xs border border-blue-200 bg-blue-50 px-1.5 py-0.2 text-[9.5px] font-semibold text-blue-700 hover:bg-blue-100"
+										class="mono-num py-0.2 rounded-xs border border-blue-200 bg-blue-50 px-1.5 text-[9.5px] font-semibold text-blue-700 hover:bg-blue-100"
 									>
 										→ {stdMnem}
 									</button>
@@ -2352,7 +2183,9 @@
 					</div>
 
 					<!-- Delete Curve -->
-					<div class="flex items-center justify-between rounded-sm border border-red-200 bg-red-50/50 px-2 py-1.5">
+					<div
+						class="flex items-center justify-between rounded-sm border border-red-200 bg-red-50/50 px-2 py-1.5"
+					>
 						<span class="text-[11px] font-medium text-red-900">
 							Delete <strong class="mono-num">{workbench.selectedQaqcCurve}</strong>
 						</span>
@@ -2387,7 +2220,9 @@
 
 					<!-- Clear All Calculated Curves (Top-to-Bottom or By Formation) -->
 					{#if wellData.calculatedCurvesPresent.length > 0}
-						<div class="flex items-center justify-between rounded-sm border border-red-200 bg-red-50/40 px-2 py-1.5">
+						<div
+							class="flex items-center justify-between rounded-sm border border-red-200 bg-red-50/40 px-2 py-1.5"
+						>
 							<span class="text-[11px] font-medium text-red-900">
 								Clear Calculated Curves ({wellData.calculatedCurvesPresent.length})
 							</span>
@@ -2407,7 +2242,9 @@
 			{/if}
 
 			{#if editStatusMsg}
-				<div class="mono-num mt-1 rounded-xs bg-emerald-50 px-2 py-1 text-[10.5px] font-medium text-emerald-800">
+				<div
+					class="mono-num mt-1 rounded-xs bg-emerald-50 px-2 py-1 text-[10.5px] font-medium text-emerald-800"
+				>
 					{editStatusMsg}
 				</div>
 			{/if}
@@ -2422,12 +2259,20 @@
 					<thead class="bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
 						<tr class="h-6 border-b border-[var(--border-hairline)]">
 							<th class="px-1.5 font-semibold">Curve</th>
-							<th class="px-1.5 text-right font-semibold" title="Shallowest valid depth (m)">Top</th>
-							<th class="px-1.5 text-right font-semibold" title="Deepest valid depth (m)">Bottom</th>
+							<th
+								class="px-1.5 text-right font-semibold"
+								title="Shallowest valid depth (m)">Top</th
+							>
+							<th
+								class="px-1.5 text-right font-semibold"
+								title="Deepest valid depth (m)">Bottom</th
+							>
 							<th class="px-1.5 text-right font-semibold">Min</th>
 							<th class="px-1.5 text-right font-semibold">Max</th>
 							<th class="px-1.5 text-right font-semibold">Mean</th>
-							<th class="px-1.5 text-right font-semibold" title="Standard Deviation">Std</th>
+							<th class="px-1.5 text-right font-semibold" title="Standard Deviation"
+								>Std</th
+							>
 						</tr>
 					</thead>
 					{#each statGroups as grp (grp.key)}
@@ -2445,7 +2290,8 @@
 								{#each grp.curves as c (c)}
 									{@const st = wellData.activeStats[c] ?? wellData.stats[c]}
 									{@const isSelected = workbench.selectedQaqcCurve === c}
-									{@const inSplice = editorMode === 'splice' && spliceRuns.includes(c)}
+									{@const inSplice =
+										editorMode === 'splice' && spliceRuns.includes(c)}
 									<tr
 										onclick={() => (workbench.selectedQaqcCurve = c)}
 										title={`${c}: ${fmtNum(st?.top, 1)}–${fmtNum(st?.bottom, 1)} m (${st?.count ?? 0} valid samples)`}
@@ -2455,27 +2301,32 @@
 												? 'bg-indigo-50/50'
 												: ''}"
 									>
-										<td class="mono-num px-1.5 font-semibold text-[var(--text-primary)] whitespace-nowrap">
+										<td
+											class="mono-num px-1.5 font-semibold whitespace-nowrap text-[var(--text-primary)]"
+										>
 											<div class="flex items-center justify-between gap-1">
 												<span>
 													{c}
 													{#if getCurveUnit(c)}
-														<span class="text-[9px] font-normal text-[var(--text-muted)]">
+														<span
+															class="text-[9px] font-normal text-[var(--text-muted)]"
+														>
 															({getCurveUnit(c)})
 														</span>
 													{/if}
 													{#if grp.key === 'edited'}
-														{@const editInfo = wellData.isCurveEdited(c)}
+														{@const editInfo =
+															wellData.isCurveEdited(c)}
 														{#if editInfo.source}
 															<span
-																class="ml-1 rounded-xs border border-amber-300 bg-amber-50 px-1 py-0.2 text-[8.5px] font-medium text-amber-800"
+																class="py-0.2 ml-1 rounded-xs border border-amber-300 bg-amber-50 px-1 text-[8.5px] font-medium text-amber-800"
 																title="Renamed from {editInfo.source}"
 															>
 																from {editInfo.source}
 															</span>
 														{:else if editInfo.reason}
 															<span
-																class="ml-1 rounded-xs border border-amber-300 bg-amber-50 px-1 py-0.2 text-[8.5px] font-medium text-amber-800"
+																class="py-0.2 ml-1 rounded-xs border border-amber-300 bg-amber-50 px-1 text-[8.5px] font-medium text-amber-800"
 																title={editInfo.reason}
 															>
 																{editInfo.reason}
@@ -2485,7 +2336,9 @@
 												</span>
 												{#if editorMode === 'splice'}
 													{#if inSplice}
-														<span class="rounded-xs bg-blue-100 px-1 text-[8.5px] font-bold text-blue-800">
+														<span
+															class="rounded-xs bg-blue-100 px-1 text-[8.5px] font-bold text-blue-800"
+														>
 															R{spliceRuns.indexOf(c) + 1}
 														</span>
 													{:else}
@@ -2504,16 +2357,28 @@
 												{/if}
 											</div>
 										</td>
-										<td class="mono-num px-1.5 text-right text-[var(--text-secondary)]">
+										<td
+											class="mono-num px-1.5 text-right text-[var(--text-secondary)]"
+										>
 											{fmtNum(st?.top, 1)}
 										</td>
-										<td class="mono-num px-1.5 text-right text-[var(--text-secondary)]">
+										<td
+											class="mono-num px-1.5 text-right text-[var(--text-secondary)]"
+										>
 											{fmtNum(st?.bottom, 1)}
 										</td>
-										<td class="mono-num px-1.5 text-right">{fmtNum(st?.min, 2)}</td>
-										<td class="mono-num px-1.5 text-right">{fmtNum(st?.max, 2)}</td>
-										<td class="mono-num px-1.5 text-right">{fmtNum(st?.mean, 2)}</td>
-										<td class="mono-num px-1.5 text-right">{fmtNum(st?.std, 2)}</td>
+										<td class="mono-num px-1.5 text-right"
+											>{fmtNum(st?.min, 2)}</td
+										>
+										<td class="mono-num px-1.5 text-right"
+											>{fmtNum(st?.max, 2)}</td
+										>
+										<td class="mono-num px-1.5 text-right"
+											>{fmtNum(st?.mean, 2)}</td
+										>
+										<td class="mono-num px-1.5 text-right"
+											>{fmtNum(st?.std, 2)}</td
+										>
 									</tr>
 								{/each}
 							</tbody>
@@ -2532,7 +2397,9 @@
 				: 'CALI / DRHO / RHOB'}
 		>
 			<!-- Status Banner & Quick Actions -->
-			<div class="mb-2 flex items-center justify-between rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1.5 text-[10.5px]">
+			<div
+				class="mb-2 flex items-center justify-between rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1.5 text-[10.5px]"
+			>
 				<div class="flex items-center gap-1.5">
 					<span
 						class="inline-block h-2 w-2 rounded-full {activeBadholeStats.count > 0
@@ -2543,7 +2410,10 @@
 					></span>
 					{#if activeBadholeStats.present}
 						<span class="font-medium text-[var(--text-primary)]">
-							Flagged: <strong class="mono-num text-red-700">{activeBadholeStats.count}</strong> / {activeBadholeStats.total} ({fmtNum(activeBadholeStats.pct, 1)}%)
+							Flagged: <strong class="mono-num text-red-700"
+								>{activeBadholeStats.count}</strong
+							>
+							/ {activeBadholeStats.total} ({fmtNum(activeBadholeStats.pct, 1)}%)
 						</span>
 					{:else}
 						<span class="text-[var(--text-muted)]">No BADHOLE curve computed yet</span>
@@ -2562,9 +2432,13 @@
 			</div>
 
 			<!-- 1. Differential Caliper Criterion -->
-			<div class="mb-1.5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
+			<div
+				class="mb-1.5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5"
+			>
 				<div class="flex items-center justify-between">
-					<label class="flex items-center gap-1.5 text-xs font-semibold text-[var(--text-primary)] cursor-pointer">
+					<label
+						class="flex cursor-pointer items-center gap-1.5 text-xs font-semibold text-[var(--text-primary)]"
+					>
 						<input
 							type="checkbox"
 							bind:checked={workbench.badholeParams.useCali}
@@ -2572,51 +2446,133 @@
 						/>
 						<span>1. Differential Caliper (|CALI − BS|)</span>
 					</label>
-					<span class="mono-num text-[9.5px] {curveList.includes('CALI') ? 'text-emerald-700 font-semibold' : 'text-slate-400'}">
+					<span
+						class="mono-num text-[9.5px] {curveList.includes('CALI')
+							? 'font-semibold text-emerald-700'
+							: 'text-slate-400'}"
+					>
 						{curveList.includes('CALI') ? 'CALI ✓' : 'No CALI'}
 					</span>
 				</div>
 
 				{#if workbench.badholeParams.useCali}
-					<div class="mt-1 space-y-1 pl-1">
-						<label class="flex items-center gap-1.5 text-[11px] text-[var(--text-secondary)] cursor-pointer">
-							<input
-								type="checkbox"
-								bind:checked={workbench.badholeParams.autoBitsize}
-								class="h-3 w-3 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
-							/>
-							<span>Auto-Detect Casing Sections & Bit Size (BS)</span>
-						</label>
-						<div class="grid grid-cols-2 gap-x-2">
-							<NumericScrubber
-								label="Washout ΔCALI"
-								bind:value={workbench.badholeParams.caliThreshold}
-								unit="in"
-								min={0.5}
-								max={8.0}
-								step={0.25}
-								decimals={2}
-								onrun={() => runBadholeFlagging(false)}
-							/>
-							<NumericScrubber
-								label={workbench.badholeParams.autoBitsize ? 'Fallback BS' : 'Bit Size (BS)'}
-								bind:value={workbench.badholeParams.bitsizeDefault}
-								unit="in"
-								min={4.5}
-								max={26.0}
-								step={0.25}
-								decimals={2}
-								onrun={() => runBadholeFlagging(false)}
-							/>
+					<div class="mt-1.5 space-y-1.5 pl-1">
+						<div class="flex items-center justify-between gap-1.5 text-[10px]">
+							<span class="font-semibold text-[var(--text-secondary)]">Bit Size Source:</span>
+							<button
+								type="button"
+								onclick={jumpToHoleSections}
+								class="font-semibold text-blue-700 hover:underline"
+							>
+								Edit Hole Sections ({wellData.holeSections.length}) →
+							</button>
 						</div>
+						{#if wellData.holeSections.length > 0}
+							<div
+								class="grid grid-cols-2 gap-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-0.5 text-[10px]"
+							>
+								<button
+									type="button"
+									onclick={() => (workbench.badholeParams.useHoleSections = true)}
+									class="h-5.5 rounded-xs font-medium transition-colors {workbench.badholeParams.useHoleSections
+										? 'bg-[var(--bg-surface)] font-semibold text-[var(--accent-primary)] shadow-2xs'
+										: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+								>
+									Hole Sections ({wellData.holeSections.length})
+								</button>
+								<button
+									type="button"
+									onclick={() => {
+										seedManualFromHoleSections();
+										workbench.badholeParams.useHoleSections = false;
+									}}
+									class="h-5.5 rounded-xs font-medium transition-colors {!workbench.badholeParams.useHoleSections
+										? 'bg-[var(--bg-surface)] font-semibold text-[var(--accent-primary)] shadow-2xs'
+										: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+								>
+									Manual / Auto BS
+								</button>
+							</div>
+						{/if}
+
+						{#if wellData.holeSections.length > 0 && workbench.badholeParams.useHoleSections}
+							<div
+								class="rounded-xs border border-blue-200 bg-blue-50/60 px-2 py-1 text-[10px] text-blue-950"
+							>
+								Using bit sizes from <strong>Hole Sections</strong> ({wellData.holeSections
+									.map((s) => (s.bit_size != null ? `${s.bit_size}"` : s.name))
+									.join(' → ')}). Switch to <strong>Manual / Auto BS</strong> above to test custom numbers.
+							</div>
+							<div class="grid grid-cols-2 gap-x-2">
+								<NumericScrubber
+									label="Washout ΔCALI"
+									bind:value={workbench.badholeParams.caliThreshold}
+									unit="in"
+									min={0.5}
+									max={8.0}
+									step={0.25}
+									decimals={2}
+									onrun={() => runBadholeFlagging(false)}
+								/>
+								<NumericScrubber
+									label="Uncovered BS"
+									bind:value={workbench.badholeParams.bitsizeDefault}
+									unit="in"
+									min={4.5}
+									max={26.0}
+									step={0.25}
+									decimals={2}
+									onrun={() => runBadholeFlagging(false)}
+								/>
+							</div>
+						{:else}
+							<label
+								class="flex cursor-pointer items-center gap-1.5 text-[11px] text-[var(--text-secondary)]"
+							>
+								<input
+									type="checkbox"
+									bind:checked={workbench.badholeParams.autoBitsize}
+									class="h-3 w-3 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+								/>
+								<span>Auto-Detect Casing Sections &amp; Bit Size (BS)</span>
+							</label>
+							<div class="grid grid-cols-2 gap-x-2">
+								<NumericScrubber
+									label="Washout ΔCALI"
+									bind:value={workbench.badholeParams.caliThreshold}
+									unit="in"
+									min={0.5}
+									max={8.0}
+									step={0.25}
+									decimals={2}
+									onrun={() => runBadholeFlagging(false)}
+								/>
+								<NumericScrubber
+									label={workbench.badholeParams.autoBitsize
+										? 'Fallback BS'
+										: 'Bit Size (BS)'}
+									bind:value={workbench.badholeParams.bitsizeDefault}
+									unit="in"
+									min={4.5}
+									max={26.0}
+									step={0.25}
+									decimals={2}
+									onrun={() => runBadholeFlagging(false)}
+								/>
+							</div>
+						{/if}
 					</div>
 				{/if}
 			</div>
 
 			<!-- 2. Density Correction (DRHO) Criterion -->
-			<div class="mb-1.5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
+			<div
+				class="mb-1.5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5"
+			>
 				<div class="flex items-center justify-between">
-					<label class="flex items-center gap-1.5 text-xs font-semibold text-[var(--text-primary)] cursor-pointer">
+					<label
+						class="flex cursor-pointer items-center gap-1.5 text-xs font-semibold text-[var(--text-primary)]"
+					>
 						<input
 							type="checkbox"
 							bind:checked={workbench.badholeParams.useDrho}
@@ -2624,8 +2580,18 @@
 						/>
 						<span>2. Density Correction (|DRHO|)</span>
 					</label>
-					<span class="mono-num text-[9.5px] {curveList.includes('DRHO') || curveList.includes('HDRA') || curveList.includes('DCOR') ? 'text-emerald-700 font-semibold' : 'text-slate-400'}">
-						{curveList.includes('DRHO') || curveList.includes('HDRA') || curveList.includes('DCOR') ? 'DRHO ✓' : 'No DRHO'}
+					<span
+						class="mono-num text-[9.5px] {curveList.includes('DRHO') ||
+						curveList.includes('HDRA') ||
+						curveList.includes('DCOR')
+							? 'font-semibold text-emerald-700'
+							: 'text-slate-400'}"
+					>
+						{curveList.includes('DRHO') ||
+						curveList.includes('HDRA') ||
+						curveList.includes('DCOR')
+							? 'DRHO ✓'
+							: 'No DRHO'}
 					</span>
 				</div>
 
@@ -2646,9 +2612,13 @@
 			</div>
 
 			<!-- 3. RHOB / NPHI Pad Standoff Cutoffs -->
-			<div class="mb-1.5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
+			<div
+				class="mb-1.5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5"
+			>
 				<div class="flex items-center justify-between">
-					<label class="flex items-center gap-1.5 text-xs font-semibold text-[var(--text-primary)] cursor-pointer">
+					<label
+						class="flex cursor-pointer items-center gap-1.5 text-xs font-semibold text-[var(--text-primary)]"
+					>
 						<input
 							type="checkbox"
 							bind:checked={workbench.badholeParams.useRhobNphi}
@@ -2693,7 +2663,9 @@
 								onrun={() => runBadholeFlagging(false)}
 							/>
 						</div>
-						<label class="flex items-center gap-1.5 text-[11px] text-[var(--text-secondary)] cursor-pointer">
+						<label
+							class="flex cursor-pointer items-center gap-1.5 text-[11px] text-[var(--text-secondary)]"
+						>
 							<input
 								type="checkbox"
 								bind:checked={workbench.badholeParams.excludeCoal}
@@ -2706,9 +2678,13 @@
 			</div>
 
 			<!-- 4. Rolling Trend & Rugosity Spike Detection -->
-			<div class="mb-1.5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
+			<div
+				class="mb-1.5 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5"
+			>
 				<div class="flex items-center justify-between">
-					<label class="flex items-center gap-1.5 text-xs font-semibold text-[var(--text-primary)] cursor-pointer">
+					<label
+						class="flex cursor-pointer items-center gap-1.5 text-xs font-semibold text-[var(--text-primary)]"
+					>
 						<input
 							type="checkbox"
 							bind:checked={workbench.badholeParams.useRugosity}
@@ -2755,22 +2731,32 @@
 			</div>
 
 			{#if badholeSummary}
-				<div class="mb-1.5 grid grid-cols-4 gap-1 rounded-sm border border-red-200/80 bg-red-50/40 p-1 text-center text-[9.5px]">
+				<div
+					class="mb-1.5 grid grid-cols-4 gap-1 rounded-sm border border-red-200/80 bg-red-50/40 p-1 text-center text-[9.5px]"
+				>
 					<div>
 						<div class="text-[var(--text-muted)]">CALI</div>
-						<div class="mono-num font-bold text-slate-800">{badholeSummary.cali_flagged}</div>
+						<div class="mono-num font-bold text-slate-800">
+							{badholeSummary.cali_flagged}
+						</div>
 					</div>
 					<div>
 						<div class="text-[var(--text-muted)]">DRHO</div>
-						<div class="mono-num font-bold text-slate-800">{badholeSummary.drho_flagged}</div>
+						<div class="mono-num font-bold text-slate-800">
+							{badholeSummary.drho_flagged}
+						</div>
 					</div>
 					<div>
 						<div class="text-[var(--text-muted)]">RHOB/NPHI</div>
-						<div class="mono-num font-bold text-slate-800">{badholeSummary.rhob_nphi_flagged}</div>
+						<div class="mono-num font-bold text-slate-800">
+							{badholeSummary.rhob_nphi_flagged}
+						</div>
 					</div>
 					<div>
 						<div class="text-[var(--text-muted)]">Rugosity</div>
-						<div class="mono-num font-bold text-slate-800">{badholeSummary.rugosity_flagged}</div>
+						<div class="mono-num font-bold text-slate-800">
+							{badholeSummary.rugosity_flagged}
+						</div>
 					</div>
 				</div>
 			{/if}
@@ -2786,7 +2772,9 @@
 				</button>
 				<button
 					type="button"
-					disabled={wellData.isCalculating || wellData.isSaving || !wellData.hasPendingComputed('qaqc-badhole')}
+					disabled={wellData.isCalculating ||
+						wellData.isSaving ||
+						!wellData.hasPendingComputed('qaqc-badhole')}
 					onclick={saveBadholeFlagging}
 					title={wellData.hasPendingComputed('qaqc-badhole')
 						? wellData.getPendingSaveTooltip(
@@ -2803,37 +2791,194 @@
 
 		<ParameterSection
 			title="Borehole Environmental Corrections"
-			badge="GR / NPHI / RHOB / RT"
+			badge={envQcSummary ? 'GR / NPHI / RHOB / RT / DT · Run' : 'GR / NPHI / RHOB / RT / DT'}
 			defaultOpen={false}
 		>
+			<div
+				class="mb-1.5 rounded-xs bg-[var(--bg-subtle)] px-2 py-1 text-[10px] leading-snug text-[var(--text-secondary)]"
+			>
+				Generic (tool-agnostic) corrections. Each curve gets <span class="mono-num"
+					>*_ENV_CORR</span
+				>, <span class="mono-num">*_SIGMA</span>, <span class="mono-num">*_QC_CONF</span>
+				and <span class="mono-num">*_QC_STATUS</span>. Lithology, porosity and saturation
+				use the corrected curves, weighted by confidence.
+			</div>
+
+			<!-- Mud & Bit Source Selector (Hole Sections vs Manual Override) -->
+			<div class="mb-2 space-y-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
+				<div class="flex items-center justify-between text-[10px]">
+					<span class="font-semibold text-[var(--text-primary)]">Mud &amp; Bit Program Source</span>
+					<button
+						type="button"
+						onclick={jumpToHoleSections}
+						class="font-semibold text-blue-700 hover:underline"
+					>
+						{wellData.holeSections.length > 0
+							? `Edit Hole Sections (${wellData.holeSections.length}) →`
+							: '+ Add Hole Sections →'}
+					</button>
+				</div>
+				{#if wellData.holeSections.length > 0}
+					<div
+						class="grid grid-cols-2 gap-1 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-0.5 text-[10.5px]"
+					>
+						<button
+							type="button"
+							onclick={() => (ep.useHoleSections = true)}
+							class="h-6 rounded-xs font-medium transition-colors {ep.useHoleSections
+								? 'bg-[var(--bg-surface)] font-semibold text-[var(--accent-primary)] shadow-2xs'
+								: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+						>
+							Hole Sections ({wellData.holeSections.length})
+						</button>
+						<button
+							type="button"
+							onclick={() => {
+								seedManualFromHoleSections();
+								ep.useHoleSections = false;
+							}}
+							class="h-6 rounded-xs font-medium transition-colors {!ep.useHoleSections
+								? 'bg-[var(--bg-surface)] font-semibold text-[var(--accent-primary)] shadow-2xs'
+								: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+						>
+							Manual Override
+						</button>
+					</div>
+					{#if ep.useHoleSections}
+						<div class="max-h-28 overflow-y-auto rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]">
+							<table class="w-full border-collapse text-left text-[9.5px]">
+								<thead class="bg-[var(--bg-subtle)] text-[var(--text-muted)]">
+									<tr>
+										<th class="px-1.5 py-0.5 font-medium">Section</th>
+										<th class="px-1 py-0.5 text-right font-medium">MD ({depthDisplay.unit})</th>
+										<th class="px-1 py-0.5 text-right font-medium">BS</th>
+										<th class="px-1 py-0.5 font-medium">Mud</th>
+										<th class="px-1.5 py-0.5 text-right font-medium">MW</th>
+									</tr>
+								</thead>
+								<tbody class="divide-y divide-[var(--border-hairline)]">
+									{#each wellData.holeSections as hs (hs.id)}
+										<tr>
+											<td class="truncate px-1.5 py-0.5 font-semibold text-[var(--text-primary)]">{hs.name}</td>
+											<td class="mono-num px-1 py-0.5 text-right text-[var(--text-secondary)]">
+												{fmtNum(depthFromMeters(hs.top, depthDisplay.unit), 0)}–{fmtNum(depthFromMeters(hs.bottom, depthDisplay.unit), 0)}
+											</td>
+											<td class="mono-num px-1 py-0.5 text-right">{hs.bit_size != null ? `${hs.bit_size}"` : '—'}</td>
+											<td class="px-1 py-0.5">{hs.mud_type || '—'}</td>
+											<td class="mono-num px-1.5 py-0.5 text-right">{hs.mud_weight != null ? `${hs.mud_weight}` : '—'}</td>
+										</tr>
+									{/each}
+								</tbody>
+							</table>
+						</div>
+					{:else}
+						<div class="flex items-center justify-between text-[9.5px] text-amber-800">
+							<span>Manual override active (Hole Sections bypassed for quick testing).</span>
+							<button
+								type="button"
+								onclick={seedManualFromHoleSections}
+								class="shrink-0 font-semibold text-blue-700 hover:underline"
+							>
+								↺ Reset from Hole
+							</button>
+						</div>
+					{/if}
+				{:else}
+					<div class="text-[10px] text-[var(--text-muted)]">
+						No Hole Sections defined yet — using manual mud &amp; bit parameters below.
+					</div>
+				{/if}
+			</div>
+
+			{#each [{ label: 'Tool Conveyance', key: 'toolType', options: [['WL', 'Wireline'], ['LWD', 'LWD']] }, ...(wellData.holeSections.length > 0 && ep.useHoleSections ? [] : [{ label: 'Mud Type', key: 'mudType', options: [['WBM', 'Water-based (WBM)'], ['OBM', 'Oil-based (OBM)'], ['SBM', 'Synthetic (SBM)']] }]), { label: 'Resistivity Tool', key: 'resTool', options: [['auto', 'Auto (from conveyance)'], ['induction', 'Induction'], ['laterolog', 'Laterolog'], ['propagation', 'Propagation (LWD)']] }, { label: 'Depth Unit', key: 'depthUnit', options: [['auto', 'Well header'], ['m', 'm'], ['ft', 'ft']] }] as sel (sel.key)}
+				<div class="grid grid-cols-[1fr_148px] items-center gap-x-2 py-0.5">
+					<span class="text-xs font-medium text-[var(--text-primary)]">{sel.label}</span>
+					<select
+						value={(ep as any)[sel.key]}
+						onchange={(e) =>
+							((ep as any)[sel.key] = (e.currentTarget as HTMLSelectElement).value)}
+						class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
+					>
+						{#each sel.options as [val, text] (val)}
+							<option value={val}>{text}</option>
+						{/each}
+					</select>
+				</div>
+			{/each}
+			{#if ep.mudType !== 'WBM' && ep.resTool === 'laterolog'}
+				<div
+					class="mb-1 rounded-xs border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] text-amber-800"
+				>
+					Laterolog does not read in non-conductive mud. RT is flagged unreliable.
+				</div>
+			{/if}
+
+			<label
+				class="mt-1 flex cursor-pointer items-center gap-1.5 text-[11px] font-semibold text-[var(--text-primary)]"
+			>
+				<input
+					type="checkbox"
+					bind:checked={ep.offshore}
+					class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+				/>
+				<span>Offshore well (temperature from seabed)</span>
+			</label>
+			{#if ep.offshore}
+				<div class="grid grid-cols-2 gap-x-2">
+					<NumericScrubber
+						label="Water Depth"
+						bind:value={ep.waterDepth}
+						unit={ep.depthUnit === 'ft' ? 'ft' : 'm'}
+						min={0}
+						max={4000}
+						step={10}
+						decimals={0}
+						onrun={() => runEnvCorrections(false)}
+					/>
+					<NumericScrubber
+						label="Seabed Temp"
+						bind:value={ep.seabedTempC}
+						unit="°C"
+						min={-2}
+						max={30}
+						step={0.5}
+						onrun={() => runEnvCorrections(false)}
+					/>
+				</div>
+			{/if}
+
 			<div class="grid grid-cols-2 gap-x-2">
-				<NumericScrubber
-					label="Bit Size"
-					bind:value={ep.bitsizeDefault}
-					unit="in"
-					min={4.5}
-					max={17.5}
-					step={0.25}
-					onrun={() => runEnvCorrections(false)}
-				/>
-				<NumericScrubber
-					label="Mud Weight"
-					bind:value={ep.mudWeight}
-					unit="ppg"
-					min={8.0}
-					max={18.0}
-					step={0.2}
-					onrun={() => runEnvCorrections(false)}
-				/>
-				<NumericScrubber
-					label="Surface Temp"
-					bind:value={ep.surfaceTemp}
-					unit="°F"
-					min={40}
-					max={120}
-					step={2}
-					onrun={() => runEnvCorrections(false)}
-				/>
+				{#if !(wellData.holeSections.length > 0 && ep.useHoleSections)}
+					<NumericScrubber
+						label="Bit Size"
+						bind:value={ep.bitsizeDefault}
+						unit="in"
+						min={3.5}
+						max={26.0}
+						step={0.125}
+						onrun={() => runEnvCorrections(false)}
+					/>
+					<NumericScrubber
+						label="Mud Weight"
+						bind:value={ep.mudWeight}
+						unit="ppg"
+						min={8.0}
+						max={18.0}
+						step={0.2}
+						onrun={() => runEnvCorrections(false)}
+					/>
+				{/if}
+				{#if !ep.offshore}
+					<NumericScrubber
+						label="Surface Temp"
+						bind:value={ep.surfaceTemp}
+						unit="°F"
+						min={-20}
+						max={120}
+						step={2}
+						onrun={() => runEnvCorrections(false)}
+					/>
+				{/if}
 				<NumericScrubber
 					label="Temp Gradient"
 					bind:value={ep.tempGrad}
@@ -2843,16 +2988,114 @@
 					step={0.1}
 					onrun={() => runEnvCorrections(false)}
 				/>
+				<NumericScrubber
+					label="Washout ΔCALI"
+					bind:value={ep.washoutThold}
+					unit="in"
+					min={0.5}
+					max={6.0}
+					step={0.25}
+					onrun={() => runEnvCorrections(false)}
+				/>
+				<NumericScrubber
+					label="Mudcake Density"
+					bind:value={ep.rhoMudcake}
+					unit="g/cc"
+					min={1.0}
+					max={2.6}
+					step={0.05}
+					onrun={() => runEnvCorrections(false)}
+				/>
+				<NumericScrubber
+					label="Formation Water Sal."
+					bind:value={ep.formationSalinityPpm}
+					unit="ppm"
+					min={500}
+					max={300000}
+					step={5000}
+					decimals={0}
+					onrun={() => runEnvCorrections(false)}
+				/>
 			</div>
-			<NumericScrubber
-				label="Mud Filtrate Salinity"
-				bind:value={ep.salinityPpm}
-				unit="ppm"
-				min={1000}
-				max={250000}
-				step={2000}
-				onrun={() => runEnvCorrections(false)}
-			/>
+			{#if !(wellData.holeSections.length > 0 && ep.useHoleSections) && ep.mudType === 'WBM'}
+				<div class="grid grid-cols-3 gap-x-1.5">
+					<NumericScrubber
+						label="Mud Salinity"
+						bind:value={ep.salinityPpm}
+						unit="ppm"
+						min={0}
+						max={250000}
+						step={2000}
+						decimals={0}
+						onrun={() => runEnvCorrections(false)}
+					/>
+					<NumericScrubber
+						label="Rmf (0 = est.)"
+						bind:value={ep.rmf}
+						unit="Ω·m"
+						min={0}
+						max={20}
+						step={0.01}
+						decimals={3}
+						onrun={() => runEnvCorrections(false)}
+					/>
+					<NumericScrubber
+						label="Rmf Temp"
+						bind:value={ep.rmfTempC}
+						unit="°C"
+						min={0}
+						max={80}
+						step={1}
+						onrun={() => runEnvCorrections(false)}
+					/>
+				</div>
+			{:else if wellData.holeSections.length > 0 && ep.useHoleSections}
+				<details class="mt-1 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1 text-[10px]">
+					<summary class="cursor-pointer font-semibold text-[var(--text-secondary)] hover:text-[var(--text-primary)]">
+						Fallback defaults for depths outside Hole Sections
+					</summary>
+					<div class="mt-1 grid grid-cols-2 gap-x-2">
+						<NumericScrubber
+							label="Fallback BS"
+							bind:value={ep.bitsizeDefault}
+							unit="in"
+							min={3.5}
+							max={26.0}
+							step={0.125}
+							onrun={() => runEnvCorrections(false)}
+						/>
+						<NumericScrubber
+							label="Fallback MW"
+							bind:value={ep.mudWeight}
+							unit="ppg"
+							min={8.0}
+							max={18.0}
+							step={0.2}
+							onrun={() => runEnvCorrections(false)}
+						/>
+						<NumericScrubber
+							label="Fallback Salinity"
+							bind:value={ep.salinityPpm}
+							unit="ppm"
+							min={0}
+							max={250000}
+							step={2000}
+							decimals={0}
+							onrun={() => runEnvCorrections(false)}
+						/>
+						<NumericScrubber
+							label="Fallback Rmf"
+							bind:value={ep.rmf}
+							unit="Ω·m"
+							min={0}
+							max={20}
+							step={0.01}
+							decimals={3}
+							onrun={() => runEnvCorrections(false)}
+						/>
+					</div>
+				</details>
+			{/if}
 			<div class="mt-1 flex gap-1.5">
 				<button
 					type="button"
@@ -2864,7 +3107,9 @@
 				</button>
 				<button
 					type="button"
-					disabled={wellData.isCalculating || wellData.isSaving || !wellData.hasPendingComputed('qaqc-env')}
+					disabled={wellData.isCalculating ||
+						wellData.isSaving ||
+						!wellData.hasPendingComputed('qaqc-env')}
 					onclick={saveEnvCorrections}
 					title={wellData.hasPendingComputed('qaqc-env')
 						? wellData.getPendingSaveTooltip(
@@ -2876,20 +3121,152 @@
 				>
 					{wellData.isSaving ? 'Saving...' : 'Save'}
 				</button>
+				<button
+					type="button"
+					onclick={() => {
+						workbench.crossplotTemplateOverride = 'env-corr-qc';
+						if (
+							workbench.rightPaneTab === 'grid' ||
+							workbench.rightPaneTab === 'missing'
+						) {
+							workbench.rightPaneTab = 'split';
+						}
+					}}
+					title="Open the Borehole Env Correction & Invasion QC plot in the right pane"
+					class="h-6 rounded-sm border border-blue-200 bg-blue-50 px-2 text-[11px] font-semibold text-blue-700 hover:bg-blue-100"
+				>
+					QC Plot →
+				</button>
+				<button
+					type="button"
+					onclick={() => {
+						workbench.crossplotTemplateOverride = 'temp-pressure';
+						if (workbench.rightPaneTab === 'grid' || workbench.rightPaneTab === 'missing') {
+							workbench.rightPaneTab = 'split';
+						}
+					}}
+					title="Open the 2-track Temperature & Pressure Modelling Profile in the right pane"
+					class="h-6 rounded-sm border border-teal-200 bg-teal-50 px-1.5 text-[11px] font-semibold text-teal-800 hover:bg-teal-100"
+				>
+					T–P →
+				</button>
 			</div>
+
+			{#if envInfo}
+				<div class="mt-1.5 flex flex-wrap gap-1 text-[9.5px]">
+					<span class="rounded-xs bg-slate-100 px-1.5 py-0.5 font-semibold text-slate-700"
+						>{envInfo.tool_type}</span
+					>
+					<span class="rounded-xs bg-slate-100 px-1.5 py-0.5 font-semibold text-slate-700"
+						>{envInfo.mud_type} · {envInfo.mud_weight_ppg} ppg</span
+					>
+					<span class="rounded-xs bg-slate-100 px-1.5 py-0.5 font-semibold text-slate-700"
+						>{envInfo.offshore ? 'Offshore' : 'Onshore'}</span
+					>
+					<span class="mono-num rounded-xs bg-slate-100 px-1.5 py-0.5 text-slate-700"
+						>T₀ {envInfo.top_temp_c} °C · {envInfo.gradient_c_per_km} °C/km</span
+					>
+					<span class="mono-num rounded-xs bg-slate-100 px-1.5 py-0.5 text-slate-700"
+						>depth {envInfo.depth_unit}</span
+					>
+				</div>
+			{/if}
+
+			{#if envQcSummary && Object.keys(envQcSummary).length > 0}
+				<table class="mt-1.5 w-full border-collapse text-[9.5px]">
+					<thead>
+						<tr class="text-[var(--text-muted)]">
+							<th class="py-0.5 text-left font-medium">Curve</th>
+							<th
+								class="py-0.5 text-right font-medium"
+								title="Gauge hole, negligible correction">Good</th
+							>
+							<th
+								class="py-0.5 text-right font-medium"
+								title="Corrected, still reliable">Corr.</th
+							>
+							<th
+								class="py-0.5 text-right font-medium"
+								title="Confidence below threshold: candidate for reconstruction"
+								>Unrel.</th
+							>
+							<th class="py-0.5 text-right font-medium">Conf</th>
+							<th
+								class="py-0.5 text-right font-medium"
+								title="95th percentile |corrected − raw|">P95 |Δ|</th
+							>
+						</tr>
+					</thead>
+					<tbody>
+						{#each Object.entries(envQcSummary) as [log, s] (log)}
+							<tr class="border-t border-[var(--border-hairline)]">
+								<td class="mono-num py-0.5 font-semibold text-[var(--text-primary)]"
+									>{log}</td
+								>
+								<td class="mono-num py-0.5 text-right text-emerald-700"
+									>{s.good_pct}%</td
+								>
+								<td class="mono-num py-0.5 text-right text-blue-700"
+									>{s.corrected_pct}%</td
+								>
+								<td
+									class="mono-num py-0.5 text-right {s.unreliable_pct > 10
+										? 'font-bold text-red-700'
+										: 'text-red-600'}">{s.unreliable_pct}%</td
+								>
+								<td class="mono-num py-0.5 text-right text-[var(--text-primary)]"
+									>{s.mean_conf ?? '—'}</td
+								>
+								<td class="mono-num py-0.5 text-right text-[var(--text-secondary)]">
+									{s.p95_abs_delta != null
+										? `${s.p95_abs_delta} ${ENV_DELTA_UNITS[log] ?? ''}`
+										: '—'}
+								</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			{/if}
+
+			{#if envAssumptions.length > 0}
+				<div
+					class="mt-1.5 rounded-xs border border-amber-200 bg-amber-50/60 px-2 py-1 text-[10px] leading-snug text-amber-900"
+				>
+					<div class="mb-0.5 font-semibold">
+						Assumed inputs ({envAssumptions.length}). These widen *_SIGMA:
+					</div>
+					<ul class="list-disc pl-3.5">
+						{#each envAssumptions as a, i (i)}
+							<li>{a}</li>
+						{/each}
+					</ul>
+				</div>
+			{/if}
 		</ParameterSection>
 
 		<ParameterSection
 			title="Raw Log Resolution Enhancement"
-			badge={enhSummary ? (workbench.enhanceParams.useEnhancedLogs ? 'Enhanced · In Use' : 'Enhanced') : 'Not Run'}
+			badge={enhSummary
+				? workbench.enhanceParams.useEnhancedLogs
+					? 'Enhanced · In Use'
+					: 'Enhanced'
+				: 'Not Run'}
 			defaultOpen={false}
 		>
-			<div class="mb-1.5 rounded-xs bg-[var(--bg-subtle)] px-2 py-1 text-[10px] leading-snug text-[var(--text-secondary)]">
-				1D constrained deconvolution harmonizes <span class="mono-num">GR</span>, <span class="mono-num">NPHI</span>, and <span class="mono-num">RHOB</span> onto a common vertical footprint before any non-linear transform. Raw curves are never modified; results are written as <span class="mono-num">*_ENH</span>, <span class="mono-num">*_RECON</span>, and <span class="mono-num">DECONV_WEIGHT</span>.
+			<div
+				class="mb-1.5 rounded-xs bg-[var(--bg-subtle)] px-2 py-1 text-[10px] leading-snug text-[var(--text-secondary)]"
+			>
+				1D constrained deconvolution harmonizes <span class="mono-num">GR</span>,
+				<span class="mono-num">NPHI</span>, and <span class="mono-num">RHOB</span> onto a
+				common vertical footprint before any non-linear transform. Raw curves are never
+				modified; results are written as <span class="mono-num">*_ENH</span>,
+				<span class="mono-num">*_RECON</span>, and
+				<span class="mono-num">DECONV_WEIGHT</span>.
 			</div>
 
 			<div class="grid grid-cols-[1fr_148px] items-center gap-x-2 py-0.5">
-				<span class="text-xs font-medium text-[var(--text-primary)]">Target Resolution</span>
+				<span class="text-xs font-medium text-[var(--text-primary)]">Target Resolution</span
+				>
 				<select
 					bind:value={workbench.enhanceParams.mode}
 					class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
@@ -2899,7 +3276,9 @@
 				</select>
 			</div>
 			<div class="mb-1 text-[10px] leading-snug text-[var(--text-muted)]">
-				Target FWHM. <span class="mono-num">Enhance All</span> = Nyquist floor (Factor × Δz). <span class="mono-num">Match Finest</span> = sharpest tool FWHM. Curves already at target pass through.
+				Target FWHM. <span class="mono-num">Enhance All</span> = Nyquist floor (Factor ×
+				Δz). <span class="mono-num">Match Finest</span> = sharpest tool FWHM. Curves already at
+				target pass through.
 			</div>
 
 			<div class="grid grid-cols-[1fr_148px] items-center gap-x-2 py-0.5">
@@ -2913,7 +3292,8 @@
 				</select>
 			</div>
 			<div class="mb-1 text-[10px] leading-snug text-[var(--text-muted)]">
-				<span class="mono-num">Constrained Huber</span> = production, edge-preserving. <span class="mono-num">Wiener</span> = fast preview, smoother, ignores Huber and Morozov.
+				<span class="mono-num">Constrained Huber</span> = production, edge-preserving.
+				<span class="mono-num">Wiener</span> = fast preview, smoother, ignores Huber and Morozov.
 			</div>
 
 			<NumericScrubber
@@ -2988,7 +3368,8 @@
 				</button>
 				<button
 					type="button"
-					disabled={wellData.isCalculating || !wellData.hasPendingComputed('qaqc-enhance')}
+					disabled={wellData.isCalculating ||
+						!wellData.hasPendingComputed('qaqc-enhance')}
 					onclick={() => runResolutionEnhancement(true)}
 					title={wellData.hasPendingComputed('qaqc-enhance')
 						? 'Persist the enhanced curves to the database'
@@ -3011,12 +3392,17 @@
 			</div>
 
 			{#if enhSummary}
-				<div class="mt-1.5 rounded-sm border border-indigo-200 bg-indigo-50/50 p-1.5 text-[10px]">
+				<div
+					class="mt-1.5 rounded-sm border border-indigo-200 bg-indigo-50/50 p-1.5 text-[10px]"
+				>
 					<div class="mb-1 flex items-center justify-between">
 						<span class="font-semibold text-indigo-950">
-							Target FWHM {fmtNum(enhSummary.target_fwhm_m, 3)} {enhSummary.depth_uom}
+							Target FWHM {fmtNum(enhSummary.target_fwhm_m, 3)}
+							{enhSummary.depth_uom}
 						</span>
-						<span class="text-[var(--text-muted)]">Δz {fmtNum(enhSummary.depth_step_m, 4)}</span>
+						<span class="text-[var(--text-muted)]"
+							>Δz {fmtNum(enhSummary.depth_step_m, 4)}</span
+						>
 					</div>
 					<table class="w-full text-left">
 						<thead class="text-[var(--text-muted)]">
@@ -3031,11 +3417,16 @@
 							{#each Object.entries(enhSummary.diagnostics) as [name, d] (name)}
 								<tr>
 									<td class="mono-num font-semibold text-slate-800">{name}</td>
-									<td class="mono-num text-right">{fmtNum(d.effective_fwhm_m, 3)}</td>
-									<td class="mono-num text-right">{fmtNum(d.estimated_noise_std, 4)}</td>
+									<td class="mono-num text-right"
+										>{fmtNum(d.effective_fwhm_m, 3)}</td
+									>
+									<td class="mono-num text-right"
+										>{fmtNum(d.estimated_noise_std, 4)}</td
+									>
 									<td
 										class="mono-num text-right"
-										class:text-red-700={Math.abs(d.relative_volume_bias_pct) >= 0.5}
+										class:text-red-700={Math.abs(d.relative_volume_bias_pct) >=
+											0.5}
 									>
 										{fmtNum(d.relative_volume_bias_pct, 2)}%
 									</td>
@@ -3072,15 +3463,20 @@
 						Use enhanced logs downstream
 					</span>
 					<br />
-					Feed <span class="mono-num">GR_ENH</span>/<span class="mono-num">NPHI_ENH</span>/<span class="mono-num">RHOB_ENH</span>
-					into lithology, porosity, Thomas-Stieber, and saturation instead of the raw curves. Permeability follows automatically because it consumes the
-					<span class="mono-num">PHIT</span> and <span class="mono-num">VCLAY</span> those modules produce.
+					Feed <span class="mono-num">GR_ENH</span>/<span class="mono-num">NPHI_ENH</span
+					>/<span class="mono-num">RHOB_ENH</span>
+					into lithology, porosity, Thomas-Stieber, and saturation instead of the raw curves.
+					Permeability follows automatically because it consumes the
+					<span class="mono-num">PHIT</span> and <span class="mono-num">VCLAY</span> those modules
+					produce.
 				</span>
 			</label>
 		</ParameterSection>
 
 		{#if wellData.lastError}
-			<div class="m-2 rounded-sm border border-red-200 bg-red-50 p-2 text-xs text-[var(--status-error)]">
+			<div
+				class="m-2 rounded-sm border border-red-200 bg-red-50 p-2 text-xs text-[var(--status-error)]"
+			>
 				{wellData.lastError}
 			</div>
 		{/if}
@@ -3090,7 +3486,9 @@
 		class="flex h-9 shrink-0 items-center justify-between border-t border-[var(--border-hairline)] bg-[var(--bg-app)] px-2.5"
 	>
 		<span class="text-[11px] text-[var(--text-muted)]">
-			Active Curve: <strong class="mono-num text-[var(--text-primary)]">{workbench.selectedQaqcCurve}</strong>
+			Active Curve: <strong class="mono-num text-[var(--text-primary)]"
+				>{workbench.selectedQaqcCurve}</strong
+			>
 		</span>
 		<button
 			type="button"

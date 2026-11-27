@@ -2,7 +2,7 @@ import { api, postJson, saveAncillaryItems } from '$lib/api/client';
 import type { CoreComparisonMetrics, CurveSummaryStats } from '$lib/api/schema';
 import { appStatus } from './status.svelte';
 import { workbench } from './workbench.svelte';
-import { calibrateGamma, gammaEndpoints, gammaKey, gammaLabel, selectedGamma, setGammaEndpoints } from '$lib/utils/lithology';
+import { calibrateGamma, gammaEndpoints, gammaKey, gammaLabel, selectedGamma, setGammaEndpoints, syncHeaderToLithoParams } from '$lib/utils/lithology';
 import {
 	selectSpliceInterval,
 	validateSpliceInterval,
@@ -36,6 +36,19 @@ export interface PerforationItem {
 	top: number;
 	bottom: number;
 	description?: string;
+}
+
+export interface HoleSectionItem {
+	id: string;
+	name: string;
+	top: number;
+	bottom: number;
+	bit_size?: number | null;
+	mud_type?: string | null;
+	mud_weight?: number | null;
+	mud_salinity?: number | null;
+	rmf?: number | null;
+	rmf_temp?: number | null;
 }
 
 export type CurveEditOperation =
@@ -73,6 +86,22 @@ export const CALCULATED_CURVE_GROUPS: Record<
 			'CALI_ENV_CORR',
 			'DT_ENV_CORR',
 			'INVASION_FLAG',
+			'INVASION_PROFILE',
+			'RXO_EST',
+			'DI_EST',
+			'ENV_QC_REASON',
+			'HOLE_SEVERITY',
+			'ENV_TEMP_C',
+			'ENV_BS',
+			'ENV_RM',
+			'ENV_RMF',
+			'ENV_RW',
+			...['GR', 'NPHI', 'RHOB', 'RT', 'DT'].flatMap((l) => [
+				`${l}_QC_CONF`,
+				`${l}_QC_STATUS`,
+				`${l}_SIGMA`,
+				`${l}_CORR_DELTA`
+			]),
 			'GR_NORM',
 			'NPHI_NORM',
 			'NPHI_HC',
@@ -291,7 +320,7 @@ export function isCalculatedCurveMnemonic(c: string): boolean {
 	if (/(?:_FLAG|_FLAGS)$/i.test(up) || /^FLAG_/i.test(up)) return true;
 	// Normalizations, corrections, enhancements, predictions, reconstructions, synthetic models
 	if (
-		/(?:_NORM|_ENV_CORR|_DEN_CORR|_HC|_BLK|_SYN|_RECON|_ENH|_IMP|_PRED|_ML|_CONSTRUCTED|_P10|_P50|_P90)$/i.test(
+		/(?:_NORM|_ENV_CORR|_DEN_CORR|_HC|_BLK|_SYN|_RECON|_ENH|_IMP|_PRED|_ML|_CONSTRUCTED|_P10|_P50|_P90|_QC_CONF|_QC_STATUS|_SIGMA|_CORR_DELTA|_EST)$/i.test(
 			up
 		)
 	) {
@@ -396,6 +425,7 @@ class WellDataState {
 	tops = $state<FormationTop[]>([]);
 	contacts = $state<FluidContact[]>([]);
 	perforations = $state<PerforationItem[]>([]);
+	holeSections = $state<HoleSectionItem[]>([]);
 	coreSamples = $state<Record<string, any>[]>([]);
 	originalCoreSamples = $state.raw<Record<string, any>[]>([]);
 	originalScalPc = $state.raw<Record<string, any>[]>([]);
@@ -462,6 +492,7 @@ class WellDataState {
 	// Reservoir summary table & metrics from latest run
 	zonalSummary = $state.raw<Record<string, any>[]>([]);
 	zonalSummarySource = $state<{ projectId: string; wellId: string } | null>(null);
+	ressumCutoffsSensitivity = $state<any>(null);
 	poroCoreMetrics = $state<CoreComparisonMetrics | null>(null);
 	/** Provenance of the applied grain-density correlation in the last porosity run. */
 	poroGrainDensityProvenance = $state<Record<string, any> | null>(null);
@@ -1402,6 +1433,7 @@ class WellDataState {
 		this.permeabilityComparison = null;
 		this.porosityComparisonError = null;
 		this.permeabilityComparisonError = null;
+		this.ressumCutoffsSensitivity = null;
 		this.cancelPendingWellLoadTask();
 		this.isLoading = true;
 		this.lastError = null;
@@ -1724,6 +1756,33 @@ class WellDataState {
 					description: p.description ?? ''
 				}))
 				.filter((p) => Number.isFinite(p.top) && Number.isFinite(p.bottom))
+				.sort((a, b) => a.top - b.top);
+			this.holeSections = (((data as any).hole_sections || []) as any[])
+				.map((s: any, i: number) => ({
+					id: String(s.id ?? `hs-${i}`),
+					name: String(s.name ?? `Section-${i + 1}`),
+					top: Number(s.top),
+					bottom: Number(s.bottom),
+					bit_size:
+						s.bit_size != null && Number.isFinite(Number(s.bit_size))
+							? Number(s.bit_size)
+							: null,
+					mud_type: s.mud_type ? String(s.mud_type).trim().toUpperCase() : '',
+					mud_weight:
+						s.mud_weight != null && Number.isFinite(Number(s.mud_weight))
+							? Number(s.mud_weight)
+							: null,
+					mud_salinity:
+						s.mud_salinity != null && Number.isFinite(Number(s.mud_salinity))
+							? Number(s.mud_salinity)
+							: null,
+					rmf: s.rmf != null && Number.isFinite(Number(s.rmf)) ? Number(s.rmf) : null,
+					rmf_temp:
+						s.rmf_temp != null && Number.isFinite(Number(s.rmf_temp))
+							? Number(s.rmf_temp)
+							: null
+				}))
+				.filter((s) => Number.isFinite(s.top) && Number.isFinite(s.bottom))
 				.sort((a, b) => a.top - b.top);
 			this.coreSamples = rawCoreList.map((s: any) => ({
 				...s,
@@ -3034,6 +3093,7 @@ class WellDataState {
 			if (groupSet.has('ressum') || clearedSet.has('PHIT') || clearedSet.has('SWT')) {
 				this.zonalSummary = [];
 				this.zonalSummarySource = null;
+				this.ressumCutoffsSensitivity = null;
 			}
 			if (groupSet.has('litho_poro') || clearedSet.has('PHIT')) {
 				this.poroCoreMetrics = null;
@@ -3538,6 +3598,7 @@ class WellDataState {
 			...this.config,
 			...updates
 		};
+		syncHeaderToLithoParams(updates, workbench.lithoParams);
 		if (persist && pid && wid) {
 			const res = await postJson<any>(
 				`/quick_pp/workspace/projects/${encodeURIComponent(pid)}/wells/${encodeURIComponent(wid)}/config`,
@@ -4319,6 +4380,49 @@ class WellDataState {
 			CPERM: computeSummaryStats(newCperm, dept),
 			...(hasAmb ? { CPORE_AMB: computeSummaryStats(newCporeAmb, dept) } : {}),
 			...(hasAir ? { CPERM_AIR: computeSummaryStats(newCpermAir, dept) } : {})
+		};
+	}
+
+	/**
+	 * Rebuild in-memory `BS` (bit size) curve from `this.holeSections` so Track 1 (`CALI / BS`)
+	 * updates immediately when hole sections are added, edited, or deleted.
+	 */
+	syncBitSizeCurveFromHoleSections() {
+		const dept = this.curves['DEPT'] ?? this.curves['DEPTH'] ?? [];
+		if (dept.length === 0) return;
+
+		const validSections = [...this.holeSections]
+			.filter(
+				(s) =>
+					Number.isFinite(Number(s.top)) &&
+					Number(s.bottom) > Number(s.top) &&
+					s.bit_size != null &&
+					Number.isFinite(Number(s.bit_size)) &&
+					Number(s.bit_size) > 0
+			)
+			.sort((a, b) => Number(a.top) - Number(b.top));
+
+		if (validSections.length === 0) return;
+
+		const newBs = dept.map((d) => {
+			if (!Number.isFinite(d)) return Number.NaN;
+			let val = Number.NaN;
+			for (const s of validSections) {
+				if (d >= Number(s.top) && d <= Number(s.bottom)) {
+					val = Number(s.bit_size);
+				}
+			}
+			return val;
+		});
+		if (!newBs.some((v) => Number.isFinite(v))) return;
+
+		this.curves = {
+			...this.curves,
+			BS: newBs
+		};
+		this.stats = {
+			...this.stats,
+			BS: computeSummaryStats(newBs, dept)
 		};
 	}
 

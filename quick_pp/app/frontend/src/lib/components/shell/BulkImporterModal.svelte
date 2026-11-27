@@ -10,6 +10,7 @@
 
 	let activeTab = $state<
 		| 'las'
+		| 'hole_sections'
 		| 'formation_tops'
 		| 'fluid_contacts'
 		| 'perforations'
@@ -363,6 +364,7 @@
 			>
 				{#each [
 					['las', 'LAS / DLIS / Parquet Logs'],
+					['hole_sections', 'Hole Sections'],
 					['formation_tops', 'Formation Tops'],
 					['fluid_contacts', 'Fluid Contacts'],
 					['perforations', 'Perforations'],
@@ -760,6 +762,16 @@
 																	type="number"
 																	step="0.001"
 																	bind:value={fileItem.metadata.rmf}
+																	class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1.5 font-mono"
+																/>
+															</label>
+															<label class="flex flex-col gap-0.5">
+																<span class="text-[10px] font-semibold text-[var(--text-secondary)]">Rmf Temp (°C)</span>
+																<input
+																	type="number"
+																	step="0.5"
+																	bind:value={fileItem.metadata.rmf_temp}
+																	placeholder="e.g. 20"
 																	class="h-6 rounded-xs border border-[var(--border-hairline)] bg-white px-1.5 font-mono"
 																/>
 															</label>

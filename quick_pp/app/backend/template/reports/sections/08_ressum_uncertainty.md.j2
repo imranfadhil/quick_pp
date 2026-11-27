@@ -26,6 +26,10 @@ Probabilistic petrophysical uncertainty ranges were quantified across $N = 1000$
 | **{{ u.zone }}** | {{ u.metric }} | {{ u.p90 }} | **{{ u.p50 }}** | {{ u.p10 }} | {{ u.spread }} |
 {% endfor %}
 
+{% if uncertainty_drivers_text %}
+> **Tornado Sensitivity Drivers:** {{ uncertainty_drivers_text }}
+{% endif %}
+
 {% if volumetric_summary and volumetric_summary.field_totals %}
 ### {{ sec_num }}.4 Volumetric Hydrocarbon Resources (SPE-PRMS Latin Hypercube Monte Carlo)
 
@@ -37,6 +41,16 @@ Probabilistic in-place and recoverable volumes were evaluated under **{{ volumet
 {% for z in volumetric_summary.zonal_summaries %}
 | **{{ z.zone }}** | {{ "%.2f"|format(z.stoiip.p90) }} | **{{ "%.2f"|format(z.stoiip.p50) }}** | {{ "%.2f"|format(z.stoiip.p10) }} | {{ "%.2f"|format(z.rec_oil.p50) }} | {{ "%.2f"|format(z.giip.p90) }} | **{{ "%.2f"|format(z.giip.p50) }}** | {{ "%.2f"|format(z.giip.p10) }} | {{ "%.2f"|format(z.rec_gas.p50) }} |
 {% endfor %}
+{% else %}
+### {{ sec_num }}.4 Volumetric Resource In-Place Readiness Note
+
+> [!NOTE]
+> **Static Geomodel Handover & Volumetric Readiness:** 3D structural-framework gross rock volume (GRV) or drainage area boundaries have not been committed in this project snapshot. Petrophysical evaluation inputs are verified and primed for dynamic simulation and static geomodel populating:
+> * **Cumulative Hydrocarbon Pore Thickness (HCPT), all {{ volumetric_readiness.evaluated_zones if volumetric_readiness and volumetric_readiness.evaluated_zones is defined else "—" }} zones:** ${{ "%.2f"|format(volumetric_readiness.column_hcpt) if volumetric_readiness and volumetric_readiness.column_hcpt is defined else "—" }}\text{ m}$ (sum of per-zone means; matches the Executive Summary)
+> * **Mean HCPT per Evaluated Zone:** ${{ "%.2f"|format(volumetric_readiness.mean_hcpt) if volumetric_readiness and volumetric_readiness.mean_hcpt is defined else "—" }}\text{ m}$
+> * **Cumulative Net Pay Thickness:** ${{ "%.1f"|format(volumetric_readiness.column_net_pay) if volumetric_readiness and volumetric_readiness.column_net_pay is defined else "—" }}\text{ m}$ (mean per zone ${{ "%.1f"|format(volumetric_readiness.mean_net_pay) if volumetric_readiness and volumetric_readiness.mean_net_pay is defined else "—" }}\text{ m}$)
+> * **Net-to-Gross Ratio (pay, total net pay / total gross):** ${{ "%.3f"|format(volumetric_readiness.mean_ntg) if volumetric_readiness and volumetric_readiness.mean_ntg is defined else "—" }}\text{ v/v}$
+> * **Average Reservoir Porosity & Water Saturation:** $\bar{\phi}_{e,pay} = {{ "%.3f"|format(volumetric_readiness.mean_phie) if volumetric_readiness and volumetric_readiness.mean_phie is defined else "—" }}\text{ v/v}$, $\bar{S}_{w,pay} = {{ "%.3f"|format(volumetric_readiness.mean_sw) if volumetric_readiness and volumetric_readiness.mean_sw is defined else "—" }}\text{ v/v}$
 {% endif %}
 
 {% if include_ai_commentary and ai_commentary.uncertainty_narrative %}

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onDestroy } from 'svelte';
 	import { authState } from '$lib/state/auth.svelte';
+	import { demoSession } from '$lib/state/demoSession.svelte';
 	import { depthDisplay } from '$lib/state/depthDisplay.svelte';
 	import { projectData } from '$lib/state/projectData.svelte';
 	import { appStatus } from '$lib/state/status.svelte';
@@ -10,8 +11,8 @@
 	import { fmtDepth } from '$lib/utils/formatters';
 
 	const STEP_LABELS: Record<string, string> = {
+		ancillary: 'Well & Ancillary',
 		qaqc: 'Data & QAQC',
-		ancillary: 'Tops & Ancillary',
 		'litho-poro': 'Lithology & Porosity',
 		perm: 'Permeability',
 		saturation: 'Saturation',
@@ -72,9 +73,7 @@
 		return `${scopeLabel} › ${STEP_LABELS[stepKey] ?? stepKey}`;
 	});
 
-	let isFiltered = $derived(
-		workbench.depthFilter !== null || workbench.selectedZones.length > 0
-	);
+	let isFiltered = $derived(workbench.depthFilter !== null || workbench.selectedZones.length > 0);
 
 	function formatDuration(ms: number | null | undefined): string {
 		if (ms === null || ms === undefined || ms <= 0) return '';
@@ -96,7 +95,11 @@
 		let tvdss = r.TVDSS ?? r.TVD ?? null;
 		if (tvdss === null && wellData.survey && wellData.survey.length > 0) {
 			const sorted = wellData.survey
-				.filter((s) => Number.isFinite(s.md) && (Number.isFinite(s.tvdss) || Number.isFinite(s.tvd)))
+				.filter(
+					(s) =>
+						Number.isFinite(s.md) &&
+						(Number.isFinite(s.tvdss) || Number.isFinite(s.tvd))
+				)
 				.sort((a, b) => a.md - b.md);
 			if (sorted.length > 0) {
 				if (md <= sorted[0].md) {
@@ -129,7 +132,9 @@
 >
 	<!-- Animated Top Progress Line when Busy -->
 	{#if appStatus.isBusy}
-		<div class="pointer-events-none absolute top-0 right-0 left-0 h-[2px] overflow-hidden bg-blue-100">
+		<div
+			class="pointer-events-none absolute top-0 right-0 left-0 h-[2px] overflow-hidden bg-blue-100"
+		>
 			{#if appStatus.displayProgress !== null}
 				<div
 					class="h-full bg-[var(--accent-primary)] transition-all duration-150"
@@ -147,7 +152,7 @@
 			<button
 				type="button"
 				onclick={() => (appStatus.logPopoverOpen = !appStatus.logPopoverOpen)}
-				class="inline-flex shrink-0 items-center gap-1 rounded-xs border border-blue-200 bg-blue-50 px-1.5 py-0.2 text-[9px] font-bold tracking-wider text-blue-700 uppercase hover:bg-blue-100 transition-colors cursor-pointer"
+				class="py-0.2 inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-xs border border-blue-200 bg-blue-50 px-1.5 text-[9px] font-bold tracking-wider text-blue-700 uppercase transition-colors hover:bg-blue-100"
 				title="Click to view activity log"
 			>
 				<span
@@ -175,12 +180,15 @@
 			{/if}
 		{:else if appStatus.displayLevel === 'error'}
 			<span
-				class="inline-flex shrink-0 items-center gap-1 rounded-xs border border-red-200 bg-red-50 px-1.5 py-0.2 text-[9px] font-bold tracking-wider text-red-700 uppercase"
+				class="py-0.2 inline-flex shrink-0 items-center gap-1 rounded-xs border border-red-200 bg-red-50 px-1.5 text-[9px] font-bold tracking-wider text-red-700 uppercase"
 			>
 				<span class="inline-block h-1.5 w-1.5 rounded-full bg-red-600"></span>
 				Error
 			</span>
-			<span class="truncate font-medium text-[var(--status-error)]" title={appStatus.displayMessage}>
+			<span
+				class="truncate font-medium text-[var(--status-error)]"
+				title={appStatus.displayMessage}
+			>
 				{appStatus.displayMessage}
 			</span>
 			{#if appStatus.displayDetail}
@@ -198,7 +206,7 @@
 			</button>
 		{:else if appStatus.displayLevel === 'warning'}
 			<span
-				class="inline-flex shrink-0 items-center gap-1 rounded-xs border border-amber-200 bg-amber-50 px-1.5 py-0.2 text-[9px] font-bold tracking-wider text-amber-800 uppercase"
+				class="py-0.2 inline-flex shrink-0 items-center gap-1 rounded-xs border border-amber-200 bg-amber-50 px-1.5 text-[9px] font-bold tracking-wider text-amber-800 uppercase"
 			>
 				<span class="inline-block h-1.5 w-1.5 rounded-full bg-amber-500"></span>
 				Notice
@@ -210,11 +218,13 @@
 			<button
 				type="button"
 				onclick={() => (appStatus.logPopoverOpen = !appStatus.logPopoverOpen)}
-				class="group inline-flex shrink-0 items-center gap-1.5 text-[var(--text-secondary)] hover:opacity-80 transition-opacity cursor-pointer"
+				class="group inline-flex shrink-0 cursor-pointer items-center gap-1.5 text-[var(--text-secondary)] transition-opacity hover:opacity-80"
 				title="Click to view activity log"
 			>
 				<span class="inline-block h-2 w-2 rounded-full bg-emerald-500"></span>
-				<span class="truncate font-medium text-emerald-700 dark:text-emerald-400 group-hover:underline">
+				<span
+					class="truncate font-medium text-emerald-700 group-hover:underline dark:text-emerald-400"
+				>
 					{wellData.lastSavedMessage}
 				</span>
 			</button>
@@ -230,7 +240,7 @@
 			<button
 				type="button"
 				onclick={() => (appStatus.logPopoverOpen = !appStatus.logPopoverOpen)}
-				class="inline-flex shrink-0 items-center gap-1.5 text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors cursor-pointer"
+				class="inline-flex shrink-0 cursor-pointer items-center gap-1.5 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
 				title="Click to view activity log"
 			>
 				<span class="inline-block h-2 w-2 rounded-full bg-emerald-500"></span>
@@ -261,7 +271,8 @@
 		{#if workbench.wellId}
 			<span class="text-[var(--border-hairline)]">|</span>
 			<span class="mono-num">
-				<strong class="font-semibold text-[var(--text-primary)]">{workbench.wellId}</strong>:
+				<strong class="font-semibold text-[var(--text-primary)]">{workbench.wellId}</strong
+				>:
 				{#if isFiltered}
 					<span class="font-semibold text-blue-700">
 						{wellData.visibleIndices.length.toLocaleString()}
@@ -282,9 +293,12 @@
 		{#if cursorDepthReadout}
 			<span class="text-[var(--border-hairline)]">|</span>
 			<div class="mono-num inline-flex items-center gap-1.5">
-				<span class="text-[10px] font-semibold tracking-wider text-[var(--text-muted)] uppercase">Cursor</span>
 				<span
-					class="inline-flex items-center gap-1 rounded-xs border border-slate-200 bg-slate-100/90 px-1.5 py-0 text-[10px] text-slate-800 dark:border-slate-700 dark:bg-slate-800/80 dark:text-slate-200 shadow-2xs"
+					class="text-[10px] font-semibold tracking-wider text-[var(--text-muted)] uppercase"
+					>Cursor</span
+				>
+				<span
+					class="inline-flex items-center gap-1 rounded-xs border border-slate-200 bg-slate-100/90 px-1.5 py-0 text-[10px] text-slate-800 shadow-2xs dark:border-slate-700 dark:bg-slate-800/80 dark:text-slate-200"
 					title="Measured Depth (MD)"
 				>
 					<span class="text-[8.5px] font-bold text-slate-500 uppercase">MD</span>
@@ -292,11 +306,15 @@
 				</span>
 				{#if cursorDepthReadout.tvdss !== null}
 					<span
-						class="inline-flex items-center gap-1 rounded-xs border border-sky-200 bg-sky-50/90 px-1.5 py-0 text-[10px] text-sky-900 dark:border-sky-800/70 dark:bg-sky-950/60 dark:text-sky-200 shadow-2xs"
+						class="inline-flex items-center gap-1 rounded-xs border border-sky-200 bg-sky-50/90 px-1.5 py-0 text-[10px] text-sky-900 shadow-2xs dark:border-sky-800/70 dark:bg-sky-950/60 dark:text-sky-200"
 						title="True Vertical Depth Subsea (TVDSS)"
 					>
-						<span class="text-[8.5px] font-bold text-sky-600 dark:text-sky-400 uppercase">TVDSS</span>
-						<span class="font-bold">{formatDisplayDepth(cursorDepthReadout.tvdss)}</span>
+						<span
+							class="text-[8.5px] font-bold text-sky-600 uppercase dark:text-sky-400"
+							>TVDSS</span
+						>
+						<span class="font-bold">{formatDisplayDepth(cursorDepthReadout.tvdss)}</span
+						>
 					</span>
 				{/if}
 			</div>
@@ -307,10 +325,12 @@
 	<div class="relative flex shrink-0 items-center gap-2 pl-3">
 		{#if authState.isDemoMode}
 			<span
-				class="hidden text-[10px] font-medium text-emerald-700 sm:inline"
-				title="Ephemeral Demo Mode — Session changes are isolated in memory"
+				class="hidden text-[10px] font-medium {demoSession.lagWarning
+					? 'text-amber-700'
+					: 'text-emerald-700'} sm:inline"
+				title="Ephemeral Demo Mode — Pre-seeded DB is read-only; temporary uploads & reports auto-clean on session exit"
 			>
-				● Ephemeral Demo
+				● Ephemeral Demo ({demoSession.onlineUsers}/{demoSession.maxUsers} online)
 			</span>
 		{/if}
 
@@ -359,17 +379,25 @@
 				<div class="flex-1 divide-y divide-[var(--border-hairline)] overflow-y-auto">
 					{#if appStatus.activeTasks.length > 0}
 						{#each appStatus.activeTasks as task (task.id)}
-							<div class="flex items-start gap-2 bg-blue-50/60 px-2.5 py-1.5 text-[11px]">
+							<div
+								class="flex items-start gap-2 bg-blue-50/60 px-2.5 py-1.5 text-[11px]"
+							>
 								<span
 									class="mt-0.5 inline-block h-2.5 w-2.5 shrink-0 animate-spin rounded-full border-2 border-blue-600 border-t-transparent"
 								></span>
 								<div class="min-w-0 flex-1">
-									<div class="truncate font-semibold text-blue-900">{task.label}</div>
+									<div class="truncate font-semibold text-blue-900">
+										{task.label}
+									</div>
 									{#if task.detail}
-										<div class="truncate text-[10px] text-blue-700">{task.detail}</div>
+										<div class="truncate text-[10px] text-blue-700">
+											{task.detail}
+										</div>
 									{/if}
 								</div>
-								<span class="mono-num shrink-0 text-[10px] font-medium text-blue-700">
+								<span
+									class="mono-num shrink-0 text-[10px] font-medium text-blue-700"
+								>
 									In flight
 								</span>
 							</div>
@@ -382,9 +410,12 @@
 						</div>
 					{:else}
 						{#each appStatus.history as item (item.id)}
-							<div class="flex items-start gap-2 px-2.5 py-1.5 text-[11px] hover:bg-[var(--bg-app)]">
+							<div
+								class="flex items-start gap-2 px-2.5 py-1.5 text-[11px] hover:bg-[var(--bg-app)]"
+							>
 								<span
-									class="mono-num mt-0.5 shrink-0 text-[10px] font-bold {item.level === 'error'
+									class="mono-num mt-0.5 shrink-0 text-[10px] font-bold {item.level ===
+									'error'
 										? 'text-[var(--status-error)]'
 										: item.level === 'warning'
 											? 'text-[var(--status-warn)]'
@@ -401,19 +432,29 @@
 												: '•'}
 								</span>
 								<div class="min-w-0 flex-1">
-									<div class="truncate font-medium text-[var(--text-primary)]" title={item.message}>
+									<div
+										class="truncate font-medium text-[var(--text-primary)]"
+										title={item.message}
+									>
 										{item.message}
 									</div>
 									{#if item.detail}
-										<div class="truncate text-[10px] text-[var(--text-muted)]" title={item.detail}>
+										<div
+											class="truncate text-[10px] text-[var(--text-muted)]"
+											title={item.detail}
+										>
 											{item.detail}
 										</div>
 									{/if}
 								</div>
-								<div class="mono-num flex shrink-0 flex-col items-end text-[9.5px] text-[var(--text-muted)]">
+								<div
+									class="mono-num flex shrink-0 flex-col items-end text-[9.5px] text-[var(--text-muted)]"
+								>
 									<span>{item.timestamp}</span>
 									{#if item.durationMs}
-										<span class="text-[9px] font-medium text-[var(--text-secondary)]">
+										<span
+											class="text-[9px] font-medium text-[var(--text-secondary)]"
+										>
 											{formatDuration(item.durationMs)}
 										</span>
 									{/if}
@@ -429,7 +470,8 @@
 	<!-- Floating Toast Notification for Operation Completion / Alerts -->
 	{#if appStatus.toast}
 		<div
-			class="pointer-events-auto absolute bottom-8 left-3 z-50 flex max-w-sm items-center gap-2 rounded-xs border px-2.5 py-1 text-xs shadow-lg backdrop-blur-md transition-all duration-150 {appStatus.toast.level === 'error'
+			class="pointer-events-auto absolute bottom-8 left-3 z-50 flex max-w-sm items-center gap-2 rounded-xs border px-2.5 py-1 text-xs shadow-lg backdrop-blur-md transition-all duration-150 {appStatus
+				.toast.level === 'error'
 				? 'border-red-300 bg-red-50/95 text-red-900'
 				: appStatus.toast.level === 'warning'
 					? 'border-amber-300 bg-amber-50/95 text-amber-900'

@@ -128,6 +128,7 @@ export interface ProjectListItem {
 
 export type MultiWellSaveModule = 'rock-typing' | 'perm-transform' | 'swirr-corr' | 'shf';
 export type SwirrExtractionMode = 'cutoff_pc' | 'interp_pc';
+export type SwirrPcDomain = 'lab' | 'reservoir';
 export type SwirrEquationType = 'rqi_power' | 'semilog_k' | 'timur';
 export type SwirrFitScope = 'global' | 'per_rt';
 
@@ -143,6 +144,7 @@ export interface SwirrCorrelationRule {
 
 export interface SwirrModelConfig {
 	extractionMode: SwirrExtractionMode;
+	pcDomain?: SwirrPcDomain;
 	referencePcPsi: number;
 	equationType: SwirrEquationType;
 	fitScope: SwirrFitScope;
@@ -164,7 +166,10 @@ export interface SwirrPlugRow {
 	cperm: number;
 	rqi_ratio: number;
 	rqi: number;
+	fzi?: number;
 	max_pc: number;
+	experiment_type?: string;
+	pc_domain?: string;
 	sw_at_max_pc: number;
 	extracted_swirr: number;
 	modeled_swirr: number;
@@ -307,6 +312,9 @@ class ProjectDataState {
 			this.luciaCutoffs = vals;
 		} else {
 			this.fziCutoffs = vals;
+		}
+		if (this.swirrResult?.plugs?.length) {
+			this.recomputeSwirrClientSide(!this.swirrManualRuleOverride);
 		}
 	}
 
@@ -453,6 +461,7 @@ class ProjectDataState {
 
 	swirrConfig = $state<SwirrModelConfig>({
 		extractionMode: 'cutoff_pc',
+		pcDomain: 'lab',
 		referencePcPsi: 50.0,
 		equationType: 'rqi_power',
 		fitScope: 'global',
@@ -1716,7 +1725,8 @@ class ProjectDataState {
 			indVal = phiz > 1e-6 ? rqi / phiz : 0;
 			higherIsBetter = true;
 		}
-		const cutoffs = this.activeDrtCutoffs || [0.5, 1.2, 2.5, 5.0];
+		const rawCutoffs = this.activeDrtCutoffs || [0.5, 1.2, 2.5, 5.0];
+		const cutoffs = [...rawCutoffs].map(Number).filter(Number.isFinite).sort((a, b) => a - b);
 		const nCut = cutoffs.length;
 		if (nCut === 0) return 1;
 		let rt = 1;
@@ -1807,13 +1817,26 @@ class ProjectDataState {
 	): boolean {
 		const wn = String(wellName || '').trim();
 		if (wn) {
+			const wnTok = wn
+				.toLowerCase()
+				.replace(/(?<![0-9])0+([1-9])/g, '$1')
+				.replace(/[^a-z0-9]/g, '');
 			if (workbench.scope === 'single-well' && workbench.wellId) {
-				if (wn !== workbench.wellId) return false;
-			} else if (
-				this.selectedWellNames.length > 0 &&
-				!this.selectedWellNames.includes(wn)
-			) {
-				return false;
+				const activeTok = workbench.wellId
+					.toLowerCase()
+					.replace(/(?<![0-9])0+([1-9])/g, '$1')
+					.replace(/[^a-z0-9]/g, '');
+				if (wnTok !== activeTok) return false;
+			} else if (this.selectedWellNames.length > 0) {
+				const hasMatch = this.selectedWellNames.some((sel) => {
+					if (sel === wn) return true;
+					const selTok = sel
+						.toLowerCase()
+						.replace(/(?<![0-9])0+([1-9])/g, '$1')
+						.replace(/[^a-z0-9]/g, '');
+					return selTok === wnTok;
+				});
+				if (!hasMatch) return false;
 			}
 		}
 		const d = typeof depth === 'number' && Number.isFinite(depth) ? depth : null;
@@ -1888,11 +1911,17 @@ class ProjectDataState {
 				p.cpore && p.cperm
 					? (this.classifyRockType(p.cpore, p.cperm) ?? p.rt ?? 1)
 					: (p.rt ?? 1);
+			const phiCl = Math.max(1e-4, p.cpore || 0.15);
+			const kCl = Math.max(1e-4, p.cperm || 10.0);
+			const rqiCl = 0.0314 * Math.sqrt(kCl / phiCl);
+			const phizCl = phiCl / Math.max(1e-4, 1.0 - phiCl);
+			const fziCl = phizCl > 1e-6 ? rqiCl / phizCl : 0;
 			return {
 				...p,
 				plug_id: normPid,
 				zone: resolvedZone,
 				rt: dynRt,
+				fzi: Number(fziCl.toFixed(3)),
 				max_pc: Number(maxPc.toFixed(2)),
 				sw_at_max_pc: Number(minSw.toFixed(4)),
 				extracted_swirr: Number(extSwirr.toFixed(4)),
@@ -2032,14 +2061,30 @@ class ProjectDataState {
 		const globalRule = fitSubset(inclPlugs, 'global');
 		nextRules['global'] = globalRule;
 
-		const rts = Array.from(new Set(updatedPlugs.map((p) => p.rt))).sort((a, b) => a - b);
-		for (const rt of rts) {
+		const numCutoffs = (this.activeDrtCutoffs || []).length;
+		const cutoffRts = Array.from({ length: Math.max(3, numCutoffs + 1) }, (_, i) => i + 1);
+		const plugRts = updatedPlugs
+			.map((p) => p.rt)
+			.filter((r) => r != null && Number.isFinite(r));
+		const allRts = Array.from(new Set([...cutoffRts, ...plugRts])).sort((a, b) => a - b);
+		for (const rt of allRts) {
 			const rtKey = String(rt);
 			const sub = inclPlugs.filter((p) => p.rt === rt);
-			nextRules[rtKey] =
-				sub.length >= 1
-					? fitSubset(sub, rtKey)
-					: { ...globalRule, scope: rtKey, count: 0 };
+			if (sub.length >= 1) {
+				nextRules[rtKey] = fitSubset(sub, rtKey);
+			} else if (
+				cfg.rules?.[rtKey] &&
+				(cfg.rules[rtKey].a != null || cfg.rules[rtKey].b != null)
+			) {
+				// User manually specified or copied parameters for this RT without samples
+				nextRules[rtKey] = {
+					...cfg.rules[rtKey],
+					scope: rtKey,
+					count: 0
+				};
+			} else {
+				nextRules[rtKey] = { ...globalRule, scope: rtKey, count: 0, r2: 0, rmse: 0 };
+			}
 		}
 
 		this.swirrConfig.rules = nextRules;
@@ -2070,6 +2115,7 @@ class ProjectDataState {
 		const pid = workbench.projectId;
 		if (!pid) return false;
 		if (!force && this.swirrResult && Array.isArray(this.swirrResult.plugs) && this.swirrResult.plugs.length > 0) {
+			this.recomputeSwirrClientSide(!this.swirrManualRuleOverride);
 			return true;
 		}
 		try {
@@ -2078,10 +2124,14 @@ class ProjectDataState {
 				`/quick_pp/workspace/projects/${encodeURIComponent(pid)}/swirr/fit`,
 				{
 					well_names: this.selectedWellNames.length > 0 ? this.selectedWellNames : null,
-					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
-					min_depth: workbench.depthFilter?.min ?? null,
-					max_depth: workbench.depthFilter?.max ?? null,
+					zones:
+						workbench.scope === 'multi-well' && workbench.selectedZones.length > 0
+							? workbench.selectedZones
+							: null,
+					min_depth: workbench.scope === 'multi-well' ? (workbench.depthFilter?.min ?? null) : null,
+					max_depth: workbench.scope === 'multi-well' ? (workbench.depthFilter?.max ?? null) : null,
 					extraction_mode: cfg.extractionMode,
+					pc_domain: cfg.pcDomain ?? 'lab',
 					reference_pc_psi: cfg.referencePcPsi,
 					equation_type: cfg.equationType,
 					fit_scope: cfg.fitScope,
@@ -2304,14 +2354,34 @@ class ProjectDataState {
 			Object.keys(existing.fits).length > 0;
 
 		const nextFits = keepExistingFits
-			? existing!.fits
+			? { ...existing!.fits }
 			: activeModel === 'leverett_j'
-				? jSatMode === 'sw'
-					? fitsSw
-					: fitsSwn
+				? { ...(jSatMode === 'sw' ? fitsSw : fitsSwn) }
 				: activeModel === 'skelt_harrison'
-					? fitsSkelt
-					: fitsCuddy;
+					? { ...fitsSkelt }
+					: { ...fitsCuddy };
+
+		// Ensure every rock type in allRts has an entry in nextFits
+		const numCutoffs = (this.activeDrtCutoffs || []).length;
+		const cutoffRts = Array.from({ length: Math.max(3, numCutoffs + 1) }, (_, i) => i + 1);
+		const plugRts = (sr.plugs || [])
+			.map((p) => p.rt)
+			.filter((r) => r != null && Number.isFinite(r));
+		const allRts = Array.from(new Set([...cutoffRts, ...plugRts])).sort((a, b) => a - b);
+		for (const rt of allRts) {
+			const rtKey = String(rt);
+			if (!nextFits[rtKey]) {
+				const fallbackFit =
+					existing?.fits?.[rtKey] ||
+					nextFits[String(rt - 1)] ||
+					nextFits[String(rt + 1)] ||
+					Object.values(nextFits)[0] || { a: 0.1, b: 1.5, count: 0, r2: 0, rmse: 0 };
+				nextFits[rtKey] = {
+					...fallbackFit,
+					count: 0
+				};
+			}
+		}
 
 		this.shfResult = {
 			model: activeModel,
@@ -2346,6 +2416,11 @@ class ProjectDataState {
 			perm: existing?.perm ?? [],
 			rock_flags: existing?.rock_flags ?? [],
 			shf: existing?.shf ?? []
+		};
+		this.shfSavedFits = {
+			model: activeModel,
+			j_sat_mode: jSatMode,
+			fits: { ...nextFits }
 		};
 	}
 
@@ -2802,17 +2877,79 @@ class ProjectDataState {
 		}
 	}
 
+	upsertProject(item: ProjectListItem): ProjectListItem[] {
+		const pid = Number(item.project_id);
+		if (!Number.isFinite(pid) || pid <= 0) return this.projects;
+		const normalizedName = (item.name || '').trim() || `Project ${pid}`;
+		const existingIdx = this.projects.findIndex((p) => Number(p.project_id) === pid);
+		const nextList = [...this.projects];
+		if (existingIdx >= 0) {
+			nextList[existingIdx] = {
+				...nextList[existingIdx],
+				...item,
+				project_id: pid,
+				name: normalizedName
+			};
+		} else {
+			nextList.push({
+				...item,
+				project_id: pid,
+				name: normalizedName
+			});
+		}
+		this.projects = nextList.sort((a, b) =>
+			(a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })
+		);
+		return this.projects;
+	}
+
 	async loadProjects(): Promise<ProjectListItem[]> {
 		try {
-			const { data } = await api.GET('/quick_pp/database/projects');
-			const list = Array.isArray(data) ? data : [];
+			const { data, error } = await api.GET('/quick_pp/database/projects', {
+				cache: 'no-store'
+			});
+			if (error || !Array.isArray(data)) {
+				if (error) {
+					this.error = String((error as any)?.detail ?? 'Failed to load projects');
+				}
+				if (this.summary?.project_id != null) {
+					this.upsertProject({
+						project_id: Number(this.summary.project_id),
+						name: this.summary.name,
+						description: this.summary.description ?? undefined
+					});
+				}
+				return this.projects;
+			}
+			const list = data.map((p) => ({
+				...p,
+				project_id: Number(p.project_id)
+			}));
 			this.projects = [...list].sort((a, b) =>
 				(a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })
 			);
+			if (
+				this.summary?.project_id != null &&
+				workbench.projectId != null &&
+				String(this.summary.project_id) === String(workbench.projectId)
+			) {
+				this.upsertProject({
+					project_id: Number(this.summary.project_id),
+					name: this.summary.name,
+					description: this.summary.description ?? undefined
+				});
+			}
 			return this.projects;
 		} catch (e: any) {
 			this.error = e?.message || 'Failed to load projects';
-			return [];
+			if (this.summary?.project_id != null) {
+				this.upsertProject({
+					project_id: Number(this.summary.project_id),
+					name: this.summary.name,
+					description: this.summary.description ?? undefined
+				});
+			}
+			return this.projects;
 		}
 	}
 
@@ -2852,6 +2989,11 @@ class ProjectDataState {
 					(a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })
 				);
 				this.summary = { ...data, wells: sortedWells };
+				this.upsertProject({
+					project_id: Number(data.project_id),
+					name: data.name,
+					description: data.description ?? undefined
+				});
 			}
 		} catch {
 			// Ignore background summary refresh error
@@ -2890,6 +3032,11 @@ class ProjectDataState {
 				(a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' })
 			);
 			this.summary = { ...data, wells: sortedAvailableWells };
+			this.upsertProject({
+				project_id: Number(data.project_id),
+				name: data.name,
+				description: data.description ?? undefined
+			});
 			this.selectedWellNames = sortedAvailableWells.map((w) => w.name);
 
 			const availableWells = sortedAvailableWells;
@@ -2948,7 +3095,17 @@ class ProjectDataState {
 		if (error || !data) {
 			throw new Error(String((error as any)?.detail ?? 'Failed to create project'));
 		}
+		this.upsertProject({
+			project_id: Number(data.project_id),
+			name: data.name || name.trim(),
+			description
+		});
 		await this.loadProjects();
+		this.upsertProject({
+			project_id: Number(data.project_id),
+			name: data.name || name.trim(),
+			description
+		});
 		await this.selectProject(data.project_id);
 		return data;
 	}
@@ -2962,7 +3119,17 @@ class ProjectDataState {
 			`/quick_pp/database/projects/${encodeURIComponent(String(projectId))}`,
 			payload
 		);
+		this.upsertProject({
+			project_id: Number(res.project_id ?? projectId),
+			name: res.name || trimmed,
+			description: res.description ?? description
+		});
 		await this.loadProjects();
+		this.upsertProject({
+			project_id: Number(res.project_id ?? projectId),
+			name: res.name || trimmed,
+			description: res.description ?? description
+		});
 		if (String(workbench.projectId) === String(projectId)) {
 			if (this.summary) {
 				this.summary = {

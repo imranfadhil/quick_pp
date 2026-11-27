@@ -243,19 +243,46 @@ def _plan_native_tool_calls(req: AgentChatRequest) -> List[Dict[str, Any]]:
     has_theory_kw = any(
         kw in q
         for kw in (
-            "equation", "formula", "governing equation", "cite formula",
-            "how do you calculate", "how is", "mathematical model",
-            "ssot reference", "technical reference", "workflow reference",
-            "cutoffs definition", "parameter bounds", "theoretical foundation"
+            "equation",
+            "formula",
+            "governing equation",
+            "cite formula",
+            "how do you calculate",
+            "how is",
+            "mathematical model",
+            "ssot reference",
+            "technical reference",
+            "workflow reference",
+            "cutoffs definition",
+            "parameter bounds",
+            "theoretical foundation",
         )
     )
     has_petro_topic = any(
         topic in q
         for topic in (
-            "qaqc", "badhole", "washout", "multimineral", "multi-mineral", "lithology",
-            "porosity", "shf", "leverett", "j-function", "capillary", "conformal",
-            "uncertainty", "archie", "simandoux", "permeability", "fzi", "vshale",
-            "clay", "fwl", "fluid contact", "water saturation"
+            "qaqc",
+            "badhole",
+            "washout",
+            "multimineral",
+            "multi-mineral",
+            "lithology",
+            "porosity",
+            "shf",
+            "leverett",
+            "j-function",
+            "capillary",
+            "conformal",
+            "uncertainty",
+            "archie",
+            "simandoux",
+            "permeability",
+            "fzi",
+            "vshale",
+            "clay",
+            "fwl",
+            "fluid contact",
+            "water saturation",
         )
     )
     wants_theory = has_theory_kw and has_petro_topic
@@ -615,7 +642,6 @@ def _plan_native_tool_calls(req: AgentChatRequest) -> List[Dict[str, Any]]:
     return calls
 
 
-
 def _handle_unrecognized_native_prompt(
     req: AgentChatRequest,
 ) -> tuple[str, List[Dict[str, str]]]:
@@ -627,9 +653,24 @@ def _handle_unrecognized_native_prompt(
     is_regional_or_literature = any(
         term in q.lower()
         for term in (
-            "sandstone", "formation", "group", "basin", "field", "balmoral", "brent",
-            "statfjord", "forties", "ekofisk", "clifton", "average porosity", "typical",
-            "analogue", "analog", "literature", "benchmark", "regional"
+            "sandstone",
+            "formation",
+            "group",
+            "basin",
+            "field",
+            "balmoral",
+            "brent",
+            "statfjord",
+            "forties",
+            "ekofisk",
+            "clifton",
+            "average porosity",
+            "typical",
+            "analogue",
+            "analog",
+            "literature",
+            "benchmark",
+            "regional",
         )
     )
 
@@ -655,8 +696,7 @@ def _handle_unrecognized_native_prompt(
         )
 
     actions_md = "\n".join(
-        f"- ⚡ **{act['label']}**: {act['description']}"
-        for act in PRESET_QUICK_ACTIONS
+        f"- ⚡ **{act['label']}**: {act['description']}" for act in PRESET_QUICK_ACTIONS
     )
 
     reply = (
@@ -689,23 +729,30 @@ def _synthesize_petrophysical_explanation(
         for rec in tool_records
     )
     no_core = any(
-        rec.get("name") == "inspect_well" and (rec.get("result") or {}).get("core_sample_count", 0) == 0
+        rec.get("name") == "inspect_well"
+        and (rec.get("result") or {}).get("core_sample_count", 0) == 0
         for rec in tool_records
     )
 
     if has_washout or no_core:
         reasons: List[str] = []
         if has_washout:
-            reasons.append("washout intervals detected where density/neutron log measurements are degraded by pad standoff")
+            reasons.append(
+                "washout intervals detected where density/neutron log measurements are degraded by pad standoff"
+            )
         if no_core:
-            reasons.append("lack of routine core calibration points (CPORE/CPERM) to anchor porosity and permeability transforms")
+            reasons.append(
+                "lack of routine core calibration points (CPORE/CPERM) to anchor porosity and permeability transforms"
+            )
         confidence_badge = (
             f"> ⚠️ **Answer Confidence: Medium** — Quantitative results computed from active well logs, but note: "
             f"{'; '.join(reasons)}.\n"
         )
         sections.append(confidence_badge)
     else:
-        sections.append("> ✅ **Answer Confidence: High** — Grounded directly in quantitative MCP tool execution on active well logs.\n")
+        sections.append(
+            "> ✅ **Answer Confidence: High** — Grounded directly in quantitative MCP tool execution on active well logs.\n"
+        )
 
     for rec in tool_records:
         t_name = rec["name"]
@@ -888,8 +935,7 @@ def _synthesize_petrophysical_explanation(
             ref_md = res.get("reference_content", "")
             src = res.get("source", "docs/workflows/")
             sections.append(
-                f"### 📖 Grounded Petrophysical Foundation (`{src}`)\n\n"
-                f"{ref_md}\n"
+                f"### 📖 Grounded Petrophysical Foundation (`{src}`)\n\n{ref_md}\n"
             )
 
     # Synthesize comprehensive Gaps & Uncertainty Analysis section across all executed tools
@@ -907,7 +953,9 @@ def _synthesize_petrophysical_explanation(
                     "Porosity, permeability, and saturation height models rely on uncalibrated empirical log transforms."
                 )
             curves = set(res.get("available_curves", []))
-            missing_essential = [c for c in ("RHOB", "NPHI", "GR", "RT", "CALI") if c not in curves]
+            missing_essential = [
+                c for c in ("RHOB", "NPHI", "GR", "RT", "CALI") if c not in curves
+            ]
             if missing_essential:
                 gaps.append(
                     f"**Missing Essential Curves**: Curves {', '.join(f'`{c}`' for c in missing_essential)} "
@@ -932,13 +980,16 @@ def _synthesize_petrophysical_explanation(
             iw = res.get("interval_width_summary") or {}
             if iw:
                 uncerts.append(
-                    f"**Conformal P10–P90 Interval Spreads**: Porosity uncertainty is `±{round(iw.get('phit_mean_width_vv', 0)/2, 4)} v/v`, "
-                    f"Sw uncertainty is `±{round(iw.get('sw_mean_width_vv', 0)/2, 4)} v/v`, and Permeability spread is "
+                    f"**Conformal P10–P90 Interval Spreads**: Porosity uncertainty is `±{round(iw.get('phit_mean_width_vv', 0) / 2, 4)} v/v`, "
+                    f"Sw uncertainty is `±{round(iw.get('sw_mean_width_vv', 0) / 2, 4)} v/v`, and Permeability spread is "
                     f"`{iw.get('perm_median_p90_p10_factor')}×` between P10 and P90."
                 )
             z_conf = res.get("zonal_conformal_summary") or []
             if z_conf:
-                cert_pay = [f"{z['zone']} ({round(z['certifiable_pay_fraction']*100, 1)}% P10 vs {round(z['upside_pay_fraction']*100, 1)}% P90)" for z in z_conf[:3]]
+                cert_pay = [
+                    f"{z['zone']} ({round(z['certifiable_pay_fraction'] * 100, 1)}% P10 vs {round(z['upside_pay_fraction'] * 100, 1)}% P90)"
+                    for z in z_conf[:3]
+                ]
                 uncerts.append(
                     f"**Pay Confidence Disparity**: Certifiable pay (P10) vs upside pay (P90): {', '.join(cert_pay)}."
                 )
@@ -992,19 +1043,21 @@ def _run_openai_compatible_agent(
     context_summary: str,
 ) -> tuple[str, List[Dict[str, Any]]]:
     """Run petrophysical MCP synthesis and tool-calling against OpenRouter or Local Ollama (`/v1/chat/completions`)."""
+    from quick_pp.app.backend.services.demo_guard import validate_external_llm_target
+
     provider = req.provider.lower()
+    base_url, api_key = validate_external_llm_target(
+        provider=provider,
+        caller_base_url=req.base_url,
+        caller_api_key=req.api_key,
+        env_openrouter_url=_get_env_key(
+            "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
+        ),
+        env_openrouter_key=_get_env_key("OPENROUTER_API_KEY", ""),
+    )
     if provider == "ollama":
-        base_url = (
-            req.base_url or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
-        ).rstrip("/")
-        api_key = req.api_key or "ollama"
         model = req.model or "qwen2.5:7b"
     else:
-        base_url = (
-            req.base_url
-            or _get_env_key("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
-        ).rstrip("/")
-        api_key = (req.api_key or "").strip() or _get_env_key("OPENROUTER_API_KEY", "")
         model = req.model or "deepseek/deepseek-chat"
         if not api_key:
             raise ValueError(
@@ -1049,7 +1102,9 @@ def _run_openai_compatible_agent(
 
     from quick_pp.app.backend.services.ssot_reference import get_step_reference
 
-    step_grounding = get_step_reference(req.scope or "single-well", req.step or "overview")
+    step_grounding = get_step_reference(
+        req.scope or "single-well", req.step or "overview"
+    )
 
     messages: List[Dict[str, Any]] = [
         {
@@ -1151,8 +1206,13 @@ def _run_openai_compatible_agent(
 )
 async def list_assistant_providers():
     """Return available agent providers, models, and MCP tool definitions for the Svelte UI drawer."""
+    from quick_pp.app.backend.utils.auth import is_demo_mode
+
+    demo = is_demo_mode()
     providers_out = []
     for p in PROVIDERS_CATALOG:
+        if demo and p.get("id") == "ollama":
+            continue
         env_k = p.get("env_key")
         has_env_key = bool(_get_env_key(env_k)) if env_k else True
         providers_out.append({**p, "server_key_configured": has_env_key})
@@ -1219,6 +1279,8 @@ async def assistant_chat(req: AgentChatRequest):
             reply_text = _synthesize_petrophysical_explanation(
                 req.message, executed_tools
             )
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.warning(
             f"External provider '{provider}' failed ({exc}); falling back to native_mcp agent."

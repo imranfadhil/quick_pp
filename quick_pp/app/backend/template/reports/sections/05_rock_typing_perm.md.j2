@@ -4,14 +4,28 @@
 
 Rock typing and continuous permeability ($K$) prediction were established using **{{ rt_summary.basis if rt_summary else 'Routine Core Analysis (RCA) & Log-Derived Hydraulic Flow Units' }}** via the Reservoir Quality Index ($RQI$), Normalized Porosity ($\phi_z$), Flow Zone Indicator ($FZI$), and Discrete Rock Typing ($DRT$) formulation:
 
-$$RQI = 0.0314 \sqrt{\frac{K}{\phi_e}}, \quad \phi_z = \frac{\phi_e}{1 - \phi_e}, \quad FZI = \frac{RQI}{\phi_z}, \quad DRT = \text{round}(2 \ln(FZI) + 10.6)$$
+$$RQI = 0.0314 \sqrt{\frac{K}{\phi_e}}, \quad \phi_z = \frac{\phi_e}{1 - \phi_e}, \quad FZI = \frac{RQI}{\phi_z}$$
+
+Discrete Rock Types (DRT) are assigned by binning $FZI$ at the cut-offs below ({{ rt_summary.cutoff_source if rt_summary and rt_summary.cutoff_source else 'unspecified source' }}).
 
 | Rock Type | $DRT$ / Class | FZI Range ($\mu\text{m}$) | Samples ($n$) | Sample Share (%) | Semi-Log Porosity-Permeability Transform | Regression $R^2$ |
 | :--- | :---: | :---: | :---: | :---: | :--- | :---: |
 {% for rt in rock_types %}
-| **{{ rt.name }}** | {{ rt.code }} | {{ rt.fzi_range }} | {{ rt.n_samples if rt.n_samples is defined else "—" }} | {{ "%.1f"|format(rt.share_pct) }}% | $\log_{10}(K) = {{ rt.slope }} \cdot \phi_e + ({{ rt.intercept }})$ | {{ "%.2f"|format(rt.r2) }} |
+| **{{ rt.name }}** | {{ rt.code }} | {{ rt.fzi_range }} | {{ rt.n_samples if rt.n_samples is defined else "—" }} | {{ ("%.1f"|format(rt.share_pct) ~ "%") if rt.share_pct is not none else "—" }} | {% if rt.slope is not none and rt.intercept is not none %}$\log_{10}(K) = {{ rt.slope }} \cdot \phi_e + ({{ rt.intercept }})${% else %}Insufficient data (fewer than 3 samples or no porosity spread){% endif %} | {{ ("%.2f"|format(rt.r2)) if rt.r2 is not none else "—" }} |
 {% endfor %}
 
+{% if saved_flag_rows %}
+#### Table 5.1b: Saved Workbench `ROCK_FLAG` Classes — Power-Law Permeability Transform ($K = a\,\phi^{b}$)
+
+The classes below come from the `ROCK_FLAG` curve saved by the workbench on the same samples, so they reflect the cut-offs and classifier actually used (including any ML propagation) rather than the FZI re-binning above.
+
+| `ROCK_FLAG` | Samples ($n$) | Sample Share (%) | $\sum K$ Share (%) | $a$ | $b$ | Regression $R^2$ ($\log_{10}K$) | Transform Source |
+| :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
+{% for f in saved_flag_rows %}
+| **{{ f.rock_flag }}** | {{ f.n_samples }} | {{ "%.1f"|format(f.share_pct) }}% | {{ "%.1f"|format(f.kh_pct) }}% | {{ f.a if f.a is not none else "—" }} | {{ f.b if f.b is not none else "—" }} | {{ ("%.2f"|format(f.r2)) if f.r2 is not none else "—" }} | {{ f.source }} |
+{% endfor %}
+
+{% endif %}
 {% if poro_params.core_perm_count > 0 or poro_params.core_shift_applied or poro_params.core_corrected %}
 ### 5.2 Core Permeability Calibration (`PERM` $\times$ `CPERM`) & Data Lineage
 
@@ -27,6 +41,16 @@ $$RQI = 0.0314 \sqrt{\frac{K}{\phi_e}}, \quad \phi_z = \frac{\phi_e}{1 - \phi_e}
 {% if poro_params.core_corrected %}
 | Overburden & Klinkenberg $K$ | $\sigma_{eff}$ / $P_m$ | {{ "%.0f"|format(poro_params.net_confining_stress) }} / {{ "%.1f"|format(poro_params.mean_pore_pressure) }} | $\text{psi}$ | `CPERM_AIR` $\to$ `CPERM` ($c_k = {{ "%.1e"|format(poro_params.perm_compaction_coeff) }}\text{ psi}^{-1}$, {{ poro_params.klinkenberg_method }}) |
 {% endif %}
+{% endif %}
+
+{% if well_core_parity and (poro_params.core_perm_r2 < 0.40 or poro_params.core_perm_count == 0) and not is_single_well %}
+#### Well-by-Well Core-to-Log Permeability Parity Diagnostics
+
+| Well Name | Valid Plugs | Applied Shift (m) | $R^2$ ($\log_{10} K$) | RMSE ($\text{dec}$) | Factor Error | Parity Status | Diagnostic Recommendation |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
+{% for wp in well_core_parity %}
+| **{{ wp.well_name }}** | {{ wp.n_perm_plugs if wp.n_perm_plugs is defined else wp.n_plugs }} | {{ "%+.2f"|format(wp.mean_shift_m) }} | {{ "%.2f"|format(wp.r2_perm if wp.r2_perm is defined else 0.0) }} | {{ "%.3f"|format(wp.rmse_log_perm if wp.rmse_log_perm is defined else 0.0) }} | {{ "%.2f"|format(wp.factor_err_perm if wp.factor_err_perm is defined else 1.0) }}× | **{{ wp.perm_status if wp.perm_status is defined else wp.status }}** | {{ wp.perm_recommendation if wp.perm_recommendation is defined else wp.recommendation }} |
+{% endfor %}
 {% endif %}
 
 {% if include_ai_commentary and ai_commentary.rock_typing_narrative %}

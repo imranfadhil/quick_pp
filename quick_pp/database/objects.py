@@ -35,6 +35,9 @@ from quick_pp.database.models import (
     FormationTop as ORMFormationTop,
 )
 from quick_pp.database.models import (
+    HoleSection as ORMHoleSection,
+)
+from quick_pp.database.models import (
     Perforation as ORMPerforation,
 )
 from quick_pp.database.models import (
@@ -632,6 +635,8 @@ class Project(object):
                 well_obj.add_well_surveys(ancillary_data["well_surveys"])
             if "perforations" in ancillary_data:
                 well_obj.add_perforations(ancillary_data["perforations"])
+            if "hole_sections" in ancillary_data:
+                well_obj.add_hole_sections(ancillary_data["hole_sections"])
             if "core_data" in ancillary_data:
                 for core_sample_data in ancillary_data["core_data"]:
                     well_obj.add_core_sample_with_measurements(**core_sample_data)
@@ -671,6 +676,40 @@ class Project(object):
         logger.debug(f"Retrieving well names: {well_names}")
         return well_names
 
+    def _find_orm_well(self, well_name: str) -> Optional[ORMWell]:
+        """Find ORMWell by exact name, with fallback to canonical delimiter-insensitive matching."""
+        if not well_name:
+            return None
+        orm_well = self.db_session.scalar(
+            select(ORMWell).filter_by(project_id=self.project_id, name=well_name)
+        )
+        if orm_well:
+            return orm_well
+        import re
+
+        target_tok = re.sub(
+            r"(?<![0-9])0+([1-9])", r"\1", str(well_name).strip().lower()
+        )
+        target_tok = re.sub(r"[^a-z0-9]", "", target_tok)
+        if not target_tok:
+            return None
+        for w in getattr(self._orm_project, "wells", []) or []:
+            w_tok = re.sub(
+                r"(?<![0-9])0+([1-9])", r"\1", str(w.name or "").strip().lower()
+            )
+            w_tok = re.sub(r"[^a-z0-9]", "", w_tok)
+            if w_tok and w_tok == target_tok:
+                return w
+            uwi_tok = re.sub(
+                r"(?<![0-9])0+([1-9])",
+                r"\1",
+                str(getattr(w, "uwi", "") or "").strip().lower(),
+            )
+            uwi_tok = re.sub(r"[^a-z0-9]", "", uwi_tok)
+            if uwi_tok and uwi_tok == target_tok:
+                return w
+        return None
+
     def get_well_data(self, well_name: str) -> pd.DataFrame:
         """Retrieves all data for a specific well in the project.
 
@@ -684,9 +723,7 @@ class Project(object):
             ValueError: If the well is not found in the project.
         """
         logger.debug(f"Retrieving data for well: {well_name} in project '{self.name}'")
-        orm_well = self.db_session.scalar(
-            select(ORMWell).filter_by(project_id=self.project_id, name=well_name)
-        )
+        orm_well = self._find_orm_well(well_name)
         if orm_well:
             well_obj = Well(self.db_session, well_id=orm_well.well_id)
             return well_obj.get_data()
@@ -707,9 +744,7 @@ class Project(object):
         logger.debug(
             f"Retrieving data (optimized) for well: {well_name} in project '{self.name}'"
         )
-        orm_well = self.db_session.scalar(
-            select(ORMWell).filter_by(project_id=self.project_id, name=well_name)
-        )
+        orm_well = self._find_orm_well(well_name)
         if orm_well:
             well_obj = Well(self.db_session, well_id=orm_well.well_id)
             return well_obj.get_data_optimized()
@@ -731,9 +766,7 @@ class Project(object):
         logger.debug(
             f"Retrieving ancillary data for well: {well_name} in project '{self.name}'"
         )
-        orm_well = self.db_session.scalar(
-            select(ORMWell).filter_by(project_id=self.project_id, name=well_name)
-        )
+        orm_well = self._find_orm_well(well_name)
         if orm_well:
             well_obj = Well(self.db_session, well_id=orm_well.well_id)
             return well_obj.get_ancillary_data()
@@ -752,9 +785,7 @@ class Project(object):
             ValueError: If the well is not found in the project.
         """
         logger.debug(f"Loading well object: {well_name} in project '{self.name}'")
-        orm_well = self.db_session.scalar(
-            select(ORMWell).filter_by(project_id=self.project_id, name=well_name)
-        )
+        orm_well = self._find_orm_well(well_name)
         if orm_well:
             return Well(self.db_session, well_id=orm_well.well_id)
         raise ValueError(f"Well '{well_name}' not found in project '{self.name}'.")
@@ -2859,6 +2890,192 @@ class Well(object):
         logger.debug(f"Retrieved {len(df)} perforations for well '{self.name}'.")
         return df
 
+    def add_hole_sections(
+        self, hole_sections: List[Dict[str, Any]], replace: bool = False
+    ):
+        """Adds or updates a list of wellbore hole sections / mud program intervals for the well.
+
+        Args:
+            hole_sections (List[Dict[str, Any]]): List of hole section dicts containing
+                'name' (optional), 'top', 'bottom', 'bit_size', 'mud_type', 'mud_weight',
+                'mud_salinity', 'rmf', 'rmf_temp'.
+            replace (bool): If True, deletes all existing hole sections for this well before inserting.
+        """
+        logger.info(
+            f"Adding/updating {len(hole_sections or [])} hole sections for well '{self.name}' (replace={replace})."
+        )
+        try:
+            ORMHoleSection.__table__.create(
+                bind=self.db_session.get_bind(), checkfirst=True
+            )
+        except Exception:
+            pass
+
+        def _opt_float(val: Any) -> Optional[float]:
+            if val is None or str(val).strip() in ("", "nan", "None"):
+                return None
+            try:
+                f = float(val)
+                return round(f, 6) if np.isfinite(f) else None
+            except (TypeError, ValueError):
+                return None
+
+        dedup_sections: Dict[tuple, Dict[str, Any]] = {}
+        for idx, sec_data in enumerate(hole_sections or []):
+            if not isinstance(sec_data, dict):
+                continue
+            top_raw = sec_data.get(
+                "top",
+                sec_data.get(
+                    "top_depth", sec_data.get("top_md", sec_data.get("depth"))
+                ),
+            )
+            bot_raw = sec_data.get(
+                "bottom",
+                sec_data.get(
+                    "bottom_depth",
+                    sec_data.get("base", sec_data.get("bottom_md", top_raw)),
+                ),
+            )
+            if top_raw is None or bot_raw is None:
+                logger.warning(f"Skipping invalid hole section data: {sec_data}")
+                continue
+            try:
+                t_val = round(float(top_raw), 4)
+                b_val = round(float(bot_raw), 4)
+            except (TypeError, ValueError):
+                continue
+            if not (np.isfinite(t_val) and np.isfinite(b_val)):
+                continue
+            if b_val < t_val:
+                t_val, b_val = b_val, t_val
+
+            bs_val = _opt_float(
+                sec_data.get("bit_size", sec_data.get("bit_size_in", sec_data.get("bs")))
+            )
+            default_label = (
+                f'{bs_val:g}" Section' if bs_val and bs_val > 0 else f"Section-{idx + 1}"
+            )
+            s_name = str(
+                sec_data.get("name")
+                or sec_data.get("section_name")
+                or default_label
+            ).strip()
+            if not s_name:
+                s_name = default_label
+
+            mt_raw = str(sec_data.get("mud_type") or "WBM").strip().upper()
+            if mt_raw in ("OBM", "OIL", "OIL-BASED", "OIL_BASED"):
+                mt_val = "OBM"
+            elif mt_raw in ("SBM", "SYNTHETIC", "SOBM"):
+                mt_val = "SBM"
+            else:
+                mt_val = "WBM"
+
+            mw_val = _opt_float(
+                sec_data.get("mud_weight", sec_data.get("mud_weight_ppg"))
+            )
+            sal_val = _opt_float(
+                sec_data.get(
+                    "mud_salinity",
+                    sec_data.get("salinity_ppm", sec_data.get("salinity")),
+                )
+            )
+            rmf_val = _opt_float(sec_data.get("rmf"))
+            rmf_temp_val = _opt_float(
+                sec_data.get("rmf_temp", sec_data.get("rmf_temp_c"))
+            )
+
+            dedup_sections[(s_name, t_val, b_val)] = {
+                "name": s_name,
+                "top": t_val,
+                "bottom": b_val,
+                "bit_size": bs_val,
+                "mud_type": mt_val,
+                "mud_weight": mw_val,
+                "mud_salinity": sal_val,
+                "rmf": rmf_val,
+                "rmf_temp": rmf_temp_val,
+            }
+
+        if not dedup_sections and not replace:
+            return
+
+        if replace:
+            self.db_session.query(ORMHoleSection).filter_by(
+                well_id=self.well_id
+            ).delete(synchronize_session="fetch")
+        else:
+            existing_secs = list(
+                self.db_session.scalars(
+                    select(ORMHoleSection).filter_by(well_id=self.well_id)
+                ).all()
+            )
+            for es in existing_secs:
+                key = (
+                    str(es.name).strip(),
+                    round(float(es.top), 4),
+                    round(float(es.bottom), 4),
+                )
+                if key in dedup_sections or any(
+                    k[0] == str(es.name).strip() for k in dedup_sections
+                ):
+                    self.db_session.delete(es)
+        self.db_session.flush()
+
+        for s_clean in dedup_sections.values():
+            orm_sec = ORMHoleSection(well_id=self.well_id, **s_clean)
+            self.db_session.add(orm_sec)
+        self.db_session.flush()
+
+    def get_hole_sections(self) -> pd.DataFrame:
+        """Retrieves all hole sections for the well as a DataFrame."""
+        try:
+            ORMHoleSection.__table__.create(
+                bind=self.db_session.get_bind(), checkfirst=True
+            )
+            secs = self._orm_well.hole_sections
+        except Exception:
+            try:
+                self.db_session.rollback()
+            except Exception:
+                pass
+            secs = []
+
+        cols = [
+            "name",
+            "top",
+            "bottom",
+            "bit_size",
+            "mud_type",
+            "mud_weight",
+            "mud_salinity",
+            "rmf",
+            "rmf_temp",
+        ]
+        if not secs:
+            return pd.DataFrame(columns=cols)
+
+        data = [
+            {
+                "name": s.name,
+                "top": float(s.top),
+                "bottom": float(s.bottom),
+                "bit_size": float(s.bit_size) if s.bit_size is not None else None,
+                "mud_type": (s.mud_type or "WBM").upper(),
+                "mud_weight": float(s.mud_weight) if s.mud_weight is not None else None,
+                "mud_salinity": float(s.mud_salinity)
+                if s.mud_salinity is not None
+                else None,
+                "rmf": float(s.rmf) if s.rmf is not None else None,
+                "rmf_temp": float(s.rmf_temp) if s.rmf_temp is not None else None,
+            }
+            for s in secs
+        ]
+        df = pd.DataFrame(data).sort_values(by=["top", "bottom"]).reset_index(drop=True)
+        logger.debug(f"Retrieved {len(df)} hole sections for well '{self.name}'.")
+        return df
+
     def add_core_sample_with_measurements(
         self,
         sample_name: str,
@@ -3270,7 +3487,7 @@ class Well(object):
                             "saturation": sw_val,
                             "experiment_type": row.get("experiment_type")
                             or row.get("type")
-                            or "micp",
+                            or "porous_plate",
                             "cycle": row.get("cycle") or "drainage",
                         }
                     )
@@ -3466,7 +3683,7 @@ class Well(object):
                         "permeability": perm_val,
                         "pc": float(p.pressure),
                         "sw": float(p.saturation),
-                        "experiment_type": p.experiment_type or "micp",
+                        "experiment_type": p.experiment_type or "porous_plate",
                         "cycle": p.cycle or "drainage",
                     }
                 )
@@ -3669,6 +3886,7 @@ class Well(object):
                             "saturation": p.saturation,
                             "pressure": p.pressure,
                             "type": p.experiment_type,
+                            "experiment_type": p.experiment_type,
                             "cycle": p.cycle,
                         }
                         for p in sample.capillary_pressure_data
@@ -3715,6 +3933,7 @@ class Well(object):
             "pressure_tests": self.get_pressure_tests(),
             "well_surveys": self.get_well_surveys(),
             "perforations": self.get_perforations(),
+            "hole_sections": self.get_hole_sections(),
             "core_data": self.get_core_data(),
         }
         return ancillary_data

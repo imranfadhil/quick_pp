@@ -10,14 +10,143 @@
 	import { workbench } from '$lib/state/workbench.svelte';
 	import { depthDisplay } from '$lib/state/depthDisplay.svelte';
 	import { depthFromMeters, depthToMeters } from '$lib/utils/depthUnits';
+	import { salinityFromRmf } from '$lib/utils/fluidUnits';
+	import { fmtNum } from '$lib/utils/formatters';
 	import { computeMinimumCurvature, interpolateTrajectoryOnGrid } from '$lib/utils/trajectory';
 
-	type AncillaryTab = 'tops' | 'contacts' | 'perfs' | 'core' | 'scal' | 'pressure' | 'survey';
-	let { initialTab = 'tops' }: { initialTab?: AncillaryTab } = $props();
+	type AncillaryTab =
+		| 'hole_sections'
+		| 'tops'
+		| 'contacts'
+		| 'perfs'
+		| 'core'
+		| 'scal'
+		| 'pressure'
+		| 'survey';
+	let { initialTab }: { initialTab?: AncillaryTab } = $props();
 	// svelte-ignore state_referenced_locally
-	let activeTab = $state<AncillaryTab>(initialTab);
+	if (initialTab) workbench.ancillarySubTab = initialTab;
+	let activeTab = $derived(workbench.ancillarySubTab);
+	function setActiveTab(tab: AncillaryTab) {
+		workbench.ancillarySubTab = tab;
+	}
 	let isSaving = $state(false);
 	let statusMsg = $state<string | null>(null);
+
+	// Well Header & Metadata Editor state
+	let showWellHeader = $state(true);
+	let editingWellHeader = $state(false);
+	let savingWellHeader = $state(false);
+	let headerDraft = $state<Record<string, any>>({});
+
+	const derivedFiltrateSalinity = $derived.by(() => {
+		const r = Number(headerDraft.rmf);
+		if (!Number.isFinite(r) || r <= 0) return null;
+		const t = Number(headerDraft.rmf_temp);
+		return salinityFromRmf(r, Number.isFinite(t) ? t : 20);
+	});
+
+	const filtrateQcWarning = $derived.by(() => {
+		const r = Number(headerDraft.rmf);
+		const t = Number(headerDraft.rmf_temp);
+		const s = Number(headerDraft.mud_filtrate_salinity);
+
+		if (Number.isFinite(r)) {
+			if (r <= 0) return 'Rmf must be greater than 0.';
+			if (r > 15)
+				return `Rmf (${r} Ωm) is unusually high for mud filtrate (typically 0.02 – 5 Ωm).`;
+		}
+		if (Number.isFinite(t)) {
+			if (t < 0 || t > 70)
+				return `Rmf measurement temperature (${t}°C) is outside typical surface pit range (10 – 40°C).`;
+		}
+		if (Number.isFinite(s) && s > 350000) {
+			return `Mud filtrate salinity (${s.toLocaleString()} ppm) exceeds NaCl saturation limit (~350,000 ppm).`;
+		}
+		if (
+			Number.isFinite(r) &&
+			r > 0 &&
+			Number.isFinite(s) &&
+			s > 0 &&
+			derivedFiltrateSalinity != null
+		) {
+			const ratio = s / derivedFiltrateSalinity;
+			if (ratio > 1.4 || ratio < 0.6) {
+				const tempStr = Number.isFinite(t) ? `${t}°C` : '20°C';
+				return `Input salinity (${s.toLocaleString()} ppm) differs from Rmf-derived NaCl equivalent (~${derivedFiltrateSalinity.toLocaleString()} ppm @ ${tempStr}). Verify if mud contains non-NaCl salts or check units.`;
+			}
+		}
+		return null;
+	});
+
+	function handleRmfInput() {
+		const derived = derivedFiltrateSalinity;
+		if (
+			derived != null &&
+			(headerDraft.mud_filtrate_salinity == null || headerDraft.mud_filtrate_salinity === '')
+		) {
+			headerDraft.mud_filtrate_salinity = derived;
+		}
+	}
+
+	let lastSyncedWellGen = -1;
+	$effect(() => {
+		const gen = wellData.wellLoadGeneration;
+		const hdr = wellData.header || {};
+		if (gen !== lastSyncedWellGen && Object.keys(hdr).length > 0) {
+			lastSyncedWellGen = gen;
+			editingWellHeader = false;
+		}
+	});
+
+	function openHeaderEditor() {
+		const h = wellData.header || {};
+		headerDraft = {
+			uwi: h.uwi ?? workbench.wellId ?? '',
+			company: h.company ?? '',
+			field: h.field ?? '',
+			country: h.country ?? '',
+			location: h.location ?? '',
+			province: h.province ?? '',
+			service_company: h.service_company ?? '',
+			log_date: h.log_date ?? '',
+			spud_date: h.spud_date ?? '',
+			latitude: h.latitude ?? null,
+			longitude: h.longitude ?? null,
+			x_coord: h.x_coord ?? null,
+			y_coord: h.y_coord ?? null,
+			crs: h.crs ?? '',
+			datum_unit: h.datum_unit || 'm',
+			kb_elev: h.kb_elev ?? null,
+			df_elev: h.df_elev ?? null,
+			gl_elev: h.gl_elev ?? null,
+			water_depth: h.water_depth ?? null,
+			bht: h.bht ?? null,
+			bht_unit: h.bht_unit || 'degC',
+			bit_size: h.bit_size ?? null,
+			rmf: h.rmf ?? null,
+			rmf_temp: h.rmf_temp ?? h.surface_temp ?? null,
+			mud_density: h.mud_density ?? null,
+			mud_filtrate_salinity: h.mud_filtrate_salinity ?? null,
+			mud_filtrate_density: h.mud_filtrate_density ?? null,
+			mud_type: h.mud_type ?? '',
+			obm_base_density: h.obm_base_density ?? null
+		};
+		showWellHeader = true;
+		editingWellHeader = true;
+	}
+
+	async function saveHeaderDraft() {
+		savingWellHeader = true;
+		try {
+			await wellData.saveWellHeader(headerDraft, true);
+			editingWellHeader = false;
+		} catch (e: any) {
+			wellData.lastError = e?.message || 'Failed to save well header';
+		} finally {
+			savingWellHeader = false;
+		}
+	}
 
 	// New item quick-entry drafts (expressed directly in depthDisplay.unit)
 	let newName = $state('');
@@ -25,12 +154,21 @@
 	let newPerfTop = $state<number | null>(null);
 	let newPerfBottom = $state<number | null>(null);
 	let newPerfDesc = $state('');
+	let newHoleTop = $state<number | null>(null);
+	let newHoleBottom = $state<number | null>(null);
+	let newHoleBitSize = $state<number | null>(8.5);
+	let newHoleMudType = $state<'WBM' | 'OBM' | 'SBM'>('WBM');
+	let newHoleMudWeight = $state<number | null>(9.5);
+	let newHoleSalinity = $state<number | null>(30000);
+	let newHoleRmf = $state<number | null>(null);
+	let newHoleRmfTemp = $state<number | null>(null);
 	let newVal1 = $state<number | null>(0.2);
 	let newVal2 = $state<number | null>(100);
 	let newScalPc = $state<number | null>(15);
 	let newScalSw = $state<number | null>(0.35);
 	let newScalCpore = $state<number | null>(null);
 	let newScalCperm = $state<number | null>(null);
+	let newScalExpType = $state<string>('porous_plate');
 	// Formation pressure test quick-entry drafts (optional fields may be left blank)
 	let newPressMob = $state<number | null>(null);
 	let newPressPerm = $state<number | null>(null);
@@ -46,16 +184,51 @@
 			previousDepthUnit = unit;
 			if (oldUnit === unit) return;
 			if (newDepth !== null && Number.isFinite(newDepth)) {
-				newDepth = Number(depthFromMeters(depthToMeters(newDepth, oldUnit), unit).toFixed(2));
+				newDepth = Number(
+					depthFromMeters(depthToMeters(newDepth, oldUnit), unit).toFixed(2)
+				);
 			}
 			if (newPerfTop !== null && Number.isFinite(newPerfTop)) {
-				newPerfTop = Number(depthFromMeters(depthToMeters(newPerfTop, oldUnit), unit).toFixed(2));
+				newPerfTop = Number(
+					depthFromMeters(depthToMeters(newPerfTop, oldUnit), unit).toFixed(2)
+				);
 			}
 			if (newPerfBottom !== null && Number.isFinite(newPerfBottom)) {
-				newPerfBottom = Number(depthFromMeters(depthToMeters(newPerfBottom, oldUnit), unit).toFixed(2));
+				newPerfBottom = Number(
+					depthFromMeters(depthToMeters(newPerfBottom, oldUnit), unit).toFixed(2)
+				);
+			}
+			if (newHoleTop !== null && Number.isFinite(newHoleTop)) {
+				newHoleTop = Number(
+					depthFromMeters(depthToMeters(newHoleTop, oldUnit), unit).toFixed(2)
+				);
+			}
+			if (newHoleBottom !== null && Number.isFinite(newHoleBottom)) {
+				newHoleBottom = Number(
+					depthFromMeters(depthToMeters(newHoleBottom, oldUnit), unit).toFixed(2)
+				);
 			}
 		});
 	});
+
+	const HOLE_SECTION_COLS: GridColumn[] = [
+		{ key: 'name', label: 'Section', editable: true },
+		{ key: 'top', label: 'Top', unit: 'm', numeric: true, decimals: 1, editable: true },
+		{ key: 'bottom', label: 'Bottom', unit: 'm', numeric: true, decimals: 1, editable: true },
+		{ key: 'bit_size', label: 'Bit', unit: 'in', numeric: true, decimals: 3, editable: true },
+		{ key: 'mud_type', label: 'Mud', editable: true },
+		{ key: 'mud_weight', label: 'MW', unit: 'ppg', numeric: true, decimals: 2, editable: true },
+		{
+			key: 'mud_salinity',
+			label: 'Salinity',
+			unit: 'ppm',
+			numeric: true,
+			decimals: 0,
+			editable: true
+		},
+		{ key: 'rmf', label: 'Rmf', unit: 'Ωm', numeric: true, decimals: 3, editable: true },
+		{ key: 'rmf_temp', label: 'Rmf T', unit: '°C', numeric: true, decimals: 1, editable: true }
+	];
 
 	const TOP_COLS: GridColumn[] = [
 		{ key: 'name', label: 'Formation / Zone', editable: true },
@@ -108,6 +281,7 @@
 	const SCAL_PC_COLS: GridColumn[] = [
 		{ key: 'sample_name', label: 'Sample', editable: true },
 		{ key: 'depth', label: 'Depth', unit: 'm', numeric: true, decimals: 2, editable: true },
+		{ key: 'experiment_type', label: 'Method', editable: true, width: '100px' },
 		{
 			key: 'porosity',
 			label: 'CPORE',
@@ -310,6 +484,46 @@
 
 	async function addQuickRow() {
 		if (!workbench.projectId || !workbench.wellId) return;
+		if (activeTab === 'hole_sections') {
+			if (
+				newHoleTop === null ||
+				!Number.isFinite(newHoleTop) ||
+				newHoleBottom === null ||
+				!Number.isFinite(newHoleBottom)
+			) {
+				statusMsg = 'Enter valid top and bottom depths before adding a hole section.';
+				return;
+			}
+			const t = depthToMeters(Number(newHoleTop), depthDisplay.unit);
+			const b = depthToMeters(Number(newHoleBottom), depthDisplay.unit);
+			if (Math.abs(b - t) < 1e-6) {
+				statusMsg = 'Hole section bottom depth must differ from top depth.';
+				return;
+			}
+			const bsVal = optNum(newHoleBitSize);
+			wellData.holeSections = [
+				...wellData.holeSections,
+				{
+					id: `hs-${Date.now()}`,
+					name:
+						newName.trim() ||
+						(bsVal != null ? `${bsVal}" Section` : `Section-${wellData.holeSections.length + 1}`),
+					top: Math.min(t, b),
+					bottom: Math.max(t, b),
+					bit_size: bsVal,
+					mud_type: (newHoleMudType || 'WBM').toUpperCase(),
+					mud_weight: optNum(newHoleMudWeight),
+					mud_salinity: optNum(newHoleSalinity),
+					rmf: optNum(newHoleRmf),
+					rmf_temp: optNum(newHoleRmfTemp)
+				}
+			].sort((a, b2) => a.top - b2.top);
+			newName = '';
+			newHoleTop = newHoleBottom;
+			newHoleBottom = null;
+			await saveCurrentTab();
+			return;
+		}
 		if (activeTab === 'perfs') {
 			if (
 				newPerfTop === null ||
@@ -409,7 +623,9 @@
 					porosity: effPor,
 					permeability: effPerm,
 					rock_type: rt,
-					experiment_type: 'micp',
+					experiment_type: (newScalExpType || lastScal?.experiment_type || 'porous_plate')
+						.trim()
+						.toLowerCase(),
 					cycle: 'drainage'
 				}
 			];
@@ -443,7 +659,10 @@
 		const removeSet = new Set(indices);
 		const removedCount = removeSet.size;
 		try {
-			if (activeTab === 'tops') {
+			if (activeTab === 'hole_sections') {
+				wellData.holeSections = wellData.holeSections.filter((_, i) => !removeSet.has(i));
+				wellData.syncBitSizeCurveFromHoleSections();
+			} else if (activeTab === 'tops') {
 				wellData.tops = wellData.tops.filter((_, i) => !removeSet.has(i));
 				if (workbench.selectedZones.length > 0) {
 					const remainingNames = new Set(wellData.tops.map((t) => t.name));
@@ -480,7 +699,42 @@
 	async function handlePasteRows(pastedRows: Record<string, any>[]) {
 		if (!pastedRows.length) return;
 		const now = Date.now();
-		if (activeTab === 'tops') {
+		if (activeTab === 'hole_sections') {
+			const mapped = pastedRows
+				.map((r, i) => {
+					const t = Number(r.top ?? r.top_md ?? r.depth);
+					const b = Number(r.bottom ?? r.bottom_md ?? r.base);
+					const bs = optNum(r.bit_size ?? r.bs ?? r.bit);
+					const mtRaw = String(r.mud_type ?? r.mud ?? '').trim().toUpperCase();
+					const mt = mtRaw.startsWith('OB')
+						? 'OBM'
+						: mtRaw.startsWith('SB')
+							? 'SBM'
+							: mtRaw.startsWith('WB')
+								? 'WBM'
+								: mtRaw;
+					return {
+						id: `hs-${now}-${i}`,
+						name: String(
+							r.name ||
+								r.section_name ||
+								(bs != null ? `${bs}" Section` : `Section-${wellData.holeSections.length + i + 1}`)
+						).trim(),
+						top: Math.min(t, b),
+						bottom: Math.max(t, b),
+						bit_size: bs,
+						mud_type: mt,
+						mud_weight: optNum(r.mud_weight ?? r.mw ?? r.mud_density),
+						mud_salinity: optNum(r.mud_salinity ?? r.salinity),
+						rmf: optNum(r.rmf),
+						rmf_temp: optNum(r.rmf_temp ?? r.rmf_temp_c)
+					};
+				})
+				.filter((s) => Number.isFinite(s.top) && Number.isFinite(s.bottom) && s.bottom > s.top);
+			wellData.holeSections = [...wellData.holeSections, ...mapped].sort(
+				(a, b) => a.top - b.top
+			);
+		} else if (activeTab === 'tops') {
 			const mapped = pastedRows
 				.map((r, i) => ({
 					id: `top-${now}-${i}`,
@@ -578,7 +832,11 @@
 						porosity: por,
 						permeability: perm,
 						rock_type: projectData.classifyRockType(por, perm),
-						experiment_type: r.experiment_type || 'micp',
+						experiment_type: String(
+							r.experiment_type || r.type || r.method || 'porous_plate'
+						)
+							.trim()
+							.toLowerCase(),
 						cycle: r.cycle || 'drainage'
 					};
 				})
@@ -610,7 +868,59 @@
 		isSaving = true;
 		statusMsg = null;
 		try {
-			if (activeTab === 'tops') {
+			if (activeTab === 'hole_sections') {
+				wellData.holeSections = wellData.holeSections
+					.filter(
+						(s) => Number.isFinite(Number(s.top)) && Number.isFinite(Number(s.bottom))
+					)
+					.map((s, i) => {
+						const t = Number(s.top);
+						const b = Number(s.bottom);
+						const bs = optNum(s.bit_size);
+						const mtRaw = String(s.mud_type ?? '').trim().toUpperCase();
+						const mt = mtRaw.startsWith('OB')
+							? 'OBM'
+							: mtRaw.startsWith('SB')
+								? 'SBM'
+								: mtRaw.startsWith('WB')
+									? 'WBM'
+									: mtRaw;
+						return {
+							id: s.id || `hs-${i}`,
+							name:
+								String(s.name || '').trim() ||
+								(bs != null ? `${bs}" Section` : `Section-${i + 1}`),
+							top: Math.min(t, b),
+							bottom: Math.max(t, b),
+							bit_size: bs,
+							mud_type: mt,
+							mud_weight: optNum(s.mud_weight),
+							mud_salinity: optNum(s.mud_salinity),
+							rmf: optNum(s.rmf),
+							rmf_temp: optNum(s.rmf_temp)
+						};
+					})
+					.filter((s) => s.bottom > s.top)
+					.sort((a, b) => a.top - b.top);
+				wellData.syncBitSizeCurveFromHoleSections();
+				await saveAncillaryItems(
+					workbench.projectId,
+					workbench.wellId,
+					'hole_sections',
+					'hole_sections',
+					wellData.holeSections.map((s) => ({
+						name: s.name,
+						top: s.top,
+						bottom: s.bottom,
+						bit_size: s.bit_size ?? null,
+						mud_type: s.mud_type || '',
+						mud_weight: s.mud_weight ?? null,
+						mud_salinity: s.mud_salinity ?? null,
+						rmf: s.rmf ?? null,
+						rmf_temp: s.rmf_temp ?? null
+					}))
+				);
+			} else if (activeTab === 'tops') {
 				await saveAncillaryItems(
 					workbench.projectId,
 					workbench.wellId,
@@ -678,10 +988,11 @@
 					wellData.coreSamples
 				);
 			} else if (activeTab === 'scal') {
-				// Propagate shared depth, porosity, and permeability for same sample_name if user edited one row
+				// Propagate shared depth, porosity, permeability, and experiment_type for same sample_name if user edited one row
 				const depthBySample = new Map<string, number>();
 				const cporeBySample = new Map<string, number | null>();
 				const cpermBySample = new Map<string, number | null>();
+				const expBySample = new Map<string, string>();
 				for (const r of wellData.scalPc) {
 					const sname = String(r.sample_name || '').trim();
 					if (sname) {
@@ -702,6 +1013,9 @@
 							Number.isFinite(Number(r.permeability))
 						) {
 							cpermBySample.set(sname, Number(r.permeability));
+						}
+						if (r.experiment_type) {
+							expBySample.set(sname, String(r.experiment_type).trim().toLowerCase());
 						}
 					}
 				}
@@ -728,7 +1042,11 @@
 						porosity: por,
 						permeability: perm,
 						rock_type: projectData.classifyRockType(por, perm),
-						experiment_type: r.experiment_type || 'micp',
+						experiment_type: String(
+							expBySample.get(sname) || r.experiment_type || 'porous_plate'
+						)
+							.trim()
+							.toLowerCase(),
 						cycle: r.cycle || 'drainage'
 					};
 				});
@@ -741,6 +1059,7 @@
 					'pc_data',
 					normalizedScal
 				);
+				void projectData.ensureSwirrDataLoaded(true);
 			} else if (activeTab === 'pressure') {
 				// Normalize (blank optional cells -> null) & drop rows missing depth/pressure
 				wellData.pressureTests = wellData.pressureTests
@@ -800,7 +1119,10 @@
 
 	async function handleScalCellChange(rowIndex: number, key: string, _newValue: any) {
 		const row = wellData.scalPc[rowIndex];
-		if (row && ['porosity', 'permeability', 'depth', 'sample_name'].includes(key)) {
+		if (
+			row &&
+			['porosity', 'permeability', 'depth', 'sample_name', 'experiment_type'].includes(key)
+		) {
 			const sname = String(row.sample_name || '').trim();
 			if (sname) {
 				const por =
@@ -817,12 +1139,16 @@
 						? Number(row.permeability)
 						: null;
 				const depth = Number.isFinite(Number(row.depth)) ? Number(row.depth) : null;
+				const expType = row.experiment_type
+					? String(row.experiment_type).trim().toLowerCase()
+					: null;
 
 				for (const r of wellData.scalPc) {
 					if (String(r.sample_name || '').trim() === sname) {
 						if (key === 'porosity') r.porosity = normPor;
 						if (key === 'permeability') r.permeability = perm;
 						if (key === 'depth' && depth !== null) r.depth = depth;
+						if (key === 'experiment_type' && expType) r.experiment_type = expType;
 						r.rock_type = projectData.classifyRockType(r.porosity, r.permeability);
 					}
 				}
@@ -841,30 +1167,616 @@
 		}
 		await saveCurrentTab();
 	}
+
+	let hdr = $derived(wellData.header || {});
+	let dUnit = $derived(hdr.datum_unit || 'm');
 </script>
 
 <div class="flex h-full flex-col overflow-hidden bg-[var(--bg-surface)]">
-	<!-- Sub-navigation Tabs -->
-	<div
-		class="grid grid-cols-7 border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)] text-[10px] font-semibold"
-	>
-		{#each [['tops', `Tops (${wellData.tops.length})`], ['contacts', `Contacts (${wellData.contacts.length})`], ['perfs', `Perfs (${wellData.perforations.length})`], ['core', `RCA (${wellData.coreSamples.length})`], ['scal', `SCAL (${wellData.scalPc.length})`], ['pressure', `Press (${wellData.pressureTests.length})`], ['survey', `Survey (${wellData.survey.length})`]] as [key, lbl]}
+	<!-- Collapsible Well Header & Metadata Panel -->
+	<div class="shrink-0 border-b border-[var(--border-hairline)] bg-[var(--bg-surface)]">
+		<div
+			class="flex h-7 items-center justify-between bg-[var(--bg-subtle)] px-2.5 text-[11px] select-none"
+		>
 			<button
 				type="button"
-				onclick={() => (activeTab = key as AncillaryTab)}
-				class="h-7 truncate border-r border-[var(--border-hairline)] px-1 transition-colors last:border-r-0 {activeTab ===
+				onclick={() => (showWellHeader = !showWellHeader)}
+				class="flex min-w-0 flex-1 items-center gap-1.5 text-left font-bold text-[var(--text-primary)] hover:text-[var(--accent-primary)]"
+			>
+				<span class="text-[9px] text-[var(--text-muted)]">{showWellHeader ? '▼' : '▶'}</span>
+				<span class="truncate">Well Header &amp; Metadata</span>
+				<span
+					class="mono-num truncate rounded-xs bg-[var(--bg-surface)] px-1.5 py-0.2 text-[9.5px] font-medium text-[var(--text-secondary)]"
+				>
+					{hdr.uwi ? `UWI: ${hdr.uwi}` : (workbench.wellId ?? '—')}
+				</span>
+			</button>
+			<div class="flex shrink-0 items-center gap-1">
+				<button
+					type="button"
+					onclick={() =>
+						editingWellHeader ? (editingWellHeader = false) : openHeaderEditor()}
+					class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--text-secondary)] hover:bg-slate-200 hover:text-[var(--text-primary)]"
+				>
+					{editingWellHeader ? 'Cancel' : 'Edit Header'}
+				</button>
+			</div>
+		</div>
+
+		{#if showWellHeader}
+			<div class="max-h-[42vh] overflow-y-auto px-2.5 py-2">
+				{#if hdr.company || hdr.field || hdr.country || hdr.crs}
+					<div class="mb-1.5 flex flex-wrap items-center gap-1 text-[10px]">
+						{#if hdr.company}
+							<span
+								class="rounded-xs bg-blue-50 px-1.5 py-0.5 font-semibold text-blue-800"
+							>
+								{hdr.company}
+							</span>
+						{/if}
+						{#if hdr.field}
+							<span
+								class="rounded-xs bg-indigo-50 px-1.5 py-0.5 font-semibold text-indigo-800"
+							>
+								{hdr.field}
+							</span>
+						{/if}
+						{#if hdr.country}
+							<span
+								class="rounded-xs bg-emerald-50 px-1.5 py-0.5 font-semibold text-emerald-800"
+							>
+								{hdr.country}
+							</span>
+						{/if}
+						{#if hdr.crs}
+							<span
+								class="rounded-xs bg-slate-100 px-1.5 py-0.5 font-mono text-[9.5px] text-[var(--text-secondary)]"
+							>
+								CRS: {hdr.crs}
+							</span>
+						{/if}
+					</div>
+				{/if}
+
+				{#if !editingWellHeader}
+					<div class="grid grid-cols-2 gap-1.5 text-[10.5px]">
+						<div
+							class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1"
+						>
+							<div class="text-[9.5px] text-[var(--text-muted)]">Well Name / UWI</div>
+							<div
+								class="truncate font-semibold text-[var(--text-primary)]"
+								title={`${hdr.well_name || workbench.wellId || '—'} (${hdr.uwi || '—'})`}
+							>
+								{hdr.well_name || workbench.wellId || '—'}
+								<span
+									class="font-mono text-[10px] font-normal text-[var(--text-secondary)]"
+								>
+									({hdr.uwi || hdr.api || '—'})
+								</span>
+							</div>
+						</div>
+						<div
+							class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1"
+						>
+							<div class="text-[9.5px] text-[var(--text-muted)]">Company / Operator</div>
+							<div
+								class="truncate font-semibold text-[var(--text-primary)]"
+								title={hdr.company || '—'}
+							>
+								{hdr.company || '—'}
+							</div>
+						</div>
+						<div
+							class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1"
+						>
+							<div class="text-[9.5px] text-[var(--text-muted)]">Field / Block</div>
+							<div
+								class="truncate font-semibold text-[var(--text-primary)]"
+								title={`${hdr.field || '—'}${hdr.location ? ` • ${hdr.location}` : ''}`}
+							>
+								{hdr.field || '—'}{hdr.location ? ` • ${hdr.location}` : ''}
+							</div>
+						</div>
+						<div
+							class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1"
+						>
+							<div class="text-[9.5px] text-[var(--text-muted)]">Country / Province</div>
+							<div
+								class="truncate font-semibold text-[var(--text-primary)]"
+								title={`${hdr.country || '—'}${hdr.province ? ` (${hdr.province})` : ''}`}
+							>
+								{hdr.country || '—'}{hdr.province ? ` (${hdr.province})` : ''}
+							</div>
+						</div>
+						<div
+							class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1"
+						>
+							<div class="text-[9.5px] text-[var(--text-muted)]">Latitude</div>
+							<div
+								class="mono-num truncate font-semibold text-[var(--text-primary)]"
+								title={hdr.latitude_raw || String(hdr.latitude ?? '—')}
+							>
+								{hdr.latitude != null ? `${Number(hdr.latitude).toFixed(6)}°` : '—'}
+								{#if hdr.latitude_raw && hdr.latitude_raw !== String(hdr.latitude)}
+									<span class="text-[9.5px] font-normal text-[var(--text-muted)]"
+										>({hdr.latitude_raw})</span
+									>
+								{/if}
+							</div>
+						</div>
+						<div
+							class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1"
+						>
+							<div class="text-[9.5px] text-[var(--text-muted)]">Longitude</div>
+							<div
+								class="mono-num truncate font-semibold text-[var(--text-primary)]"
+								title={hdr.longitude_raw || String(hdr.longitude ?? '—')}
+							>
+								{hdr.longitude != null ? `${Number(hdr.longitude).toFixed(6)}°` : '—'}
+								{#if hdr.longitude_raw && hdr.longitude_raw !== String(hdr.longitude)}
+									<span class="text-[9.5px] font-normal text-[var(--text-muted)]"
+										>({hdr.longitude_raw})</span
+									>
+								{/if}
+							</div>
+						</div>
+						{#if hdr.x_coord != null || hdr.y_coord != null}
+							<div
+								class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1"
+							>
+								<div class="text-[9.5px] text-[var(--text-muted)]">X / Easting</div>
+								<div class="mono-num truncate font-semibold text-[var(--text-primary)]">
+									{hdr.x_coord != null ? fmtNum(hdr.x_coord, 2) : '—'}
+								</div>
+							</div>
+							<div
+								class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1"
+							>
+								<div class="text-[9.5px] text-[var(--text-muted)]">Y / Northing</div>
+								<div class="mono-num truncate font-semibold text-[var(--text-primary)]">
+									{hdr.y_coord != null ? fmtNum(hdr.y_coord, 2) : '—'}
+								</div>
+							</div>
+						{/if}
+						<div
+							class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1"
+						>
+							<div class="text-[9.5px] text-[var(--text-muted)]">KB / DF Elevation</div>
+							<div class="mono-num truncate font-semibold text-[var(--text-primary)]">
+								KB: {hdr.kb_elev != null ? `${hdr.kb_elev} ${dUnit}` : '—'}
+								{#if hdr.df_elev != null}
+									• DF: {hdr.df_elev} {dUnit}
+								{/if}
+							</div>
+						</div>
+						<div
+							class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1"
+						>
+							<div class="text-[9.5px] text-[var(--text-muted)]">GL / Water Depth</div>
+							<div class="mono-num truncate font-semibold text-[var(--text-primary)]">
+								GL: {hdr.gl_elev != null ? `${hdr.gl_elev} ${dUnit}` : '—'}
+								{#if hdr.water_depth != null}
+									• WD: {hdr.water_depth} {dUnit}
+								{/if}
+							</div>
+						</div>
+						<div
+							class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1"
+						>
+							<div class="text-[9.5px] text-[var(--text-muted)]">Service Co. / Date</div>
+							<div
+								class="truncate font-semibold text-[var(--text-primary)]"
+								title={`${hdr.service_company || '—'} • ${hdr.log_date || hdr.spud_date || '—'}`}
+							>
+								{hdr.service_company || '—'}
+								{#if hdr.log_date || hdr.spud_date}
+									<span class="font-normal text-[var(--text-secondary)]"
+										>• {hdr.log_date || hdr.spud_date}</span
+									>
+								{/if}
+							</div>
+						</div>
+						<div
+							class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1"
+						>
+							<div class="text-[9.5px] text-[var(--text-muted)]">
+								BHT / Bit Size / Rmf
+							</div>
+							<div class="mono-num truncate font-semibold text-[var(--text-primary)]">
+								{hdr.bht != null ? `${hdr.bht}°` : '—'} • {hdr.bit_size != null
+									? `${hdr.bit_size}"`
+									: '—'} • {hdr.rmf != null
+									? `${hdr.rmf} Ωm${hdr.rmf_temp != null ? ` @ ${hdr.rmf_temp}°C` : ''}`
+									: '—'}
+							</div>
+						</div>
+						<div
+							class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1 col-span-2"
+						>
+							<div class="text-[9.5px] text-[var(--text-muted)]">
+								Mud Filtrate Density / Salinity / Type
+							</div>
+							<div class="mono-num truncate font-semibold text-[var(--text-primary)]">
+								{hdr.mud_filtrate_density != null
+									? `${fmtNum(hdr.mud_filtrate_density, 3)} g/cc`
+									: '—'} • {hdr.mud_filtrate_salinity != null
+									? `${fmtNum(hdr.mud_filtrate_salinity, 0)} ppm`
+									: '—'} • {hdr.mud_type ? hdr.mud_type : '—'}
+							</div>
+						</div>
+					</div>
+
+					{#if Array.isArray(hdr.curve_lineage) && hdr.curve_lineage.length > 0}
+						<details class="mt-1.5 text-[10px] text-[var(--text-secondary)]">
+							<summary
+								class="cursor-pointer font-semibold hover:text-[var(--text-primary)]"
+							>
+								Imported LAS curve lineage ({hdr.curve_lineage.length})
+							</summary>
+							<div
+								class="mt-1 max-h-32 space-y-0.5 overflow-y-auto rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5"
+							>
+								{#each hdr.curve_lineage as entry}
+									<div>
+										{entry.filename}: {entry.source_mnemonic}{entry.source_unit
+											? ` (${entry.source_unit})`
+											: ''}
+										→ {entry.stored_curve}{entry.raw_curve
+											? ` (raw: ${entry.raw_curve})`
+											: ''}
+									</div>
+								{/each}
+							</div>
+						</details>
+					{/if}
+					{#if (hdr.raw_well_header && Object.keys(hdr.raw_well_header).length > 0) || (hdr.raw_parameters && Object.keys(hdr.raw_parameters).length > 0)}
+						<details class="mt-1.5 text-[10px] text-[var(--text-secondary)]">
+							<summary
+								class="cursor-pointer font-semibold hover:text-[var(--text-primary)]"
+							>
+								Raw LAS/DLIS Header Tags ({Object.keys(hdr.raw_well_header || {})
+									.length} ~Well, {Object.keys(hdr.raw_parameters || {}).length} ~Parameter)
+							</summary>
+							<div
+								class="mt-1 grid max-h-32 grid-cols-2 gap-x-2 gap-y-0.5 overflow-y-auto rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 font-mono text-[9.5px]"
+							>
+								{#each Object.entries( { ...(hdr.raw_well_header || {}), ...(hdr.raw_parameters || {}) } ) as [rk, rv]}
+									<div class="truncate" title={`${rk}: ${rv}`}>
+										<span class="font-semibold text-[var(--text-secondary)]"
+											>{rk}:</span
+										>
+										<span class="text-[var(--text-primary)]">{rv ?? '—'}</span>
+									</div>
+								{/each}
+							</div>
+						</details>
+					{/if}
+				{:else}
+					<div
+						class="space-y-1.5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-2 text-[10.5px]"
+					>
+						<div class="grid grid-cols-2 gap-1.5">
+							<label class="flex flex-col gap-0.5">
+								<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
+									>UWI / API</span
+								>
+								<input
+									type="text"
+									bind:value={headerDraft.uwi}
+									class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+								/>
+							</label>
+							<label class="flex flex-col gap-0.5">
+								<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
+									>Company / Operator</span
+								>
+								<input
+									type="text"
+									bind:value={headerDraft.company}
+									class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+								/>
+							</label>
+							<label class="flex flex-col gap-0.5">
+								<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
+									>Field</span
+								>
+								<input
+									type="text"
+									bind:value={headerDraft.field}
+									class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+								/>
+							</label>
+							<label class="flex flex-col gap-0.5">
+								<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
+									>Country</span
+								>
+								<input
+									type="text"
+									bind:value={headerDraft.country}
+									class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+								/>
+							</label>
+							<label class="flex flex-col gap-0.5">
+								<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
+									>Location / Block</span
+								>
+								<input
+									type="text"
+									bind:value={headerDraft.location}
+									class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+								/>
+							</label>
+							<label class="flex flex-col gap-0.5">
+								<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
+									>Province / State</span
+								>
+								<input
+									type="text"
+									bind:value={headerDraft.province}
+									class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+								/>
+							</label>
+							<label class="flex flex-col gap-0.5">
+								<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
+									>Latitude (°)</span
+								>
+								<input
+									type="number"
+									step="0.000001"
+									bind:value={headerDraft.latitude}
+									class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+								/>
+							</label>
+							<label class="flex flex-col gap-0.5">
+								<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
+									>Longitude (°)</span
+								>
+								<input
+									type="number"
+									step="0.000001"
+									bind:value={headerDraft.longitude}
+									class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+								/>
+							</label>
+							<label class="flex flex-col gap-0.5">
+								<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
+									>KB Elevation ({headerDraft.datum_unit || 'm'})</span
+								>
+								<input
+									type="number"
+									step="0.1"
+									bind:value={headerDraft.kb_elev}
+									class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+								/>
+							</label>
+							<label class="flex flex-col gap-0.5">
+								<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
+									>DF Elevation ({headerDraft.datum_unit || 'm'})</span
+								>
+								<input
+									type="number"
+									step="0.1"
+									bind:value={headerDraft.df_elev}
+									class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+								/>
+							</label>
+							<label class="flex flex-col gap-0.5">
+								<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
+									>GL / Seabed Elev ({headerDraft.datum_unit || 'm'})</span
+								>
+								<input
+									type="number"
+									step="0.1"
+									bind:value={headerDraft.gl_elev}
+									class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+								/>
+							</label>
+							<label class="flex flex-col gap-0.5">
+								<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
+									>Service Company</span
+								>
+								<input
+									type="text"
+									bind:value={headerDraft.service_company}
+									class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+								/>
+							</label>
+							<label class="flex flex-col gap-0.5">
+								<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
+									>Log Date</span
+								>
+								<input
+									type="text"
+									bind:value={headerDraft.log_date}
+									class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+								/>
+							</label>
+							<label class="flex flex-col gap-0.5">
+								<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
+									>BHT ({headerDraft.bht_unit || 'degC'})</span
+								>
+								<input
+									type="number"
+									step="0.1"
+									bind:value={headerDraft.bht}
+									class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+								/>
+							</label>
+							<label class="flex flex-col gap-0.5">
+								<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
+									>Bit Size (in)</span
+								>
+								<input
+									type="number"
+									step="0.125"
+									bind:value={headerDraft.bit_size}
+									class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+								/>
+							</label>
+							<label class="flex flex-col gap-0.5">
+								<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
+									>Rmf (ohm.m)</span
+								>
+								<input
+									type="number"
+									step="0.001"
+									min="0.001"
+									bind:value={headerDraft.rmf}
+									oninput={handleRmfInput}
+									placeholder="e.g. 0.5"
+									class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+								/>
+							</label>
+							<label class="flex flex-col gap-0.5">
+								<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
+									>Rmf Meas Temp (°C)</span
+								>
+								<input
+									type="number"
+									step="0.5"
+									bind:value={headerDraft.rmf_temp}
+									oninput={handleRmfInput}
+									placeholder="e.g. 20"
+									class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+								/>
+							</label>
+							<label class="flex flex-col gap-0.5">
+								<div class="flex items-center justify-between">
+									<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
+										>Mud Filtrate Salinity (ppm)</span
+									>
+									{#if derivedFiltrateSalinity != null}
+										<button
+											type="button"
+											onclick={() => {
+												headerDraft.mud_filtrate_salinity =
+													derivedFiltrateSalinity;
+											}}
+											class="cursor-pointer text-[9px] font-semibold text-blue-600 hover:text-blue-800 hover:underline"
+											title="Set salinity to Bateman-Konen equivalent from Rmf"
+										>
+											⚡ Calc ({derivedFiltrateSalinity.toLocaleString()})
+										</button>
+									{/if}
+								</div>
+								<input
+									type="number"
+									min="0"
+									step="1000"
+									bind:value={headerDraft.mud_filtrate_salinity}
+									class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+								/>
+							</label>
+							<label class="flex flex-col gap-0.5">
+								<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
+									>Mud Filtrate Density (g/cc)</span
+								>
+								<input
+									type="number"
+									min="0.1"
+									max="2"
+									step="0.01"
+									bind:value={headerDraft.mud_filtrate_density}
+									class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+								/>
+							</label>
+							<label class="flex flex-col gap-0.5">
+								<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
+									>Mud Type</span
+								>
+								<select
+									bind:value={headerDraft.mud_type}
+									class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+								>
+									<option value="">—</option>
+									<option value="WBM">WBM (Water-Based)</option>
+									<option value="OBM">OBM (Oil-Based)</option>
+									<option value="SBM">SBM (Synthetic-Based)</option>
+								</select>
+							</label>
+							<label class="flex flex-col gap-0.5 col-span-2">
+								<span class="text-[9.5px] font-medium text-[var(--text-muted)]"
+									>OBM Base Oil Density (g/cc)</span
+								>
+								<input
+									type="number"
+									min="0.65"
+									max="0.95"
+									step="0.01"
+									bind:value={headerDraft.obm_base_density}
+									class="mono-num h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[11px]"
+								/>
+							</label>
+							{#if filtrateQcWarning}
+								<div
+									class="col-span-2 flex items-start justify-between gap-1.5 rounded-xs border border-amber-300 bg-amber-50 px-2 py-1 text-[10px] text-amber-900"
+								>
+									<div class="flex items-start gap-1">
+										<span class="font-bold">⚠️ QC:</span>
+										<span>{filtrateQcWarning}</span>
+									</div>
+									{#if derivedFiltrateSalinity != null && Number(headerDraft.mud_filtrate_salinity) !== derivedFiltrateSalinity}
+										<button
+											type="button"
+											onclick={() => {
+												headerDraft.mud_filtrate_salinity =
+													derivedFiltrateSalinity;
+											}}
+											class="shrink-0 cursor-pointer font-semibold text-blue-700 underline hover:text-blue-900"
+										>
+											Use {derivedFiltrateSalinity.toLocaleString()} ppm
+										</button>
+									{/if}
+								</div>
+							{/if}
+						</div>
+						<div class="flex justify-end gap-1.5 pt-1">
+							<button
+								type="button"
+								onclick={() => (editingWellHeader = false)}
+								class="h-6 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-[10.5px] font-medium text-[var(--text-secondary)]"
+							>
+								Cancel
+							</button>
+							<button
+								type="button"
+								disabled={savingWellHeader}
+								onclick={saveHeaderDraft}
+								class="h-6 rounded-xs bg-[var(--accent-primary)] px-2.5 text-[10.5px] font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+							>
+								{savingWellHeader ? 'Saving...' : 'Save Header'}
+							</button>
+						</div>
+					</div>
+				{/if}
+			</div>
+		{/if}
+	</div>
+
+	<!-- Sub-navigation Tabs (2-row 4-col grid for clear labels across all 8 ancillary tables) -->
+	<div
+		class="grid shrink-0 grid-cols-4 border-b border-[var(--border-hairline)] bg-[var(--bg-subtle)] text-[10px] font-semibold"
+	>
+		{#each [['hole_sections', `Hole (${wellData.holeSections.length})`], ['tops', `Tops (${wellData.tops.length})`], ['contacts', `Contacts (${wellData.contacts.length})`], ['perfs', `Perfs (${wellData.perforations.length})`], ['core', `RCA (${wellData.coreSamples.length})`], ['scal', `SCAL (${wellData.scalPc.length})`], ['pressure', `Press (${wellData.pressureTests.length})`], ['survey', `Survey (${wellData.survey.length})`]] as [key, lbl]}
+			<button
+				type="button"
+				onclick={() => setActiveTab(key as AncillaryTab)}
+				class="h-6.5 truncate border-r border-b border-[var(--border-hairline)] px-1 transition-colors [&:nth-child(4n)]:border-r-0 [&:nth-child(n+5)]:border-b-0 {activeTab ===
 				key
-					? 'border-b-2 border-b-[var(--accent-primary)] bg-[var(--bg-surface)] text-[var(--accent-primary)]'
+					? 'bg-[var(--bg-surface)] font-bold text-[var(--accent-primary)] shadow-[inset_0_-2px_0_var(--accent-primary)]'
 					: 'text-[var(--text-secondary)] hover:bg-slate-200/60'}"
-				title={key === 'core'
-					? 'Routine Core Analysis (CPORE, CPERM, CGD)'
-					: key === 'scal'
-						? 'SCAL Capillary Pressure (Multiple Pc & Sw pairs per sample/depth)'
-						: key === 'perfs'
-							? 'Perforation intervals (Name, Top, Bottom, Description)'
-							: key === 'pressure'
-								? 'Formation pressure tests (Depth, Pressure, Mobility, Permeability, Temperature, Remarks)'
-								: lbl}
+				title={key === 'hole_sections'
+					? 'Hole Sections & Mud Program (Bit Size, Mud Type, Mud Weight, Salinity, Rmf)'
+					: key === 'core'
+						? 'Routine Core Analysis (CPORE, CPERM, CGD)'
+						: key === 'scal'
+							? 'SCAL Capillary Pressure (Multiple Pc & Sw pairs per sample/depth)'
+							: key === 'perfs'
+								? 'Perforation intervals (Name, Top, Bottom, Description)'
+								: key === 'pressure'
+									? 'Formation pressure tests (Depth, Pressure, Mobility, Permeability, Temperature, Remarks)'
+									: lbl}
 			>
 				{lbl}
 			</button>
@@ -875,7 +1787,81 @@
 	<div
 		class="flex items-center gap-1 overflow-x-auto border-b border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5"
 	>
-		{#if activeTab === 'tops' || activeTab === 'contacts'}
+		{#if activeTab === 'hole_sections'}
+			<input
+				type="text"
+				placeholder='Section (e.g. 8.5" Res)'
+				bind:value={newName}
+				class="h-6 w-24 min-w-0 shrink-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1.5 text-xs"
+			/>
+			<input
+				type="number"
+				step="any"
+				placeholder="Top"
+				title="Section Top MD ({depthDisplay.unit})"
+				bind:value={newHoleTop}
+				class="mono-num h-6 w-20 shrink-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1.5 text-right text-xs"
+			/>
+			<input
+				type="number"
+				step="any"
+				placeholder="Bottom"
+				title="Section Bottom MD ({depthDisplay.unit})"
+				bind:value={newHoleBottom}
+				class="mono-num h-6 w-20 shrink-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1.5 text-right text-xs"
+			/>
+			<input
+				type="number"
+				step="0.125"
+				placeholder="Bit (in)"
+				title="Bit Size (inches)"
+				bind:value={newHoleBitSize}
+				class="mono-num h-6 w-16 shrink-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+			/>
+			<select
+				bind:value={newHoleMudType}
+				title="Mud System (WBM / OBM / SBM)"
+				class="h-6 w-16 shrink-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-xs"
+			>
+				<option value="WBM">WBM</option>
+				<option value="OBM">OBM</option>
+				<option value="SBM">SBM</option>
+			</select>
+			<input
+				type="number"
+				step="0.1"
+				placeholder="MW (ppg)"
+				title="Mud Weight (ppg)"
+				bind:value={newHoleMudWeight}
+				class="mono-num h-6 w-16 shrink-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+			/>
+			{#if newHoleMudType === 'WBM'}
+				<input
+					type="number"
+					step="1000"
+					placeholder="Sal (ppm)"
+					title="Mud Filtrate Salinity (ppm)"
+					bind:value={newHoleSalinity}
+					class="mono-num h-6 w-20 shrink-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+				/>
+				<input
+					type="number"
+					step="0.01"
+					placeholder="Rmf"
+					title="Mud Filtrate Resistivity Rmf (ohm.m)"
+					bind:value={newHoleRmf}
+					class="mono-num h-6 w-14 shrink-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+				/>
+				<input
+					type="number"
+					step="1"
+					placeholder="T°C"
+					title="Rmf Measurement Temp (°C)"
+					bind:value={newHoleRmfTemp}
+					class="mono-num h-6 w-12 shrink-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-right text-xs"
+				/>
+			{/if}
+		{:else if activeTab === 'tops' || activeTab === 'contacts'}
 			<input
 				type="text"
 				placeholder={activeTab === 'tops' ? 'Top Name (e.g. Hugin)' : 'OWC / GOC / FWL'}
@@ -965,6 +1951,16 @@
 				title="Sample Depth ({depthDisplay.unit})"
 				class="mono-num h-6 w-24 shrink-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1.5 text-right text-xs"
 			/>
+			<select
+				bind:value={newScalExpType}
+				title="Experiment Type (Method)"
+				class="h-6 w-24 shrink-0 rounded-sm border border-[var(--border-hairline)] bg-white px-1 text-xs text-[var(--text-primary)]"
+			>
+				<option value="porous_plate">Porous Plate</option>
+				<option value="micp">MICP</option>
+				<option value="centrifuge">Centrifuge</option>
+				<option value="oil_brine">Water-Oil</option>
+			</select>
 			<input
 				type="number"
 				step="any"
@@ -1161,7 +2157,18 @@
 
 	<!-- Editable High-Density Grid (Supports Double-Click Edit, Multi-Row Selection & Excel Paste) -->
 	<div class="min-h-0 flex-1">
-		{#if activeTab === 'tops'}
+		{#if activeTab === 'hole_sections'}
+			<CompactDataGrid
+				columns={HOLE_SECTION_COLS}
+				bind:rows={wellData.holeSections}
+				editable={true}
+				emptyMessage='No hole sections defined. Add intervals above (Bit Size, Mud Type, MW, Salinity, Rmf) or paste from Excel to drive QAQC & Fluid Density.'
+				oncellchange={() => saveCurrentTab()}
+				onpasteRows={handlePasteRows}
+				ondeleteRow={handleDeleteRow}
+				ondeleteRows={handleDeleteRows}
+			/>
+		{:else if activeTab === 'tops'}
 			<CompactDataGrid
 				columns={TOP_COLS}
 				bind:rows={wellData.tops}

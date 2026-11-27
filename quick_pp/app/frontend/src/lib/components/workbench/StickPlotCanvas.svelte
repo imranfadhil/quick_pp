@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
+	import { untrack, onDestroy } from 'svelte';
 	import { browser } from '$app/environment';
 	import { projectData } from '$lib/state/projectData.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
@@ -12,6 +12,13 @@
 	let plotAreaLeft = $state(54);
 	let plotAreaRight = $state(12);
 	let yRange = $state<[number, number] | null>(null);
+	let defaultYRange = $state<[number, number] | null>(null);
+
+	let showInspectionLine = $state(false);
+	let isInspectionLocked = $state(false);
+	let lockedTvd = $state<number | null>(null);
+	let cursorTvd = $state<number | null>(null);
+	let hoveredWellName = $state<string | null>(null);
 
 	let hoverReadout = $state<{
 		well: string | null;
@@ -26,6 +33,7 @@
 		hafwl: number | null;
 		gr: number | null;
 		vcoal: number | null;
+		isGas?: boolean;
 	}>({
 		well: null,
 		tvd: null,
@@ -38,7 +46,8 @@
 		shf: null,
 		hafwl: null,
 		gr: null,
-		vcoal: null
+		vcoal: null,
+		isGas: false
 	});
 
 	function syncPlotBounds() {
@@ -120,11 +129,40 @@
 		}
 		if (
 			workbench.stickPlotZoneFilter !== 'ALL' &&
+			workbench.stickPlotZoneFilter !== 'SELECTED' &&
 			availableTops.includes(workbench.stickPlotZoneFilter)
 		) {
 			return workbench.stickPlotZoneFilter;
 		}
+		if (workbench.selectedZones.length > 0) {
+			const found = workbench.selectedZones.find((z) => availableTops.includes(z));
+			if (found) return found;
+		}
 		return availableTops[0] ?? '';
+	});
+
+	let activeZoneSet = $derived.by(() => {
+		const filter = workbench.stickPlotZoneFilter;
+		if (filter === 'SELECTED') {
+			return workbench.selectedZones.length > 0 ? new Set(workbench.selectedZones) : null;
+		}
+		if (filter !== 'ALL') {
+			return new Set([filter]);
+		}
+		if (workbench.selectedZones.length > 0) {
+			return new Set(workbench.selectedZones);
+		}
+		return null;
+	});
+
+	let activeZoneLabel = $derived.by(() => {
+		if (workbench.stickPlotZoneFilter === 'SELECTED' && workbench.selectedZones.length > 0) {
+			return workbench.selectedZones.join(', ');
+		}
+		if (workbench.stickPlotZoneFilter === 'ALL' && workbench.selectedZones.length > 0) {
+			return workbench.selectedZones.join(', ');
+		}
+		return workbench.stickPlotZoneFilter;
 	});
 
 	function findNearestDepthValue(
@@ -199,33 +237,80 @@
 		return map;
 	});
 
-	function getWellZoneBounds(
+	function getWellMultiZoneBounds(
 		w: NonNullable<typeof projectData.stickPlotResult>['wells'][number],
-		zoneName: string
+		zoneSet: Set<string> | string | null
 	): { startMd: number; endMd: number; startTvd: number; endTvd: number } | null {
-		if (!zoneName || zoneName === 'ALL' || !w.tops || w.tops.length === 0) return null;
-		const sortedTops = [...w.tops]
-			.filter((t) => Number.isFinite(t.depth) && Number.isFinite(t.tvd))
-			.sort((a, b) => a.depth - b.depth);
-		const matchTop = sortedTops.find((t) => t.name === zoneName);
-		if (!matchTop) return null;
-		const nextTop = sortedTops.find((t) => t.depth > matchTop.depth + 0.5);
+		if (!zoneSet) return null;
+		const set =
+			typeof zoneSet === 'string'
+				? zoneSet === 'ALL' || zoneSet === 'SELECTED'
+					? null
+					: new Set([zoneSet])
+				: zoneSet;
+		if (!set || set.size === 0) return null;
+
+		let minStartMd = Infinity;
+		let minStartTvd = Infinity;
+		let maxEndMd = -Infinity;
+		let maxEndTvd = -Infinity;
+		let foundAny = false;
+
+		if (w.tops && w.tops.length > 0) {
+			const sortedTops = [...w.tops]
+				.filter((t) => Number.isFinite(t.depth) && Number.isFinite(t.tvd))
+				.sort((a, b) => a.depth - b.depth);
+
+			for (let i = 0; i < sortedTops.length; i++) {
+				const top = sortedTops[i];
+				if (set.has(top.name)) {
+					foundAny = true;
+					if (top.depth < minStartMd) minStartMd = top.depth;
+					if (top.tvd < minStartTvd) minStartTvd = top.tvd;
+
+					const nextTop = sortedTops.find(
+						(t, idx) => idx > i && !set.has(t.name) && t.depth > top.depth + 0.5
+					);
+					const endMd = nextTop ? nextTop.depth : (w.max_tvd ?? top.depth + 200);
+					const endTvd = nextTop ? nextTop.tvd : (w.max_tvd ?? top.tvd + 200);
+
+					if (endMd > maxEndMd) maxEndMd = endMd;
+					if (endTvd > maxEndTvd) maxEndTvd = endTvd;
+				}
+			}
+		}
+
+		if (!foundAny && w.tvd && w.zones) {
+			for (let i = 0; i < w.tvd.length; i++) {
+				const t = w.tvd[i];
+				const md = w.depths?.[i] ?? t;
+				const zn = w.zones[i];
+				if (t === null || !Number.isFinite(t) || !zn || !set.has(zn)) continue;
+				foundAny = true;
+				if (md !== null && md < minStartMd) minStartMd = md;
+				if (t < minStartTvd) minStartTvd = t;
+				if (md !== null && md > maxEndMd) maxEndMd = md;
+				if (t > maxEndTvd) maxEndTvd = t;
+			}
+		}
+
+		if (!foundAny) return null;
 		return {
-			startMd: matchTop.depth,
-			endMd: nextTop ? nextTop.depth : Infinity,
-			startTvd: matchTop.tvd,
-			endTvd: nextTop ? nextTop.tvd : Infinity
+			startMd: minStartMd,
+			endMd: maxEndMd,
+			startTvd: minStartTvd,
+			endTvd: maxEndTvd
 		};
 	}
 
 	// Per-well zone-specific Top TVD and cumulative HCPV for sorting and header display
 	let wellZoneMetrics = $derived.by(() => {
 		const rawWells = projectData.stickPlotResult?.wells ?? [];
-		const activeZone = workbench.stickPlotZoneFilter;
+		const activeSet = activeZoneSet;
 		const result = new Map<string, { topTvd: number; hcpv: number; hasZone: boolean }>();
 
 		for (const w of rawWells) {
-			if (activeZone === 'ALL') {
+			if (!activeSet || activeSet.size === 0) {
 				result.set(w.well_name, {
 					topTvd: w.top_reservoir_tvd,
 					hcpv: w.cum_hcpv,
@@ -233,7 +318,7 @@
 				});
 				continue;
 			}
-			const zb = getWellZoneBounds(w, activeZone);
+			const zb = getWellMultiZoneBounds(w, activeSet);
 			let minZoneTvd = zb ? zb.startTvd : Infinity;
 			let hcpv = 0;
 			let prevTvd: number | null = null;
@@ -245,8 +330,8 @@
 				const zn = w.zones[i] ?? 'ALL';
 				if (tvd === null || tvd === undefined || !Number.isFinite(tvd)) continue;
 				const inZone =
-					zn === activeZone ||
-					(zb !== null && md !== null && md >= zb.startMd - 0.15 && md < zb.endMd);
+					activeSet.has(zn) ||
+					(zb !== null && md !== null && md >= zb.startMd - 0.15 && md <= zb.endMd);
 				if (!inZone) continue;
 				matchedAny = true;
 				if (tvd < minZoneTvd) minZoneTvd = tvd;
@@ -516,11 +601,15 @@
 	function resolveEffectiveFwl(zoneFilter: string, wellZones: string[]): number | null {
 		const sp = projectData.shfParams;
 		const fwlByZone = sp.fwlByZone ?? projectData.shfResult?.fwl_by_zone ?? {};
-		if (zoneFilter !== 'ALL' && fwlByZone[zoneFilter] !== undefined) {
+		if (
+			zoneFilter !== 'ALL' &&
+			zoneFilter !== 'SELECTED' &&
+			fwlByZone[zoneFilter] !== undefined
+		) {
 			return Number(fwlByZone[zoneFilter]);
 		}
 		for (const z of wellZones) {
-			if (z && fwlByZone[z] !== undefined) {
+			if (z && z !== 'ALL' && z !== 'SELECTED' && fwlByZone[z] !== undefined) {
 				return Number(fwlByZone[z]);
 			}
 		}
@@ -617,25 +706,45 @@
 	}
 
 	let lastZoneFilter = $state<string>(workbench.stickPlotZoneFilter);
+	let lastSelectedZones = $state<string>(workbench.selectedZones.join(','));
 	let lastDatumMode = $state<string>(workbench.stickPlotDatumMode);
 	let lastFlattenTop = $state<string>(workbench.stickPlotFlattenTop);
 	let lastShowLogs = $state<boolean>(workbench.stickPlotShowLogs);
+
 	$effect(() => {
 		const zf = workbench.stickPlotZoneFilter;
+		const sz = workbench.selectedZones.join(',');
 		const dm = workbench.stickPlotDatumMode;
 		const ft = workbench.stickPlotFlattenTop;
 		const sl = workbench.stickPlotShowLogs;
 		if (
 			zf !== lastZoneFilter ||
+			sz !== lastSelectedZones ||
 			dm !== lastDatumMode ||
 			ft !== lastFlattenTop ||
 			sl !== lastShowLogs
 		) {
 			lastZoneFilter = zf;
+			lastSelectedZones = sz;
 			lastDatumMode = dm;
 			lastFlattenTop = ft;
 			lastShowLogs = sl;
 			yRange = null;
+		}
+	});
+
+	let prevSelectedZonesKey = $state(workbench.selectedZones.join(','));
+	$effect(() => {
+		const currentKey = workbench.selectedZones.join(',');
+		if (currentKey !== prevSelectedZonesKey) {
+			prevSelectedZonesKey = currentKey;
+			if (workbench.selectedZones.length > 1) {
+				workbench.stickPlotZoneFilter = 'SELECTED';
+			} else if (workbench.selectedZones.length === 1) {
+				workbench.stickPlotZoneFilter = workbench.selectedZones[0];
+			} else {
+				workbench.stickPlotZoneFilter = 'ALL';
+			}
 		}
 	});
 
@@ -647,6 +756,290 @@
 		}
 	}
 
+	let activeInspectionTvd = $derived(
+		isInspectionLocked && lockedTvd !== null ? lockedTvd : cursorTvd
+	);
+
+	function depthToPercent(depth: number): number | null {
+		const range = yRange ?? defaultYRange;
+		if (!range) return null;
+		const [d0, d1] = range;
+		if (!Number.isFinite(d0) || !Number.isFinite(d1) || d0 === d1) return null;
+		const topD = Math.min(d0, d1);
+		const botD = Math.max(d0, d1);
+		const span = botD - topD;
+		if (span <= 0) return null;
+		const ratio = (depth - topD) / span;
+		if (ratio < 0 || ratio > 1) return null;
+		return ratio * 100;
+	}
+
+	let inspectionPct = $derived(
+		showInspectionLine && activeInspectionTvd !== null
+			? depthToPercent(activeInspectionTvd)
+			: null
+	);
+
+	function toggleInspectionLock() {
+		if (!showInspectionLine) return;
+		isInspectionLocked = !isInspectionLocked;
+		if (isInspectionLocked) {
+			lockedTvd = activeInspectionTvd;
+		} else {
+			lockedTvd = null;
+		}
+	}
+
+	function unlockInspection() {
+		isInspectionLocked = false;
+		lockedTvd = null;
+	}
+
+	let pointerMoveRaf = 0;
+	function handlePlotPointerMove(e: PointerEvent) {
+		if (!plotContainer) return;
+		const rect = plotContainer.getBoundingClientRect();
+		const plotLeft = rect.left + plotAreaLeft;
+		const plotWidth = Math.max(1, rect.width - (plotAreaLeft + plotAreaRight));
+		const relX = (e.clientX - plotLeft) / plotWidth;
+
+		if (relX >= 0 && relX <= 1) {
+			const foundIdx = trackDomains.findIndex(([x0, x1]) => relX >= x0 && relX <= x1);
+			if (foundIdx !== -1 && orderedWells[foundIdx]) {
+				hoveredWellName = orderedWells[foundIdx].well_name;
+			}
+		}
+
+		if (!showInspectionLine || isInspectionLocked) return;
+
+		const plotTop = rect.top + 8;
+		const plotHeight = Math.max(1, rect.height - 34);
+		const range = yRange ?? defaultYRange;
+		if (!range) return;
+		const [d0, d1] = range;
+		if (!Number.isFinite(d0) || !Number.isFinite(d1) || d0 === d1) return;
+
+		const topD = Math.min(d0, d1);
+		const botD = Math.max(d0, d1);
+		const relY = Math.min(1, Math.max(0, (e.clientY - plotTop) / plotHeight));
+		const nextTvd = Number((topD + relY * (botD - topD)).toFixed(1));
+
+		cancelAnimationFrame(pointerMoveRaf);
+		pointerMoveRaf = requestAnimationFrame(() => {
+			if (isInspectionLocked) return;
+			cursorTvd = nextTvd;
+		});
+	}
+
+	$effect(() => {
+		if (!browser) return;
+		const handleKeyDown = (e: KeyboardEvent) => {
+			const target = e.target as HTMLElement | null;
+			if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
+			if (e.key === 'i' || e.key === 'I' || e.key === 'c' || e.key === 'C') {
+				showInspectionLine = !showInspectionLine;
+				if (!showInspectionLine) unlockInspection();
+			} else if (e.code === 'Space' || e.key === ' ') {
+				if (showInspectionLine) {
+					e.preventDefault();
+					toggleInspectionLock();
+				}
+			}
+		};
+		window.addEventListener('keydown', handleKeyDown);
+		return () => {
+			window.removeEventListener('keydown', handleKeyDown);
+		};
+	});
+
+	onDestroy(() => {
+		cancelAnimationFrame(pointerMoveRaf);
+	});
+
+	interface WellStickReadout {
+		well: string;
+		tvd: number | null;
+		md: number | null;
+		zone: string | null;
+		bvo: number | null;
+		bvoh: number | null;
+		phit: number | null;
+		swt: number | null;
+		shf: number | null;
+		hafwl: number | null;
+		gr: number | null;
+		vcoal: number | null;
+		isGas: boolean;
+		statusText?: string;
+	}
+
+	function getWellReadoutAtTvd(
+		wellName: string | null,
+		targetTvd: number | null
+	): WellStickReadout | null {
+		if (!wellName || targetTvd === null || !Number.isFinite(targetTvd)) return null;
+		const w = orderedWells.find((item) => item.well_name === wellName);
+		if (!w || !w.tvd || w.tvd.length === 0) return null;
+
+		const isFlattened = workbench.stickPlotDatumMode === 'flattened';
+		const targetTop = effectiveFlattenTop;
+		let datumDepth = 0;
+		if (isFlattened) {
+			const mTop = w.tops?.find((t) => t.name === targetTop && Number.isFinite(t.tvd));
+			datumDepth = mTop ? mTop.tvd : (w.top_reservoir_tvd ?? w.min_tvd ?? 0);
+		}
+
+		const searchTvd = isFlattened ? targetTvd + datumDepth : targetTvd;
+		let bestIdx = -1;
+		let bestDiff = Infinity;
+		for (let i = 0; i < w.tvd.length; i++) {
+			const t = w.tvd[i];
+			if (t === null || !Number.isFinite(t)) continue;
+			const diff = Math.abs(t - searchTvd);
+			if (diff < bestDiff) {
+				bestDiff = diff;
+				bestIdx = i;
+			}
+		}
+
+		// Find geological zone from tops even if outside logged curve interval
+		let zoneFromTops: string | null = null;
+		if (w.tops && w.tops.length > 0) {
+			const sortedTops = [...w.tops]
+				.filter((t) => Number.isFinite(t.tvd))
+				.sort((a, b) => a.tvd - b.tvd);
+			for (const t of sortedTops) {
+				if (t.tvd <= searchTvd) {
+					zoneFromTops = t.name;
+				}
+			}
+		}
+
+		const minLogTvd =
+			w.min_tvd ?? (w.tvd.find((t) => t !== null && Number.isFinite(t)) ?? null);
+		const maxLogTvd = w.max_tvd ?? null;
+		const isAboveLog = minLogTvd !== null && searchTvd < minLogTvd - 2;
+		const isBelowLog = maxLogTvd !== null && searchTvd > maxLogTvd + 2;
+
+		if (bestIdx === -1 || bestDiff > 25 || isAboveLog || isBelowLog) {
+			return {
+				well: w.well_name,
+				tvd: targetTvd,
+				md: null,
+				zone: zoneFromTops,
+				bvo: null,
+				bvoh: null,
+				phit: null,
+				swt: null,
+				shf: null,
+				hafwl: null,
+				gr: null,
+				vcoal: null,
+				isGas: false,
+				statusText: isAboveLog
+					? `Above Log (<${Math.round(minLogTvd!)}m)`
+					: isBelowLog
+						? `Below Log (>${Math.round(maxLogTvd!)}m)`
+						: 'No Log at TVD'
+			};
+		}
+
+		const i = bestIdx;
+		const tvdVal = w.tvd[i];
+		if (tvdVal === null || !Number.isFinite(tvdVal)) return null;
+		const effTvd = isFlattened ? tvdVal - datumDepth : tvdVal;
+		const md = w.depths?.[i] ?? tvdVal;
+		const zn = w.zones?.[i] ?? zoneFromTops ?? 'ALL';
+		const bvo = w.bvo?.[i] ?? null;
+		const phit = w.phit?.[i] ?? null;
+		const swt = w.swt?.[i] ?? null;
+		let shf = w.shf?.[i] ?? null;
+
+		const wShfMap = liveShfLookup.get(w.well_name);
+		if (wShfMap && md !== null) {
+			const liveVal = findNearestDepthValue(wShfMap.depths, wShfMap.values, md, 2.5);
+			if (liveVal !== undefined) shf = liveVal;
+		}
+		if (
+			(shf === null || shf === undefined || !Number.isFinite(shf)) &&
+			phit !== null &&
+			Number.isFinite(phit)
+		) {
+			const activeZone = workbench.stickPlotZoneFilter;
+			const sampleFwl = resolveEffectiveFwl(activeZone !== 'ALL' ? activeZone : zn, [
+				zn,
+				...w.zones
+			]);
+			if (sampleFwl !== null) {
+				shf = evalContinuousShfFallback(phit, tvdVal, sampleFwl);
+			}
+		}
+
+		const bvoh =
+			phit !== null && shf !== null && Number.isFinite(phit) && Number.isFinite(shf)
+				? Math.max(0, Math.min(1, phit * (1 - shf)))
+				: (w.bvoh?.[i] ?? null);
+
+		const isGas = Boolean(
+			(w.gas_flag && w.gas_flag[i] === 1) ||
+				(w.bvg && w.bvg[i] !== null && Number(w.bvg[i]) > 0.005)
+		);
+
+		const activeZone = workbench.stickPlotZoneFilter;
+		const fwl = resolveEffectiveFwl(activeZone !== 'ALL' ? activeZone : zn, [zn, ...w.zones]);
+
+		return {
+			well: w.well_name,
+			tvd: effTvd,
+			md,
+			zone: zn,
+			bvo,
+			bvoh,
+			phit,
+			swt,
+			shf,
+			hafwl: fwl !== null && typeof tvdVal === 'number' ? fwl - tvdVal : null,
+			gr: w.gr?.[i] ?? null,
+			vcoal: w.vcoal?.[i] ?? null,
+			isGas
+		};
+	}
+
+	let allWellReadouts = $derived.by(() => {
+		if (!showInspectionLine || activeInspectionTvd === null) return [];
+		return orderedWells.map((well, wIdx) => {
+			const dom = trackDomains[wIdx] ?? [0, 1];
+			const leftPct = dom[0] * 100;
+			const widthPct = Math.max(2, (dom[1] - dom[0]) * 100);
+			const isHovered = (hoveredWellName ?? workbench.wellId) === well.well_name;
+
+			let readout: WellStickReadout | null = null;
+			if (
+				hoverReadout.well === well.well_name &&
+				hoverReadout.tvd !== null &&
+				Math.abs(hoverReadout.tvd - activeInspectionTvd) < 0.8
+			) {
+				readout = {
+					...hoverReadout,
+					well: well.well_name,
+					isGas: Boolean(hoverReadout.isGas)
+				};
+			} else {
+				readout = getWellReadoutAtTvd(well.well_name, activeInspectionTvd);
+			}
+
+			return {
+				well,
+				wIdx,
+				dom,
+				leftPct,
+				widthPct,
+				isHovered,
+				readout
+			};
+		});
+	});
+
 	function buildStickPlot() {
 		const wells = orderedWells;
 		const domains = trackDomains;
@@ -655,6 +1048,7 @@
 		const annotations: any[] = [];
 
 		const activeZone = workbench.stickPlotZoneFilter;
+		const activeSet = activeZoneSet;
 		const globalSelectedZones =
 			workbench.selectedZones.length > 0 ? new Set(workbench.selectedZones) : null;
 		const minD = workbench.depthFilter?.min ?? -Infinity;
@@ -688,7 +1082,7 @@
 			const hasPerfStrip = workbench.stickPlotShowPerfs && (w.perforations?.length ?? 0) > 0;
 			const rightLabelX = hasPerfStrip ? xMax * 0.8 : xMax * 0.98;
 			const wShfMap = liveShfLookup.get(w.well_name);
-			const zb = getWellZoneBounds(w, activeZone);
+			const zb = getWellMultiZoneBounds(w, activeSet);
 
 			if (zb !== null && Number.isFinite(zb.startTvd)) {
 				const startEff = isFlattened ? zb.startTvd - datumDepth : zb.startTvd;
@@ -765,10 +1159,10 @@
 				}
 				prevValidTvd = effTvd;
 
-				const matchesActiveZone =
-					activeZone === 'ALL' ||
-					zn === activeZone ||
-					(zb !== null && md !== null && md >= zb.startMd - 0.15 && md < zb.endMd);
+				const inActiveZones = !activeSet || activeSet.has(zn);
+				const inZoneBounds =
+					zb !== null && md !== null && md >= zb.startMd - 0.15 && md <= zb.endMd;
+				const matchesActiveZone = inActiveZones || inZoneBounds;
 				const zoneMatches =
 					matchesActiveZone && (!globalSelectedZones || globalSelectedZones.has(zn));
 
@@ -859,7 +1253,7 @@
 					tvd,
 					effTvd,
 					md,
-					zone: activeZone !== 'ALL' && matchesActiveZone ? activeZone : zn,
+					zone: zn,
 					bvo,
 					bvoh,
 					phit,
@@ -975,11 +1369,12 @@
 				x: bvoArr,
 				y: tvdArr,
 				customdata: customDataArr,
+				text: customDataArr.map((cd) => (cd ? (cd.isGas ? 'BVG (Gas)' : 'BVO (Oil)') : '')),
 				line: { color: '#047857', width: 1.5 },
 				hovertemplate:
 					`<b>${w.well_name}</b><br>` +
 					`${isFlattened ? 'Rel Depth' : 'TVDSS'}: %{y:.1f} m<br>` +
-					'%{customdata.isGas ? "BVG (Gas)" : "BVO (Oil)"}: %{x:.3f} v/v<extra></extra>'
+					'%{text}: %{x:.3f} v/v<extra></extra>'
 			});
 
 			// BVHC_SHF Fill & Stroke
@@ -1010,11 +1405,12 @@
 					x: bvohArr,
 					y: tvdArr,
 					customdata: customDataArr,
+					text: customDataArr.map((cd) => (cd ? (cd.isGas ? 'BVG (SHF)' : 'BVO (SHF)') : '')),
 					line: { color: '#B91C1C', width: 1.6, dash: '4px,2px' },
 					hovertemplate:
 						`<b>${w.well_name}</b><br>` +
 						`${isFlattened ? 'Rel Depth' : 'TVDSS'}: %{y:.1f} m<br>` +
-						'BVHC (SHF): %{x:.3f} v/v<extra></extra>'
+						'%{text}: %{x:.3f} v/v<extra></extra>'
 				});
 			}
 
@@ -1316,7 +1712,7 @@
 				}
 				for (const grp of groupedTops) {
 					const isHighlighted =
-						(activeZone !== 'ALL' && grp.names.includes(activeZone)) ||
+						(activeSet !== null && grp.names.some((name) => activeSet.has(name))) ||
 						(isFlattened && grp.names.includes(targetTop));
 					const labelText =
 						grp.names.length <= 2
@@ -1475,6 +1871,7 @@
 			Number((maxTvd + pad).toFixed(1)),
 			Number((minTvd - pad).toFixed(1))
 		];
+		defaultYRange = computedRange;
 
 		// Stratigraphic Datum flattening horizontal reference line at y = 0
 		if (isFlattened) {
@@ -1666,6 +2063,10 @@
 					const pt = ev?.points?.[0];
 					const cd = pt?.customdata;
 					if (cd && typeof cd === 'object') {
+						if (cd.well) hoveredWellName = cd.well;
+						if (typeof cd.tvd === 'number' && !isInspectionLocked) {
+							cursorTvd = cd.tvd;
+						}
 						const fwl = resolveEffectiveFwl(workbench.stickPlotZoneFilter, [cd.zone]);
 						hoverReadout = {
 							well: cd.well,
@@ -1679,7 +2080,8 @@
 							shf: cd.shf,
 							hafwl: fwl !== null && typeof cd.tvd === 'number' ? fwl - cd.tvd : null,
 							gr: typeof cd.gr === 'number' ? cd.gr : null,
-							vcoal: typeof cd.vcoal === 'number' ? cd.vcoal : null
+							vcoal: typeof cd.vcoal === 'number' ? cd.vcoal : null,
+							isGas: Boolean(cd.isGas)
 						};
 						if (typeof cd.md === 'number') {
 							workbench.cursorDepth = cd.md;
@@ -1757,6 +2159,9 @@
 					bind:value={workbench.stickPlotZoneFilter}
 					class="h-5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] py-0 pr-5 pl-1.5 text-[10.5px] font-medium text-[var(--text-primary)]"
 				>
+					{#if workbench.selectedZones.length > 1}
+						<option value="SELECTED">Selected ({workbench.selectedZones.length} Zones)</option>
+					{/if}
 					{#each availableZones as zn (zn)}
 						<option value={zn}>{zn}</option>
 					{/each}
@@ -1863,6 +2268,41 @@
 			</label>
 			<button
 				type="button"
+				title="Toggle horizontal cursor inspection line across all wells (Shortcut: 'I' or 'C')"
+				onclick={() => {
+					showInspectionLine = !showInspectionLine;
+					if (!showInspectionLine) unlockInspection();
+				}}
+				class="flex h-5 items-center gap-1 rounded-sm border px-1.5 text-[10px] font-semibold transition-colors {showInspectionLine
+					? 'border-indigo-600 bg-indigo-50 text-indigo-700 dark:border-indigo-500 dark:bg-indigo-950/60 dark:text-indigo-300'
+					: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+			>
+				<svg
+					class="h-3 w-3"
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					stroke-width="2"
+				>
+					<path d="M4 12h16" stroke-width="2.5" />
+					<path d="M12 4v16" stroke-dasharray="2 2" stroke-width="1.5" />
+				</svg>
+				<span>{showInspectionLine ? 'Inspection ON' : 'Inspection'}</span>
+			</button>
+			{#if showInspectionLine}
+				<button
+					type="button"
+					title="Lock / freeze inspection line at current depth (Shortcut: Space)"
+					onclick={toggleInspectionLock}
+					class="flex h-5 items-center gap-1 rounded-sm border px-1.5 text-[10px] font-semibold transition-colors {isInspectionLocked
+						? 'border-amber-500 bg-amber-50 text-amber-800 shadow-2xs dark:border-amber-600 dark:bg-amber-950/60 dark:text-amber-200'
+						: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+				>
+					<span>{isInspectionLocked ? '🔒 Locked' : '🔓 Lock (Space)'}</span>
+				</button>
+			{/if}
+			<button
+				type="button"
 				disabled={projectData.isLoadingStickPlot}
 				onclick={() => void projectData.loadStickPlot(true)}
 				title="Reload latest saved curves across all wells"
@@ -1967,12 +2407,12 @@
 							<div
 								class="mono-num flex items-center justify-between text-[7.5px] whitespace-nowrap text-[var(--text-muted)]"
 							>
-								<span title="Top TVDSS ({workbench.stickPlotZoneFilter})"
+								<span title="Top TVDSS ({activeZoneLabel})"
 									>Top:{dispTopTvd.toFixed(0)}m</span
 								>
 								<span
 									class="font-semibold text-emerald-700"
-									title="Cumulative Hydrocarbon Pore Volume Column ({workbench.stickPlotZoneFilter})"
+									title="Cumulative Hydrocarbon Pore Volume Column ({activeZoneLabel})"
 								>
 									HCPV:{dispHcpv.toFixed(2)}m
 								</span>
@@ -2073,7 +2513,10 @@
 			</div>
 
 			<!-- Multi-Well TVDSS Stick Plot Canvas -->
-			<div class="relative min-h-0 flex-1 overflow-hidden">
+			<div
+				class="relative min-h-0 flex-1 overflow-hidden"
+				onpointermove={handlePlotPointerMove}
+			>
 				{#if projectData.isLoadingStickPlot && orderedWells.length === 0}
 					<div
 						class="flex h-full w-full items-center justify-center text-xs text-[var(--text-muted)]"
@@ -2110,74 +2553,198 @@
 					</div>
 				{:else}
 					<div bind:this={plotContainer} class="h-full w-full"></div>
+
+					<!-- Toggleable Horizontal Inspection Crosshair & Active Well Inspection Card -->
+					{#if showInspectionLine && inspectionPct !== null}
+						{@const isAbove = inspectionPct > 30}
+						<div
+							style="top: 8px; bottom: 26px; left: {plotAreaLeft}px; right: {plotAreaRight}px;"
+							class="pointer-events-none absolute z-20 overflow-visible"
+						>
+							<!-- Horizontal line spanning all wells -->
+							<div
+								style="top: {inspectionPct}%;"
+								class="pointer-events-none absolute right-0 left-0 z-25 -translate-y-1/2 border-t-[1.5px] {isInspectionLocked
+									? 'border-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.55)]'
+									: 'border-indigo-500/95 shadow-[0_0_8px_rgba(99,102,241,0.45)]'}"
+							>
+								<!-- Depth Badge on Left Edge -->
+								<div
+									class="rounded-2xs pointer-events-auto absolute -top-2.5 left-1 flex items-center gap-1 border px-1.5 py-0.2 text-[8px] font-bold shadow-xs backdrop-blur-xs {isInspectionLocked
+										? 'border-amber-400 bg-amber-50/95 text-amber-900'
+										: 'border-indigo-300 bg-indigo-50/95 text-indigo-900'}"
+								>
+									<span>
+										{isInspectionLocked ? '🔒 ' : ''}
+										{workbench.stickPlotDatumMode === 'flattened' ? 'Rel Depth:' : 'TVDSS:'}
+										{activeInspectionTvd !== null ? `${activeInspectionTvd.toFixed(1)}m` : '—'}
+									</span>
+									{#if isInspectionLocked}
+										<button
+											type="button"
+											onclick={unlockInspection}
+											class="ml-0.5 text-[9px] font-bold text-amber-700 hover:text-amber-950 cursor-pointer"
+											title="Unlock inspection line (Space)"
+										>
+											×
+										</button>
+									{/if}
+								</div>
+							</div>
+
+							<!-- Floating Inspection Cards for All Wells Across Crosshair (offset above/below to keep horizontal line and logs visible) -->
+							<div
+								style="top: {inspectionPct}%;"
+								class="pointer-events-none absolute right-0 left-0 z-30"
+							>
+								{#each allWellReadouts as item (item.well.well_name)}
+									{@const r = item.readout}
+									<div
+										style="left: {item.leftPct}%; width: {item.widthPct}%; {isAbove
+											? 'bottom: 22px;'
+											: 'top: 22px;'}"
+										class="absolute px-1"
+									>
+										{#if r}
+											<div
+												class="rounded-xs border p-1 text-[8px] leading-tight shadow-md backdrop-blur-sm transition-all {item.isHovered
+													? 'border-indigo-500 bg-white/98 ring-1 ring-indigo-400 dark:border-indigo-400 dark:bg-slate-900/98 text-slate-900 dark:text-slate-100 shadow-indigo-100 dark:shadow-none'
+													: 'border-slate-300/80 bg-white/92 dark:border-slate-700/80 dark:bg-slate-900/92 text-slate-800 dark:text-slate-200'}"
+											>
+												<!-- Card Header: Well & Zone -->
+												<div
+													class="mb-0.5 flex items-center justify-between border-b border-slate-200/80 pb-0.5 font-semibold dark:border-slate-700/80"
+												>
+													<button
+														type="button"
+														onclick={() => projectData.selectWell(item.well.well_name)}
+														class="pointer-events-auto truncate text-[8.5px] font-bold hover:underline cursor-pointer {item.isHovered
+															? 'text-indigo-600 dark:text-indigo-400'
+															: 'text-slate-800 dark:text-slate-100'}"
+														title="Select {item.well.well_name}"
+													>
+														{item.well.well_name}
+													</button>
+													{#if r.zone && r.zone !== 'ALL' && r.zone !== '—'}
+														<span
+															class="rounded-2xs truncate bg-slate-100 px-1 py-0 text-[7px] text-slate-600 dark:bg-slate-800 dark:text-slate-300 max-w-[50%]"
+															title={r.zone}
+														>
+															{r.zone}
+														</span>
+													{/if}
+												</div>
+
+												{#if r.statusText}
+													<!-- Muted Status when outside logged curves -->
+													<div
+														class="py-1 text-center font-medium text-slate-400 dark:text-slate-500 text-[7.5px]"
+													>
+														{r.statusText}
+													</div>
+												{:else}
+													<!-- Compact Curves Grid -->
+													<div class="mono-num grid grid-cols-2 gap-x-1 gap-y-0.5 text-[7.5px]">
+														{#if r.gr !== null}
+															<div class="flex items-center justify-between">
+																<span class="font-bold text-emerald-700">GR</span>
+																<span>{fmtNum(r.gr, 1)}</span>
+															</div>
+														{/if}
+														{#if r.vcoal !== null && r.vcoal > 0.005}
+															<div class="flex items-center justify-between">
+																<span class="font-bold text-zinc-900 dark:text-zinc-300"
+																	>COAL</span
+																>
+																<span>{fmtNum(r.vcoal, 2)}</span>
+															</div>
+														{/if}
+														<div class="flex items-center justify-between">
+															<span class="font-bold text-emerald-700"
+																>{r.isGas ? 'BVG' : 'BVO'}</span
+															>
+															<span class="font-semibold">{fmtNum(r.bvo, 3)}</span>
+														</div>
+														{#if r.bvoh !== null}
+															<div class="flex items-center justify-between">
+																<span class="font-bold text-red-600">SHF</span>
+																<span class="font-semibold">{fmtNum(r.bvoh, 3)}</span>
+															</div>
+														{/if}
+														{#if r.phit !== null}
+															<div class="flex items-center justify-between">
+																<span class="font-bold text-blue-700">PHIT</span>
+																<span>{fmtNum(r.phit, 3)}</span>
+															</div>
+														{/if}
+														{#if r.swt !== null}
+															<div class="flex items-center justify-between">
+																<span class="font-bold text-slate-600 dark:text-slate-400"
+																	>SWT</span
+																>
+																<span>{fmtNum(r.swt, 3)}</span>
+															</div>
+														{/if}
+														{#if r.shf !== null}
+															<div class="flex items-center justify-between">
+																<span class="font-bold text-red-700">SHF_M</span>
+																<span>{fmtNum(r.shf, 3)}</span>
+															</div>
+														{/if}
+														{#if r.hafwl !== null}
+															<div
+																class="col-span-2 flex items-center justify-between border-t border-slate-100 pt-0.5 dark:border-slate-800"
+															>
+																<span class="font-bold text-blue-700">HAFWL</span>
+																<span>{fmtNum(r.hafwl, 1)}m</span>
+															</div>
+														{/if}
+													</div>
+												{/if}
+											</div>
+										{/if}
+									</div>
+								{/each}
+							</div>
+						</div>
+					{/if}
 				{/if}
 			</div>
 		</div>
 	</div>
 
-	<!-- Synchronized Bottom Readout Bar -->
+	<!-- Synchronized Bottom Status & Legend Bar -->
 	<div
 		class="mono-num flex h-7 shrink-0 items-center justify-between border-t border-[var(--border-hairline)] bg-[var(--bg-app)] px-2.5 text-[11px] text-[var(--text-secondary)]"
 	>
-		<div class="flex flex-wrap items-center gap-x-3">
-			<span>
-				<strong class="text-[var(--text-primary)]">Well:</strong>
-				{hoverReadout.well ?? workbench.wellId ?? '—'}
-			</span>
-			<span>
-				<strong class="text-[var(--text-primary)]">
-					{workbench.stickPlotDatumMode === 'flattened' ? 'Rel Depth:' : 'TVDSS:'}
-				</strong>
-				{fmtDepth(hoverReadout.tvd)}
-			</span>
-			<span>
-				<strong>MD:</strong>
-				{fmtDepth(hoverReadout.md ?? workbench.cursorDepth)}
-			</span>
-			{#if hoverReadout.zone}
-				<span>
-					<strong>Zone:</strong>
-					{hoverReadout.zone}
+		<div class="flex items-center gap-x-2 text-[10.5px]">
+			{#if showInspectionLine}
+				<span class="inline-flex items-center gap-1 font-medium text-[var(--text-primary)]">
+					{#if isInspectionLocked}
+						<span class="inline-flex items-center gap-1 text-amber-700 dark:text-amber-400">
+							🔒 Locked at {workbench.stickPlotDatumMode === 'flattened' ? 'Rel Depth' : 'TVDSS'}:
+							<strong class="mono-num">{fmtDepth(activeInspectionTvd)}</strong>
+						</span>
+						<button
+							type="button"
+							onclick={unlockInspection}
+							class="text-[10px] text-amber-700 underline hover:text-amber-900 cursor-pointer"
+						>
+							(Unlock: Space)
+						</button>
+					{:else}
+						<span class="inline-flex items-center gap-1 text-indigo-700 dark:text-indigo-400">
+							<span>Inspection active:</span>
+							<strong class="mono-num">{fmtDepth(activeInspectionTvd)}</strong>
+						</span>
+						<span class="text-[10px] text-[var(--text-muted)]">
+							· [Space] to freeze · [I] to toggle
+						</span>
+					{/if}
 				</span>
-			{/if}
-			{#if hoverReadout.gr !== null && hoverReadout.gr !== undefined}
-				<span>
-					<strong class="text-emerald-700">GR:</strong>
-					{fmtNum(hoverReadout.gr, 1)} gAPI
-				</span>
-			{/if}
-			{#if hoverReadout.vcoal !== null && hoverReadout.vcoal !== undefined && hoverReadout.vcoal > 0.001}
-				<span>
-					<strong class="text-zinc-800">VCOAL:</strong>
-					{fmtNum(hoverReadout.vcoal, 3)}
-				</span>
-			{/if}
-			<span>
-				<strong class="text-emerald-700">BVO (Log):</strong>
-				{fmtNum(hoverReadout.bvo, 3)}
-			</span>
-			<span>
-				<strong class="text-red-600">BVO (SHF):</strong>
-				{fmtNum(hoverReadout.bvoh, 3)}
-			</span>
-			<span>
-				<strong class="text-blue-700">PHIT:</strong>
-				{fmtNum(hoverReadout.phit, 3)}
-			</span>
-			<span>
-				<strong>SWT:</strong>
-				{fmtNum(hoverReadout.swt, 3)}
-			</span>
-			{#if hoverReadout.shf !== null && hoverReadout.shf !== undefined}
-				<span>
-					<strong>SHF:</strong>
-					{fmtNum(hoverReadout.shf, 3)}
-				</span>
-			{/if}
-			{#if hoverReadout.hafwl !== null && hoverReadout.hafwl !== undefined}
-				<span>
-					<strong class="text-blue-700">HAFWL:</strong>
-					{fmtNum(hoverReadout.hafwl, 1)} m
+			{:else}
+				<span class="text-[10.5px] text-[var(--text-muted)]">
+					Multi-Well Stick Plot · Press <kbd class="rounded-xs border border-slate-300 bg-slate-100 px-1 py-0.2 text-[9.5px] font-sans">I</kbd> to inspect across wells
 				</span>
 			{/if}
 		</div>

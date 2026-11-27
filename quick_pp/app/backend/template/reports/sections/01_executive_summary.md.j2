@@ -13,6 +13,16 @@ This Single-Well Computer-Processed Interpretation (CPI) & Formation Evaluation 
 > **Petrophysicist Note:** {{ custom_notes }}
 {% endif %}
 
+{% if gate_summary and (gate_summary.n_blocking > 0 or gate_summary.n_review > 0) %}
+> **Evaluation QC status: {{ gate_summary.overall }}.** {{ gate_summary.n_blocking }} blocking and {{ gate_summary.n_review }} review item(s) were raised by the automated gate checks (Section 7).
+{% for g in gate_summary.blocking %}
+> * **{{ g.id }} (blocking):** {{ g.measured }} {{ g.action }}
+{% endfor %}
+{% for g in gate_summary.review %}
+> * **{{ g.id }} (review):** {{ g.measured }} {{ g.action }}
+{% endfor %}
+{% endif %}
+
 ### Table 1.1: Zonal Net Reservoir & Net Pay Summary — Well `{{ focal_well }}`
 
 | Zone | Interval (m MD) | Interval (m TVDss) | Gross (m) | Net Res (m) | $NTG_{res}$ | $\bar{V}_{sh,res}$ | $\bar{\phi}_{e,res}$ | $K_{geom,res}$ (mD) | Net Pay (m) | $NTG_{pay}$ | $\bar{\phi}_{e,pay}$ | $\bar{S}_{w,pay}$ | $HCPT$ (m) |
@@ -33,11 +43,21 @@ This Single-Well Computer-Processed Interpretation (CPI) & Formation Evaluation 
 {% if include_ai_commentary and ai_commentary.executive_summary %}
 {{ ai_commentary.executive_summary }}
 {% else %}
-This technical petrophysical evaluation report documents the deterministic and probabilistic log, core, and special core analysis (SCAL) interpretation for **{{ project_name }}** across **{{ wells|length }}** evaluated well(s) (`{{ well_names|join(', ') }}`) targeting **{{ target_zones|join(', ') }}**, prepared for Static Geological Modeling (Petrel/RMS) and Dynamic Reservoir Simulation (Eclipse/Intersect) handover.
+This technical petrophysical evaluation report documents the deterministic and probabilistic log, core, and special core analysis (SCAL) interpretation for **{{ project_name }}** across **{{ wells|length }}** evaluated {{ (wells|length) | pluralize('well') }} (`{{ well_names|join(', ') }}`) targeting **{{ target_zones|join(', ') }}**, prepared for Static Geological Modeling (Petrel/RMS) and Dynamic Reservoir Simulation (Eclipse/Intersect) handover.
 {% endif %}
 
 {% if custom_notes %}
 > **Petrophysicist Note:** {{ custom_notes }}
+{% endif %}
+
+{% if gate_summary and (gate_summary.n_blocking > 0 or gate_summary.n_review > 0) %}
+> **Handover status: {{ gate_summary.overall }}.** {{ gate_summary.n_blocking }} blocking and {{ gate_summary.n_review }} review item(s) were raised by the automated gate checks (Section 10).
+{% for g in gate_summary.blocking %}
+> * **{{ g.id }} (blocking):** {{ g.measured }} {{ g.action }}
+{% endfor %}
+{% for g in gate_summary.review %}
+> * **{{ g.id }} (review):** {{ g.measured }} {{ g.action }}
+{% endfor %}
 {% endif %}
 
 ### Table 1.1: Field-Wide Zonal Net Reservoir & Net Pay Summary (Thickness & Pore-Volume Weighted)

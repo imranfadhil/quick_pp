@@ -342,6 +342,76 @@ def estimate_temperature_gradient(tvd, unit="metric"):
     return temp
 
 
+def formation_temperature_c(
+    tvd,
+    surface_temp=25.0,
+    gradient=30.0,
+    meas_system="metric",
+    t_min=5.0,
+    t_max=250.0,
+):
+    """Formation temperature (degC) from a linear geothermal gradient.
+
+    Parameterised version of :func:`estimate_temperature_gradient`. The result is
+    always in degrees Celsius, clamped to ``[t_min, t_max]``.
+
+    Args:
+        tvd (np.ndarray or float): True vertical depth in metres.
+        surface_temp (float, optional): Surface temperature. degC for ``'metric'``,
+            degF for ``'imperial'``. Defaults to 25.0.
+        gradient (float, optional): Geothermal gradient. degC/km for ``'metric'``,
+            degF/1000 ft for ``'imperial'``. Defaults to 30.0.
+        meas_system (str, optional): ``'metric'`` or ``'imperial'``.
+        t_min (float, optional): Lower clamp in degC. Defaults to 5.0.
+        t_max (float, optional): Upper clamp in degC. Defaults to 250.0.
+
+    Returns:
+        np.ndarray or float: Formation temperature in degC.
+    """
+    if meas_system not in ("metric", "imperial"):
+        raise ValueError("meas_system must be 'metric' or 'imperial'.")
+    tvd_arr = np.asarray(tvd, dtype=float)
+    surface_temp = 25.0 if not np.isfinite(surface_temp) else float(surface_temp)
+    gradient = 30.0 if not np.isfinite(gradient) else float(gradient)
+    if meas_system == "imperial":
+        temp_f = surface_temp + gradient * (tvd_arr * 3.28084 / 1000.0)
+        temp_c = (temp_f - 32.0) * 5.0 / 9.0
+    else:
+        temp_c = surface_temp + gradient * (tvd_arr / 1000.0)
+    temp_c = np.clip(temp_c, t_min, t_max)
+    return float(temp_c) if temp_c.ndim == 0 else temp_c
+
+
+def estimate_rw_at_depth(
+    tvd,
+    water_salinity=35000.0,
+    surface_temp=25.0,
+    gradient=30.0,
+    meas_system="metric",
+    min_salinity=100.0,
+):
+    """Rw (ohm.m) at depth from salinity and a linear geothermal gradient.
+
+    Combines :func:`formation_temperature_c` and
+    :func:`estimate_rw_temperature_salinity`, with a salinity floor so that
+    fresh-water inputs cannot blow Rw up. Mirrors the frontend ``getRwAtDepth``.
+
+    Args:
+        tvd (np.ndarray or float): True vertical depth in metres.
+        water_salinity (float, optional): NaCl salinity in ppm. Non-finite values
+            fall back to 35000. Defaults to 35000.
+        surface_temp, gradient, meas_system: See :func:`formation_temperature_c`.
+        min_salinity (float, optional): Salinity floor in ppm. Defaults to 100.
+
+    Returns:
+        np.ndarray or float: Rw in ohm.m.
+    """
+    sal = 35000.0 if not np.isfinite(water_salinity) else float(water_salinity)
+    sal = max(sal, float(min_salinity))
+    temp_c = formation_temperature_c(tvd, surface_temp, gradient, meas_system)
+    return estimate_rw_temperature_salinity(np.asarray(temp_c, dtype=float), sal)
+
+
 def estimate_b_waxman_smits(T, rw):
     """Estimate the B parameter (equivalent conductance) for the Waxman-Smits model.
 
@@ -361,7 +431,10 @@ def estimate_b_waxman_smits(T, rw):
     """
     logger.debug("Estimating B parameter for Waxman-Smits (Juhasz 1981)")
     B = (-1.28 + 0.225 * T - 0.0004059 * T**2) / (1 + (0.045 * T - 0.27) * rw**1.23)
-    logger.debug(f"B parameter range: {B.min():.3f} - {B.max():.3f}")
+    b_arr = np.asarray(B)
+    logger.debug(
+        f"B parameter range: {float(b_arr.min()):.3f} - {float(b_arr.max()):.3f}"
+    )
     return B
 
 
@@ -820,6 +893,7 @@ def calibrate_water_leg_m(
     vsh_cutoff=0.30,
     min_phit=0.03,
     max_phit=0.45,
+    a=1.0,
 ):
     """Calibrate cementation exponent (m) strictly from a 100% water-bearing zone.
 
@@ -836,6 +910,8 @@ def calibrate_water_leg_m(
         vsh_cutoff (float, optional): Maximum Vsh for clean sand in Archie mode. Defaults to 0.30.
         min_phit (float, optional): Minimum porosity cutoff. Defaults to 0.03.
         max_phit (float, optional): Maximum porosity cutoff. Defaults to 0.45.
+        a (float, optional): Tortuosity factor used in the Archie and Indonesian
+            inversions. Non-positive or non-finite values fall back to 1.0. Defaults to 1.0.
 
     Returns:
         dict: Calibrated results containing:
@@ -858,6 +934,7 @@ def calibrate_water_leg_m(
         rw_arr = np.full_like(rt_arr, float(rw_arr))
     else:
         rw_arr = rw_arr.ravel()
+    a = float(a) if np.isfinite(a) and a > 0 else 1.0
 
     n = len(rt_arr)
     vsh_arr = (
@@ -880,9 +957,9 @@ def calibrate_water_leg_m(
         if vsh is not None:
             valid_mask &= np.isfinite(vsh_arr) & (vsh_arr <= vsh_cutoff)
         calc_m = np.full(n, np.nan, dtype=float)
-        calc_m[valid_mask] = np.log(rw_arr[valid_mask] / rt_arr[valid_mask]) / np.log(
-            phit_arr[valid_mask]
-        )
+        calc_m[valid_mask] = np.log(
+            a * rw_arr[valid_mask] / rt_arr[valid_mask]
+        ) / np.log(phit_arr[valid_mask])
     elif method == "indonesian":
         calc_m = np.full(n, np.nan, dtype=float)
         sh_term = np.clip(vsh_arr, 0.0, 1.0) ** (
@@ -891,7 +968,7 @@ def calibrate_water_leg_m(
         diff = (1.0 / np.sqrt(np.maximum(rt_arr, 1e-4))) - sh_term
         diff_mask = valid_mask & (diff > 0)
         calc_m[diff_mask] = (2.0 / np.log(phit_arr[diff_mask])) * np.log(
-            np.sqrt(rw_arr[diff_mask]) * diff[diff_mask]
+            np.sqrt(a * rw_arr[diff_mask]) * diff[diff_mask]
         )
         valid_mask = diff_mask
     elif method in ("shell_lucia", "shell", "lucia"):

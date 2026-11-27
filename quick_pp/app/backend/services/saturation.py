@@ -10,6 +10,7 @@ from quick_pp.app.backend.schemas.saturation_b import InputData as BInput
 from quick_pp.app.backend.schemas.saturation_qv import InputData as QvInput
 from quick_pp.app.backend.schemas.saturation_qvn import InputData as QvnInput
 from quick_pp.app.backend.schemas.saturation_rw import InputData as RwInput
+from quick_pp.app.backend.schemas.saturation_rw_depth import InputData as RwDepthInput
 from quick_pp.app.backend.schemas.saturation_temp_grad import InputData as TempGradInput
 from quick_pp.app.backend.schemas.saturation_waxman_smits import (
     InputData as WaxmanSmitsInput,
@@ -204,6 +205,38 @@ async def estimate_rw(inputs: RwInput) -> List[Dict[str, float]]:
         else:
             result_list = [_safe_float(val) for val in np.asarray(rw).flatten()]
         return [{"RW": val} for val in result_list]
+    except Exception as e:
+        raise HTTPException(
+            status_code=400, detail=f"Error processing request: {e}"
+        ) from e
+
+
+@router.post(
+    "/rw_at_depth",
+    summary="Estimate Rw and formation temperature at depth",
+    description=(
+        "Single source of truth for Rw(T, salinity) along a linear geothermal gradient "
+        "(Bateman-Konen). Temperature is clamped to 5-250 degC and salinity floored at 100 ppm. "
+        "Returns TEMP_C and RW per input depth."
+    ),
+    operation_id="estimate_rw_at_depth",
+)
+async def estimate_rw_at_depth_(inputs: RwDepthInput) -> List[Dict[str, float]]:
+    """Return formation temperature (degC) and Rw (ohm.m) for each TVD sample."""
+    from quick_pp.saturation import estimate_rw_at_depth, formation_temperature_c
+
+    p = inputs.model_dump()
+    try:
+        tvd = np.asarray([row["tvd"] for row in p["data"]], dtype=float)
+        args = (p["surface_temp"], p["gradient"], p["meas_system"])
+        temp = np.atleast_1d(formation_temperature_c(tvd, *args))
+        rw = np.atleast_1d(
+            estimate_rw_at_depth(tvd, p["water_salinity"], *args)
+        )
+        return [
+            {"TEMP_C": _safe_float(t), "RW": _safe_float(r)}
+            for t, r in zip(temp, rw, strict=False)
+        ]
     except Exception as e:
         raise HTTPException(
             status_code=400, detail=f"Error processing request: {e}"

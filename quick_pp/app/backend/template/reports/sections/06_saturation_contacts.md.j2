@@ -6,11 +6,22 @@
 ### {{ sec_num }}.1 Electrical Properties, Formation Water Resistivity & Saturation Equation
 
 * **Saturation Model:** `{{ sw_params.model_name }}`
-* **Free Water Level ($FWL$):** ${{ "%.1f"|format(sw_params.fwl) }}\text{ m TVDss}$
-* **Formation Water Salinity & Resistivity:** ${{ sw_params.salinity|int }}\text{ ppm NaCl equivalent}$, $R_w = {{ "%.3f"|format(sw_params.rw) }}\text{ }\Omega\cdot\text{m} \text{ @ } {{ "%.1f"|format(sw_params.temp) }}^\circ\text{C}$ (Arps temperature scaling).
+* **Free Water Level ($FWL$):** ${{ "%.1f"|format(sw_params.fwl) }}\text{ m TVDss}$ (Basis: `{{ sw_params.fwl_basis }}`)
+* **Formation Water Salinity & Resistivity:** ${{ sw_params.salinity|int }}\text{ ppm NaCl equivalent}$, $R_w = {{ "%.3f"|format(sw_params.rw) }}\text{ }\Omega\cdot\text{m} \text{ @ } {{ "%.1f"|format(sw_params.temp) }}^\circ\text{C}$ ({{ sw_params.temp_basis }}).
 * **Electrical Tortuosity, Cementation & Saturation Exponents:** $a = {{ sw_params.a }}$, $m = {{ sw_params.m }}$, $n = {{ sw_params.n }}$
 
-$$S_w^n + R_w \cdot B \cdot Q_v \cdot S_w^{n-1} = \frac{a \cdot R_w}{\phi_t^m \cdot R_t} \quad \text{(Waxman-Smits Shaly-Sand)} \qquad S_w = \left(\frac{a \cdot R_w}{\phi_t^m \cdot R_t}\right)^{1/n} \quad \text{(Archie)}$$
+{% if sw_params.model_key == 'waxman_smits' %}
+$$S_w^n + B \cdot Q_v \cdot R_w \cdot S_w^{n-1} = \frac{a \cdot R_w}{\phi_t^m \cdot R_t} \quad \text{(Active Waxman-Smits Shaly-Sand)}$$
+$$\text{Clean-Sand Baseline (Archie Reference): } S_w = \left(\frac{a \cdot R_w}{\phi_t^m \cdot R_t}\right)^{1/n}$$
+{% elif sw_params.model_key == 'dual_water' %}
+$$\frac{1}{R_t} = \frac{\phi_t^m}{a} \left( S_{wt}^n \frac{1}{R_{wf}} + S_{wb} \left( \frac{1}{R_{wb}} - \frac{1}{R_{wf}} \right) S_{wt}^{n-1} \right) \quad \text{(Active Dual-Water Model)}$$
+$$\text{Clean-Sand Baseline (Archie Reference): } S_w = \left(\frac{a \cdot R_w}{\phi_t^m \cdot R_t}\right)^{1/n}$$
+{% elif sw_params.model_key in ('simandoux', 'indonesian') %}
+$$\frac{1}{R_t} = \frac{\phi_e^m \cdot S_w^n}{a \cdot R_w (1 - V_{sh})} + \frac{V_{sh} \cdot S_w}{R_{sh}} \quad \text{(Active Shaly-Sand Model)}$$
+$$\text{Clean-Sand Baseline (Archie Reference): } S_w = \left(\frac{a \cdot R_w}{\phi_t^m \cdot R_t}\right)^{1/n}$$
+{% else %}
+$$S_w = \left(\frac{a \cdot R_w}{\phi_t^m \cdot R_t}\right)^{1/n} \quad \text{(Active Archie Equation)}$$
+{% endif %}
 
 | Parameter | Symbol | Value | Unit | Basis / Calibration |
 | :--- | :---: | :---: | :---: | :--- |
@@ -18,7 +29,18 @@ $$S_w^n + R_w \cdot B \cdot Q_v \cdot S_w^{n-1} = \frac{a \cdot R_w}{\phi_t^m \c
 | Cementation Exponent | $m$ | {{ sw_params.m }} | unitless | Formation Factor ($F = a / \phi^m$) |
 | Saturation Exponent | $n$ | {{ sw_params.n }} | unitless | Resistivity Index ($RI = S_w^{-n}$) |
 | Formation Water Resistivity | $R_w$ | {{ "%.3f"|format(sw_params.rw) }} | $\Omega\cdot\text{m}$ | Water Zone Pickett $S_w = 100\%$ Ro Trend |
-| Free Water Level | $FWL$ | {{ "%.1f"|format(sw_params.fwl) }} | $\text{m TVDss}$ | Resistivity-Porosity Fluid Contact Interpretation |
+| Formation Temperature | $T_{res}$ | {{ "%.1f"|format(sw_params.temp) }} | $^\circ\text{C}$ | {{ sw_params.temp_basis }} |
+| Free Water Level | $FWL$ | {{ "%.1f"|format(sw_params.fwl) }} | $\text{m TVDss}$ | {{ sw_params.fwl_basis }} |
+{% if sw_params.model_key == 'waxman_smits' %}
+| Clay Counter-Ion Conductance | $B$ | {{ sw_params.b_conductance }} | $\text{L}\cdot\text{equiv}^{-1}\cdot\Omega^{-1}\cdot\text{m}^{-1}$ | Juhasz (1981) Empirical Model @ $T_{res}$ & $R_w$ |
+| Cation Exchange Capacity / Pore Vol | $Q_v$ | {{ sw_params.qv }} | $\text{meq/mL}$ | {{ sw_params.qv_method }} |
+| Shale Porosity | $\phi_{sh}$ | {{ sw_params.phish }} | $\text{v/v}$ | Clay-Bound Water ($CBW$) Partitioning Endpoint |
+{% elif sw_params.model_key == 'dual_water' %}
+| Bound Water Resistivity | $R_{wb}$ | {{ "%.3f"|format(sw_params.rwb) }} | $\Omega\cdot\text{m}$ | Dual Water Bound-Water Calibration |
+| Bound Water Saturation Endpoint | $S_{wb}$ | {{ "%.2f"|format(sw_params.swb) }} | $\text{v/v}$ | Clay-Bound Water Saturation Limit |
+{% elif sw_params.model_key in ('simandoux', 'indonesian') %}
+| Shale Resistivity | $R_{sh}$ | {{ "%.2f"|format(sw_params.rsh) }} | $\Omega\cdot\text{m}$ | Adjacent Pure Shale Bed Resistivity Baseline |
+{% endif %}
 
 {% if include_ai_commentary and ai_commentary.saturation_narrative %}
 {{ ai_commentary.saturation_narrative }}
@@ -62,11 +84,65 @@ Accurate delineation of fluid contacts is fundamental to volumetric in-place est
   - **Oil-Water Contact (OWC):** ${{ "%.1f"|format(z.owc) }}\text{ m TVDss}$ (Bracket: ${{ "%.1f"|format(z.odt) if z.odt else "N/A" }}\text{ m}$ to ${{ "%.1f"|format(z.wut) if z.wut else "N/A" }}\text{ m}$).
   {% endif %}
   {% if z.fwl is not none %}
-  - **Free Water Level (FWL):** ${{ "%.1f"|format(z.fwl) }}\text{ m TVDss}$ (Capillary $P_c = 0$ Datum).
+  - **Free Water Level (FWL):** ${{ "%.1f"|format(z.fwl) if z.fwl is number else z.fwl }}\text{ m TVDss}$ (Capillary $P_c = 0$ Datum).
   {% endif %}
 {% endfor %}
 {% endif %}
 {% else %}
 > [!NOTE]
 > Discrete single-well fluid contact markers (GUT/GDT/OUT/ODT/WUT/OWC/GOC/FWL) have not yet been extracted or committed to ancillary data for this project. Global saturation model uses $FWL = {{ "%.1f"|format(sw_params.fwl) }}\text{ m TVDss}$.
+{% endif %}
+
+{% if fpt_summary and fpt_summary.has_data %}
+### {{ sec_num }}.3 Formation Pressure Testing (RFT/MDT/XPT) & Fluid Gradient Regimes
+
+Formation Pressure Tester (RFT/MDT/XPT) data were gathered across the evaluated wells to establish in-situ reservoir pressure regimes, verify vertical fluid communication, and determine independent fluid contact datums from hydrostatic gradient intersections.
+
+{% if fpt_summary.filter_note %}
+> **Station screening:** {{ fpt_summary.filter_note }} Only stations inside the target reservoir zones, with valid quality and plausible pressure, enter the regime table and gradient fits.
+{% endif %}
+
+#### Table {{ sec_num }}.3: Multi-Well Formation Pressure Regimes & Fitted Fluid Gradients
+
+| Well Name | Total Stations | Valid Stations | Depth Range (m TVDss) | Formation Pressure (psia) | Mobility Range (mD/cP) | Hydrostatic Regime |
+| :--- | :---: | :---: | :---: | :---: | :---: | :--- |
+{% for w in fpt_summary.well_fpt_rows %}
+| **{{ w.well_name }}** | {{ w.total_count }} | {{ w.valid_count }} | {{ w.depth_range }} | {{ w.pressure_range }} | {{ w.mobility_range }} | {{ w.overpressure_regime }} |
+{% endfor %}
+
+{% if fpt_summary.fpt_gradient_rows and fpt_summary.fpt_gradient_rows|length > 0 %}
+**Fitted Fluid Pressure Gradients & In-Situ Densities:**
+
+| Zone / Reservoir Segment | Inferred Phase | Pressure Gradient (psi/ft) | In-Situ Density (g/cc) | Datum Pressure @ FWL (psia) | $R^2$ | Stations ($n$) | TVDss Depth Range |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+{% for g in fpt_summary.fpt_gradient_rows %}
+| **{{ g.zone or "Target Reservoir" }}** | **{{ g.fluid_type }}**{% if g.accepted is defined and not g.accepted %} (rejected){% endif %} | {{ "%.4f"|format(g.gradient_psi_ft) }} | {{ "%.3f"|format(g.density_gcc) }} | {{ "%.1f"|format(g.datum_pressure) if g.datum_pressure is defined else "—" }} | {{ "%.3f"|format(g.r_squared) if g.r_squared is defined else "—" }} | {{ g.n_points }} | {{ g.tvdss_range }} |
+{% endfor %}
+
+{% if fpt_summary.rejected_fits %}
+> **Fits not used downstream:**
+{% for g in fpt_summary.rejected_fits %}
+> * {{ g.fluid_type }} ({{ g.zone }}): {{ g.reject_reason }}. Not used for saturation-height density or contact estimation.
+{% endfor %}
+{% endif %}
+{% endif %}
+
+{% if fpt_summary.fpt_contacts and fpt_summary.fpt_contacts|length > 0 %}
+#### Table {{ sec_num }}.4: Pressure-Gradient Contact Reconciliation vs. Log/Capillary Contacts
+
+{% if not fpt_summary.fwl_is_committed %}
+> **Indicative only:** no committed fluid contact exists for this project. The reference FWL ({{ "%.1f"|format(sw_params.fwl) }} m TVDss) is inferred from the log saturation transition, so the pressure-derived contacts below are not reconciled against an independent datum.
+{% endif %}
+
+| Contact Type | FPT TVDss P50 (m) | FPT Bracket P10–P90 (m) | Log / Capillary TVDss (m) | Contact Reconciliation Delta ($\Delta\text{TVDss}$) | Audit Reconciliation Status |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+{% for c in fpt_summary.fpt_contacts %}
+| **{{ c.contact_type }}** | **{{ "%.1f"|format(c.tvdss_p50) }}** | {{ "%.1f"|format(c.tvdss_p10) }} – {{ "%.1f"|format(c.tvdss_p90) }} | {{ "%.1f"|format(sw_params.fwl) }} | {{ "%+.1f"|format(c.delta_log_tvdss) if c.delta_log_tvdss is defined else "0.0" }} m | **{{ c.status or "✓ RECONCILED" }}** |
+{% endfor %}
+{% endif %}
+
+{% if assets.fpt_pressure_plot %}
+
+![Figure {{ sec_num }}.2: {{ "Well" if is_single_well else "Multi-Well" }} Formation Pressure vs. TVDss & Fluid Gradient Regimes]({{ assets.fpt_pressure_plot }})
+{% endif %}
 {% endif %}

@@ -292,3 +292,153 @@ def test_analyze_by_zone(fpt_client):
     assert r_b["active_zone"] == "Sand-B"
     assert r_b["gradients"]["OIL"]["gradient"] == pytest.approx(PSI_PER_M_OIL, abs=0.05)
     assert r_b["contacts"]["OWC"]["tvdss_p50"] == pytest.approx(1815.0, abs=1.0)
+
+
+def test_zone_filtering_case_insensitive_and_aliases(fpt_client):
+    pid, _ = fpt_client
+    # Lowercase / uppercase zone filter should cleanly match Sand-A
+    r_lower = _analyze(pid, zones=["sand-a"], n_simulations=100)
+    assert r_lower["n_points"] == 9
+    assert all("Sand-A" in p["zone"] for p in r_lower["points"])
+
+    r_upper = _analyze(pid, zones=["SAND-A"], n_simulations=100)
+    assert r_upper["n_points"] == 9
+
+    # Alias / substring filter: 'Sand-A Formation' matching 'Sand-A'
+    r_alias = _analyze(pid, zones=["Sand-A Formation"], n_simulations=100)
+    assert r_alias["n_points"] == 9
+
+
+def test_zone_resolution_from_well_logs_and_unit_alignment():
+    # Test _resolve_fpt_point_zone directly
+    from quick_pp.app.backend.services.fpt import _resolve_fpt_point_zone
+
+    # Case 1: Stored zone wins
+    z, src = _resolve_fpt_point_zone(1000.0, "Fulmar", None, [])
+    assert z == "Fulmar"
+    assert src == "stored"
+
+    # Case 2: Resolved from well_df ZONES curve with depth in meters
+    wdf_m = pd.DataFrame({
+        "DEPTH": np.linspace(2400.0, 2500.0, 101),
+        "ZONES": ["Fulmar"] * 60 + ["Skagerrak"] * 41,
+    })
+    z_m, src_m = _resolve_fpt_point_zone(2420.0, None, wdf_m, [])
+    assert z_m == "Fulmar"
+    assert src_m == "well_logs"
+
+    # Case 3: md in feet (7939.6 ft ~ 2420 m) while well_df is in meters
+    z_ft, src_ft = _resolve_fpt_point_zone(7939.6, None, wdf_m, [])
+    assert z_ft == "Fulmar"
+    assert src_ft == "well_logs"
+
+    # Case 4: Fallback to formation tops with unit alignment (md in ft, tops in m)
+    tops_m = [
+        {"name": "Fulmar", "depth": 2400.0},
+        {"name": "Skagerrak", "depth": 2492.0},
+    ]
+    z_top, src_top = _resolve_fpt_point_zone(7940.0, None, None, tops_m)
+    assert z_top == "Fulmar"
+    assert src_top == "tops"
+
+
+def test_zone_overrides_case_insensitive_and_fallback(fpt_client):
+    pid, _ = fpt_client
+
+    # 1. Zone override matching case-insensitively ('sand-a' matching 'Sand-A')
+    res_ov = _analyze(
+        pid,
+        group_by_zone=True,
+        overrides_by_zone={
+            "sand-a": {
+                "OIL": {
+                    "density_gcc": 0.80,
+                    "mode": "fixed",
+                }
+            }
+        },
+        n_simulations=100,
+    )
+    assert "Sand-A" in res_ov["by_zone"]
+    sand_a_oil = res_ov["by_zone"]["Sand-A"]["gradients"]["OIL"]
+    assert sand_a_oil["density_gcc"] == pytest.approx(0.80, abs=0.01)
+    assert sand_a_oil["method"] == "fixed_gradient"
+
+    # 2. Substring / alias zone override ('Sand-A Reservoir' matching 'Sand-A')
+    res_alias_ov = _analyze(
+        pid,
+        group_by_zone=True,
+        overrides_by_zone={
+            "Sand-A Reservoir": {
+                "OIL": {
+                    "density_gcc": 0.72,
+                    "mode": "fixed",
+                }
+            }
+        },
+        n_simulations=100,
+    )
+    assert "Sand-A" in res_alias_ov["by_zone"]
+    sand_a_alias_oil = res_alias_ov["by_zone"]["Sand-A"]["gradients"]["OIL"]
+    assert sand_a_alias_oil["density_gcc"] == pytest.approx(0.72, abs=0.01)
+
+
+def test_tvdss_feet_unit_reconciliation_preventing_inflation(fpt_client):
+    """Verify that TVDSS provided in feet (e.g. 8090 ft) for a metric well (MD ~ 2491.7 m)
+    does not shoot to 26542 ft (~3.28x / 4x) when analyzed in display unit 'ft'.
+    """
+    pid, session = fpt_client
+    w = Well(db_session=session, project_id=pid, name="21-25-2", uwi="21-25-2", depth_uom="m")
+    w.save()
+
+    # Pressure tests with MD in metres (2491.7 m) and TVDSS stored in feet (8090.0 ft)
+    w.add_pressure_tests(
+        [
+            {"depth": 2491.7, "pressure": 5848.0, "tvdss": 8090.0, "fluid_type": "OIL"},
+            {"depth": 2507.0, "pressure": 5863.0, "tvdss": 8139.4, "fluid_type": "OIL"},
+            {"depth": 2516.3, "pressure": 5869.0, "tvdss": 8164.4, "fluid_type": "OIL"},
+            {"depth": 2551.8, "pressure": 5892.0, "tvdss": 8287.5, "fluid_type": "OIL"},
+        ]
+    )
+    session.commit()
+
+    pts_res = fpt_service.fpt_list_points(pid, well_names=["21-25-2"])
+    pts = pts_res["points"]
+    p0 = next(p for p in pts if p["md"] == pytest.approx(2491.7, abs=0.1))
+    # Stored canonical TVDSS should be converted to metres (~2465.8 m), NOT left at 8090 m
+    assert p0["tvdss"] == pytest.approx(8090.0 * 0.3048, abs=0.5)
+
+    # When analyzed in feet ('ft'):
+    # TVDSS should display as 8090 ft, NOT shoot to 26542 ft!
+    res_ft = _analyze(pid, well_names=["21-25-2"], depth_unit="ft", pressure_unit="psi", n_simulations=100)
+    p0_ft = next(p for p in res_ft["points"] if p["md"] == pytest.approx(2491.7, abs=0.1))
+    assert p0_ft["tvdss_display"] == pytest.approx(8090.0, abs=1.0)
+    assert p0_ft["tvdss_display"] < 10000.0  # Must not shoot to ~26542 ft!
+
+    # Oil gradient must be ~0.22 psi/ft (not 0.0711 psi/ft)
+    oil_grad = res_ft["gradients"]["OIL"]["gradient"]
+    assert 0.18 < oil_grad < 0.28
+    # Oil density must be ~0.51 g/cc (not 0.164 g/cc)
+    oil_rho = res_ft["gradients"]["OIL"]["density_gcc"]
+    assert 0.45 < oil_rho < 0.65
+
+
+def test_resolve_well_tvd_array_unit_alignment():
+    """Verify _resolve_well_tvd_array reconciles when well_df TVDSS is in feet and target MD in metres."""
+    # Well log dataframe with DEPTH in metres (~2500m) and TVDSS in feet (~8090ft)
+    depths_m = np.linspace(2480.0, 2560.0, 81)
+    tvdss_ft = depths_m * (1.0 / 0.3048) - 85.0  # ~8050 to 8315 ft
+    well_df = pd.DataFrame({"DEPTH": depths_m, "TVDSS": tvdss_ft})
+
+    target_md_m = np.array([2491.7, 2507.0, 2551.8])
+    resolved_m = ws_service._resolve_well_tvd_array(target_md_m, well_df, None)
+
+    # Resolved TVDSS must be in metres (~2465 m), not in feet (~8090 ft)
+    assert np.all(resolved_m < 3000.0)
+    assert np.all(resolved_m > 2400.0)
+    expected_m = (target_md_m * (1.0 / 0.3048) - 85.0) * 0.3048
+    assert resolved_m == pytest.approx(expected_m, abs=0.5)
+
+
+
+

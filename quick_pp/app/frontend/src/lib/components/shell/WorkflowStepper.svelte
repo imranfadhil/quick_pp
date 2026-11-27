@@ -90,16 +90,26 @@
 		readyCheck: () => boolean;
 	}> = [
 		{
-			id: 'qaqc',
+			id: 'ancillary',
 			num: 1,
-			label: 'Data & QAQC',
-			readyCheck: () => Object.keys(wellData.curves).length > 1
+			label: 'Well & Ancillary',
+			readyCheck: () =>
+				wellData.tops.length > 0 ||
+				wellData.holeSections.length > 0 ||
+				wellData.coreSamples.length > 0 ||
+				wellData.survey.length > 0 ||
+				Boolean(
+					wellData.header?.kb_elev != null ||
+						wellData.header?.df_elev != null ||
+						wellData.header?.bht != null ||
+						wellData.header?.rmf != null
+				)
 		},
 		{
-			id: 'ancillary',
+			id: 'qaqc',
 			num: 2,
-			label: 'Tops & Ancillary',
-			readyCheck: () => wellData.tops.length > 0 || wellData.coreSamples.length > 0
+			label: 'Data & QAQC',
+			readyCheck: () => Object.keys(wellData.curves).length > 1
 		},
 		{
 			id: 'litho-poro',
@@ -188,8 +198,8 @@
 		if (workbench.scope === 'single-well') {
 			if (workbench.singleWellStep === 'scal') return 'sw-standalone-core-pc';
 			const map: Record<SingleWellStep, string> = {
-				'qaqc': 'sw-step-1-qaqc',
-				'ancillary': 'sw-step-2-ancillary',
+				'ancillary': 'sw-step-1-ancillary',
+				'qaqc': 'sw-step-2-qaqc',
 				'litho-poro': 'sw-step-3-litho-poro',
 				'perm': 'sw-step-4-perm',
 				'saturation': 'sw-step-5-saturation',
@@ -198,7 +208,7 @@
 				'scal': 'sw-standalone-core-pc',
 				'toc': 'sw-standalone-source-rock'
 			};
-			return map[workbench.singleWellStep] ?? 'sw-step-1-qaqc';
+			return map[workbench.singleWellStep] ?? 'sw-step-1-ancillary';
 		}
 		if (workbench.multiWellStep === 'swirr-corr') return 'mw-standalone-scal-relperm';
 		if (workbench.multiWellStep === 'fpt') return 'mw-standalone-fpt';

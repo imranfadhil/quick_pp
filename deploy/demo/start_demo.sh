@@ -21,12 +21,19 @@ export QPP_DISABLE_TRAINING=true
 export QPP_DATABASE_URL="sqlite:////code/data/quick_pp.db"
 export QPP_PRETRAINED_MODELS_PATH="/code/data/seed/pretrained_models.joblib"
 
-# 1. Launch FastAPI backend on 127.0.0.1:6312
-uvicorn quick_pp.app.backend.main:app --host 127.0.0.1 --port 6312 --workers 1 &
+# Keep glibc & OpenMP/BLAS thread pools lean inside 1-vCPU / 2 GB containers
+export MALLOC_ARENA_MAX="${MALLOC_ARENA_MAX:-2}"
+export MALLOC_TRIM_THRESHOLD_="${MALLOC_TRIM_THRESHOLD_:-65536}"
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-1}"
+export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
+
+# 1. Launch FastAPI backend on 127.0.0.1:6312 (no access-log spam)
+uvicorn quick_pp.app.backend.main:app --host 127.0.0.1 --port 6312 --workers 1 --no-access-log --limit-concurrency 64 &
 BACKEND_PID=$!
 
-# 2. Launch SvelteKit Node adapter build on 127.0.0.1:5469
-HOST=127.0.0.1 PORT=5469 BODY_SIZE_LIMIT=5242880 node /code/quick_pp/app/frontend/build &
+# 2. Launch SvelteKit Node adapter build on 127.0.0.1:5469 with bounded 256 MB V8 heap
+NODE_OPTIONS="--max-old-space-size=256" HOST=127.0.0.1 PORT=5469 BODY_SIZE_LIMIT=5242880 node /code/quick_pp/app/frontend/build &
 FRONTEND_PID=$!
 
 # 3. Launch Nginx reverse proxy in foreground on port 7860
@@ -37,4 +44,3 @@ trap "kill -TERM $BACKEND_PID $FRONTEND_PID $NGINX_PID 2>/dev/null || true" SIGI
 
 wait -n $BACKEND_PID $FRONTEND_PID $NGINX_PID
 exit $?
-

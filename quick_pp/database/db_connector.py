@@ -50,7 +50,9 @@ class DBConnector:
 
         if not db_url:
             # Default to a local SQLite DB if no URL is provided or empty.
-            db_url = os.environ.get("QPP_DATABASE_URL") or "sqlite:///./data/quick_pp.db"
+            db_url = (
+                os.environ.get("QPP_DATABASE_URL") or "sqlite:///./data/quick_pp.db"
+            )
 
         if db_url.startswith("sqlite:///") and ":memory:" not in db_url:
             sqlite_path = db_url[len("sqlite:///") :].split("?")[0]
@@ -92,7 +94,7 @@ class DBConnector:
                 max_overflow=30,
                 pool_timeout=60,
                 pool_recycle=1800,
-                connect_args={"connect_timeout": 3} if "postgres" in db_url else {},
+                connect_args={"connect_timeout": 10} if "postgres" in db_url else {},
             )
         DBConnector._Session = sessionmaker(
             autocommit=False, autoflush=False, bind=DBConnector._engine
@@ -163,14 +165,36 @@ class DBConnector:
         else:
             raise ValueError(f"Unsupported database type: {db_type}")
         try:
-            self.run_sql_script(os.path.join(script_dir, sql_script))
-            self._migrate_uam_columns()
-            self._migrate_project_columns()
-            self._migrate_pressure_test_columns()
-            self._migrate_fluid_contact_columns()
-            self._migrate_unique_indices()
+            if db_type == "postgresql" and DBConnector._engine is not None:
+                from sqlalchemy import text
+
+                with DBConnector._engine.connect() as lock_conn:
+                    lock_conn.execute(text("SELECT pg_advisory_lock(718294)"))
+                    lock_conn.commit()
+                    try:
+                        self.run_sql_script(os.path.join(script_dir, sql_script))
+                        self._migrate_uam_columns()
+                        self._migrate_project_columns()
+                        self._migrate_pressure_test_columns()
+                        self._migrate_fluid_contact_columns()
+                        self._migrate_unique_indices()
+                    finally:
+                        try:
+                            lock_conn.execute(text("SELECT pg_advisory_unlock(718294)"))
+                            lock_conn.commit()
+                        except Exception:
+                            pass
+            else:
+                self.run_sql_script(os.path.join(script_dir, sql_script))
+                self._migrate_uam_columns()
+                self._migrate_project_columns()
+                self._migrate_pressure_test_columns()
+                self._migrate_fluid_contact_columns()
+                self._migrate_unique_indices()
         except Exception as exc:
-            if "readonly" in str(exc).lower() or os.environ.get("QPP_DEMO_MODE", "").lower() in ("1", "true", "yes"):
+            if "readonly" in str(exc).lower() or os.environ.get(
+                "QPP_DEMO_MODE", ""
+            ).lower() in ("1", "true", "yes"):
                 pass
             else:
                 raise
@@ -202,7 +226,9 @@ class DBConnector:
                 for col_name, col_def in migrations:
                     if col_name not in existing_cols:
                         conn.execute(
-                            text(f'ALTER TABLE "users" ADD COLUMN "{col_name}" {col_def}')
+                            text(
+                                f'ALTER TABLE "users" ADD COLUMN "{col_name}" {col_def}'
+                            )
                         )
         except Exception:
             pass
@@ -309,13 +335,41 @@ class DBConnector:
         elif "postgresql" in DBConnector._engine.url.drivername:
             try:
                 with DBConnector._engine.begin() as conn:
-                    conn.execute(text('ALTER TABLE "formation_tops" DROP CONSTRAINT IF EXISTS "formation_tops_well_id_name_key"'))
-                    conn.execute(text('ALTER TABLE "fluid_contacts" DROP CONSTRAINT IF EXISTS "fluid_contacts_well_id_name_key"'))
-                    conn.execute(text('ALTER TABLE "pressure_tests" DROP CONSTRAINT IF EXISTS "pressure_tests_well_id_depth_key"'))
-                    conn.execute(text('ALTER TABLE "core_samples" DROP CONSTRAINT IF EXISTS "core_samples_well_id_sample_name_key"'))
-                    conn.execute(text('ALTER TABLE "core_samples" DROP CONSTRAINT IF EXISTS "core_samples_well_id_depth_key"'))
-                    conn.execute(text('ALTER TABLE "capillary_pressure" DROP CONSTRAINT IF EXISTS "capillary_pressure_sample_id_saturation_experiment_type_cycle_key"'))
-                    conn.execute(text('ALTER TABLE "capillary_pressure" DROP CONSTRAINT IF EXISTS "capillary_pressure_sample_id_saturation_experiment_type_cyc_key"'))
+                    conn.execute(
+                        text(
+                            'ALTER TABLE "formation_tops" DROP CONSTRAINT IF EXISTS "formation_tops_well_id_name_key"'
+                        )
+                    )
+                    conn.execute(
+                        text(
+                            'ALTER TABLE "fluid_contacts" DROP CONSTRAINT IF EXISTS "fluid_contacts_well_id_name_key"'
+                        )
+                    )
+                    conn.execute(
+                        text(
+                            'ALTER TABLE "pressure_tests" DROP CONSTRAINT IF EXISTS "pressure_tests_well_id_depth_key"'
+                        )
+                    )
+                    conn.execute(
+                        text(
+                            'ALTER TABLE "core_samples" DROP CONSTRAINT IF EXISTS "core_samples_well_id_sample_name_key"'
+                        )
+                    )
+                    conn.execute(
+                        text(
+                            'ALTER TABLE "core_samples" DROP CONSTRAINT IF EXISTS "core_samples_well_id_depth_key"'
+                        )
+                    )
+                    conn.execute(
+                        text(
+                            'ALTER TABLE "capillary_pressure" DROP CONSTRAINT IF EXISTS "capillary_pressure_sample_id_saturation_experiment_type_cycle_key"'
+                        )
+                    )
+                    conn.execute(
+                        text(
+                            'ALTER TABLE "capillary_pressure" DROP CONSTRAINT IF EXISTS "capillary_pressure_sample_id_saturation_experiment_type_cyc_key"'
+                        )
+                    )
             except Exception:
                 pass
 
@@ -357,7 +411,10 @@ class DBConnector:
     def _migrate_sqlite_table_unique_constraints(self):
         """Ensure existing SQLite tables with legacy narrow UNIQUE constraints
         are migrated to composite unique constraints while preserving all rows."""
-        if DBConnector._engine is None or "sqlite" not in DBConnector._engine.url.drivername:
+        if (
+            DBConnector._engine is None
+            or "sqlite" not in DBConnector._engine.url.drivername
+        ):
             return
 
         try:
@@ -366,7 +423,9 @@ class DBConnector:
                 cursor = raw_conn.cursor()
 
                 # 1. formation_tops
-                row = cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='formation_tops'").fetchone()
+                row = cursor.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='formation_tops'"
+                ).fetchone()
                 if row and 'UNIQUE("well_id", "name")' in row[0]:
                     cursor.execute("PRAGMA foreign_keys=OFF;")
                     cursor.execute("""
@@ -383,16 +442,27 @@ class DBConnector:
                         SELECT "top_id", "well_id", "name", "depth" FROM "formation_tops";
                     """)
                     cursor.execute('DROP TABLE "formation_tops";')
-                    cursor.execute('ALTER TABLE "formation_tops_migration_tmp" RENAME TO "formation_tops";')
-                    cursor.execute('CREATE INDEX IF NOT EXISTS "idx_formation_tops_well_id" ON "formation_tops" ("well_id");')
+                    cursor.execute(
+                        'ALTER TABLE "formation_tops_migration_tmp" RENAME TO "formation_tops";'
+                    )
+                    cursor.execute(
+                        'CREATE INDEX IF NOT EXISTS "idx_formation_tops_well_id" ON "formation_tops" ("well_id");'
+                    )
                     cursor.execute("PRAGMA foreign_keys=ON;")
                     raw_conn.commit()
 
                 # 2. fluid_contacts
-                row = cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='fluid_contacts'").fetchone()
+                row = cursor.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='fluid_contacts'"
+                ).fetchone()
                 if row and 'UNIQUE("well_id", "name")' in row[0]:
                     cursor.execute("PRAGMA foreign_keys=OFF;")
-                    cols_info = [c[1] for c in cursor.execute("PRAGMA table_info('fluid_contacts')").fetchall()]
+                    cols_info = [
+                        c[1]
+                        for c in cursor.execute(
+                            "PRAGMA table_info('fluid_contacts')"
+                        ).fetchall()
+                    ]
                     cols_str = ", ".join(f'"{c}"' for c in cols_info)
                     cursor.execute("""
                         CREATE TABLE "fluid_contacts_migration_tmp" (
@@ -408,18 +478,34 @@ class DBConnector:
                             UNIQUE("well_id", "name", "depth")
                         );
                     """)
-                    cursor.execute(f'INSERT OR IGNORE INTO "fluid_contacts_migration_tmp"({cols_str}) SELECT {cols_str} FROM "fluid_contacts";')
+                    cursor.execute(
+                        f'INSERT OR IGNORE INTO "fluid_contacts_migration_tmp"({cols_str}) SELECT {cols_str} FROM "fluid_contacts";'
+                    )
                     cursor.execute('DROP TABLE "fluid_contacts";')
-                    cursor.execute('ALTER TABLE "fluid_contacts_migration_tmp" RENAME TO "fluid_contacts";')
-                    cursor.execute('CREATE INDEX IF NOT EXISTS "idx_fluid_contacts_well_id" ON "fluid_contacts" ("well_id");')
+                    cursor.execute(
+                        'ALTER TABLE "fluid_contacts_migration_tmp" RENAME TO "fluid_contacts";'
+                    )
+                    cursor.execute(
+                        'CREATE INDEX IF NOT EXISTS "idx_fluid_contacts_well_id" ON "fluid_contacts" ("well_id");'
+                    )
                     cursor.execute("PRAGMA foreign_keys=ON;")
                     raw_conn.commit()
 
                 # 3. pressure_tests
-                row = cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='pressure_tests'").fetchone()
-                if row and ('UNIQUE("well_id", "depth")' in row[0] or 'UNIQUE("well_id", "depth")' in row[0].replace(" ", "")):
+                row = cursor.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='pressure_tests'"
+                ).fetchone()
+                if row and (
+                    'UNIQUE("well_id", "depth")' in row[0]
+                    or 'UNIQUE("well_id", "depth")' in row[0].replace(" ", "")
+                ):
                     cursor.execute("PRAGMA foreign_keys=OFF;")
-                    cols_info = [c[1] for c in cursor.execute("PRAGMA table_info('pressure_tests')").fetchall()]
+                    cols_info = [
+                        c[1]
+                        for c in cursor.execute(
+                            "PRAGMA table_info('pressure_tests')"
+                        ).fetchall()
+                    ]
                     cols_str = ", ".join(f'"{c}"' for c in cols_info)
                     cursor.execute("""
                         CREATE TABLE "pressure_tests_migration_tmp" (
@@ -440,18 +526,34 @@ class DBConnector:
                             UNIQUE("well_id", "depth", "pressure")
                         );
                     """)
-                    cursor.execute(f'INSERT OR IGNORE INTO "pressure_tests_migration_tmp"({cols_str}) SELECT {cols_str} FROM "pressure_tests";')
+                    cursor.execute(
+                        f'INSERT OR IGNORE INTO "pressure_tests_migration_tmp"({cols_str}) SELECT {cols_str} FROM "pressure_tests";'
+                    )
                     cursor.execute('DROP TABLE "pressure_tests";')
-                    cursor.execute('ALTER TABLE "pressure_tests_migration_tmp" RENAME TO "pressure_tests";')
-                    cursor.execute('CREATE INDEX IF NOT EXISTS "idx_pressure_tests_well_id" ON "pressure_tests" ("well_id");')
+                    cursor.execute(
+                        'ALTER TABLE "pressure_tests_migration_tmp" RENAME TO "pressure_tests";'
+                    )
+                    cursor.execute(
+                        'CREATE INDEX IF NOT EXISTS "idx_pressure_tests_well_id" ON "pressure_tests" ("well_id");'
+                    )
                     cursor.execute("PRAGMA foreign_keys=ON;")
                     raw_conn.commit()
 
                 # 4. core_samples
-                row = cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='core_samples'").fetchone()
-                if row and ('UNIQUE("well_id", "sample_name")' in row[0] or 'UNIQUE("well_id", "depth")' in row[0]):
+                row = cursor.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='core_samples'"
+                ).fetchone()
+                if row and (
+                    'UNIQUE("well_id", "sample_name")' in row[0]
+                    or 'UNIQUE("well_id", "depth")' in row[0]
+                ):
                     cursor.execute("PRAGMA foreign_keys=OFF;")
-                    cols_info = [c[1] for c in cursor.execute("PRAGMA table_info('core_samples')").fetchall()]
+                    cols_info = [
+                        c[1]
+                        for c in cursor.execute(
+                            "PRAGMA table_info('core_samples')"
+                        ).fetchall()
+                    ]
                     cols_str = ", ".join(f'"{c}"' for c in cols_info)
                     cursor.execute("""
                         CREATE TABLE "core_samples_migration_tmp" (
@@ -464,18 +566,35 @@ class DBConnector:
                             UNIQUE("well_id", "sample_name", "depth")
                         );
                     """)
-                    cursor.execute(f'INSERT OR IGNORE INTO "core_samples_migration_tmp"({cols_str}) SELECT {cols_str} FROM "core_samples";')
+                    cursor.execute(
+                        f'INSERT OR IGNORE INTO "core_samples_migration_tmp"({cols_str}) SELECT {cols_str} FROM "core_samples";'
+                    )
                     cursor.execute('DROP TABLE "core_samples";')
-                    cursor.execute('ALTER TABLE "core_samples_migration_tmp" RENAME TO "core_samples";')
-                    cursor.execute('CREATE INDEX IF NOT EXISTS "idx_core_samples_well_id" ON "core_samples" ("well_id");')
+                    cursor.execute(
+                        'ALTER TABLE "core_samples_migration_tmp" RENAME TO "core_samples";'
+                    )
+                    cursor.execute(
+                        'CREATE INDEX IF NOT EXISTS "idx_core_samples_well_id" ON "core_samples" ("well_id");'
+                    )
                     cursor.execute("PRAGMA foreign_keys=ON;")
                     raw_conn.commit()
 
                 # 5. capillary_pressure
-                row = cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='capillary_pressure'").fetchone()
-                if row and 'UNIQUE("sample_id", "saturation", "experiment_type", "cycle")' in row[0]:
+                row = cursor.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name='capillary_pressure'"
+                ).fetchone()
+                if (
+                    row
+                    and 'UNIQUE("sample_id", "saturation", "experiment_type", "cycle")'
+                    in row[0]
+                ):
                     cursor.execute("PRAGMA foreign_keys=OFF;")
-                    cols_info = [c[1] for c in cursor.execute("PRAGMA table_info('capillary_pressure')").fetchall()]
+                    cols_info = [
+                        c[1]
+                        for c in cursor.execute(
+                            "PRAGMA table_info('capillary_pressure')"
+                        ).fetchall()
+                    ]
                     cols_str = ", ".join(f'"{c}"' for c in cols_info)
                     cursor.execute("""
                         CREATE TABLE "capillary_pressure_migration_tmp" (
@@ -488,10 +607,16 @@ class DBConnector:
                             UNIQUE("sample_id", "pressure", "saturation", "experiment_type", "cycle")
                         );
                     """)
-                    cursor.execute(f'INSERT OR IGNORE INTO "capillary_pressure_migration_tmp"({cols_str}) SELECT {cols_str} FROM "capillary_pressure";')
+                    cursor.execute(
+                        f'INSERT OR IGNORE INTO "capillary_pressure_migration_tmp"({cols_str}) SELECT {cols_str} FROM "capillary_pressure";'
+                    )
                     cursor.execute('DROP TABLE "capillary_pressure";')
-                    cursor.execute('ALTER TABLE "capillary_pressure_migration_tmp" RENAME TO "capillary_pressure";')
-                    cursor.execute('CREATE INDEX IF NOT EXISTS "idx_capillary_pressure_sample_id" ON "capillary_pressure" ("sample_id");')
+                    cursor.execute(
+                        'ALTER TABLE "capillary_pressure_migration_tmp" RENAME TO "capillary_pressure";'
+                    )
+                    cursor.execute(
+                        'CREATE INDEX IF NOT EXISTS "idx_capillary_pressure_sample_id" ON "capillary_pressure" ("sample_id");'
+                    )
                     cursor.execute("PRAGMA foreign_keys=ON;")
                     raw_conn.commit()
                 cursor.close()

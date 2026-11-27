@@ -43,6 +43,133 @@
 		std: number;
 	} | null>(null);
 
+	// Cutoff Sensitivity & PRMS Optimization state
+	let isAnalyzingSensitivity = $state(false);
+	let sensitivityTargetPct = $state(95);
+	let sensitivityData = $state<any>(null);
+	let sensitivityError = $state<string | null>(null);
+	let cutoffsAppliedMessage = $state<string | null>(null);
+
+	// Sync with wellData cache
+	$effect(() => {
+		if (wellData.ressumCutoffsSensitivity && !sensitivityData) {
+			sensitivityData = wellData.ressumCutoffsSensitivity;
+		}
+	});
+
+	async function runCutoffsSensitivity() {
+		if (!workbench.projectId || !workbench.wellId) return;
+		isAnalyzingSensitivity = true;
+		sensitivityError = null;
+		cutoffsAppliedMessage = null;
+		try {
+			const payload = {
+				percentile: sensitivityTargetPct,
+				min_depth: workbench.depthFilter?.min ?? null,
+				max_depth: workbench.depthFilter?.max ?? null,
+				zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null
+			};
+			const res = await postJson<any>(
+				`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/wells/${encodeURIComponent(workbench.wellId)}/cutoffs_sensitivity`,
+				payload
+			);
+			sensitivityData = res;
+			wellData.ressumCutoffsSensitivity = res;
+		} catch (e: any) {
+			sensitivityError = e?.message || 'Cutoff sensitivity analysis failed';
+		} finally {
+			isAnalyzingSensitivity = false;
+		}
+	}
+
+	function applyOptimalCutoffs() {
+		if (!sensitivityData?.optimal_cutoffs) return;
+		const { vshale, phit, swt } = sensitivityData.optimal_cutoffs;
+		if (typeof vshale === 'number') rp.vshMax = vshale;
+		if (typeof phit === 'number') rp.phitMin = phit;
+		if (typeof swt === 'number') rp.swtMax = swt;
+		cutoffsAppliedMessage = 'Recommended PRMS Cut-offs Applied ✓';
+		executeResSum(false);
+		setTimeout(() => {
+			cutoffsAppliedMessage = null;
+		}, 3500);
+	}
+
+	function getSparklinePoints(
+		items: Array<{ cutoff: number; hcpv_pct: number }>,
+		width: number,
+		height: number,
+		padding: number = 6
+	): string {
+		if (!items || items.length === 0) return '';
+		const xVals = items.map((d) => d.cutoff);
+		const minX = Math.min(...xVals);
+		const maxX = Math.max(...xVals);
+		const rangeX = maxX - minX || 1;
+		const minY = 0;
+		const maxY = 100;
+		const rangeY = maxY - minY || 1;
+
+		return items
+			.map((d) => {
+				const x = padding + ((d.cutoff - minX) / rangeX) * (width - 2 * padding);
+				const y = height - padding - ((d.hcpv_pct - minY) / rangeY) * (height - 2 * padding);
+				return `${x.toFixed(1)},${y.toFixed(1)}`;
+			})
+			.join(' ');
+	}
+
+	function getSparklineArea(
+		items: Array<{ cutoff: number; hcpv_pct: number }>,
+		width: number,
+		height: number,
+		padding: number = 6
+	): string {
+		if (!items || items.length === 0) return '';
+		const xVals = items.map((d) => d.cutoff);
+		const minX = Math.min(...xVals);
+		const maxX = Math.max(...xVals);
+		const rangeX = maxX - minX || 1;
+		const minY = 0;
+		const maxY = 100;
+		const rangeY = maxY - minY || 1;
+
+		const pts = items.map((d) => {
+			const x = padding + ((d.cutoff - minX) / rangeX) * (width - 2 * padding);
+			const y = height - padding - ((d.hcpv_pct - minY) / rangeY) * (height - 2 * padding);
+			return `${x.toFixed(1)},${y.toFixed(1)}`;
+		});
+
+		const firstX = padding + ((items[0].cutoff - minX) / rangeX) * (width - 2 * padding);
+		const lastX = padding + ((items[items.length - 1].cutoff - minX) / rangeX) * (width - 2 * padding);
+		const bottomY = height - padding;
+
+		return `M ${firstX.toFixed(1)},${bottomY.toFixed(1)} L ${pts.join(' L ')} L ${lastX.toFixed(1)},${bottomY.toFixed(1)} Z`;
+	}
+
+	function getCutoffX(
+		cutoffVal: number,
+		items: Array<{ cutoff: number; hcpv_pct: number }>,
+		width: number,
+		padding: number = 6
+	): number {
+		if (!items || items.length === 0) return width / 2;
+		const xVals = items.map((d) => d.cutoff);
+		const minX = Math.min(...xVals);
+		const maxX = Math.max(...xVals);
+		const rangeX = maxX - minX || 1;
+		const clamped = Math.max(minX, Math.min(maxX, cutoffVal));
+		return padding + ((clamped - minX) / rangeX) * (width - 2 * padding);
+	}
+
+	function getPctY(pct: number, height: number, padding: number = 6): number {
+		const minY = 0;
+		const maxY = 100;
+		const rangeY = maxY - minY || 1;
+		const clamped = Math.max(minY, Math.min(maxY, pct));
+		return height - padding - ((clamped - minY) / rangeY) * (height - 2 * padding);
+	}
+
 	async function executeResSum(persist: boolean = false) {
 		if (!workbench.projectId || !workbench.wellId) return;
 		const projectId = workbench.projectId;
@@ -103,6 +230,10 @@
 			}
 			wellData.zonalSummary = data.summary || [];
 			wellData.zonalSummarySource = { projectId, wellId };
+			if (data.cutoffs_sensitivity) {
+				sensitivityData = data.cutoffs_sensitivity;
+				wellData.ressumCutoffsSensitivity = data.cutoffs_sensitivity;
+			}
 			upscaledCellCount = data.upscaling?.n_cells ?? null;
 			blockedCells = data.upscaling?.blocked_cells ?? [];
 			const rawUncRows: Record<string, any>[] =
@@ -274,6 +405,322 @@
 							step={0.1}
 							onrun={() => executeResSum(false)}
 						/>
+					</div>
+				{/if}
+			</div>
+
+			<!-- Cutoff Sensitivity & PRMS Optimization -->
+			<div class="mt-3 border-t border-[var(--border-hairline)] pt-2.5">
+				<div class="flex items-center justify-between">
+					<div class="flex items-center gap-1.5">
+						<span class="text-[11px] font-bold text-[var(--text-primary)]">Sensitivity Analysis</span>
+						<span class="rounded-xs bg-blue-50 px-1 py-0.2 text-[9px] font-medium text-blue-700 border border-blue-200">
+							PRMS {sensitivityTargetPct}% HCPV
+						</span>
+					</div>
+					<button
+						type="button"
+						onclick={runCutoffsSensitivity}
+						disabled={isAnalyzingSensitivity}
+						class="flex items-center gap-1 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 py-0.5 text-[10px] font-medium text-[var(--text-primary)] hover:bg-slate-200 transition-colors disabled:opacity-50 cursor-pointer"
+						title="Run empirical cutoff sensitivity analysis (Vsh, PHIT, Swt sweeps vs HCPV)"
+					>
+						{#if isAnalyzingSensitivity}
+							<span class="inline-block h-2.5 w-2.5 animate-spin rounded-full border border-current border-t-transparent"></span>
+							<span>Analyzing...</span>
+						{:else}
+							<span>Calibrate</span>
+						{/if}
+					</button>
+				</div>
+
+				<!-- Target Percentile Selector Buttons -->
+				<div class="mt-1.5 flex items-center justify-between text-[10px]">
+					<span class="text-[var(--text-secondary)]">Recovery Target:</span>
+					<div class="flex gap-1">
+						{#each [90, 95, 98] as pct}
+							<button
+								type="button"
+								onclick={() => {
+									sensitivityTargetPct = pct;
+									runCutoffsSensitivity();
+								}}
+								class="rounded-xs px-1.5 py-0.5 font-medium transition-colors cursor-pointer {sensitivityTargetPct === pct
+									? 'bg-[var(--accent-primary)] text-white font-semibold'
+									: 'bg-[var(--bg-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+							>
+								{pct}% {pct === 95 ? '(PRMS)' : ''}
+							</button>
+						{/each}
+					</div>
+				</div>
+
+				{#if sensitivityError}
+					<div class="mt-1.5 rounded-xs border border-rose-200 bg-rose-50 p-1.5 text-[10px] text-rose-700">
+						{sensitivityError}
+					</div>
+				{/if}
+
+				{#if cutoffsAppliedMessage}
+					<div class="mt-1.5 rounded-xs border border-emerald-200 bg-emerald-50 p-1.5 text-[10px] font-semibold text-emerald-800">
+						{cutoffsAppliedMessage}
+					</div>
+				{/if}
+
+				{#if sensitivityData?.optimal_cutoffs}
+					<!-- Recommended vs Current Comparison Card -->
+					<div class="mt-2 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-2 text-xs">
+						<div class="flex items-center justify-between pb-1 mb-1 border-b border-[var(--border-hairline)]">
+							<span class="text-[10px] font-bold text-slate-700">Optimal Inflection Cut-offs:</span>
+							<button
+								type="button"
+								onclick={applyOptimalCutoffs}
+								class="rounded-xs bg-emerald-600 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-emerald-700 transition-colors shadow-2xs cursor-pointer"
+							>
+								Apply Recommended
+							</button>
+						</div>
+
+						<div class="grid grid-cols-3 gap-1.5 text-center text-[10px]">
+							<div class="rounded-xs bg-[var(--bg-surface)] p-1 border border-[var(--border-hairline)]">
+								<div class="text-[9px] text-[var(--text-secondary)]">Vsh,max</div>
+								<div class="font-bold text-blue-800">{sensitivityData.optimal_cutoffs.vshale}</div>
+								<div class="text-[8.5px] text-[var(--text-muted)]">Cur: {rp.vshMax}</div>
+							</div>
+							<div class="rounded-xs bg-[var(--bg-surface)] p-1 border border-[var(--border-hairline)]">
+								<div class="text-[9px] text-[var(--text-secondary)]">Φ,min</div>
+								<div class="font-bold text-emerald-800">{sensitivityData.optimal_cutoffs.phit}</div>
+								<div class="text-[8.5px] text-[var(--text-muted)]">Cur: {rp.phitMin}</div>
+							</div>
+							<div class="rounded-xs bg-[var(--bg-surface)] p-1 border border-[var(--border-hairline)]">
+								<div class="text-[9px] text-[var(--text-secondary)]">Sw,max</div>
+								<div class="font-bold text-purple-800">{sensitivityData.optimal_cutoffs.swt}</div>
+								<div class="text-[8.5px] text-[var(--text-muted)]">Cur: {rp.swtMax}</div>
+							</div>
+						</div>
+					</div>
+
+					<!-- Mini SVG Sensitivity Sparkline Curves -->
+					<div class="mt-2 space-y-2">
+						<!-- 1. Vshale Sparkline -->
+						{#if sensitivityData.vsh_sensitivity?.length}
+							<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-1.5">
+								<div class="flex items-center justify-between text-[10px]">
+									<span class="font-semibold text-blue-900">Vshale vs Retained HCPV %</span>
+									<span class="text-[9px] text-[var(--text-muted)]">
+										Opt: <strong class="text-emerald-700">{sensitivityData.optimal_cutoffs.vshale}</strong> | Cur: {rp.vshMax}
+									</span>
+								</div>
+								<div class="relative mt-1">
+									<svg viewBox="0 0 240 55" class="h-14 w-full overflow-visible">
+										<defs>
+											<linearGradient id="vshGradResSum" x1="0" y1="0" x2="0" y2="1">
+												<stop offset="0%" stop-color="#3b82f6" stop-opacity="0.25" />
+												<stop offset="100%" stop-color="#3b82f6" stop-opacity="0.02" />
+											</linearGradient>
+										</defs>
+										<!-- Target benchmark dashed line (e.g. 95%) -->
+										<line
+											x1="6"
+											y1={getPctY(sensitivityTargetPct, 55, 6)}
+											x2="234"
+											y2={getPctY(sensitivityTargetPct, 55, 6)}
+											stroke="#94a3b8"
+											stroke-dasharray="2,2"
+											stroke-width="1"
+										/>
+										<!-- Area fill -->
+										<path
+											d={getSparklineArea(sensitivityData.vsh_sensitivity, 240, 55, 6)}
+											fill="url(#vshGradResSum)"
+										/>
+										<!-- Sparkline stroke -->
+										<polyline
+											fill="none"
+											stroke="#2563eb"
+											stroke-width="1.8"
+											points={getSparklinePoints(sensitivityData.vsh_sensitivity, 240, 55, 6)}
+										/>
+										<!-- Optimal cutoff vertical line -->
+										<line
+											x1={getCutoffX(sensitivityData.optimal_cutoffs.vshale, sensitivityData.vsh_sensitivity, 240, 6)}
+											y1="4"
+											x2={getCutoffX(sensitivityData.optimal_cutoffs.vshale, sensitivityData.vsh_sensitivity, 240, 6)}
+											y2="49"
+											stroke="#16a34a"
+											stroke-width="1.5"
+										/>
+										<!-- Current cutoff vertical line -->
+										<line
+											x1={getCutoffX(rp.vshMax, sensitivityData.vsh_sensitivity, 240, 6)}
+											y1="4"
+											x2={getCutoffX(rp.vshMax, sensitivityData.vsh_sensitivity, 240, 6)}
+											y2="49"
+											stroke="#f59e0b"
+											stroke-dasharray="2,2"
+											stroke-width="1.5"
+										/>
+									</svg>
+									<div class="flex items-center justify-between text-[8px] text-[var(--text-muted)]">
+										<span>0.05 (Clean)</span>
+										<span class="text-emerald-700 font-semibold">{sensitivityTargetPct}% Threshold</span>
+										<span>0.95 (Shaly)</span>
+									</div>
+								</div>
+							</div>
+						{/if}
+
+						<!-- 2. Porosity Sparkline -->
+						{#if sensitivityData.phi_sensitivity?.length}
+							<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-1.5">
+								<div class="flex items-center justify-between text-[10px]">
+									<span class="font-semibold text-emerald-900">Porosity vs Retained HCPV %</span>
+									<span class="text-[9px] text-[var(--text-muted)]">
+										Opt: <strong class="text-emerald-700">{sensitivityData.optimal_cutoffs.phit}</strong> | Cur: {rp.phitMin}
+									</span>
+								</div>
+								<div class="relative mt-1">
+									<svg viewBox="0 0 240 55" class="h-14 w-full overflow-visible">
+										<defs>
+											<linearGradient id="phiGradResSum" x1="0" y1="0" x2="0" y2="1">
+												<stop offset="0%" stop-color="#10b981" stop-opacity="0.25" />
+												<stop offset="100%" stop-color="#10b981" stop-opacity="0.02" />
+											</linearGradient>
+										</defs>
+										<!-- Target benchmark dashed line -->
+										<line
+											x1="6"
+											y1={getPctY(sensitivityTargetPct, 55, 6)}
+											x2="234"
+											y2={getPctY(sensitivityTargetPct, 55, 6)}
+											stroke="#94a3b8"
+											stroke-dasharray="2,2"
+											stroke-width="1"
+										/>
+										<!-- Area fill -->
+										<path
+											d={getSparklineArea(sensitivityData.phi_sensitivity, 240, 55, 6)}
+											fill="url(#phiGradResSum)"
+										/>
+										<!-- Sparkline stroke -->
+										<polyline
+											fill="none"
+											stroke="#059669"
+											stroke-width="1.8"
+											points={getSparklinePoints(sensitivityData.phi_sensitivity, 240, 55, 6)}
+										/>
+										<!-- Optimal cutoff vertical line -->
+										<line
+											x1={getCutoffX(sensitivityData.optimal_cutoffs.phit, sensitivityData.phi_sensitivity, 240, 6)}
+											y1="4"
+											x2={getCutoffX(sensitivityData.optimal_cutoffs.phit, sensitivityData.phi_sensitivity, 240, 6)}
+											y2="49"
+											stroke="#16a34a"
+											stroke-width="1.5"
+										/>
+										<!-- Current cutoff vertical line -->
+										<line
+											x1={getCutoffX(rp.phitMin, sensitivityData.phi_sensitivity, 240, 6)}
+											y1="4"
+											x2={getCutoffX(rp.phitMin, sensitivityData.phi_sensitivity, 240, 6)}
+											y2="49"
+											stroke="#f59e0b"
+											stroke-dasharray="2,2"
+											stroke-width="1.5"
+										/>
+									</svg>
+									<div class="flex items-center justify-between text-[8px] text-[var(--text-muted)]">
+										<span>0.01 (Tight)</span>
+										<span class="text-emerald-700 font-semibold">{sensitivityTargetPct}% Threshold</span>
+										<span>0.35 (Porous)</span>
+									</div>
+								</div>
+							</div>
+						{/if}
+
+						<!-- 3. Water Saturation Sparkline -->
+						{#if sensitivityData.sw_sensitivity?.length}
+							<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] p-1.5">
+								<div class="flex items-center justify-between text-[10px]">
+									<span class="font-semibold text-purple-900">Saturation vs Retained HCPV %</span>
+									<span class="text-[9px] text-[var(--text-muted)]">
+										Opt: <strong class="text-emerald-700">{sensitivityData.optimal_cutoffs.swt}</strong> | Cur: {rp.swtMax}
+									</span>
+								</div>
+								<div class="relative mt-1">
+									<svg viewBox="0 0 240 55" class="h-14 w-full overflow-visible">
+										<defs>
+											<linearGradient id="swGradResSum" x1="0" y1="0" x2="0" y2="1">
+												<stop offset="0%" stop-color="#a855f7" stop-opacity="0.25" />
+												<stop offset="100%" stop-color="#a855f7" stop-opacity="0.02" />
+											</linearGradient>
+										</defs>
+										<!-- Target benchmark dashed line -->
+										<line
+											x1="6"
+											y1={getPctY(sensitivityTargetPct, 55, 6)}
+											x2="234"
+											y2={getPctY(sensitivityTargetPct, 55, 6)}
+											stroke="#94a3b8"
+											stroke-dasharray="2,2"
+											stroke-width="1"
+										/>
+										<!-- Area fill -->
+										<path
+											d={getSparklineArea(sensitivityData.sw_sensitivity, 240, 55, 6)}
+											fill="url(#swGradResSum)"
+										/>
+										<!-- Sparkline stroke -->
+										<polyline
+											fill="none"
+											stroke="#7e22ce"
+											stroke-width="1.8"
+											points={getSparklinePoints(sensitivityData.sw_sensitivity, 240, 55, 6)}
+										/>
+										<!-- Optimal cutoff vertical line -->
+										<line
+											x1={getCutoffX(sensitivityData.optimal_cutoffs.swt, sensitivityData.sw_sensitivity, 240, 6)}
+											y1="4"
+											x2={getCutoffX(sensitivityData.optimal_cutoffs.swt, sensitivityData.sw_sensitivity, 240, 6)}
+											y2="49"
+											stroke="#16a34a"
+											stroke-width="1.5"
+										/>
+										<!-- Current cutoff vertical line -->
+										<line
+											x1={getCutoffX(rp.swtMax, sensitivityData.sw_sensitivity, 240, 6)}
+											y1="4"
+											x2={getCutoffX(rp.swtMax, sensitivityData.sw_sensitivity, 240, 6)}
+											y2="49"
+											stroke="#f59e0b"
+											stroke-dasharray="2,2"
+											stroke-width="1.5"
+										/>
+									</svg>
+									<div class="flex items-center justify-between text-[8px] text-[var(--text-muted)]">
+										<span>0.20 (Hydrocarbon)</span>
+										<span class="text-emerald-700 font-semibold">{sensitivityTargetPct}% Threshold</span>
+										<span>0.95 (Wet)</span>
+									</div>
+								</div>
+							</div>
+						{/if}
+
+						<!-- Legend -->
+						<div class="flex items-center justify-center gap-3 pt-1 text-[8.5px] text-[var(--text-secondary)]">
+							<span class="flex items-center gap-1">
+								<span class="inline-block h-2 w-2 rounded-full bg-emerald-600"></span>
+								<span>Recommended ({sensitivityTargetPct}%)</span>
+							</span>
+							<span class="flex items-center gap-1">
+								<span class="inline-block h-2 w-2 rounded-full bg-amber-500"></span>
+								<span>Current Cutoff</span>
+							</span>
+							<span class="flex items-center gap-1">
+								<span class="inline-block h-0.5 w-3 border-b border-dashed border-slate-400"></span>
+								<span>Target PRMS</span>
+							</span>
+						</div>
 					</div>
 				{/if}
 			</div>

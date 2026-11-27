@@ -43,6 +43,31 @@ def test_compute_continuous_m():
     assert np.all(m_sh > 1.9) and np.all(m_sh < 2.1)
 
 
+def test_calibrate_water_leg_m_tortuosity_factor():
+    n = 60
+    phit = np.linspace(0.15, 0.30, n)
+    rw, a, true_m = 0.05, 0.81, 2.0
+    rt = a * rw / (phit**true_m)
+
+    # Archie: ignoring a biases m; passing a recovers the true value
+    biased = calibrate_water_leg_m(rt=rt, rw=rw, phit=phit, method="archie")
+    fixed = calibrate_water_leg_m(rt=rt, rw=rw, phit=phit, method="archie", a=a)
+    assert abs(fixed["mean_m"] - true_m) < 0.01
+    assert abs(biased["mean_m"] - true_m) > 0.05
+
+    # Indonesian with Vsh=0 reduces to Archie, so `a` must be honoured there too
+    indo = calibrate_water_leg_m(
+        rt=rt, rw=rw, phit=phit, vsh=np.zeros(n), method="indonesian", a=a
+    )
+    assert abs(indo["mean_m"] - true_m) < 0.01
+
+    # Invalid `a` falls back to 1.0
+    assert (
+        calibrate_water_leg_m(rt=rt, rw=rw, phit=phit, a=-1.0)["mean_m"]
+        == biased["mean_m"]
+    )
+
+
 def test_calibrate_water_leg_m():
     # Synthetic clean water zone
     n = 100

@@ -35,6 +35,7 @@ from quick_pp.app.backend.utils.utils import natural_sort_key, sanitize_filename
 from quick_pp.config import Config
 from quick_pp.database import models as db_models
 from quick_pp.database import objects as db_objects
+from quick_pp.utils import interpolate_tvd_on_md, survey_tvd_stations
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,11 @@ class ZipStreamingResponse(Response):
         media_type: Optional[str] = None,
         background: Any = None,
     ) -> None:
-        raw_bytes = content.getvalue() if isinstance(content, io.BytesIO) else bytes(content or b"")
+        raw_bytes = (
+            content.getvalue()
+            if isinstance(content, io.BytesIO)
+            else bytes(content or b"")
+        )
         super().__init__(
             content=raw_bytes,
             status_code=status_code,
@@ -67,7 +72,7 @@ router = APIRouter(prefix="/database", tags=["Database"])
 # Maps key "{project_id}_{well_name}_{tolerance}" -> (timestamp, pd.DataFrame)
 _merged_data_cache: Dict[str, tuple[float, pd.DataFrame]] = {}
 _cache_ttl = 1800  # 30 minutes
-_cache_max_entries = 50
+_cache_max_entries = 12 if os.environ.get("QPP_DEMO_MODE", "").lower() in ("1", "true", "yes") else 50
 _merge_locks: Dict[str, threading.Lock] = {}
 _merge_locks_guard = threading.Lock()
 MAX_DEMO_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB cap per file in demo mode
@@ -116,6 +121,15 @@ def _safe_cache_token(val: Any) -> str:
 
 def write_shared_well_cache(project_id: int, well_name: str, df: pd.DataFrame) -> None:
     """Persist an updated in-memory merged well DataFrame to shared temp storage so all worker processes see it."""
+    if is_demo_mode():
+        # Demo container runs a single Uvicorn worker (--workers 1); skip /tmp pickle disk writes
+        try:
+            from quick_pp.app.backend.services.demo_guard import mark_demo_state_dirty
+
+            mark_demo_state_dirty()
+        except Exception:
+            pass
+        return
     try:
         _SHARED_CACHE_DIR.mkdir(parents=True, exist_ok=True)
         w_tok = _safe_cache_token(well_name)
@@ -189,6 +203,15 @@ async def create_project(payload: dict, request: Request):
     if not name:
         raise HTTPException(status_code=400, detail="Project name is required")
 
+    if is_demo_mode():
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Creating new database projects is disabled in the read-only live demo. "
+                "Select one of the pre-seeded showcase projects to import or evaluate logs."
+            ),
+        )
+
     description = payload.get("description") if isinstance(payload, dict) else ""
     current_user = get_current_user_optional(request)
     created_by = (
@@ -224,7 +247,9 @@ async def create_project(payload: dict, request: Request):
 
 
 @router.get("/projects", summary="List projects")
-async def list_projects(request: Request):
+async def list_projects(request: Request, response: Response = None):
+    if response is not None:
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
     try:
         with get_db() as session:
             stmt = select(db_models.Project)
@@ -293,6 +318,12 @@ async def update_project(project_id: int, payload: dict, request: Request):
     """
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Invalid payload")
+
+    if is_demo_mode():
+        raise HTTPException(
+            status_code=403,
+            detail="Renaming pre-seeded showcase projects is disabled in the shared live demo.",
+        )
 
     new_name = (payload.get("name") or "").strip()
     new_desc = payload.get("description")
@@ -366,6 +397,11 @@ async def update_project(project_id: int, payload: dict, request: Request):
 @router.delete("/projects/{project_id}", summary="Delete a project and all its wells")
 def delete_project(project_id: int, request: Request):
     """Delete a project and all associated wells, curves, and cache entries."""
+    if is_demo_mode():
+        raise HTTPException(
+            status_code=403,
+            detail="Deleting pre-seeded showcase projects is disabled in the shared live demo.",
+        )
     try:
         with get_db() as session:
             orm_proj = session.get(db_models.Project, project_id)
@@ -474,6 +510,15 @@ async def rename_well(project_id: int, well_name: str, payload: dict, request: R
                     detail=f"Well '{well_name}' not found in project {project_id}",
                 )
 
+            if is_demo_mode() and target_orm_well is not None:
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        "Renaming pre-seeded showcase wells is disabled in the shared live demo. "
+                        "Only ephemerally uploaded wells can be renamed."
+                    ),
+                )
+
             if any(
                 n.lower() == new_name.lower() and n != well_name for n in active_names
             ):
@@ -570,6 +615,15 @@ def delete_well(project_id: int, well_name: str, request: Request):
                     detail=f"Well '{well_name}' not found in project {project_id}",
                 )
 
+            if is_demo_mode() and target_orm_well is not None:
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        "Deleting pre-seeded showcase wells is disabled in the shared live demo. "
+                        "Use 'Reset Demo' to restore curve edits."
+                    ),
+                )
+
             if in_eph:
                 eph_proj.pop(well_name, None)
 
@@ -580,6 +634,12 @@ def delete_well(project_id: int, well_name: str, request: Request):
             else:
                 if target_orm_well is not None:
                     wid = target_orm_well.well_id
+                    try:
+                        db_models.HoleSection.__table__.create(
+                            bind=session.get_bind(), checkfirst=True
+                        )
+                    except Exception:
+                        pass
                     session.expunge_all()
                     for statement in (
                         "DELETE FROM curve_data WHERE curve_id IN "
@@ -594,6 +654,7 @@ def delete_well(project_id: int, well_name: str, request: Request):
                         "DELETE FROM fluid_contacts WHERE well_id = :wid",
                         "DELETE FROM pressure_tests WHERE well_id = :wid",
                         "DELETE FROM perforations WHERE well_id = :wid",
+                        "DELETE FROM hole_sections WHERE well_id = :wid",
                         "DELETE FROM well_surveys WHERE well_id = :wid",
                         "DELETE FROM core_samples WHERE well_id = :wid",
                         "DELETE FROM curves WHERE well_id = :wid",
@@ -869,7 +930,9 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                 contacts_list_by_well.setdefault(wid, []).append(
                     {
                         "type": str(cname or "OWC").upper(),
-                        "depth": round(float(cdepth), 2) if cdepth is not None else None,
+                        "depth": round(float(cdepth), 2)
+                        if cdepth is not None
+                        else None,
                     }
                 )
 
@@ -913,8 +976,67 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                         {
                             "name": str(pname or "Perf"),
                             "top": round(float(ptop), 2) if ptop is not None else None,
-                            "bottom": round(float(pbot), 2) if pbot is not None else None,
+                            "bottom": round(float(pbot), 2)
+                            if pbot is not None
+                            else None,
                             "description": str(pdesc or ""),
+                        }
+                    )
+            except Exception:
+                try:
+                    session.rollback()
+                except Exception:
+                    pass
+
+            hole_sec_counts: Dict[int, int] = dict.fromkeys(well_ids, 0)
+            hole_secs_list_by_well: Dict[int, List[Dict[str, Any]]] = {
+                wid: [] for wid in well_ids
+            }
+            try:
+                db_models.HoleSection.__table__.create(
+                    bind=session.get_bind(), checkfirst=True
+                )
+            except Exception:
+                pass
+            try:
+                hs_stmt = text(
+                    "SELECT well_id, name, top, bottom, bit_size, mud_type, mud_weight, mud_salinity, rmf, rmf_temp "
+                    "FROM hole_sections WHERE well_id IN :well_ids ORDER BY top, bottom"
+                ).bindparams(bindparam("well_ids", expanding=True))
+                for (
+                    wid,
+                    sname,
+                    stop,
+                    sbot,
+                    sbs,
+                    smt,
+                    smw,
+                    ssal,
+                    srmf,
+                    srmft,
+                ) in session.execute(hs_stmt, {"well_ids": well_ids}).fetchall():
+                    hole_sec_counts[wid] = hole_sec_counts.get(wid, 0) + 1
+                    hole_secs_list_by_well.setdefault(wid, []).append(
+                        {
+                            "name": str(sname or "Section"),
+                            "top": round(float(stop), 2) if stop is not None else None,
+                            "bottom": round(float(sbot), 2)
+                            if sbot is not None
+                            else None,
+                            "bit_size": round(float(sbs), 3)
+                            if sbs is not None
+                            else None,
+                            "mud_type": str(smt or "WBM").upper(),
+                            "mud_weight": round(float(smw), 3)
+                            if smw is not None
+                            else None,
+                            "mud_salinity": round(float(ssal), 1)
+                            if ssal is not None
+                            else None,
+                            "rmf": round(float(srmf), 4) if srmf is not None else None,
+                            "rmf_temp": round(float(srmft), 2)
+                            if srmft is not None
+                            else None,
                         }
                     )
             except Exception:
@@ -996,13 +1118,17 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                 well_curve_set = set(curves_by_well.get(wid, []))
                 live_df: Optional[pd.DataFrame] = None
                 cached_entry = _merged_data_cache.get(f"{project_id}_{w.name}_0.16")
-                if cached_entry is not None and isinstance(cached_entry[1], pd.DataFrame):
+                if cached_entry is not None and isinstance(
+                    cached_entry[1], pd.DataFrame
+                ):
                     live_df = cached_entry[1]
                 else:
                     eph_w = _ephemeral_wells.get(project_id, {}).get(w.name)
                     if isinstance(eph_w, pd.DataFrame):
                         live_df = eph_w
-                    elif isinstance(eph_w, dict) and isinstance(eph_w.get("data"), pd.DataFrame):
+                    elif isinstance(eph_w, dict) and isinstance(
+                        eph_w.get("data"), pd.DataFrame
+                    ):
                         live_df = eph_w["data"]
                 if live_df is not None:
                     for col_name in live_df.columns:
@@ -1024,7 +1150,9 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                     w.config_data if isinstance(w.config_data, dict) else None,
                     target_depth_uom=w.depth_uom or "m",
                 )
-                w_meta = dict(extract_las_metadata(w_hdr_src, fallback_well_name=w.name))
+                w_meta = dict(
+                    extract_las_metadata(w_hdr_src, fallback_well_name=w.name)
+                )
                 w_ovr = (
                     w_hdr_src.get("header_overrides")
                     if isinstance(w_hdr_src.get("header_overrides"), dict)
@@ -1064,14 +1192,12 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                 # Compute per-formation depth intervals and curve availability
                 w_tops = tops_list_by_well.get(wid, [])
                 unique_top_depths = sorted(
-                    {
-                        float(t["depth"])
-                        for t in w_tops
-                        if t.get("depth") is not None
-                    }
+                    {float(t["depth"]) for t in w_tops if t.get("depth") is not None}
                 )
                 w_cid_map = curve_ids_by_well_mnemonic.get(wid, {})
-                zone_intervals: List[Tuple[str, float, float, Optional[Dict[str, Any]]]] = []
+                zone_intervals: List[
+                    Tuple[str, float, float, Optional[Dict[str, Any]]]
+                ] = []
                 seen_zone_names = set()
                 for t in w_tops:
                     z_name = str(t.get("name") or "").strip()
@@ -1226,6 +1352,8 @@ def get_project_summary(project_id: int) -> Dict[str, Any]:
                         "survey_count": survey_counts.get(wid, 0),
                         "perforation_count": perf_counts.get(wid, 0),
                         "perforations": perfs_list_by_well.get(wid, []),
+                        "hole_section_count": hole_sec_counts.get(wid, 0),
+                        "hole_sections": hole_secs_list_by_well.get(wid, []),
                     }
                 )
 
@@ -1395,6 +1523,20 @@ def project_read_las(
                         time.time(),
                         merged_ldf.copy(),
                     )
+                # Tier 1 cleanup: immediately remove raw uploaded files from disk after loading into RAM
+                for p in saved_paths:
+                    try:
+                        Path(p).unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                try:
+                    from quick_pp.app.backend.services.demo_guard import (
+                        mark_demo_state_dirty,
+                    )
+
+                    mark_demo_state_dirty()
+                except Exception:
+                    pass
             else:
                 proj.read_las(saved_paths, depth_uom=depth_uom)
 
@@ -1587,7 +1729,9 @@ def get_well_data(
                     # table can surface them directly (porosity/permeability/grain density).
                     meas_by_prop = {}
                     for m in measurements:
-                        prop = str(m.get("property") or m.get("property_name") or "").upper()
+                        prop = str(
+                            m.get("property") or m.get("property_name") or ""
+                        ).upper()
                         if prop and m.get("value") is not None:
                             meas_by_prop[prop] = m.get("value")
                     sample_entry = {
@@ -1619,6 +1763,11 @@ def get_well_data(
                     "perforations": (
                         well.get_perforations().to_dict(orient="records")
                         if not well.get_perforations().empty
+                        else []
+                    ),
+                    "hole_sections": (
+                        well.get_hole_sections().to_dict(orient="records")
+                        if not well.get_hole_sections().empty
                         else []
                     ),
                     "core_samples": core_samples,
@@ -1723,7 +1872,12 @@ def _compute_tvd_from_survey(
     """Compute TVD along md_values from directional survey minimum curvature (or survey TVD column).
     Returns None if no valid survey with >= 2 stations is available (never assumes TVD == MD).
     """
-    if len(md_values) == 0 or surveys_df is None or not isinstance(surveys_df, pd.DataFrame) or surveys_df.empty:
+    if (
+        len(md_values) == 0
+        or surveys_df is None
+        or not isinstance(surveys_df, pd.DataFrame)
+        or surveys_df.empty
+    ):
         return None
 
     col_map = {str(c).lower(): c for c in surveys_df.columns}
@@ -1745,60 +1899,19 @@ def _compute_tvd_from_survey(
             .drop_duplicates(subset=["md"], keep="last")
         )
         if len(s_sub) >= 2:
-            mds = s_sub["md"].to_numpy(dtype=float)
-            tvds = s_sub["tvd"].to_numpy(dtype=float)
-            if mds[0] > 1.0:
-                mds = np.insert(mds, 0, 0.0)
-                tvds = np.insert(tvds, 0, 0.0)
-            return np.interp(md_values, mds, tvds)
+            # Shared rules: surface tie-in, linear, extrapolate below last station
+            return interpolate_tvd_on_md(
+                md_values,
+                s_sub["md"].to_numpy(dtype=float),
+                s_sub["tvd"].to_numpy(dtype=float),
+            )
 
     if md_c and inc_c and azi_c:
-        s_sorted = (
-            pd.DataFrame(
-                {
-                    "md": pd.to_numeric(surveys_df[md_c], errors="coerce"),
-                    "inc": pd.to_numeric(surveys_df[inc_c], errors="coerce"),
-                    "azim": pd.to_numeric(surveys_df[azi_c], errors="coerce"),
-                }
-            )
-            .dropna()
-            .sort_values("md")
-            .drop_duplicates(subset=["md"], keep="last")
+        mds, tvds, incs = survey_tvd_stations(
+            surveys_df[md_c], surveys_df[inc_c], surveys_df[azi_c]
         )
-        if len(s_sorted) >= 2:
-            mds = s_sorted["md"].to_numpy(dtype=float)
-            incs = s_sorted["inc"].to_numpy(dtype=float)
-            azis = s_sorted["azim"].to_numpy(dtype=float)
-            if mds[0] > 1.0:
-                mds = np.insert(mds, 0, 0.0)
-                incs = np.insert(incs, 0, 0.0)
-                azis = np.insert(azis, 0, azis[0] if len(azis) > 0 else 0.0)
-            try:
-                import wellpathpy as wpp
-
-                dev = wpp.deviation(mds, incs, azis)
-                pos = dev.minimum_curvature()
-                return np.interp(
-                    md_values,
-                    np.asarray(pos.md, dtype=float),
-                    np.asarray(pos.depth, dtype=float),
-                )
-            except Exception:
-                inc_rad = np.deg2rad(incs)
-                azi_rad = np.deg2rad(azis)
-                dmd = np.diff(mds)
-                i1, i2 = inc_rad[:-1], inc_rad[1:]
-                a1, a2 = azi_rad[:-1], azi_rad[1:]
-                cos_dl = np.clip(
-                    np.cos(i2 - i1) - np.sin(i1) * np.sin(i2) * (1.0 - np.cos(a2 - a1)),
-                    -1.0,
-                    1.0,
-                )
-                dl = np.arccos(cos_dl)
-                rf = np.where(dl > 1e-6, (2.0 / dl) * np.tan(dl / 2.0), 1.0)
-                dz = 0.5 * dmd * (np.cos(i1) + np.cos(i2)) * rf
-                tvd_calc = np.concatenate([[0.0], np.cumsum(dz)])
-                return np.interp(md_values, mds, tvd_calc)
+        if len(mds) >= 2:
+            return interpolate_tvd_on_md(md_values, mds, tvds, incs)
 
     return None
 
@@ -1911,9 +2024,7 @@ def _get_merged_dataframe_sync(
 
                 well = proj.get_well(db_well_name)
                 well_header_data = (
-                    dict(well.header_data)
-                    if isinstance(well.header_data, dict)
-                    else {}
+                    dict(well.header_data) if isinstance(well.header_data, dict) else {}
                 )
                 well_config_data = (
                     dict(well._orm_well.config_data)
@@ -1994,9 +2105,7 @@ def _get_merged_dataframe_sync(
                 disc_df: pd.DataFrame, max_tol: float
             ) -> Dict[str, List[Any]]:
                 cols = [c for c in disc_df.columns if c != "depth"]
-                out_cols: Dict[str, List[Any]] = {
-                    c: [np.nan] * n_log for c in cols
-                }
+                out_cols: Dict[str, List[Any]] = {c: [np.nan] * n_log for c in cols}
                 if n_log == 0 or disc_df.empty or not cols:
                     return out_cols
                 best_dist_at_idx: Dict[int, float] = {}
@@ -2090,7 +2199,10 @@ def _get_merged_dataframe_sync(
                 )
                 if prop_up in ("POR", "CPORE", "POROSITY") and "cpore" not in row_entry:
                     row_entry["cpore"] = val / 100.0 if val > 1.0 else val
-                elif prop_up in ("PERM", "CPERM", "PERMEABILITY") and "cperm" not in row_entry:
+                elif (
+                    prop_up in ("PERM", "CPERM", "PERMEABILITY")
+                    and "cperm" not in row_entry
+                ):
                     row_entry["cperm"] = val
 
             if core_rows_by_depth:
@@ -2106,7 +2218,9 @@ def _get_merged_dataframe_sync(
                     merged["core_sample_name"] = mapped_core["core_sample_name"]
                 for c_col in ("cpore", "cperm"):
                     if c_col in mapped_core:
-                        s_mapped = pd.Series(mapped_core[c_col], index=merged.index, dtype=float)
+                        s_mapped = pd.Series(
+                            mapped_core[c_col], index=merged.index, dtype=float
+                        )
                         if s_mapped.notna().any():
                             merged[c_col] = s_mapped
             else:
@@ -2116,12 +2230,16 @@ def _get_merged_dataframe_sync(
                 has_ck = "cperm" in merged.columns
                 if (has_cp or has_ck) and n_log > 1:
                     cp_vals = (
-                        pd.to_numeric(merged["cpore"], errors="coerce").to_numpy(dtype=float)
+                        pd.to_numeric(merged["cpore"], errors="coerce").to_numpy(
+                            dtype=float
+                        )
                         if has_cp
                         else np.full(n_log, np.nan)
                     )
                     ck_vals = (
-                        pd.to_numeric(merged["cperm"], errors="coerce").to_numpy(dtype=float)
+                        pd.to_numeric(merged["cperm"], errors="coerce").to_numpy(
+                            dtype=float
+                        )
                         if has_ck
                         else np.full(n_log, np.nan)
                     )
@@ -2365,8 +2483,16 @@ def _collect_project_handover_bundles(
     well_names_filter: Optional[List[str]] = None,
 ) -> tuple[str, str, List[Dict[str, Any]], Dict[str, Any]]:
     """Gather project metadata, project-level multi-well config, and per-well handover dictionaries (including ephemeral/cached live edits)."""
-    from quick_pp.app.backend.services.workspace import _ephemeral_well_configs
+    from quick_pp.app.backend.services import workspace as ws_service
     from quick_pp.handover import collect_well_handover_dict
+
+    _ephemeral_well_configs = getattr(ws_service, "_ephemeral_well_configs", {})
+    _ephemeral_project_module_params = getattr(
+        ws_service, "_ephemeral_project_module_params", {}
+    )
+    _module_params_key = getattr(
+        ws_service, "MODULE_PARAMS_CONFIG_KEY", "module_params"
+    )
 
     if project_id in _demo_deleted_projects:
         raise ValueError(f"Project {project_id} not found")
@@ -2390,6 +2516,15 @@ def _collect_project_handover_bundles(
         eph_proj_cfg = _ephemeral_well_configs.get((project_id, "__PROJECT__"))
         if isinstance(eph_proj_cfg, dict):
             proj_cfg.update(eph_proj_cfg)
+        eph_proj_mp = _ephemeral_project_module_params.get(project_id)
+        if isinstance(eph_proj_mp, dict) and eph_proj_mp:
+            existing_mp = (
+                dict(proj_cfg.get(_module_params_key))
+                if isinstance(proj_cfg.get(_module_params_key), dict)
+                else {}
+            )
+            existing_mp.update(eph_proj_mp)
+            proj_cfg[_module_params_key] = existing_mp
 
         wells_bundle: List[Dict[str, Any]] = []
         seen_names = set()
@@ -2415,16 +2550,17 @@ def _collect_project_handover_bundles(
             ):
                 live_df = eph_entry["data"]
             else:
-                cached = _merged_data_cache.get(f"{project_id}_{curr_n}_0.16")
-                if cached is not None:
-                    live_df = cached[1]
-                else:
-                    try:
-                        live_df = _get_merged_dataframe_sync(project_id, curr_n)
-                    except Exception:
-                        live_df = None
+                try:
+                    live_df = _get_merged_dataframe_sync(project_id, curr_n)
+                except Exception:
+                    live_df = None
 
-            eph_w_cfg = _ephemeral_well_configs.get((project_id, curr_n)) or _ephemeral_well_configs.get((project_id, orig_n))
+            eph_w_cfg = _ephemeral_well_configs.get(
+                (project_id, curr_n)
+            ) or _ephemeral_well_configs.get((project_id, orig_n))
+            eph_w_hdr = _ephemeral_well_headers.get(
+                (project_id, curr_n)
+            ) or _ephemeral_well_headers.get((project_id, orig_n))
             with get_db() as w_session:
                 well_obj = db_objects.Well(w_session, well_id=w_id)
                 b_dict = collect_well_handover_dict(
@@ -2432,6 +2568,10 @@ def _collect_project_handover_bundles(
                     override_df=live_df,
                     override_config=eph_w_cfg if isinstance(eph_w_cfg, dict) else None,
                 )
+                if isinstance(eph_w_hdr, dict) and eph_w_hdr:
+                    merged_h = dict(b_dict.get("header") or {})
+                    merged_h.update(eph_w_hdr)
+                    b_dict["header"] = merged_h
                 b_dict["name"] = curr_n
                 return b_dict
 
@@ -2478,7 +2618,20 @@ def _collect_project_handover_bundles(
                     "formation_tops": pd.DataFrame(columns=["name", "depth"]),
                     "fluid_contacts": pd.DataFrame(columns=["name", "depth"]),
                     "perforations": pd.DataFrame(
-                        columns=["name", "top_depth", "bottom_depth", "description"]
+                        columns=["name", "top", "bottom", "description"]
+                    ),
+                    "hole_sections": pd.DataFrame(
+                        columns=[
+                            "name",
+                            "top",
+                            "bottom",
+                            "bit_size",
+                            "mud_type",
+                            "mud_weight",
+                            "mud_salinity",
+                            "rmf",
+                            "rmf_temp",
+                        ]
                     ),
                     "well_surveys": pd.DataFrame(columns=["md", "inc", "azim"]),
                     "pressure_tests": pd.DataFrame(
@@ -2532,8 +2685,10 @@ def export_project_handover(
         elif wells:
             filter_list = [w.strip() for w in wells.split(",") if w.strip()]
 
-        proj_name, proj_desc, wells_bundle, proj_cfg = _collect_project_handover_bundles(
-            project_id=project_id, well_names_filter=filter_list
+        proj_name, proj_desc, wells_bundle, proj_cfg = (
+            _collect_project_handover_bundles(
+                project_id=project_id, well_names_filter=filter_list
+            )
         )
         if not wells_bundle:
             raise ValueError("No matching wells found to export.")
@@ -2623,30 +2778,42 @@ def export_well_las_endpoint(project_id: int, well_name: str):
         ) from e
 
 
-
 @router.post(
     "/projects/import-handover/inspect",
     summary="Inspect a Petrophysical Handover Package (.zip) before ingestion",
 )
 def inspect_handover_package_endpoint(file: UploadFile = File(...)):
     """Inspect an uploaded Petrophysical Handover Package (.zip) and return metadata preview."""
+    from sqlalchemy import func
+
     from quick_pp.handover import inspect_handover_archive
 
     try:
         content = file.file.read()
         preview = inspect_handover_archive(content)
+        base_name = str(preview.get("project_name") or "Imported_Project").strip()
+        preview["project_name"] = base_name
         with get_db() as session:
+            existing_names_lower = {
+                str(n).strip().lower()
+                for (n,) in session.query(db_models.Project.name).all()
+                if n is not None
+            }
             existing = (
                 session.query(db_models.Project)
-                .filter_by(name=preview["project_name"])
+                .filter(func.lower(db_models.Project.name) == base_name.lower())
                 .first()
             )
             preview["is_duplicate_name"] = bool(existing)
-            preview["suggested_name"] = (
-                f"{preview['project_name']}_Imported"
-                if existing
-                else preview["project_name"]
-            )
+            if existing:
+                candidate = f"{base_name}_Imported"
+                suffix = 2
+                while candidate.lower() in existing_names_lower:
+                    candidate = f"{base_name}_Imported_{suffix}"
+                    suffix += 1
+                preview["suggested_name"] = candidate
+            else:
+                preview["suggested_name"] = base_name
         return preview
     except Exception as e:
         logger.exception("Failed to inspect handover package")
@@ -2667,21 +2834,33 @@ def commit_handover_package_endpoint(
     overwrite_existing: bool = Form(True),
 ):
     """Import a complete Petrophysical Handover Package (.zip) into database."""
+    if is_demo_mode():
+        raise HTTPException(
+            status_code=403,
+            detail="Importing full database handover archives is disabled in the read-only live demo.",
+        )
     from quick_pp.handover import import_handover_archive
 
     try:
         current_user = get_current_user_optional(request)
         user_id = int(current_user["user_id"]) if current_user else None
+        cleaned_name = (
+            project_name.strip()
+            if isinstance(project_name, str) and project_name.strip()
+            else None
+        )
         content = file.file.read()
         with get_db() as session:
             res = import_handover_archive(
                 db_session=session,
                 zip_source=content,
-                target_project_name=project_name,
+                target_project_name=cleaned_name,
                 target_project_id=project_id,
                 created_by_user_id=user_id,
                 overwrite_existing_wells=overwrite_existing,
             )
+            if res.get("project_id") is not None:
+                invalidate_well_cache(project_id=int(res["project_id"]))
             return res
     except Exception as e:
         logger.exception("Failed to import handover package")

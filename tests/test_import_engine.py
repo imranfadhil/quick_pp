@@ -568,6 +568,37 @@ def test_parse_volve_facies_xlsx():
     assert len(sheet_names) >= 1
 
 
+def test_interpolate_tvd_on_md_extrapolates_and_ties_in_surface():
+    from quick_pp.app.backend.services.ancillary import interpolate_tvd_on_md
+
+    # Vertical to 1000 m, then 30 deg inclination to 1500 m
+    surveys = [
+        {"md": 500.0, "inc": 0.0, "azim": 0.0},
+        {"md": 1000.0, "inc": 0.0, "azim": 0.0},
+        {"md": 1500.0, "inc": 30.0, "azim": 90.0},
+    ]
+    traj = compute_survey_minimum_curvature(surveys)
+    md = np.array([0.0, 250.0, 500.0, 1000.0, 1250.0, 1500.0, 1700.0, np.nan])
+    tvd = interpolate_tvd_on_md(md, traj)
+
+    # Surface tie-in: vertical section, TVD == MD
+    assert tvd[0] == pytest.approx(0.0)
+    assert tvd[1] == pytest.approx(250.0)
+    assert tvd[3] == pytest.approx(1000.0)
+    # At a station it equals the computed TVD
+    assert tvd[5] == pytest.approx(float(traj["tvd"].iloc[-1]))
+    # Below the last station: extrapolated with the last segment's dTVD/dMD (< 1)
+    slope = (traj["tvd"].iloc[-1] - traj["tvd"].iloc[-2]) / 500.0
+    assert tvd[6] == pytest.approx(traj["tvd"].iloc[-1] + 200.0 * slope)
+    assert tvd[6] - tvd[5] < 200.0
+    assert np.isnan(tvd[7])
+
+    # Single station falls back to cos(inc)
+    one = compute_survey_minimum_curvature([{"md": 1000.0, "inc": 60.0, "azim": 0.0}])
+    t1 = interpolate_tvd_on_md(np.array([1000.0, 1100.0]), one)
+    assert t1[1] - t1[0] > 0
+
+
 def test_minimum_curvature_survey_calculation():
     surveys = [
         {"md": 0.0, "inc": 0.0, "azim": 0.0},

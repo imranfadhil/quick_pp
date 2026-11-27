@@ -50,10 +50,10 @@
 			az: fpt.activeZone,
 			zones: workbench.selectedZones,
 			wells: projectData.selectedWellNames,
-			ov: fpt.overrides,
-			ovz: fpt.overridesByZone,
+			ov: $state.snapshot(fpt.overrides),
+			ovz: $state.snapshot(fpt.overridesByZone),
 			ref: fpt.refDensity,
-			fluids: fpt.allowedFluids
+			fluids: $state.snapshot(fpt.allowedFluids)
 		});
 		if (!workbench.projectId) return;
 		void sig;
@@ -83,7 +83,11 @@
 		const allPts = res?.points ?? [];
 		const pts =
 			fpt.activeZone !== 'ALL'
-				? allPts.filter((p) => (p.zone || 'Unzoned').trim() === fpt.activeZone)
+				? allPts.filter(
+						(p) =>
+							(p.zone || 'Unzoned').trim().toUpperCase() ===
+							fpt.activeZone.trim().toUpperCase()
+				  )
 				: allPts;
 		const by: Record<'GAS' | 'OIL' | 'WATER' | 'UNASSIGNED' | 'QC', number> = {
 			GAS: 0,

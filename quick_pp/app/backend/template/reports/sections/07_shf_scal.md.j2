@@ -4,7 +4,7 @@
 
 ### {{ sec_num }}.1 Leverett $J$-Function, Lab-to-Reservoir $P_c$ Scaling & Core Stress Lineage
 
-To initialize continuous 3D water saturation in the static geological cellular model above the Free Water Level ($FWL = {{ "%.1f"|format(sw_params.fwl) }}\text{ m TVDss}$, Basis: `{{ sw_params.fwl_basis }}`), log-derived $S_w$ was reconciled with capillary pressure ($P_c$) curves via the Leverett $J$-Function and Lab-to-Reservoir interfacial tension scaling:
+To initialize continuous 3D water saturation in the static geological cellular model above the Free Water Level ($FWL = {{ "%.1f"|format(shf_params.fwl if shf_params.fwl is defined else sw_params.fwl) }}\text{ m TVDss}$, Basis: `{{ shf_params.fwl_basis if shf_params.fwl_basis is defined else sw_params.fwl_basis }}`), log-derived $S_w$ was reconciled with capillary pressure ($P_c$) curves via the Leverett $J$-Function and Lab-to-Reservoir interfacial tension scaling:
 
 $$P_{c,res} = P_{c,lab} \cdot \frac{(\sigma \cos\theta)_{res}}{(\sigma \cos\theta)_{lab}}, \quad h = TVD_{ss}(FWL) - TVD_{ss}, \quad J(S_w) = \frac{0.2166 \cdot P_{c,res}}{\sigma_{res} \cos\theta_{res}} \sqrt{\frac{K}{\phi}}$$
 
@@ -13,16 +13,44 @@ $$P_{c,res} = P_{c,lab} \cdot \frac{(\sigma \cos\theta)_{res}}{(\sigma \cos\thet
 {% if poro_params.core_corrected %}
 * **Core Overburden & Klinkenberg Stress Lineage:** $\sigma_{eff} = {{ "%.0f"|format(poro_params.net_confining_stress) }}\text{ psi}$ ({{ poro_params.core_lithology }}, $c_\phi = {{ "%.1e"|format(poro_params.compaction_coeff) }}\text{ psi}^{-1}$, $c_k = {{ "%.1e"|format(poro_params.perm_compaction_coeff) }}\text{ psi}^{-1}$), $P_m = {{ "%.1f"|format(poro_params.mean_pore_pressure) }}\text{ psi}$ ({{ poro_params.klinkenberg_method }}); baseline preserved in `CPORE_AMB` / `CPORE_ORI` and `CPERM_AIR` / `CPERM_ORI`, active curves updated in `CPORE` and `CPERM`.
 {% endif %}
-* **Fluid Density Gradient:** $\rho_w = {{ shf_params.gw }}\text{ g/cc}$, $\rho_{hc} = {{ shf_params.ghc }}\text{ g/cc}$ ($\Delta\rho = {{ "%.2f"|format(shf_params.gw - shf_params.ghc) }}\text{ g/cc}$).
-* **Log $S_w$ vs. $SHF$ Reconciliation:** Mean RMSE $= {{ "%.3f"|format(shf_params.reconciliation_rmse) }}\text{ v/v}$, Mean Bias ($S_w - SHF$) $= {{ "%+.3f"|format(shf_params.reconciliation_bias) }}\text{ v/v}$.
+* **Fluid Density Gradient:** $\rho_w = {{ shf_params.gw }}\text{ g/cc}$, $\rho_{hc} = {{ shf_params.ghc }}\text{ g/cc}$ ($\Delta\rho = {{ "%.2f"|format(shf_params.gw - shf_params.ghc) }}\text{ g/cc}$, {{ shf_params.ghc_basis if shf_params.ghc_basis else 'Formation Fluid System' }}).
+* **$J$-Function Fit Source:** {{ shf_params.fit_source if shf_params.fit_source else 'unspecified' }}.
+{% if shf_params.reconciliation_rmse is not none %}
+* **Log $S_w$ vs. $SHF$ Reconciliation:** RMSE $= {{ "%.3f"|format(shf_params.reconciliation_rmse) }}\text{ v/v}$, Mean Bias ($S_w - SHF$) $= {{ "%+.3f"|format(shf_params.reconciliation_bias) }}\text{ v/v}$ ($n = {{ shf_params.reconciliation_n }}$ target-zone samples above the FWL).
+{% else %}
+* **Log $S_w$ vs. $SHF$ Reconciliation:** not computed (fewer than 20 overlapping target-zone samples above the FWL).
+{% endif %}
+{% if shf_params.reconciliation_rmse is not none and shf_params.reconciliation_rmse > 0.12 %}
 
-### {{ sec_num }}.2 Dynamic Simulation Relative Permeability ($K_{rw}, K_{ro}$) — {{ scal_params.source_label if scal_params.source_label else 'Analogue / Default North Sea Turbidite SCAL Parameterization' }}
-
-{% if scal_params.is_analogue %}
-> **SCAL Data Provenance Notice:** Project-specific steady-state / unsteady-state coreflood relative permeability ($K_{rw}, K_{ro}$) tables are not loaded (`0 SCAL plugs` in Table 2.1). The parameters below represent an **Analogue / Default North Sea Turbidite SCAL Parameterization** for preliminary simulation sensitivity only.
+> **QA ALERT:** SHF vs log $S_w$ RMSE exceeds the 0.12 v/v acceptance limit. The saturation-height function does not reproduce the log saturation and should not initialise the static model until the rock-type fits, FWL and fluid densities are reviewed.
 {% endif %}
 
+{% if shf_params.fit_rows %}
+#### Table {{ sec_num }}.1: Saved Leverett $J$-Function Fit by Rock Type
+
+| ROCK_FLAG | $a$ | $b$ | Fit $R^2$ | Fit RMSE | SCAL Points | Log vs SHF RMSE | Log Samples |
+| :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+{% for f in shf_params.fit_rows %}
+| **{{ f.rock_flag }}** | {{ f.a }} | {{ f.b }} | {{ ("%.2f"|format(f.r2)) if f.r2 is not none else "—" }} | {{ ("%.3f"|format(f.rmse)) if f.rmse is not none else "—" }} | {{ f.n_scal }} | {{ ("%.3f"|format(f.log_rmse)) if f.log_rmse is not none else "—" }} | {{ f.n_log if f.n_log is not none else "—" }} |
+{% endfor %}
+
+{% if shf_params.fit_rows|selectattr('n_scal', 'equalto', 0)|list|length > 0 %}
+> Rock types with 0 SCAL points carry parameters borrowed from the nearest calibrated class; they are not independently constrained.
+{% endif %}
+{% endif %}
+
+### {{ sec_num }}.2 Dynamic Simulation Relative Permeability ($K_{rw}, K_{ro}$) — {{ scal_params.source_label if scal_params.source_label else 'Regional Analogue / Screening Parameterization' }}
+
+{% if scal_params.is_analogue %}
+> **SCAL Data Provenance Notice:** Project-specific steady-state / unsteady-state coreflood relative permeability ($K_{rw}, K_{ro}$) tables are not loaded (`0 SCAL plugs` in Table 2.1). The parameters below represent a **{{ scal_params.source_label }}** for preliminary simulation sensitivity only.
+{% endif %}
+
+{% set scal_model = (scal_params.model or 'corey')|lower %}
+{% if scal_model == 'let' %}
+$$S_e = \frac{S_w - S_{wc}}{1 - S_{wc} - S_{or}}, \quad K_{rw}(S_w) = K_{rw}^0 \frac{S_e^{L_w}}{S_e^{L_w} + E_w (1 - S_e)^{T_w}}, \quad K_{ro}(S_w) = K_{ro}^0 \frac{(1 - S_e)^{L_o}}{(1 - S_e)^{L_o} + E_o S_e^{T_o}}$$
+{% else %}
 $$S_e = \frac{S_w - S_{wc}}{1 - S_{wc} - S_{or}}, \quad K_{rw}(S_w) = K_{rw}^0 \cdot (S_e)^{N_w}, \quad K_{ro}(S_w) = K_{ro}^0 \cdot (1 - S_e)^{N_o}$$
+{% endif %}
 
 | Parameter | Symbol | Value | Unit | Provenance / Dynamic Simulation Role |
 | :--- | :---: | :---: | :---: | :--- |
@@ -31,7 +59,7 @@ $$S_e = \frac{S_w - S_{wc}}{1 - S_{wc} - S_{or}}, \quad K_{rw}(S_w) = K_{rw}^0 \
 | Residual Oil Saturation | $S_{or}$ | {{ "%.2f"|format(scal_params.sor) }} | $\text{v/v}$ | Waterflood Residual Hydrocarbon ({{ scal_params.source_label }}) |
 | Max Water RelPerm | $K_{rw}^0$ | {{ "%.2f"|format(scal_params.krw_max) }} | $\text{frac}$ | Endpoint @ $S_w = 1 - S_{or}$ ({{ scal_params.source_label }}) |
 | Max Oil RelPerm | $K_{ro}^0$ | {{ "%.2f"|format(scal_params.kro_max) }} | $\text{frac}$ | Endpoint @ $S_w = S_{wc}$ ({{ scal_params.source_label }}) |
-{% if scal_params.model == 'let' %}
+{% if scal_model == 'let' %}
 | LET Water Parameters | $L_w / E_w / T_w$ | {{ "%.1f"|format(scal_params.lw) }} / {{ "%.1f"|format(scal_params.ew) }} / {{ "%.1f"|format(scal_params.tw) }} | unitless | Lomeland-Ebeltoft-Thomas Water Curve |
 | LET Oil Parameters | $L_o / E_o / T_o$ | {{ "%.1f"|format(scal_params.lo) }} / {{ "%.1f"|format(scal_params.eo) }} / {{ "%.1f"|format(scal_params.to) }} | unitless | Lomeland-Ebeltoft-Thomas Oil Curve |
 {% else %}

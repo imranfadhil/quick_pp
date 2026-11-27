@@ -13,6 +13,7 @@ export const SINGLE_WELL_REGIONAL_DEFAULTS: Record<ParamModuleKey, Record<string
 	'qaqc-badhole': {
 		useCali: true,
 		caliThreshold: 2.0,
+		useHoleSections: true,
 		autoBitsize: true,
 		useDrift: true,
 		driftWindowM: 50.0,
@@ -21,6 +22,7 @@ export const SINGLE_WELL_REGIONAL_DEFAULTS: Record<ParamModuleKey, Record<string
 		caliSpikeThreshold: 0.5
 	},
 	'qaqc-env': {
+		useHoleSections: true,
 		bitsizeDefault: 8.5,
 		mudWeight: 9.5,
 		surfaceTemp: 75.0,

@@ -123,26 +123,34 @@ if %ERRORLEVEL% neq 0 (
 
 set "PUBLIC_URL_VAL="
 if not "%DOMAIN%"=="" set "PUBLIC_URL_VAL=https://%DOMAIN%"
+if "%DEMO_MEM_LIMIT%"=="" set "DEMO_MEM_LIMIT=2g"
 
-call :ssh_run "printf 'QPP_DEMO_MODE=true\nQPP_DISABLE_TRAINING=true\nDEMO_PORT=%DEMO_PORT%\nDEMO_BIND=%DEMO_BIND%\nPUBLIC_URL=%PUBLIC_URL_VAL%\n' > %REMOTE_DIR%/.env"
-if %ERRORLEVEL% neq 0 (
+set "DEMO_ENV_TMP=%TEMP%\%PROJECT_NAME%-demo.env"
+powershell -NoProfile -Command "$t = if ($env:CF_TUNNEL_TOKEN) { $env:CF_TUNNEL_TOKEN.Trim() } else { '' }; $arg = if ($t) { 'run' } else { '--url=http://qpp-demo:7860' }; $lines = @('QPP_DEMO_MODE=true','QPP_DISABLE_TRAINING=true',('DEMO_PORT='+$env:DEMO_PORT),('DEMO_BIND='+$env:DEMO_BIND),('DEMO_MEM_LIMIT='+$env:DEMO_MEM_LIMIT),('PUBLIC_URL='+$env:PUBLIC_URL_VAL),('CF_TUNNEL_TOKEN='+$t),('CF_TUNNEL_ARG='+$arg)) -join [char]10; Set-Content -NoNewline -LiteralPath $env:DEMO_ENV_TMP -Value ($lines + [char]10) -Encoding ascii"
+
+call :ssh_pipe "%DEMO_ENV_TMP%" "cat > %REMOTE_DIR%/.env"
+set DEMO_ENV_RC=%ERRORLEVEL%
+if defined DEMO_ENV_TMP if exist "%DEMO_ENV_TMP%" del "%DEMO_ENV_TMP%" 2>nul
+if not %DEMO_ENV_RC% equ 0 (
     echo [ERROR] Failed to write remote .env.
     exit /b 1
 )
-echo [OK] Demo environment configured.
+echo [OK] Demo environment configured ^(Memory limit: %DEMO_MEM_LIMIT%^).
 
 REM -- Build & Start isolated demo compose stack -----------------------
 echo [5/5] Starting isolated demo stack ^(project: %COMPOSE_PROJECT%^)...
 set "COMPOSE_CMD=docker compose -p %COMPOSE_PROJECT% --env-file %REMOTE_DIR%/.env -f %REMOTE_DIR%/deploy/demo/docker-compose.yaml"
 
-REM Rebuild/update only `qpp-demo` (--no-deps) and keep `demo-quicktunnel` running (--no-recreate --no-deps)
-REM so the *.trycloudflare.com HTTPS URL does not change across sync.bat / sync.bat --restart runs.
+set "DEMO_TUNNEL_FLAGS=--no-recreate --no-deps"
+if defined CF_TUNNEL_TOKEN set "DEMO_TUNNEL_FLAGS=--no-deps"
+
+REM Rebuild/update `qpp-demo` and manage `demo-quicktunnel`:
 if "%1"=="--from-deploy" (
     set "REMOTE_CMD=!COMPOSE_CMD! up -d --build"
 ) else if %BUILD% equ 1 (
-    set "REMOTE_CMD=!COMPOSE_CMD! up -d --build --no-deps qpp-demo && !COMPOSE_CMD! up -d --no-recreate --no-deps demo-quicktunnel"
+    set "REMOTE_CMD=!COMPOSE_CMD! up -d --build --no-deps qpp-demo && !COMPOSE_CMD! up -d !DEMO_TUNNEL_FLAGS! demo-quicktunnel"
 ) else (
-    set "REMOTE_CMD=!COMPOSE_CMD! up -d --no-recreate --no-deps qpp-demo demo-quicktunnel"
+    set "REMOTE_CMD=!COMPOSE_CMD! up -d --no-deps qpp-demo && !COMPOSE_CMD! up -d !DEMO_TUNNEL_FLAGS! demo-quicktunnel"
 )
 
 call :ssh_run "!REMOTE_CMD!"
@@ -160,7 +168,19 @@ echo.
 echo [OK] Demo stack running:
 call :ssh_run "!COMPOSE_CMD! ps"
 
-REM -- Retrieve Cloudflare Quick Tunnel URL ----------------------------
+REM -- Retrieve Cloudflare Tunnel URL ----------------------------------
+if defined CF_TUNNEL_TOKEN (
+    echo.
+    if not "%DOMAIN%"=="" (
+        echo ===============================================================
+        echo    LIVE DEMO URL ^(Cloudflare Tunnel^): https://%DOMAIN%
+        echo ===============================================================
+    ) else (
+        echo [OK] Cloudflare Named Tunnel active ^(CF_TUNNEL_TOKEN configured^).
+    )
+    goto :sync_end
+)
+
 set QUICK_URL=
 echo.
 echo [INFO] Resolving Cloudflare Quick Tunnel HTTPS URL...

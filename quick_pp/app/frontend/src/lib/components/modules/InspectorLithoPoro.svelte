@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { api, getJson, postJson } from '$lib/api/client';
 	import { authState } from '$lib/state/auth.svelte';
 	import NumericScrubber from '$lib/components/workbench/NumericScrubber.svelte';
@@ -6,11 +7,18 @@
 	import SavedParamsIndicator from '$lib/components/workbench/SavedParamsIndicator.svelte';
 	import VshCalibrationPanel from '$lib/components/workbench/VshCalibrationPanel.svelte';
 	import GammaSource from '$lib/components/workbench/GammaSource.svelte';
+	import { moduleParams } from '$lib/state/moduleParams.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
 	import { workbench, computeSiltIntersection, type LithoOverride } from '$lib/state/workbench.svelte';
 	import { fmtNum } from '$lib/utils/formatters';
 	import { calculateMethodComparison } from '$lib/utils/methodComparison';
-	import { gammaParameters, fluidDensityParameters, gammaEndpoints, gammaLabel } from '$lib/utils/lithology';
+	import {
+		gammaParameters,
+		fluidDensityParameters,
+		gammaEndpoints,
+		gammaLabel,
+		syncHeaderToLithoParams
+	} from '$lib/utils/lithology';
 	import {
 		gorMetricToScfStb,
 		gorScfStbToMetric,
@@ -18,7 +26,8 @@
 		pressureGradientPsiFtToMpaKm,
 		pressureMpaToPsi,
 		pressurePsiToMpa,
-		saturationTemperatureToMetric
+		saturationTemperatureToMetric,
+		salinityFromRmf
 	} from '$lib/utils/fluidUnits';
 	import {
 		ALL_LITHOLOGY_CURVES,
@@ -381,6 +390,40 @@
 		}
 		return zeroedUpdates;
 	}
+
+	let lastLithoHeaderSyncGen = -1;
+	$effect(() => {
+		const gen = wellData.wellLoadGeneration;
+		const hdr = wellData.header || {};
+		if (gen !== lastLithoHeaderSyncGen && Object.keys(hdr).length > 0) {
+			lastLithoHeaderSyncGen = gen;
+			if (!untrack(() => moduleParams.status['litho-poro']?.matched)) {
+				syncHeaderToLithoParams(hdr, workbench.lithoParams);
+			}
+		}
+	});
+
+	const derivedFiltrateSalinity = $derived.by(() => {
+		const r = Number(workbench.lithoParams.fluidDensityRmf);
+		if (!Number.isFinite(r) || r <= 0) return null;
+		const t = Number(workbench.lithoParams.fluidDensityRmfTempC);
+		return salinityFromRmf(r, Number.isFinite(t) ? t : 20);
+	});
+
+	const filtrateMismatchWarning = $derived.by(() => {
+		if (workbench.lithoParams.fluidDensityMudType !== 'WBM') return null;
+		const r = Number(workbench.lithoParams.fluidDensityRmf);
+		const t = Number(workbench.lithoParams.fluidDensityRmfTempC);
+		const s = Number(workbench.lithoParams.fluidDensitySalinityPpm);
+		if (Number.isFinite(r) && r > 0 && Number.isFinite(s) && s > 0 && derivedFiltrateSalinity != null) {
+			const ratio = s / derivedFiltrateSalinity;
+			if (ratio > 1.4 || ratio < 0.6) {
+				const tempStr = Number.isFinite(t) ? `${t}°C` : '20°C';
+				return `Mud Salinity (${s.toLocaleString()} ppm) differs significantly from Rmf-derived NaCl equivalent (~${derivedFiltrateSalinity.toLocaleString()} ppm @ ${tempStr}).`;
+			}
+		}
+		return null;
+	});
 
 	let lithoPoroRunId = 0;
 	async function executeLithoPoro(persist: boolean = false) {
@@ -999,6 +1042,71 @@
 						)} g/cc).
 					</p>
 				{:else}
+					{#if wellData.holeSections.length > 0}
+						<div class="mt-1.5 space-y-1 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5">
+							<div class="flex items-center justify-between text-[10px]">
+								<span class="font-semibold text-[var(--text-primary)]">Mud Filtrate Source</span>
+								<button
+									type="button"
+									onclick={() => {
+										workbench.ancillarySubTab = 'hole_sections';
+										workbench.singleWellStep = 'ancillary';
+									}}
+									class="font-semibold text-blue-700 hover:underline"
+								>
+									Edit Hole ({wellData.holeSections.length}) →
+								</button>
+							</div>
+							<div class="grid grid-cols-2 gap-1 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] p-0.5 text-[10px]">
+								<button
+									type="button"
+									onclick={() => {
+										workbench.lithoParams.fluidDensityUseHoleSections = true;
+										executeLithoPoro(false);
+									}}
+									class="h-5.5 rounded-xs font-medium transition-colors {workbench.lithoParams.fluidDensityUseHoleSections
+										? 'bg-[var(--bg-surface)] font-semibold text-emerald-700 shadow-2xs'
+										: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+								>
+									Hole Sections ({wellData.holeSections.length})
+								</button>
+								<button
+									type="button"
+									onclick={() => {
+										const deepest = [...wellData.holeSections].sort((a, b) => b.bottom - a.bottom)[0];
+										if (deepest) {
+											if (deepest.mud_type === 'OBM' || deepest.mud_type === 'SBM') {
+												workbench.lithoParams.fluidDensityMudType = 'OBM';
+											} else if (deepest.mud_type === 'WBM') {
+												workbench.lithoParams.fluidDensityMudType = 'WBM';
+											}
+											if (deepest.mud_salinity != null && Number.isFinite(deepest.mud_salinity)) {
+												workbench.lithoParams.fluidDensitySalinityPpm = deepest.mud_salinity;
+											}
+											if (deepest.rmf != null && Number.isFinite(deepest.rmf) && deepest.rmf > 0) {
+												workbench.lithoParams.fluidDensityRmf = deepest.rmf;
+											}
+											if (deepest.rmf_temp != null && Number.isFinite(deepest.rmf_temp)) {
+												workbench.lithoParams.fluidDensityRmfTempC = deepest.rmf_temp;
+											}
+										}
+										workbench.lithoParams.fluidDensityUseHoleSections = false;
+										executeLithoPoro(false);
+									}}
+									class="h-5.5 rounded-xs font-medium transition-colors {!workbench.lithoParams.fluidDensityUseHoleSections
+										? 'bg-[var(--bg-surface)] font-semibold text-emerald-700 shadow-2xs'
+										: 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}"
+								>
+									Manual Override
+								</button>
+							</div>
+							{#if workbench.lithoParams.fluidDensityUseHoleSections}
+								<div class="text-[9.5px] text-emerald-900">
+									Using per-section mud system &amp; salinity/Rmf from <strong>Hole Sections</strong>; controls below act as fallback outside defined sections (or OBM base oil density).
+								</div>
+							{/if}
+						</div>
+					{/if}
 					<div class="mt-1.5 grid grid-cols-2 gap-1">
 						{#each [
 							['WBM', 'WBM'],
@@ -1020,17 +1128,35 @@
 						{/each}
 					</div>
 
-					{#if wellData.header?.mud_type || wellData.header?.mud_filtrate_density != null}
-						<p class="mt-1 text-[10px] text-[var(--text-secondary)]">
-							Well metadata:
-							{#if wellData.header?.mud_type}<span class="font-semibold">{wellData.header.mud_type}</span>{/if}
-							{#if wellData.header?.mud_filtrate_density != null}
-								• ρ<sub>mf</sub> {fmtNum(wellData.header.mud_filtrate_density, 3)} g/cc
-							{/if}
-							{#if wellData.header?.mud_filtrate_salinity != null}
-								• {fmtNum(wellData.header.mud_filtrate_salinity, 0)} ppm
-							{/if}
-						</p>
+					{#if wellData.header?.mud_type || wellData.header?.mud_filtrate_density != null || wellData.header?.rmf != null || wellData.header?.mud_filtrate_salinity != null}
+						<div
+							class="mt-1.5 flex items-center justify-between rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1 text-[10px] text-[var(--text-secondary)]"
+						>
+							<div class="truncate">
+								<span class="font-semibold text-[var(--text-primary)]">Header:</span>
+								{#if wellData.header?.mud_type}<span class="font-medium"> {wellData.header.mud_type}</span>{/if}
+								{#if wellData.header?.rmf != null}
+									• R<sub>mf</sub> {wellData.header.rmf} Ωm{wellData.header.rmf_temp != null ? ` @ ${wellData.header.rmf_temp}°C` : ''}
+								{/if}
+								{#if wellData.header?.mud_filtrate_salinity != null}
+									• {fmtNum(wellData.header.mud_filtrate_salinity, 0)} ppm
+								{/if}
+								{#if wellData.header?.mud_filtrate_density != null}
+									• ρ<sub>mf</sub> {fmtNum(wellData.header.mud_filtrate_density, 3)} g/cc
+								{/if}
+							</div>
+							<button
+								type="button"
+								onclick={() => {
+									syncHeaderToLithoParams(wellData.header || {}, workbench.lithoParams);
+									executeLithoPoro(false);
+								}}
+								class="ml-1.5 shrink-0 cursor-pointer text-[9.5px] font-semibold text-blue-600 hover:text-blue-800 hover:underline"
+								title="Reset fluid density parameters to well header metadata"
+							>
+								↺ Sync from Header
+							</button>
+						</div>
 					{/if}
 
 					{#if workbench.lithoParams.fluidDensityMudType === 'WBM'}
@@ -1062,6 +1188,31 @@
 							step={1}
 							onrun={() => executeLithoPoro(false)}
 						/>
+						{#if derivedFiltrateSalinity != null && derivedFiltrateSalinity !== workbench.lithoParams.fluidDensitySalinityPpm}
+							<div
+								class="flex items-center justify-between px-0.5 text-[9.5px] text-[var(--text-muted)]"
+							>
+								<span>Rmf implies ~{derivedFiltrateSalinity.toLocaleString()} ppm</span>
+								<button
+									type="button"
+									onclick={() => {
+										workbench.lithoParams.fluidDensitySalinityPpm = derivedFiltrateSalinity;
+										executeLithoPoro(false);
+									}}
+									class="cursor-pointer font-semibold text-blue-600 hover:text-blue-800 hover:underline"
+									title="Update Mud Salinity to match Rmf @ Temp"
+								>
+									⚡ Set Salinity to {derivedFiltrateSalinity.toLocaleString()} ppm
+								</button>
+							</div>
+						{/if}
+						{#if filtrateMismatchWarning}
+							<div
+								class="rounded-xs border border-amber-300 bg-amber-50 px-2 py-0.5 text-[9.5px] text-amber-900"
+							>
+								<span>⚠️ {filtrateMismatchWarning}</span>
+							</div>
+						{/if}
 					{:else}
 						<NumericScrubber
 							label="Base Oil Density"
@@ -1540,7 +1691,7 @@
 					<div class="mt-1 rounded-xs border border-amber-200 bg-amber-50/70 px-2 py-1 text-[10px] leading-snug text-amber-950">
 						Uses mud-filtrate density/salinity from well metadata and estimates invaded-zone HC saturation in 0.01 increments to best match the binary solid-relative clay fraction to VSH_GR.
 						{#if wellData.header?.mud_filtrate_density == null || wellData.header?.mud_filtrate_salinity == null}
-							<span class="font-bold"> Set both mud-filtrate properties in QAQC → Well Header before running.</span>
+							<span class="font-bold"> Set both mud-filtrate properties in Well &amp; Ancillary → Well Header before running.</span>
 						{/if}
 					</div>
 					<NumericScrubber

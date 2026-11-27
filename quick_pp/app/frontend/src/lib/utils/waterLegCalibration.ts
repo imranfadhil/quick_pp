@@ -1,5 +1,6 @@
 import type { SaturationModelParams } from '$lib/state/workbench.svelte';
 import type { DepthUnit } from '$lib/utils/depthUnits';
+import { estimateTempAndRw } from '$lib/utils/saturation';
 
 export interface WaterLegCalibrationResult {
 	xs: number[]; // porosity points
@@ -62,22 +63,7 @@ export function getRwAtDepth(
 	if (sp.rwMode === 'pickett' && Number.isFinite(sp.rwPickett) && sp.rwPickett > 0) {
 		return sp.rwPickett;
 	}
-	const sTemp = Number.isFinite(sp.surfaceTemp) ? sp.surfaceTemp : 25.0;
-	const tGrad = Number.isFinite(sp.tempGradient) ? sp.tempGradient : 30.0;
-	let tempC: number;
-	if (sp.measSystem === 'imperial') {
-		const tvdKft = (depthM * 3.28084) / 1000.0;
-		const tempF = sTemp + tGrad * tvdKft;
-		tempC = Math.max(5, Math.min(250, ((tempF - 32.0) * 5.0) / 9.0));
-	} else {
-		tempC = Math.max(5, Math.min(250, sTemp + tGrad * (depthM / 1000.0)));
-	}
-	const tempF = (tempC * 9.0) / 5.0 + 32.0;
-	const sal = Math.max(
-		100,
-		Number.isFinite(sp.waterSalinity) ? sp.waterSalinity : 35000
-	);
-	return Math.pow(400000.0 / (sal * tempF), 0.88);
+	return estimateTempAndRw(depthM, sp).rw;
 }
 
 /**
@@ -154,7 +140,7 @@ export function calculateWaterLegCalibration(
 	const customIdx: number[] = [];
 
 	const aFactor = Number.isFinite(sp.a) && sp.a > 0 ? sp.a : 1.0;
-	const rsh = Math.max(0.1, sp.rsh || 2.0);
+	const rsh = Math.max(1e-3, sp.rsh || 2.0);
 	const vshCleanCutoff = sp.waterLegVshCutoff ?? 0.3;
 
 	for (const idx of waterLegIndices) {
@@ -163,7 +149,8 @@ export function calculateWaterLegCalibration(
 		const rt = rtRaw[idx];
 		const vsh = Number.isFinite(vshRaw[idx]) ? Math.max(0, Math.min(1, vshRaw[idx])) : 0;
 
-		if (!Number.isFinite(phi) || phi < 0.02 || phi > 0.45) continue;
+		// Porosity window matches quick_pp.saturation.calibrate_water_leg_m (min_phit=0.03, max_phit=0.45)
+		if (!Number.isFinite(phi) || phi < 0.03 || phi > 0.45) continue;
 		if (!Number.isFinite(rt) || rt <= 0) continue;
 
 		const rw =
@@ -199,9 +186,26 @@ export function calculateWaterLegCalibration(
 		return emptyResult;
 	}
 
+	// Fewer than 3 valid points: return the same defaults as the Python reference
+	// (m=2, slope=0), but keep the points so the crossplot can still draw them.
+	if (xs.length < 3) {
+		return {
+			...emptyResult,
+			xs,
+			ys,
+			vshs,
+			depths,
+			customIdx,
+			validCount: xs.length
+		};
+	}
+
 	let meanM = xs.reduce((acc, _, i) => acc + ys[i], 0) / xs.length;
 	const sortedYs = [...ys].sort((a, b) => a - b);
-	let medianM = sortedYs[Math.floor(sortedYs.length / 2)];
+	const mid = sortedYs.length >> 1;
+	// Average the two middle values for even counts (numpy.median behaviour)
+	let medianM =
+		sortedYs.length % 2 === 0 ? (sortedYs[mid - 1] + sortedYs[mid]) / 2 : sortedYs[mid];
 	let slope = 0;
 	let intercept = meanM;
 	let r2 = 0;

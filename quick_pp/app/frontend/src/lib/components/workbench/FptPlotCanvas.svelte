@@ -104,7 +104,10 @@
 		const pts = res.points.filter((p) => {
 			if (p.tvdss_display === null || xOf(p) === null) return false;
 			if (fpt.filterPlotToActiveZone && fpt.activeZone !== 'ALL') {
-				return (p.zone || 'Unzoned').trim() === fpt.activeZone;
+				return (
+					(p.zone || 'Unzoned').trim().toUpperCase() ===
+					fpt.activeZone.trim().toUpperCase()
+				);
 			}
 			return true;
 		});
@@ -175,8 +178,14 @@
 		// Determine which zones to plot lines and contacts for
 		const zoneEntries: Array<[string, any]> = [];
 		if (res.by_zone && Object.keys(res.by_zone).length > 0) {
-			if (fpt.activeZone !== 'ALL' && res.by_zone[fpt.activeZone]) {
-				zoneEntries.push([fpt.activeZone, res.by_zone[fpt.activeZone]]);
+			const targetZoneKey =
+				fpt.activeZone !== 'ALL'
+					? Object.keys(res.by_zone).find(
+							(k) => k.trim().toUpperCase() === fpt.activeZone.trim().toUpperCase()
+					  )
+					: null;
+			if (targetZoneKey && res.by_zone[targetZoneKey]) {
+				zoneEntries.push([targetZoneKey, res.by_zone[targetZoneKey]]);
 			} else {
 				for (const [zn, zr] of Object.entries(res.by_zone)) {
 					zoneEntries.push([zn, zr]);

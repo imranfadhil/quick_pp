@@ -592,4 +592,201 @@ def test_calculate_tvd_endpoints_routing():
     assert data3["success"] is True
 
 
+def test_hole_sections_crud_import_and_downstream_manual_override():
+    import numpy as np
+    import pandas as pd
+
+    from quick_pp.database.db_connector import DBConnector
+
+    project_name = f"HoleSectionProj-{uuid4().hex}"
+    well_name = f"Well-HS-{uuid4().hex[:8]}"
+    uwi = f"UWI-HS-{uuid4().hex[:8]}"
+
+    p_res = client.post("/quick_pp/database/projects", json={"name": project_name})
+    assert p_res.status_code == 200
+    pid = p_res.json()["project_id"]
+
+    w_res = client.post(
+        f"/quick_pp/database/projects/{pid}/wells",
+        json={"name": well_name, "uwi": uwi},
+    )
+    assert w_res.status_code == 200
+
+    # Seed depth-indexed log curves across two hole sections (1000-1500m and 1500-2000m)
+    depths = np.linspace(1000.0, 2000.0, 41)
+    cali = np.where(depths < 1500.0, 12.4, 8.6)  # in-gauge for 12.25" upper & 8.5" lower!
+    df = pd.DataFrame(
+        {
+            "DEPTH": depths,
+            "CALI": cali,
+            "GR": np.full_like(depths, 45.0),
+            "NPHI": np.full_like(depths, 0.20),
+            "RHOB": np.full_like(depths, 2.32),
+            "DRHO": np.full_like(depths, 0.01),
+            "RT": np.full_like(depths, 20.0),
+        }
+    )
+    db = DBConnector()
+    db.setup_db()
+    with db.get_session() as session:
+        from quick_pp.database.objects import Project
+
+        proj = Project(session, name=project_name)
+        proj.update_data(df.assign(WELL_NAME=well_name, UWI=uwi))
+
+    # 1. Bulk CSV preview + commit for hole_sections with unit conversions (g/cc -> ppg, kppm -> ppm, degF -> degC)
+    csv_text = (
+        "Well,Section,Top MD,Bottom MD,Bit Size,Mud Type,Mud Weight,Salinity,Rmf,Rmf Temp\n"
+        f"{well_name},Intermediate,1000,1500,12.25,WBM,1.14,35,0.22,77\n"
+        f"{well_name},Reservoir,1500,2000,8.5,OBM,1.38,0,,\n"
+    )
+    prev_res = client.post(
+        "/quick_pp/import/ancillary/preview",
+        files={"file": ("hole_sections.csv", csv_text)},
+        data={"data_type": "hole_sections"},
+    )
+    assert prev_res.status_code == 200
+    mappings = prev_res.json()["column_mappings"]
+    for m in mappings:
+        if m["target_column"] == "MUD_WEIGHT":
+            m["source_unit"] = "g/cc"
+        elif m["target_column"] == "MUD_SALINITY":
+            m["source_unit"] = "kppm"
+        elif m["target_column"] == "RMF_TEMP":
+            m["source_unit"] = "degF"
+
+    import base64
+
+    commit_res = client.post(
+        "/quick_pp/import/ancillary/commit",
+        json={
+            "project_id": pid,
+            "well_name": well_name,
+            "data_type": "hole_sections",
+            "import_mode": "replace",
+            "column_mappings": mappings,
+            "file_content_base64": base64.b64encode(csv_text.encode("utf-8")).decode("ascii"),
+            "filename": "hole_sections.csv",
+        },
+    )
+    assert commit_res.status_code == 200
+    assert commit_res.json()["total_committed"] == 2
+
+    hs_list = client.get(
+        f"/quick_pp/database/projects/{pid}/wells/{well_name}/hole_sections"
+    ).json()["hole_sections"]
+    assert len(hs_list) == 2
+    assert abs(hs_list[0]["bit_size"] - 12.25) < 1e-3
+    assert abs(hs_list[0]["mud_weight"] - 1.14 * 8.345404) < 0.05
+    assert abs(hs_list[0]["mud_salinity"] - 35000.0) < 1.0
+    assert abs(hs_list[0]["rmf_temp"] - 25.0) < 0.1
+    assert hs_list[1]["mud_type"] == "OBM"
+
+    # 2. Bundle synthesizes BS curve from hole_sections
+    bundle = client.get(
+        f"/quick_pp/workspace/projects/{pid}/wells/{well_name}/bundle"
+    ).json()
+    assert len(bundle["hole_sections"]) == 2
+    assert bundle["curves"]["BS"][0] == 12.25
+    assert bundle["curves"]["BS"][-1] == 8.5
+
+    # 3. Badhole flagging: Hole Sections (0 washouts) vs Manual Override BS=6.0" (all flagged!)
+    bh_hs = client.post(
+        f"/quick_pp/workspace/projects/{pid}/wells/{well_name}/badhole_flagging",
+        json={
+            "use_cali": True,
+            "cali_threshold": 2.0,
+            "use_hole_sections": True,
+            "auto_bitsize": True,
+            "bitsize_default": 6.0,
+            "use_drho": False,
+            "save": False,
+        },
+    ).json()
+    assert bh_hs["badhole_summary"]["cali_flagged"] == 0
+
+    bh_manual = client.post(
+        f"/quick_pp/workspace/projects/{pid}/wells/{well_name}/badhole_flagging",
+        json={
+            "use_cali": True,
+            "cali_threshold": 2.0,
+            "use_hole_sections": False,
+            "auto_bitsize": False,
+            "bitsize_default": 6.0,
+            "use_drho": False,
+            "save": False,
+        },
+    ).json()
+    assert bh_manual["badhole_summary"]["cali_flagged"] == len(depths)
+
+    # 4. Borehole environmental corrections: Hole Sections vs Manual Override
+    env_hs = client.post(
+        f"/quick_pp/workspace/projects/{pid}/wells/{well_name}/environmental_corrections",
+        json={
+            "use_hole_sections": True,
+            "bitsize_default": 6.0,
+            "mud_weight": 9.0,
+            "mud_type": "WBM",
+            "salinity_ppm": 10000.0,
+            "save": False,
+        },
+    ).json()
+    assert env_hs["data"]["ENV_BS"][0] == 12.25
+    assert env_hs["data"]["ENV_BS"][-1] == 8.5
+    assert env_hs["data"]["ENV_RMF"][0] is not None
+    assert env_hs["data"]["ENV_RMF"][-1] is None  # OBM reservoir section
+
+    env_manual = client.post(
+        f"/quick_pp/workspace/projects/{pid}/wells/{well_name}/environmental_corrections",
+        json={
+            "use_hole_sections": False,
+            "bitsize_default": 6.0,
+            "mud_weight": 10.5,
+            "mud_type": "WBM",
+            "salinity_ppm": 50000.0,
+            "save": False,
+        },
+    ).json()
+    assert all(abs(v - 6.0) < 1e-6 for v in env_manual["data"]["ENV_BS"])
+    assert all(v is not None for v in env_manual["data"]["ENV_RMF"])
+
+    # 5. Continuous Fluid Density (RHO_FL) in Porosity: Hole Sections (WBM upper vs OBM lower) vs Manual Override
+    poro_hs = client.post(
+        f"/quick_pp/workspace/projects/{pid}/wells/{well_name}/porosity",
+        json={
+            "method": "den",
+            "litho_model": "ssc",
+            "fluid_density": {
+                "mode": "zonal_coupled",
+                "use_hole_sections": True,
+                "mud_type": "WBM",
+                "mud_salinity_ppm": 35000.0,
+                "obm_filtrate_density": 0.80,
+            },
+            "save": False,
+        },
+    ).json()
+    # Upper section (WBM ~1.0+ g/cc) has higher RHO_MF than lower section (OBM ~0.80 g/cc)
+    assert poro_hs["data"]["RHO_MF"][0] > 0.95
+    assert poro_hs["data"]["RHO_MF"][-1] < 0.88
+
+    poro_manual = client.post(
+        f"/quick_pp/workspace/projects/{pid}/wells/{well_name}/porosity",
+        json={
+            "method": "den",
+            "litho_model": "ssc",
+            "fluid_density": {
+                "mode": "zonal_coupled",
+                "use_hole_sections": False,
+                "mud_type": "OBM",
+                "obm_filtrate_density": 0.80,
+            },
+            "save": False,
+        },
+    ).json()
+    assert poro_manual["data"]["RHO_MF"][0] < 0.88
+    assert poro_manual["data"]["RHO_MF"][-1] < 0.88
+
+
+
 

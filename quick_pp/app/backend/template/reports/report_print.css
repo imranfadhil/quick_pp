@@ -89,6 +89,25 @@ body.qpp-report-print {
     border-collapse: collapse;
     margin: 10px 0 14px 0;
     font-size: 8.5pt;
+    table-layout: auto;
+}
+
+.qpp-report-body td,
+.qpp-report-body th {
+    overflow-wrap: break-word;
+    word-break: normal;
+}
+
+.qpp-report-body td {
+    min-width: 3.2em;
+}
+
+.qpp-report-body thead {
+    display: table-header-group;
+}
+
+.qpp-report-body tr {
+    break-inside: avoid;
     page-break-inside: avoid;
 }
 
@@ -227,7 +246,27 @@ body.qpp-report-print {
     break-before: page;
 }
 
+@page {
+    @bottom-center {
+        content: "Page " counter(page);
+        font-size: 8pt;
+        color: #64748b;
+    }
+}
+
 @media print {
+    .qpp-report-container {
+        max-width: none !important;
+        padding: 0 !important;
+        margin: 0 !important;
+    }
+    .qpp-report-body table {
+        font-size: 7.5pt;
+    }
+    .qpp-report-body th,
+    .qpp-report-body td {
+        padding: 3px 5px;
+    }
     .no-print {
         display: none !important;
     }

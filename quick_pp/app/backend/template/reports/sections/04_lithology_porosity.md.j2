@@ -47,19 +47,19 @@ $$V_{sand} + V_{silt} + V_{clay} = 1, \quad \phi_D = \frac{\rho_{ma} - \rho_b}{\
 {% else %}
 | Dry Clay Density | $\rho_{clay}$ | {{ litho_params.rho_clay }} | $\text{g/cc}$ | Clay Mineralogy Endpoint |
 | Dry Clay Neutron | $NPHI_{clay}$ | {{ litho_params.nphi_clay }} | $\text{v/v}$ | Neutron-Density Crossplot Clay Point |
+{% if not litho_params.gamma or litho_params.gamma.get('gamma_source', 'gr') == 'gr' %}
 | Clean GR Endpoint | $GR_{clean}$ | {{ litho_params.gr_clean }} | $\text{gAPI}$ | P5 Clean Reservoir Baseline |
 | Shale GR Endpoint | $GR_{shale}$ | {{ litho_params.gr_shale }} | $\text{gAPI}$ | P95 Intra-Reservoir Shale Baseline |
-{% if litho_params.model_key == 'vsh_gr' and litho_params.gamma %}
-| Gamma source | $\gamma$ | {{ litho_params.gamma.get('gamma_source', 'gr') }} | — | Calibrate for the selected response |
+{% endif %}
+{% if litho_params.model_key == 'vsh_gr' and litho_params.gamma and litho_params.gamma.get('gamma_source') != 'gr' %}
+| Gamma source | $\gamma$ | {{ litho_params.gamma.get('gamma_source') }} | — | Calibrate for the selected response |
 {% if litho_params.gamma.get('gamma_source') == 'cgr' %}
 | Gamma curve | — | {{ litho_params.gamma.get('gamma_curve') }} | — | Selected curve |
 {% elif litho_params.gamma.get('gamma_source') == 'derived_cgr' %}
 | Derived CGR inputs | — | {{ litho_params.gamma.get('thorium_curve') }} / {{ litho_params.gamma.get('potassium_curve') }} | ppm / % | Th / K |
 | CGR coefficients | $a_{Th}$ / $a_K$ | {{ litho_params.gamma.get('cgr_th_coefficient') }} / {{ litho_params.gamma.get('cgr_k_coefficient') }} | gAPI/ppm / gAPI/% | Verify tool calibration |
 {% endif %}
-{% if litho_params.gamma.get('gamma_source') != 'gr' %}
 | Clean / shale gamma endpoints | — | {{ litho_params.gamma.get('gamma_clean') }} / {{ litho_params.gamma.get('gamma_shale') }} | gAPI | Selected gamma response |
-{% endif %}
 {% endif %}
 {% endif %}
 | Total Core Plugs Loaded | $N_{core,total}$ | {{ poro_params.total_core_count }} | plugs | Full-Wellbore RCA Inventory (Table 2.1) |
@@ -73,6 +73,19 @@ $$V_{sand} + V_{silt} + V_{clay} = 1, \quad \phi_D = \frac{\rho_{ma} - \rho_b}{\
 {% endif %}
 {% if poro_params.core_count > 0 %}
 | Core-to-Log Calibration | $R^2$ / $\text{RMSE}$ | {{ "%.2f"|format(poro_params.core_r2) }} / {{ "%.3f"|format(poro_params.core_rmse) }} | $\text{v/v}$ | Mean Bias ($\phi_{log} - \phi_{core}$) $= {{ "%+.3f"|format(poro_params.core_bias) }}\text{ v/v}$ |
+{% endif %}
+{% if is_single_well and poro_params.core_perm_count and poro_params.core_perm_count > 0 %}
+| Core Permeability Parity | $R^2$ / Factor Error | {{ "%.2f"|format(poro_params.core_perm_r2) }} / {{ "%.1f"|format(poro_params.core_perm_factor_err) }}$\times$ | $\text{log}_{10}\text{ mD}$ | Valid target-zone permeability plugs ($n = {{ poro_params.core_perm_count }}$) |
+{% endif %}
+
+{% if well_core_parity and (poro_params.core_r2 < 0.40 or poro_params.core_count == 0) and not is_single_well %}
+#### Well-by-Well Core-to-Log Porosity Parity & Depth Alignment Diagnostics
+
+| Well Name | Valid Plugs | Applied Shift (m) | $R^2$ ($\phi_t$) | $R^2$ ($\phi_e$) | RMSE (v/v) | Mean Bias (v/v) | Parity Status | Diagnostic Recommendation |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
+{% for wp in well_core_parity %}
+| **{{ wp.well_name }}** | {{ wp.n_plugs }} | {{ "%+.2f"|format(wp.mean_shift_m) }} | {{ "%.2f"|format(wp.r2_phit) }} | {{ "%.2f"|format(wp.r2_phie) }} | {{ "%.3f"|format(wp.rmse_phi) }} | {{ "%+.3f"|format(wp.bias_phi) }} | **{{ wp.status }}** | {{ wp.recommendation }} |
+{% endfor %}
 {% endif %}
 
 {% if poro_params.core_shift_applied %}
