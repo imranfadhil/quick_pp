@@ -27,6 +27,10 @@
 		computeEnvCorrQcSummary,
 		ENV_QC_TRACK_FILTERS
 	} from '$lib/utils/envCorrQc';
+	import {
+		buildDepthAlignmentQcPlot,
+		computeDepthAlignmentQcSummary
+	} from '$lib/utils/depthAlignmentQc';
 	import { buildTempPressurePlot } from '$lib/utils/tempPressureProfile';
 	import { gammaEndpoints, gammaLabel } from '$lib/utils/lithology';
 	import { normalizedScalSaturation, poreThroatDistribution } from '$lib/utils/poreThroat';
@@ -120,6 +124,10 @@
 						: Array.isArray(trace.y) && trace.y.length > 0)
 			);
 		switch (mode) {
+			case 'depth-alignment-qc':
+				return traces.length > 0
+					? null
+					: 'Need at least two overlapping curves (≥ 20 samples) in the active interval to evaluate depth alignment.';
 			case 'env-corr-qc':
 				return traces.length > 0
 					? null
@@ -703,6 +711,22 @@
 			});
 			tpPlot.layout.uirevision = `temp-pressure-${workbench.projectId}-${workbench.wellId}-${depthDisplay.unit}-${workbench.tempPlotUnit}-${workbench.presPlotUnit}-${workbench.selectedZones.join(',')}-${workbench.depthFilter?.min ?? ''}_${workbench.depthFilter?.max ?? ''}`;
 			return { traces: tpPlot.traces, layout: tpPlot.layout };
+		}
+
+		if (effectiveMode === 'depth-alignment-qc') {
+			const daPlot = buildDepthAlignmentQcPlot({
+				curves: wellData.curves,
+				depthsMeters: deptAll,
+				indices,
+				depthUnit: depthDisplay.unit,
+				viewMode: workbench.depthAlignViewMode,
+				referenceCurve: workbench.depthAlignParams.referenceCurve,
+				focusCurve: workbench.depthAlignFocusCurve,
+				maxShiftM: workbench.depthAlignParams.maxShiftM,
+				excludeBadhole: workbench.depthAlignParams.excludeBadhole
+			});
+			daPlot.layout.uirevision = `depth-align-qc-${workbench.projectId}-${workbench.wellId}-${depthDisplay.unit}-${workbench.depthAlignViewMode}-${workbench.depthAlignParams.referenceCurve}-${daPlot.activeTarget ?? ''}-${workbench.selectedZones.join(',')}-${workbench.depthFilter?.min ?? ''}_${workbench.depthFilter?.max ?? ''}`;
+			return { traces: daPlot.traces, layout: daPlot.layout };
 		}
 
 		if (effectiveMode === 'env-corr-qc') {
@@ -6991,6 +7015,17 @@
 			void workbench.projectId;
 			void workbench.wellId;
 			void wellData.wellLoadGeneration;
+		} else if (mode === 'depth-alignment-qc') {
+			void wellData.curves;
+			void depthDisplay.unit;
+			void workbench.depthAlignViewMode;
+			void workbench.depthAlignFocusCurve;
+			void workbench.depthAlignParams.referenceCurve;
+			void workbench.depthAlignParams.maxShiftM;
+			void workbench.depthAlignParams.excludeBadhole;
+			void workbench.projectId;
+			void workbench.wellId;
+			void wellData.wellLoadGeneration;
 		} else if (mode === 'env-corr-qc') {
 			void wellData.curves;
 			void depthDisplay.unit;
@@ -7252,6 +7287,7 @@
 			emptyPlotMessage = untrack(() => getEmptyPlotMessage(mode, traces));
 			layout.autosize = true;
 			const depthPlot =
+				(mode === 'depth-alignment-qc' && workbench.depthAlignViewMode === 'drift') ||
 				mode === 'env-corr-qc' ||
 				mode === 'temp-pressure' ||
 				mode === 'curve-depth' ||
@@ -7265,7 +7301,12 @@
 			const visibleLegendTraces = traces.filter(
 				(t: any) => t.showlegend !== false && t.name
 			).length;
-			if (visibleLegendTraces > 5 && mode !== 'env-corr-qc' && mode !== 'temp-pressure') {
+			if (
+				visibleLegendTraces > 5 &&
+				mode !== 'depth-alignment-qc' &&
+				mode !== 'env-corr-qc' &&
+				mode !== 'temp-pressure'
+			) {
 				layout.legend = {
 					orientation: 'v',
 					x: 1.01,
@@ -7456,6 +7497,20 @@
 		};
 	});
 
+	let depthAlignSummary = $derived.by(() =>
+		effectiveMode === 'depth-alignment-qc'
+			? computeDepthAlignmentQcSummary({
+					curves: wellData.curves,
+					depthsMeters: wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [],
+					indices: wellData.visibleIndices,
+					depthUnit: depthDisplay.unit,
+					referenceCurve: workbench.depthAlignParams.referenceCurve,
+					maxShiftM: workbench.depthAlignParams.maxShiftM,
+					excludeBadhole: workbench.depthAlignParams.excludeBadhole
+				})
+			: null
+	);
+
 	let envQcSummary = $derived.by(() =>
 		effectiveMode === 'env-corr-qc'
 			? computeEnvCorrQcSummary(
@@ -7635,6 +7690,47 @@
 							title={mTip}
 							onclick={() => (mnMudType = mKey as 'fresh' | 'salt')}
 							class="h-5 px-1.5 text-[10px] font-medium whitespace-nowrap transition-colors first:border-r first:border-[var(--border-hairline)] {mnMudType ===
+							mKey
+								? 'bg-blue-600 font-semibold text-white'
+								: 'text-[var(--text-secondary)] hover:bg-slate-100'}"
+						>
+							{mLbl}
+						</button>
+					{/each}
+				</div>
+			</div>
+		{/if}
+
+		{#if effectiveMode === 'depth-alignment-qc'}
+			<div class="flex flex-wrap items-center gap-1">
+				{#if depthAlignSummary && depthAlignSummary.rows.length > 0 && workbench.depthAlignViewMode === 'drift'}
+					<select
+						value={workbench.depthAlignFocusCurve ?? ''}
+						onchange={(e) => {
+							const v = (e.currentTarget as HTMLSelectElement).value;
+							workbench.depthAlignFocusCurve = v || null;
+						}}
+						title="Select target curve to inspect against {depthAlignSummary.referenceCurve}"
+						class="h-5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-[10.5px] font-medium text-[var(--text-primary)] focus:outline-none"
+					>
+						<option value="">Auto (Worst Shift)</option>
+						{#each depthAlignSummary.rows as r (r.CURVE)}
+							<option value={r.CURVE}>
+								{r.CURVE} ({r.SHIFT_DISPLAY >= 0 ? '+' : ''}{r.SHIFT_DISPLAY} {depthDisplay.unit})
+							</option>
+						{/each}
+					</select>
+				{/if}
+				<div
+					class="inline-flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]"
+				>
+					{#each [['drift', 'Drift & Overlay', '3-track synchronized depth composite: Scaled curve overlay + shifted preview, bed-boundary |∂f/∂z|, and sliding-window drift Δz(z)'], ['correlogram', 'Correlogram', 'Bed-boundary normalized cross-correlation NCC(Δz) vs lag across all evaluated curves']] as [mKey, mLbl, mTip]}
+						<button
+							type="button"
+							title={mTip}
+							onclick={() =>
+								(workbench.depthAlignViewMode = mKey as 'drift' | 'correlogram')}
+							class="h-5 border-r border-[var(--border-hairline)] px-1.5 text-[10px] font-medium whitespace-nowrap transition-colors last:border-r-0 {workbench.depthAlignViewMode ===
 							mKey
 								? 'bg-blue-600 font-semibold text-white'
 								: 'text-[var(--text-secondary)] hover:bg-slate-100'}"
@@ -8017,6 +8113,60 @@
 			</div>
 		{/if}
 	</div>
+
+	{#if effectiveMode === 'depth-alignment-qc' && depthAlignSummary && depthAlignSummary.rows.length > 0}
+		<div
+			class="mono-num flex shrink-0 flex-wrap items-center justify-between gap-x-2.5 gap-y-1 border-b border-[var(--border-hairline)] bg-slate-50/90 px-2.5 py-1 text-[10px]"
+		>
+			<div class="flex flex-wrap items-center gap-x-2.5 text-slate-700">
+				<span>Ref: <strong>{depthAlignSummary.referenceCurve}</strong></span>
+				<span class="text-emerald-800">
+					Aligned: <strong>{depthAlignSummary.alignedCount}</strong>
+				</span>
+				{#if depthAlignSummary.minorCount > 0}
+					<span class="text-amber-700">
+						Minor: <strong>{depthAlignSummary.minorCount}</strong>
+					</span>
+				{/if}
+				{#if depthAlignSummary.offDepthCount > 0}
+					<span class="font-bold text-red-700">
+						Off-Depth: <strong>{depthAlignSummary.offDepthCount}</strong>
+					</span>
+				{/if}
+				{#if depthAlignSummary.variableDriftCount > 0}
+					<span class="text-indigo-700">
+						Var. Stretch: <strong>{depthAlignSummary.variableDriftCount}</strong>
+					</span>
+				{/if}
+			</div>
+			<div class="flex flex-wrap items-center gap-x-2 text-[9.5px] text-slate-600">
+				{#each depthAlignSummary.rows as r (r.CURVE)}
+					<button
+						type="button"
+						onclick={() => (workbench.depthAlignFocusCurve = r.CURVE)}
+						title={`${r.CURVE} vs ${r.REF_CURVE}: Shift ${r.SHIFT_DISPLAY >= 0 ? '+' : ''}${r.SHIFT_DISPLAY} ${depthDisplay.unit} (${r.SHIFT_SAMPLES >= 0 ? '+' : ''}${r.SHIFT_SAMPLES} samp), Conf ${r.CONFIDENCE.toFixed(2)}, Status ${r.STATUS}`}
+						class="cursor-pointer rounded-2xs px-1 py-0.2 hover:bg-slate-200/70 {workbench.depthAlignFocusCurve ===
+						r.CURVE
+							? 'bg-slate-200 font-semibold'
+							: ''}"
+					>
+						<strong>{r.CURVE}</strong>:
+						<span
+							class={r.STATUS === 'OFF_DEPTH'
+								? 'font-bold text-red-700'
+								: r.STATUS === 'MINOR'
+									? 'font-semibold text-amber-700'
+									: r.STATUS === 'LOW_SIGNAL'
+										? 'text-slate-400'
+										: 'text-emerald-700'}
+						>
+							{r.SHIFT_DISPLAY >= 0 ? '+' : ''}{r.SHIFT_DISPLAY}{depthDisplay.unit}
+						</span>
+					</button>
+				{/each}
+			</div>
+		</div>
+	{/if}
 
 	{#if effectiveMode === 'env-corr-qc' && envQcSummary && envQcSummary.totalSamples > 0}
 		<div

@@ -2327,6 +2327,7 @@ class WellDataState {
 	 */
 	private static readonly WORKFLOW_MODULE_ORDER = [
 		'qaqc-edit',
+		'qaqc-align',
 		'qaqc-badhole',
 		'qaqc-env',
 		'source_rock',
@@ -2339,6 +2340,7 @@ class WellDataState {
 
 	private static readonly WORKFLOW_MODULE_LABELS: Record<string, string> = {
 		'qaqc-edit': 'QAQC Edits',
+		'qaqc-align': 'Depth Alignment',
 		'qaqc-badhole': 'Badhole Flags',
 		'qaqc-env': 'Env Corrections',
 		source_rock: 'Source Rock & TOC',

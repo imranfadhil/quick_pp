@@ -60,7 +60,8 @@ export const ENV_QC_REASON_BITS: ReadonlyArray<{ bit: number; label: string }> =
 	{ bit: 64, label: 'Flatline' },
 	{ bit: 128, label: 'Cycle Skip' },
 	{ bit: 256, label: 'Assumed BS' },
-	{ bit: 512, label: 'Res/Mud Mismatch' }
+	{ bit: 512, label: 'Res/Mud Mismatch' },
+	{ bit: 1024, label: 'Off-Depth' }
 ];
 
 const M_TO_FT = 3.280839895013123;

@@ -14,6 +14,7 @@ export type CrossplotId =
 	| 'fluid-typing'
 	| 'histogram'
 	| 'curve-depth'
+	| 'depth-alignment-qc'
 	| 'env-corr-qc'
 	| 'temp-pressure'
 	| 'enhanced-vs-raw'
@@ -65,6 +66,11 @@ export const CROSSPLOTS: readonly CrossplotDefinition[] = [
 		id: 'curve-depth',
 		label: 'Curve Editor · Log vs Depth',
 		single: { group: 'Step 2 · Data & QAQC', steps: ['qaqc', 'toc'] }
+	},
+	{
+		id: 'depth-alignment-qc',
+		label: 'Inter-Log Depth Alignment QC',
+		single: { group: 'Step 2 · Data & QAQC', steps: ['qaqc'] }
 	},
 	{
 		id: 'env-corr-qc',

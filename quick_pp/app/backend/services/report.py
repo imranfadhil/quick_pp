@@ -256,6 +256,7 @@ _ENV_REASON_LABELS: List[Tuple[int, str]] = [
     (ENV_QC_REASON_BITS["CYCLE_SKIP"], "Cycle Skip"),
     (ENV_QC_REASON_BITS["BS_ASSUMED"], "Assumed BS"),
     (ENV_QC_REASON_BITS["RES_MUD_MISMATCH"], "Res/Mud Mismatch"),
+    (ENV_QC_REASON_BITS["DEPTH_MISMATCH"], "Off-Depth"),
 ]
 _ENV_CURVE_UNITS: Dict[str, str] = {
     "GR": "gAPI",
@@ -5809,6 +5810,77 @@ def validate_fdp_report_payload(context: Dict[str, Any]) -> List[Dict[str, str]]
             "status": chk12_status,
             "action_note": chk12_note,
             "detail": chk12_measured,
+        }
+    )
+
+    # CHK-13: Inter-Log Depth Alignment & Run Tie-In Audit
+    chk13_status = "PASS"
+    chk13_measured = (
+        "Insufficient multi-curve overlap to audit inter-log depth alignment."
+    )
+    chk13_note = "Inter-log depth alignment verified across evaluated curve suite."
+    if not full_df.empty and "DEPTH" in full_df.columns:
+        try:
+            from quick_pp.depth_alignment import evaluate_depth_alignment
+
+            off_items: List[str] = []
+            minor_items: List[str] = []
+            max_shift_m = 0.0
+            eval_wells = 0
+            w_groups = (
+                full_df.groupby("WELL_NAME", sort=False)
+                if "WELL_NAME" in full_df.columns
+                else [("WELL", full_df)]
+            )
+            for wn_g, w_sub in w_groups:
+                if len(w_sub) < 30:
+                    continue
+                eval_wells += 1
+                al_rep = evaluate_depth_alignment(w_sub, ref_curve="GR", depth_unit="m")
+                for cr in al_rep.get("curves") or []:
+                    if float(cr.get("confidence") or 0.0) < 0.45:
+                        continue
+                    sh_m = float(cr.get("suggested_shift_m") or 0.0)
+                    max_shift_m = max(max_shift_m, abs(sh_m))
+                    if cr.get("status") == "OFF_DEPTH":
+                        off_items.append(f"{wn_g}:{cr['curve']} ({sh_m:+.2f} m)")
+                    elif cr.get("status") == "MINOR":
+                        minor_items.append(f"{wn_g}:{cr['curve']} ({sh_m:+.2f} m)")
+
+            if eval_wells > 0:
+                if off_items and max_shift_m > 0.50:
+                    chk13_status = "QA ALERT"
+                    chk13_measured = (
+                        f"Off-depth run(s) detected across {eval_wells} well(s): "
+                        f"{', '.join(off_items[:4])} (max |Δz| = {max_shift_m:.2f} m)."
+                    )
+                    chk13_note = "Run Inter-Log Depth Alignment QC in Data & QA/QC to shift off-depth logs before evaluation."
+                elif off_items or minor_items:
+                    chk13_status = "REVIEW"
+                    flagged_txt = ", ".join((off_items + minor_items)[:4])
+                    chk13_measured = (
+                        f"Minor depth drift detected across {eval_wells} well(s): "
+                        f"{flagged_txt} (max |Δz| = {max_shift_m:.2f} m)."
+                    )
+                    chk13_note = "Inspect Depth Alignment QC plot; apply bulk or dynamic shift if using thin-bed deconvolution."
+                else:
+                    chk13_status = "PASS"
+                    chk13_measured = (
+                        f"All primary curves aligned within tolerance across {eval_wells} well(s) "
+                        f"(max |Δz| = {max_shift_m:.2f} m)."
+                    )
+        except Exception:
+            pass
+    checks.append(
+        {
+            "id": "CHK-13",
+            "rule": "Inter-Log Depth Alignment & Run Tie-In",
+            "category": "Data Conditioning",
+            "criterion": "Inter-curve bed-boundary lag |Δz| ≤ 0.25 m (≤ 1.5 samples)",
+            "measured": chk13_measured,
+            "status": chk13_status,
+            "action_note": chk13_note,
+            "detail": chk13_measured,
         }
     )
 

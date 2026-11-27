@@ -29,6 +29,7 @@
 	import { selectSpliceInterval, type SpliceInterval } from '$lib/utils/spliceIntervals';
 	import { salinityFromRmf } from '$lib/utils/fluidUnits';
 	import { parseHeaderWaterDepthMeters, syncHeaderToEnvParams } from '$lib/utils/envCorrQc';
+	import { computeDepthAlignmentQcSummary } from '$lib/utils/depthAlignmentQc';
 
 	const REQUIRED_STANDARD = ['GR', 'RT', 'NPHI', 'RHOB', 'CALI', 'DTC', 'PEF'];
 	const EVALUATED_CURVES = ALL_CALCULATED_CURVE_MNEMONICS;
@@ -1106,6 +1107,121 @@
 
 	async function saveEnvCorrections() {
 		await wellData.saveModuleComputed('qaqc-env', 'Env Corrections Saved ✓');
+	}
+
+	// --- Inter-Log Depth Alignment QC & Conditioning ---
+	const dap = workbench.depthAlignParams;
+	let selectedAlignCurves = $state<Record<string, boolean>>({});
+	let alignStatusMsg = $state<string | null>(null);
+
+	const maxShiftBinding = {
+		get: () => Number(depthFromMeters(dap.maxShiftM || 3.0, depthDisplay.unit).toFixed(1)),
+		set: (val: number) => {
+			if (val !== maxShiftBinding.get()) {
+				const clamped = Math.max(0.3, val);
+				dap.maxShiftM = Number(depthToMeters(clamped, depthDisplay.unit).toFixed(2));
+			}
+		}
+	};
+
+	let liveDepthAlign = $derived.by(() =>
+		computeDepthAlignmentQcSummary({
+			curves: wellData.curves,
+			depthsMeters: wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [],
+			indices: wellData.visibleIndices,
+			depthUnit: depthDisplay.unit,
+			referenceCurve: dap.referenceCurve,
+			maxShiftM: dap.maxShiftM,
+			windowSizeM: dap.windowSizeM,
+			excludeBadhole: dap.excludeBadhole
+		})
+	);
+
+	// Auto-select OFF_DEPTH / MINOR curves unless explicitly toggled by the user
+	function isAlignCurveSelected(curve: string, status: string, conf: number): boolean {
+		if (curve in selectedAlignCurves) return selectedAlignCurves[curve];
+		return (status === 'OFF_DEPTH' || status === 'MINOR') && conf >= 0.35;
+	}
+
+	function toggleAlignCurve(curve: string, currentChecked: boolean) {
+		selectedAlignCurves = { ...selectedAlignCurves, [curve]: !currentChecked };
+	}
+
+	let activeAlignTargetList = $derived(
+		liveDepthAlign.rows
+			.filter((r) => isAlignCurveSelected(r.CURVE, r.STATUS, r.CONFIDENCE))
+			.map((r) => r.CURVE)
+	);
+
+	$effect(() => {
+		wellData.wellLoadGeneration;
+		selectedAlignCurves = {};
+		alignStatusMsg = null;
+	});
+
+	async function runDepthAlignment(applyShifts: boolean = false, persist: boolean = false) {
+		if (!workbench.projectId || !workbench.wellId) return;
+		if (applyShifts && activeAlignTargetList.length === 0) {
+			wellData.lastError = 'Select at least one misaligned curve to depth-shift.';
+			return;
+		}
+		wellData.isCalculating = true;
+		wellData.lastError = null;
+		alignStatusMsg = null;
+		try {
+			const res = await postJson<any>(
+				`/quick_pp/workspace/projects/${encodeURIComponent(workbench.projectId)}/wells/${encodeURIComponent(workbench.wellId)}/depth_alignment`,
+				{
+					reference_curve: dap.referenceCurve,
+					max_shift: dap.maxShiftM,
+					shift_unit: 'm',
+					window_size: dap.windowSizeM,
+					window_step: Math.max(5.0, Number((dap.windowSizeM / 4).toFixed(1))),
+					exclude_badhole: dap.excludeBadhole,
+					apply: applyShifts,
+					shift_mode: dap.shiftMode,
+					curves_to_shift: applyShifts ? activeAlignTargetList : null,
+					min_depth: workbench.depthFilter?.min ?? null,
+					max_depth: workbench.depthFilter?.max ?? null,
+					zones: workbench.selectedZones.length > 0 ? workbench.selectedZones : null,
+					save: applyShifts && persist
+				}
+			);
+			if (applyShifts && res.data) {
+				wellData.mergeComputedCurves(res.data, res.stats, null);
+				wellData.markModuleComputed('qaqc-align', res.data);
+				selectedAlignCurves = {};
+				const shiftedNames = Object.keys(res.applied_shifts ?? {});
+				const oriNote =
+					Array.isArray(res.ori_curves) && res.ori_curves.length > 0
+						? ` (originals kept as ${res.ori_curves.join(', ')})`
+						: '';
+				alignStatusMsg = persist
+					? `Saved depth shift for ${shiftedNames.join(', ')}${oriNote} ✓`
+					: `Previewed ${dap.shiftMode} shift on ${shiftedNames.join(', ')}${oriNote}`;
+				if (persist) {
+					wellData.lastSavedMessage = 'Depth Alignment Saved ✓';
+				}
+			} else if (!applyShifts) {
+				const offCnt = res.alignment?.summary?.off_depth_count ?? liveDepthAlign.offDepthCount;
+				const minCnt = res.alignment?.summary?.minor_count ?? liveDepthAlign.minorCount;
+				alignStatusMsg =
+					offCnt > 0 || minCnt > 0
+						? `Scan complete: ${offCnt} off-depth, ${minCnt} minor drift vs ${res.alignment?.reference_curve ?? dap.referenceCurve}`
+						: `All evaluated curves aligned with ${res.alignment?.reference_curve ?? dap.referenceCurve} ✓`;
+			}
+		} catch (e: any) {
+			wellData.lastError = e?.message || 'Depth alignment QC failed';
+		} finally {
+			wellData.isCalculating = false;
+		}
+	}
+
+	async function saveDepthAlignment() {
+		const ok = await wellData.saveModuleComputed('qaqc-align', 'Depth Alignment Saved ✓');
+		if (ok) {
+			alignStatusMsg = 'Saved aligned curves to well ✓';
+		}
 	}
 </script>
 
@@ -2807,6 +2923,245 @@
 					{wellData.isSaving ? 'Saving...' : 'Save'}
 				</button>
 			</div>
+		</ParameterSection>
+
+		<ParameterSection
+			title="Inter-Log Depth Alignment QC"
+			badge={liveDepthAlign.rows.length === 0
+				? 'Run Tie-In'
+				: liveDepthAlign.offDepthCount > 0
+					? `${liveDepthAlign.offDepthCount} Off-Depth`
+					: liveDepthAlign.minorCount > 0
+						? `${liveDepthAlign.minorCount} Minor`
+						: 'Aligned'}
+			defaultOpen={false}
+		>
+			<div
+				class="mb-1.5 rounded-xs bg-[var(--bg-subtle)] px-2 py-1 text-[10px] leading-snug text-[var(--text-secondary)]"
+			>
+				Gap-masked bed-boundary gradient (<span class="mono-num">|∂f/∂z|</span>) cross-correlation
+				detects bulk off-depth logging runs and sliding-window cable stretch before environmental
+				corrections, invasion inversion, or thin-bed deconvolution. Originals are backed up to
+				<span class="mono-num">*_ORI</span>.
+			</div>
+
+			<div class="grid grid-cols-[1fr_132px] items-center gap-x-2 py-0.5">
+				<span class="text-xs font-medium text-[var(--text-primary)]">Reference Curve</span>
+				<select
+					bind:value={dap.referenceCurve}
+					class="h-7 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 py-0 text-xs font-medium text-[var(--text-primary)]"
+				>
+					{#each ['GR', 'RHOB', 'NPHI', 'RT', 'DTC', 'DT'].filter((c) => curveList.includes(c) || c === 'GR') as refOpt (refOpt)}
+						<option value={refOpt}>{refOpt}</option>
+					{/each}
+				</select>
+			</div>
+
+			<div class="grid grid-cols-2 gap-x-2">
+				<NumericScrubber
+					label="Max Search Δz"
+					bind:value={maxShiftBinding.get, maxShiftBinding.set}
+					unit={depthDisplay.unit}
+					min={depthDisplay.unit === 'ft' ? 2 : 0.5}
+					max={depthDisplay.unit === 'ft' ? 35 : 10}
+					step={depthDisplay.unit === 'ft' ? 1 : 0.5}
+					decimals={1}
+				/>
+				<div class="flex flex-col justify-center">
+					<label
+						class="flex cursor-pointer items-center gap-1.5 text-[10.5px] font-medium text-[var(--text-primary)]"
+					>
+						<input
+							type="checkbox"
+							bind:checked={dap.excludeBadhole}
+							class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
+						/>
+						<span>Mask BADHOLE</span>
+					</label>
+				</div>
+			</div>
+
+			{#if liveDepthAlign.rows.length > 0}
+				<table class="mt-1.5 w-full border-collapse text-[9.5px]">
+					<thead>
+						<tr class="text-[var(--text-muted)]">
+							<th class="w-4 py-0.5 text-left font-medium" title="Select curve for shift">✓</th>
+							<th class="py-0.5 text-left font-medium">Curve</th>
+							<th
+								class="py-0.5 text-right font-medium"
+								title="Suggested depth shift (+Down / −Up) to align with {liveDepthAlign.referenceCurve}"
+							>
+								Δz ({depthDisplay.unit})
+							</th>
+							<th
+								class="py-0.5 text-right font-medium"
+								title="95th percentile local sliding-window drift"
+							>
+								P95 Drift
+							</th>
+							<th class="py-0.5 text-right font-medium" title="Correlation confidence (0–1)">
+								Conf
+							</th>
+							<th class="py-0.5 text-right font-medium">Status</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each liveDepthAlign.rows as r (r.CURVE)}
+							{@const checked = isAlignCurveSelected(r.CURVE, r.STATUS, r.CONFIDENCE)}
+							<tr
+								class="cursor-pointer border-t border-[var(--border-hairline)] hover:bg-[var(--bg-subtle)] {workbench.depthAlignFocusCurve ===
+								r.CURVE
+									? 'bg-blue-50/50'
+									: ''}"
+								onclick={() => {
+									workbench.depthAlignFocusCurve = r.CURVE;
+									workbench.crossplotTemplateOverride = 'depth-alignment-qc';
+									if (
+										workbench.rightPaneTab === 'grid' ||
+										workbench.rightPaneTab === 'missing'
+									) {
+										workbench.rightPaneTab = 'split';
+									}
+								}}
+							>
+								<td class="py-0.5" onclick={(e) => e.stopPropagation()}>
+									<input
+										type="checkbox"
+										{checked}
+										onchange={() => toggleAlignCurve(r.CURVE, checked)}
+										class="h-3 w-3 rounded-2xs border-[var(--border-hairline)]"
+									/>
+								</td>
+								<td class="mono-num py-0.5 font-semibold text-[var(--text-primary)]">
+									{r.CURVE}
+									{#if wellData.curves[`${r.CURVE}_ORI`]}
+										<span
+											class="ml-0.5 rounded-2xs bg-slate-100 px-1 text-[8px] font-normal text-slate-600"
+											title="Original curve preserved in {r.CURVE}_ORI"
+										>
+											ORI
+										</span>
+									{/if}
+								</td>
+								<td
+									class="mono-num py-0.5 text-right {r.STATUS === 'OFF_DEPTH'
+										? 'font-bold text-red-700'
+										: r.STATUS === 'MINOR'
+											? 'font-semibold text-amber-700'
+											: 'text-[var(--text-primary)]'}"
+								>
+									{r.SHIFT_DISPLAY >= 0 ? '+' : ''}{r.SHIFT_DISPLAY}
+								</td>
+								<td class="mono-num py-0.5 text-right text-[var(--text-secondary)]">
+									{r.P95_DRIFT_DISPLAY}{r.VARIABLE_DRIFT ? ' ↕' : ''}
+								</td>
+								<td class="mono-num py-0.5 text-right text-[var(--text-secondary)]">
+									{r.CONFIDENCE.toFixed(2)}
+								</td>
+								<td class="py-0.5 text-right">
+									<span
+										class="rounded-2xs px-1 py-0.2 text-[8.5px] font-semibold {r.STATUS ===
+										'OFF_DEPTH'
+											? 'bg-red-50 text-red-700'
+											: r.STATUS === 'MINOR'
+												? 'bg-amber-50 text-amber-800'
+												: r.STATUS === 'LOW_SIGNAL'
+													? 'bg-slate-100 text-slate-500'
+													: 'bg-emerald-50 text-emerald-700'}"
+									>
+										{r.STATUS === 'OFF_DEPTH'
+											? 'Off-Depth'
+											: r.STATUS === 'MINOR'
+												? 'Minor'
+												: r.STATUS === 'LOW_SIGNAL'
+													? 'Low Sig'
+													: 'Aligned'}
+									</span>
+								</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+
+				<div class="mt-1.5 flex items-center justify-between gap-2 text-[10px]">
+					<span class="font-medium text-[var(--text-secondary)]">Shift Mode:</span>
+					<div
+						class="inline-flex rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)]"
+					>
+						{#each [['bulk', 'Bulk Constant', 'Apply constant bulk shift Δz to each selected curve'], ['dynamic', 'Dynamic Stretch', 'Apply monotonic sliding-window depth-shift profile Δz(z) for cable stretch / stick-slip']] as [sKey, sLbl, sTip]}
+							<button
+								type="button"
+								title={sTip}
+								onclick={() => (dap.shiftMode = sKey as 'bulk' | 'dynamic')}
+								class="h-5 border-r border-[var(--border-hairline)] px-2 text-[9.5px] font-medium transition-colors last:border-r-0 {dap.shiftMode ===
+								sKey
+									? 'bg-blue-600 font-semibold text-white'
+									: 'text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]'}"
+							>
+								{sLbl}
+							</button>
+						{/each}
+					</div>
+				</div>
+			{/if}
+
+			<div class="mt-1.5 flex gap-1.5">
+				<button
+					type="button"
+					disabled={wellData.isCalculating ||
+						wellData.isSaving ||
+						activeAlignTargetList.length === 0}
+					onclick={() => runDepthAlignment(true, false)}
+					title={activeAlignTargetList.length > 0
+						? `Apply ${dap.shiftMode} depth shift to ${activeAlignTargetList.join(', ')} (preserves *_ORI)`
+						: 'Select one or more curves in the table above to apply depth shift'}
+					class="h-6 flex-1 rounded-sm bg-[var(--accent-primary)] px-2 text-[11px] font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+				>
+					Apply Shift{activeAlignTargetList.length > 0
+						? ` (${activeAlignTargetList.length})`
+						: ''}
+				</button>
+				<button
+					type="button"
+					disabled={wellData.isCalculating ||
+						wellData.isSaving ||
+						!wellData.hasPendingComputed('qaqc-align')}
+					onclick={saveDepthAlignment}
+					title={wellData.hasPendingComputed('qaqc-align')
+						? wellData.getPendingSaveTooltip(
+								'qaqc-align',
+								'Save depth-aligned curves and *_ORI backups to the well'
+							)
+						: 'Apply Shift first to enable saving'}
+					class="h-6 rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-[11px] font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] disabled:cursor-not-allowed disabled:opacity-45"
+				>
+					{wellData.isSaving ? 'Saving...' : 'Save'}
+				</button>
+				<button
+					type="button"
+					onclick={() => {
+						workbench.crossplotTemplateOverride = 'depth-alignment-qc';
+						if (
+							workbench.rightPaneTab === 'grid' ||
+							workbench.rightPaneTab === 'missing'
+						) {
+							workbench.rightPaneTab = 'split';
+						}
+					}}
+					title="Open the 3-track Inter-Log Depth Alignment & Correlogram QC plot in the right pane"
+					class="h-6 rounded-sm border border-blue-200 bg-blue-50 px-2 text-[11px] font-semibold text-blue-700 hover:bg-blue-100"
+				>
+					QC Plot →
+				</button>
+			</div>
+
+			{#if alignStatusMsg}
+				<div
+					class="mt-1.5 rounded-xs border border-emerald-200 bg-emerald-50/70 px-2 py-1 text-[10px] text-emerald-900"
+				>
+					{alignStatusMsg}
+				</div>
+			{/if}
 		</ParameterSection>
 
 		<ParameterSection

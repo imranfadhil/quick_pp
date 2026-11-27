@@ -542,6 +542,7 @@ ENV_QC_REASON_BITS = {
     "CYCLE_SKIP": 128,  # suspected sonic cycle skip
     "BS_ASSUMED": 256,  # bit size neither measured nor in the mud program
     "RES_MUD_MISMATCH": 512,  # laterolog in non-conductive mud
+    "DEPTH_MISMATCH": 1024,  # curve off-depth relative to reference log at bed boundaries
 }
 _HOLE_SEVERITY_EDGES = (0.15, 0.40, 0.75)
 _MODEL_ERROR_FRACTION = 0.25  # fraction of |correction| treated as model error
@@ -1043,6 +1044,7 @@ def apply_environmental_corrections(
     # ---- QC columns ----------------------------------------------------------------
     spike_any = np.zeros(n, dtype=bool)
     flat_any = np.zeros(n, dtype=bool)
+    depth_mismatch_any = np.zeros(n, dtype=bool)
     if qc_columns:
         raw_cols = {
             "GR": "GR",
@@ -1051,6 +1053,119 @@ def apply_environmental_corrections(
             "RT": deep_col,
             "DT": dt_col,
         }
+        # Detect off-depth curves and widen *_SIGMA at sharp bed boundaries
+        if "DEPTH" in out_df.columns and n >= 30:
+            try:
+                from quick_pp.depth_alignment import evaluate_depth_alignment
+
+                align_rep = evaluate_depth_alignment(
+                    out_df,
+                    ref_curve="GR",
+                    max_shift=10.0 if eff_unit == "ft" else 3.0,
+                    window_size=130.0 if eff_unit == "ft" else 40.0,
+                    window_step=33.0 if eff_unit == "ft" else 10.0,
+                    depth_unit=eff_unit,
+                )
+                step_m = float(align_rep.get("step_m") or 0.1524)
+                d_sorted_ok = pd.Series(md_vals).is_monotonic_increasing
+                dz_local = (
+                    np.gradient(md_vals) if d_sorted_ok and n >= 3 else np.ones(n)
+                )
+                dz_safe = np.where(np.abs(dz_local) > 1e-6, dz_local, 1.0)
+                col_to_log = {v: k for k, v in raw_cols.items() if v}
+
+                for c_diag in align_rep.get("curves") or []:
+                    c_name = str(c_diag.get("curve") or "")
+                    conf_a = float(c_diag.get("confidence") or 0.0)
+                    if c_diag.get("status") == "OFF_DEPTH" and conf_a >= 0.45:
+                        shift_u = float(c_diag.get("suggested_shift") or 0.0)
+                        shift_s = float(c_diag.get("shift_samples") or 0.0)
+                        notes.append(
+                            f"Off-depth log detected: {c_name} shifted by "
+                            f"{shift_u:+.2f} {eff_unit} ({shift_s:+.1f} samples) vs "
+                            f"{align_rep.get('reference_curve', 'GR')} — depth-match "
+                            f"before evaluation; bed-boundary *_SIGMA widened."
+                        )
+                        lg_key = col_to_log.get(c_name)
+                        if lg_key and lg_key in results and c_name in out_df.columns:
+                            r_arr = pd.to_numeric(
+                                out_df[c_name], errors="coerce"
+                            ).to_numpy(dtype=float)
+                            if lg_key == "RT":
+                                r_work = np.where(
+                                    r_arr > 0,
+                                    np.log10(np.clip(r_arr, 1e-3, 1e5)),
+                                    np.nan,
+                                )
+                            else:
+                                r_work = r_arr
+                            r_fill = (
+                                pd.Series(r_work)
+                                .interpolate(limit_direction="both")
+                                .fillna(0.0)
+                                .to_numpy()
+                            )
+                            grad_u = np.abs(np.gradient(r_fill) / dz_safe)
+                            tol_l = profile.tolerance[lg_key]
+                            pen = np.minimum(grad_u * abs(shift_u), 1.5 * tol_l)
+                            pen = np.where(np.isfinite(r_work), pen, 0.0)
+                            prev_pen = (
+                                results[lg_key].extra_penalty_sigma.to_numpy()
+                                if results[lg_key].extra_penalty_sigma is not None
+                                else np.zeros(n)
+                            )
+                            results[lg_key].extra_penalty_sigma = pd.Series(
+                                np.sqrt(prev_pen**2 + pen**2), index=idx
+                            )
+                            depth_mismatch_any |= pen > (0.35 * tol_l)
+
+                    # Direct shallow/medium vs deep resistivity array depth tie check
+                    rt_shift_m = c_diag.get("rt_tie_shift_m")
+                    rt_conf = c_diag.get("rt_tie_confidence")
+                    if (
+                        rt_shift_m is not None
+                        and rt_conf is not None
+                        and float(rt_conf) >= 0.45
+                        and abs(float(rt_shift_m)) > max(1.5 * step_m, 0.23)
+                        and "RT" in results
+                        and deep_col
+                    ):
+                        notes.append(
+                            f"Resistivity array depth mismatch: {c_name} shifted by "
+                            f"{float(rt_shift_m):+.2f} m vs {deep_col} — invasion "
+                            f"inversion at bed boundaries has widened RT_SIGMA."
+                        )
+                        rt_raw = pd.to_numeric(
+                            out_df[deep_col], errors="coerce"
+                        ).to_numpy(dtype=float)
+                        rt_log = np.where(
+                            rt_raw > 0, np.log10(np.clip(rt_raw, 1e-3, 1e5)), np.nan
+                        )
+                        rt_fill = (
+                            pd.Series(rt_log)
+                            .interpolate(limit_direction="both")
+                            .fillna(0.0)
+                            .to_numpy()
+                        )
+                        shift_rt_u = abs(float(rt_shift_m)) / (
+                            0.3048 if eff_unit == "ft" else 1.0
+                        )
+                        pen_rt = np.minimum(
+                            np.abs(np.gradient(rt_fill) / dz_safe) * shift_rt_u,
+                            1.5 * profile.tolerance["RT"],
+                        )
+                        pen_rt = np.where(np.isfinite(rt_log), pen_rt, 0.0)
+                        prev_rt = (
+                            results["RT"].extra_penalty_sigma.to_numpy()
+                            if results["RT"].extra_penalty_sigma is not None
+                            else np.zeros(n)
+                        )
+                        results["RT"].extra_penalty_sigma = pd.Series(
+                            np.sqrt(prev_rt**2 + pen_rt**2), index=idx
+                        )
+                        depth_mismatch_any |= pen_rt > (0.35 * profile.tolerance["RT"])
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.debug(f"[env_corr] depth alignment check skipped: {exc}")
         for log, res in results.items():
             src = raw_cols.get(log)
             if not src or src not in df.columns:
@@ -1118,6 +1233,8 @@ def apply_environmental_corrections(
             + pd.Series(cycle_skip, index=idx).astype(int) * bits["CYCLE_SKIP"]
             + bs_assumed.astype(int) * bits["BS_ASSUMED"]
             + pd.Series(res_mismatch, index=idx).astype(int) * bits["RES_MUD_MISMATCH"]
+            + pd.Series(depth_mismatch_any, index=idx).astype(int)
+            * bits["DEPTH_MISMATCH"]
         )
         out_df["ENV_QC_REASON"] = reason.astype(int)
         out_df["HOLE_SEVERITY"] = severity.astype(int)

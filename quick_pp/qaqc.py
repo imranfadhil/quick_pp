@@ -1412,3 +1412,7 @@ from quick_pp.borehole_corrections import (  # noqa: E402, F401
     resistivity_borehole_correction,
     resistivity_invasion_correction,
 )
+from quick_pp.depth_alignment import (  # noqa: E402, F401
+    apply_depth_alignment,
+    evaluate_depth_alignment,
+)

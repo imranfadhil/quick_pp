@@ -52,6 +52,7 @@
 	import { depthDisplay } from '$lib/state/depthDisplay.svelte';
 	import { isCrossplotAvailable } from '$lib/utils/crossplots';
 	import { computeEnvCorrQcSummary } from '$lib/utils/envCorrQc';
+	import { computeDepthAlignmentQcSummary } from '$lib/utils/depthAlignmentQc';
 	import { gammaLabel } from '$lib/utils/lithology';
 	import { buildTempPressurePlot } from '$lib/utils/tempPressureProfile';
 
@@ -966,6 +967,53 @@
 							}
 						],
 						rows: tp.tableRows
+					};
+				}
+			}
+
+			if (workbench.effectiveCrossplot === 'depth-alignment-qc') {
+				const da = computeDepthAlignmentQcSummary({
+					curves: wellData.curves,
+					depthsMeters: wellData.curves['DEPT'] ?? wellData.curves['DEPTH'] ?? [],
+					indices: wellData.visibleIndices,
+					depthUnit: depthDisplay.unit,
+					referenceCurve: workbench.depthAlignParams.referenceCurve,
+					maxShiftM: workbench.depthAlignParams.maxShiftM,
+					excludeBadhole: workbench.depthAlignParams.excludeBadhole
+				});
+				if (da.rows.length > 0) {
+					return {
+						title: `Inter-Log Depth Alignment QC vs ${da.referenceCurve} (n=${da.totalSamples} | Off-Depth: ${da.offDepthCount}, Minor: ${da.minorCount})`,
+						columns: [
+							{ key: 'CURVE', label: 'Curve' },
+							{ key: 'SAMPLES', label: 'Samples', numeric: true, decimals: 0 },
+							{
+								key: 'SHIFT_DISPLAY',
+								label: 'Bulk Δz (+Down)',
+								unit: depthDisplay.unit,
+								numeric: true,
+								decimals: 3
+							},
+							{
+								key: 'SHIFT_SAMPLES',
+								label: 'Shift',
+								unit: 'samp',
+								numeric: true,
+								decimals: 2
+							},
+							{
+								key: 'P95_DRIFT_DISPLAY',
+								label: 'P95 |Drift|',
+								unit: depthDisplay.unit,
+								numeric: true,
+								decimals: 3
+							},
+							{ key: 'PEAK_CORR', label: 'Peak NCC', numeric: true, decimals: 3 },
+							{ key: 'ZERO_CORR', label: 'Zero-Lag NCC', numeric: true, decimals: 3 },
+							{ key: 'CONFIDENCE', label: 'Conf', numeric: true, decimals: 3 },
+							{ key: 'STATUS', label: 'Status' }
+						],
+						rows: da.rows
 					};
 				}
 			}

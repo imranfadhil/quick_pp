@@ -1,5 +1,6 @@
 import { resolveCrossplot, type CrossplotContext, type CrossplotId } from '../utils/crossplots';
 import type { EnvQcTrackFilter, EnvQcViewMode } from '../utils/envCorrQc';
+import type { DepthAlignViewMode } from '../utils/depthAlignmentQc';
 import type { PressureDisplayUnit, TempDisplayUnit } from '../utils/tempPressureProfile';
 
 export type SingleWellStep =
@@ -805,6 +806,23 @@ class WorkbenchState {
 
 	/** Curve focused by the 'enhanced-vs-raw' crossplot; null shows every enhanced curve. */
 	enhanceCompareCurve = $state<string | null>(null);
+
+	/** Controls for the 'depth-alignment-qc' Inter-Log Depth Alignment QC view. */
+	depthAlignViewMode = $state<DepthAlignViewMode>('drift');
+	depthAlignFocusCurve = $state<string | null>(null);
+	depthAlignParams = $state<{
+		referenceCurve: string;
+		maxShiftM: number;
+		windowSizeM: number;
+		excludeBadhole: boolean;
+		shiftMode: 'bulk' | 'dynamic';
+	}>({
+		referenceCurve: 'GR',
+		maxShiftM: 3.0,
+		windowSizeM: 40.0,
+		excludeBadhole: true,
+		shiftMode: 'bulk'
+	});
 
 	/** Controls for the 'env-corr-qc' Borehole Environmental Correction QC multi-track view. */
 	envQcViewMode = $state<EnvQcViewMode>('overlay');

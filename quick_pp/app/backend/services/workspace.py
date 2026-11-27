@@ -11508,6 +11508,26 @@ class WorkspaceEnvCorrectionRequest(WorkspaceFilterBase):
     unreliable_conf: float = Field(0.4, ge=0, le=1)
 
 
+class WorkspaceDepthAlignmentRequest(WorkspaceFilterBase):
+    """Inter-log raw curve depth alignment QC and bulk/dynamic shift conditioning."""
+
+    reference_curve: str = Field(
+        "GR", description="Reference curve mnemonic (e.g. 'GR', 'RHOB')"
+    )
+    target_curves: Optional[List[str]] = Field(None)
+    max_shift: float = Field(3.0, gt=0, description="Maximum search lag")
+    shift_unit: Literal["m", "ft"] = Field(
+        "m", description="Unit of max_shift, window_size, and manual_shifts"
+    )
+    window_size: float = Field(40.0, gt=0, description="Sliding window height")
+    window_step: float = Field(10.0, gt=0, description="Sliding window step")
+    exclude_badhole: bool = Field(True)
+    apply: bool = Field(False, description="Apply shifts to misaligned/selected curves")
+    shift_mode: Literal["bulk", "dynamic"] = Field("bulk")
+    curves_to_shift: Optional[List[str]] = Field(None)
+    manual_shifts: Optional[Dict[str, float]] = Field(None)
+
+
 class WorkspaceStratNormalizationRequest(BaseModel):
     well_names: Optional[List[str]] = Field(None)
     zones: Optional[List[str]] = Field(None)
@@ -13214,6 +13234,222 @@ def workspace_environmental_corrections(
     except Exception as e:
         raise HTTPException(
             status_code=400, detail=f"Environmental correction failed: {e}"
+        ) from e
+
+
+@router.post(
+    "/wells/{well_name}/depth_alignment",
+    summary="Diagnose and optionally correct raw inter-log depth mismatches",
+)
+def workspace_depth_alignment(
+    project_id: int, well_name: str, req: WorkspaceDepthAlignmentRequest
+) -> Dict[str, Any]:
+    """Run bed-boundary cross-correlation depth alignment QC and optionally shift curves.
+
+    When ``req.apply`` is True, original unshifted curves are backed up to ``<CURVE>_ORI``
+    (unless ``<CURVE>_ORI`` already exists) before writing bulk or dynamic depth shifts.
+    """
+    from quick_pp.depth_alignment import apply_depth_alignment, evaluate_depth_alignment
+
+    try:
+        df = _get_filtered_well_df(
+            project_id, well_name, req.min_depth, req.max_depth, req.zones
+        )
+        _, well_unit = _load_well_env_config(project_id, well_name)
+        eff_unit = well_unit or "m"
+
+        # Convert shift parameters from req.shift_unit into the DataFrame's native depth unit
+        unit_scale = 1.0
+        if req.shift_unit == "m" and eff_unit == "ft":
+            unit_scale = 1.0 / 0.3048
+        elif req.shift_unit == "ft" and eff_unit == "m":
+            unit_scale = 0.3048
+
+        report = evaluate_depth_alignment(
+            df,
+            ref_curve=req.reference_curve,
+            target_curves=req.target_curves,
+            max_shift=float(req.max_shift) * unit_scale,
+            window_size=float(req.window_size) * unit_scale,
+            window_step=float(req.window_step) * unit_scale,
+            exclude_badhole=req.exclude_badhole,
+            depth_unit=eff_unit,
+        )
+
+        if not req.apply:
+            return {
+                "well_name": well_name,
+                "applied": False,
+                "saved": False,
+                "saved_rows": 0,
+                "alignment": report,
+            }
+
+        manual_scaled = (
+            {
+                k: float(v) * unit_scale
+                for k, v in req.manual_shifts.items()
+                if v is not None
+            }
+            if req.manual_shifts
+            else None
+        )
+        shifted_df, applied_info = apply_depth_alignment(
+            df,
+            report,
+            curves_to_shift=req.curves_to_shift,
+            mode=req.shift_mode,
+            manual_shifts=manual_scaled,
+        )
+
+        out_cols = list(applied_info.keys())
+        ori_cols: List[str] = []
+        if out_cols:
+            isolated = _isolated_evaluation.get()
+            full_df = (
+                Config.canonicalize_dataframe(isolated.data.copy())
+                if isolated is not None
+                else Config.canonicalize_dataframe(
+                    _get_merged_dataframe_sync(project_id, well_name)
+                )
+            )
+            # Back up full-well unshifted curves to <CURVE>_ORI first so filtered-zone
+            # shifts never truncate <CURVE>_ORI outside the active depth/zone filter.
+            ori_backup_cols: Dict[str, Any] = {}
+            if not full_df.empty and "DEPTH" in full_df.columns:
+                ori_backup_cols["DEPTH"] = full_df["DEPTH"]
+                for col in out_cols:
+                    ori_name = f"{col}_ORI"
+                    if (
+                        not col.endswith("_ORI")
+                        and ori_name not in full_df.columns
+                        and col in full_df.columns
+                    ):
+                        ori_backup_cols[ori_name] = full_df[col]
+                        ori_cols.append(ori_name)
+            if ori_cols:
+                ori_df = pd.DataFrame(ori_backup_cols)
+                if req.save:
+                    _save_curves_to_well(project_id, well_name, ori_df)
+                else:
+                    _update_in_memory_well_cache(project_id, well_name, ori_df)
+
+            # Re-interpolate shifted curves using full_df source samples when available
+            # so shifting across filtered-zone boundaries does not introduce edge NaNs.
+            out_df = shifted_df[["DEPTH"] + out_cols].copy()
+            if not full_df.empty and "DEPTH" in full_df.columns:
+                full_d = pd.to_numeric(full_df["DEPTH"], errors="coerce").to_numpy(
+                    dtype=float
+                )
+                sub_d = pd.to_numeric(df["DEPTH"], errors="coerce").to_numpy(
+                    dtype=float
+                )
+                for col in out_cols:
+                    if col not in full_df.columns:
+                        continue
+                    full_v = pd.to_numeric(full_df[col], errors="coerce").to_numpy(
+                        dtype=float
+                    )
+                    valid_fv = np.isfinite(full_d) & np.isfinite(full_v)
+                    if valid_fv.sum() < 2:
+                        continue
+                    info = applied_info[col]
+                    if info["mode"] == "dynamic":
+                        # Map dynamic shift profile from sub_d onto full_d
+                        diag = next(
+                            (
+                                r
+                                for r in (report.get("curves") or [])
+                                if r["curve"] == col
+                            ),
+                            None,
+                        )
+                        if diag and len(diag.get("windows") or []) >= 2:
+                            from quick_pp.depth_alignment import (
+                                _build_monotonic_shift_profile,
+                            )
+
+                            shift_full = _build_monotonic_shift_profile(
+                                full_d[valid_fv],
+                                diag["windows"],
+                                fallback_shift=float(diag.get("suggested_shift", 0.0)),
+                            )
+                        else:
+                            shift_full = np.full(
+                                int(valid_fv.sum()), float(info["mean_shift"])
+                            )
+                    else:
+                        shift_full = np.full(
+                            int(valid_fv.sum()), float(info["mean_shift"])
+                        )
+                    warped_d = full_d[valid_fv] + shift_full
+                    order = np.argsort(warped_d, kind="stable")
+                    out_df[col] = np.interp(
+                        sub_d,
+                        warped_d[order],
+                        full_v[valid_fv][order],
+                        left=np.nan,
+                        right=np.nan,
+                    )
+
+            saved_rows = 0
+            if req.save:
+                saved_rows = _save_curves_to_well(project_id, well_name, out_df)
+            else:
+                _update_in_memory_well_cache(project_id, well_name, out_df)
+
+            shifted_eval_df = df.copy()
+            for col in out_cols:
+                shifted_eval_df[col] = out_df[col].to_numpy()
+            post_report = evaluate_depth_alignment(
+                shifted_eval_df,
+                ref_curve=req.reference_curve,
+                target_curves=req.target_curves,
+                max_shift=float(req.max_shift) * unit_scale,
+                window_size=float(req.window_size) * unit_scale,
+                window_step=float(req.window_step) * unit_scale,
+                exclude_badhole=req.exclude_badhole,
+                depth_unit=eff_unit,
+            )
+            stats = {
+                c: _curve_summary_stats(out_df[c], out_df["DEPTH"]) for c in out_cols
+            }
+            if ori_cols:
+                for oc in ori_cols:
+                    stats[oc] = _curve_summary_stats(ori_df[oc], ori_df["DEPTH"])
+            # Include newly backed-up _ORI values on the active interval slice for immediate UI badge sync
+            resp_df = out_df.copy()
+            if ori_cols:
+                ori_indexed = ori_df.drop_duplicates(
+                    subset=["DEPTH"], keep="last"
+                ).set_index("DEPTH")
+                for oc in ori_cols:
+                    resp_df[oc] = resp_df["DEPTH"].map(ori_indexed[oc]).to_numpy()
+            return {
+                "well_name": well_name,
+                "applied": True,
+                "saved": req.save,
+                "saved_rows": saved_rows,
+                "applied_shifts": applied_info,
+                "ori_curves": ori_cols,
+                "alignment": post_report,
+                "pre_alignment": report,
+                "stats": stats,
+                **dataframe_to_columnar(resp_df),
+            }
+
+        return {
+            "well_name": well_name,
+            "applied": False,
+            "saved": False,
+            "saved_rows": 0,
+            "applied_shifts": {},
+            "ori_curves": [],
+            "alignment": report,
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=400, detail=f"Depth alignment QC failed: {e}"
         ) from e
 
 

@@ -266,6 +266,12 @@ export function describeApiEndpoint(method: string, rawUrl: string): EndpointSta
 					done: `Environmental corrections applied (${wellName})`,
 					detail: wellName
 				};
+			case 'depth_alignment':
+				return {
+					active: `Evaluating inter-log depth alignment (${wellName})...`,
+					done: `Depth alignment QC updated (${wellName})`,
+					detail: wellName
+				};
 			case 'curve_edit':
 				return {
 					active: `Updating well log curve (${wellName})...`,
