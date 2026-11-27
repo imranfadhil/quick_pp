@@ -37,8 +37,7 @@
 		isSingleWell ? workbench.singleWellReportConfig : workbench.reportConfig
 	);
 	let activeGateChecks = $derived(
-		((workbench.activeReport?.context_summary?.gate_checks ??
-			preCheckContext?.gate_checks) ||
+		((workbench.activeReport?.context_summary?.gate_checks ?? preCheckContext?.gate_checks) ||
 			[]) as GateCheckItem[]
 	);
 	let activeAnomalyFlags = $derived(
@@ -58,7 +57,9 @@
 		if (isSingleWell) {
 			return workbench.wellId
 				? [workbench.wellId]
-				: (evaluatedWells[0]?.name ? [evaluatedWells[0].name] : projectData.wells.slice(0, 1).map((w) => w.name));
+				: evaluatedWells[0]?.name
+					? [evaluatedWells[0].name]
+					: projectData.wells.slice(0, 1).map((w) => w.name);
 		}
 		if (projectData.selectedWellNames.length > 0) {
 			const evalSet = new Set(evaluatedWells.map((w) => w.name));
@@ -168,8 +169,7 @@
 						: activeCfg.reportTitle,
 				author: activeCfg.author,
 				company: activeCfg.company,
-				field_name:
-					activeCfg.fieldName.trim() || projectData.summary?.name || undefined,
+				field_name: activeCfg.fieldName.trim() || projectData.summary?.name || undefined,
 				well_names: targetWells,
 				zones: activeZones,
 				target_zones: activeZones,
@@ -178,8 +178,10 @@
 				max_depth: workbench.depthFilter ? workbench.depthFilter.max : undefined,
 				model_params: {
 					litho_model_key: workbench.lithoParams.model,
-					gamma: workbench.lithoParams.model === 'vsh_gr'
-						? gammaParameters(workbench.lithoParams) : undefined,
+					gamma:
+						workbench.lithoParams.model === 'vsh_gr'
+							? gammaParameters(workbench.lithoParams)
+							: undefined,
 					litho_minerals: workbench.lithoParams.minerals,
 					litho_input_logs: workbench.lithoParams.inputLogs,
 					porosity_method_key: workbench.lithoParams.porosityMethod,
@@ -192,7 +194,10 @@
 					rho_clay: workbench.lithoParams.dryClayRhob,
 					rho_fl: workbench.lithoParams.fluidRhob,
 					dry_sand_point: [-0.02, workbench.lithoParams.drySandRhob ?? 2.65],
-					dry_clay_point: [workbench.lithoParams.dryClayNphi ?? 0.33, workbench.lithoParams.dryClayRhob ?? 2.70],
+					dry_clay_point: [
+						workbench.lithoParams.dryClayNphi ?? 0.33,
+						workbench.lithoParams.dryClayRhob ?? 2.7
+					],
 					dry_silt_point: (workbench.lithoParams as any).drySiltPoint ?? undefined,
 					silt_line_angle: (workbench.lithoParams as any).siltLineAngle ?? 119.0,
 					fluid_point: [1.0, workbench.lithoParams.fluidRhob ?? 1.0],
@@ -200,10 +205,12 @@
 					fziCutoffs: projectData.fziCutoffs,
 					fwl: workbench.saturationParams.fwl ?? projectData.shfParams.fwl ?? undefined,
 					badhole_treatment: workbench.lithoParams.badholeTreatment,
+					use_hole_sections: workbench.badholeParams.useHoleSections,
 					cali_threshold: workbench.badholeParams.caliThreshold,
 					bitsize_default: workbench.badholeParams.bitsizeDefault,
 					drho_threshold: workbench.badholeParams.drhoThreshold,
 					rhob_min: workbench.badholeParams.rhobMin,
+					env_corr_params: { ...workbench.envCorrParams },
 					sw_model_key: workbench.saturationParams.method,
 					sw_a: workbench.saturationParams.a,
 					sw_m: workbench.saturationParams.m,
@@ -325,7 +332,9 @@
 		<!-- 1. Scope-Aware Report Metadata -->
 		<ParameterSection
 			title={isSingleWell ? 'Single-Well CPI Dossier Setup' : 'Multi-Well FDP Report Setup'}
-			badge={isSingleWell ? workbench.wellId || 'SINGLE_WELL_CPI' : workbench.reportConfig.reportType}
+			badge={isSingleWell
+				? workbench.wellId || 'SINGLE_WELL_CPI'
+				: workbench.reportConfig.reportType}
 		>
 			<div class="space-y-1.5 text-xs">
 				{#if isSingleWell}
@@ -340,25 +349,35 @@
 				{:else}
 					<label class="block">
 						<span
-							class="mb-0.5 block text-[10px] font-semibold uppercase text-[var(--text-muted)]"
+							class="mb-0.5 block text-[10px] font-semibold text-[var(--text-muted)] uppercase"
 						>
 							Field Report Template
 						</span>
 						<select
 							value={workbench.reportConfig.reportType}
 							onchange={(e) =>
-								applyMultiWellPreset((e.currentTarget as HTMLSelectElement).value as ReportType)}
+								applyMultiWellPreset(
+									(e.currentTarget as HTMLSelectElement).value as ReportType
+								)}
 							class="h-7 w-full rounded-sm border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-2 text-xs font-medium text-[var(--text-primary)]"
 						>
-							<option value="FDP_FULL">Full FDP Petrophysical Evaluation (10 Chapters)</option>
-							<option value="QAQC_SUMMARY">Field Data Inventory & Log QAQC Audit</option>
-							<option value="RESSUM_ONLY">Field Reservoir Summary & Uncertainty Dossier</option>
+							<option value="FDP_FULL"
+								>Full FDP Petrophysical Evaluation (10 Chapters)</option
+							>
+							<option value="QAQC_SUMMARY"
+								>Field Data Inventory & Log QAQC Audit</option
+							>
+							<option value="RESSUM_ONLY"
+								>Field Reservoir Summary & Uncertainty Dossier</option
+							>
 						</select>
 					</label>
 				{/if}
 
 				<label class="block">
-					<span class="mb-0.5 block text-[10px] text-[var(--text-muted)]">Document Title</span>
+					<span class="mb-0.5 block text-[10px] text-[var(--text-muted)]"
+						>Document Title</span
+					>
 					<input
 						type="text"
 						bind:value={activeCfg.reportTitle}
@@ -368,7 +387,9 @@
 
 				<div class="grid grid-cols-2 gap-1.5">
 					<label class="block">
-						<span class="mb-0.5 block text-[10px] text-[var(--text-muted)]">Author / Interpreter</span>
+						<span class="mb-0.5 block text-[10px] text-[var(--text-muted)]"
+							>Author / Interpreter</span
+						>
 						<input
 							type="text"
 							bind:value={activeCfg.author}
@@ -376,7 +397,9 @@
 						/>
 					</label>
 					<label class="block">
-						<span class="mb-0.5 block text-[10px] text-[var(--text-muted)]">Company / Asset</span>
+						<span class="mb-0.5 block text-[10px] text-[var(--text-muted)]"
+							>Company / Asset</span
+						>
 						<input
 							type="text"
 							bind:value={activeCfg.company}
@@ -385,7 +408,7 @@
 					</label>
 				</div>
 
-				<label class="flex items-center gap-2 pt-1 text-xs font-medium cursor-pointer">
+				<label class="flex cursor-pointer items-center gap-2 pt-1 text-xs font-medium">
 					<input
 						type="checkbox"
 						bind:checked={activeCfg.includeAiSummary}
@@ -406,14 +429,16 @@
 			{#if !isSingleWell && projectData.wells.length > 0}
 				<div class="mb-2">
 					<div class="mb-1 flex items-center justify-between text-[10px]">
-						<span class="font-semibold uppercase text-[var(--text-muted)]">
+						<span class="font-semibold text-[var(--text-muted)] uppercase">
 							Included Field Wells
 						</span>
 						<div class="flex items-center gap-1.5">
 							<button
 								type="button"
 								onclick={() =>
-									(projectData.selectedWellNames = evaluatedWells.map((w) => w.name))}
+									(projectData.selectedWellNames = evaluatedWells.map(
+										(w) => w.name
+									))}
 								class="font-medium text-blue-600 hover:underline"
 							>
 								Evaluated ({evaluatedWells.length})
@@ -447,9 +472,9 @@
 							<label
 								class="flex items-center justify-between gap-1.5 rounded-xs px-1 py-0.5 text-xs {hasCurves
 									? 'cursor-pointer hover:bg-[var(--bg-subtle)]'
-									: 'opacity-40 cursor-not-allowed'}"
+									: 'cursor-not-allowed opacity-40'}"
 							>
-								<span class="flex items-center gap-1.5 min-w-0">
+								<span class="flex min-w-0 items-center gap-1.5">
 									<input
 										type="checkbox"
 										disabled={!hasCurves}
@@ -457,7 +482,9 @@
 										onchange={() => hasCurves && toggleWellSelection(w.name)}
 										class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] text-[var(--accent-primary)]"
 									/>
-									<span class="mono-num truncate font-medium text-[var(--text-primary)]">
+									<span
+										class="mono-num truncate font-medium text-[var(--text-primary)]"
+									>
 										{w.name}
 									</span>
 								</span>
@@ -465,7 +492,9 @@
 									{#if !hasCurves}
 										No Logs
 									{:else}
-										{(w.depth_count ?? (w as any).row_count)?.toLocaleString() ?? ''} pts
+										{(
+											w.depth_count ?? (w as any).row_count
+										)?.toLocaleString() ?? ''} pts
 									{/if}
 								</span>
 							</label>
@@ -478,7 +507,7 @@
 				class="mb-2 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1.5 text-[11px]"
 			>
 				<div class="flex items-center justify-between">
-					<span class="text-[10px] font-semibold uppercase text-[var(--text-muted)]">
+					<span class="text-[10px] font-semibold text-[var(--text-muted)] uppercase">
 						Included Zones (Top Bar Filter)
 					</span>
 					{#if workbench.selectedZones.length > 0}
@@ -486,7 +515,8 @@
 							{workbench.selectedZones.length} selected
 						</span>
 					{:else}
-						<span class="text-[10px] text-[var(--text-muted)]">All Evaluated Zones</span>
+						<span class="text-[10px] text-[var(--text-muted)]">All Evaluated Zones</span
+						>
 					{/if}
 				</div>
 				{#if workbench.selectedZones.length > 0}
@@ -501,7 +531,8 @@
 					</div>
 				{:else}
 					<div class="mt-0.5 text-[10px] text-[var(--text-muted)]">
-						Use the Zone Filter in the top bar to restrict formations included in the report.
+						Use the Zone Filter in the top bar to restrict formations included in the
+						report.
 					</div>
 				{/if}
 			</div>
@@ -534,7 +565,9 @@
 
 		<!-- 3. Modular Report Sections & Custom Notes -->
 		<ParameterSection
-			title={isSingleWell ? 'Well Dossier Sections (6)' : 'FDP Report Chapters (10)'}
+			title={isSingleWell
+				? `Well Dossier Sections (${activeCfg.sections.length})`
+				: `FDP Report Chapters (${activeCfg.sections.length})`}
 			badge={`${enabledSectionCount}/${activeCfg.sections.length} active`}
 		>
 			<div class="mb-1.5 flex items-center justify-between text-[10px]">
@@ -574,7 +607,9 @@
 						class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] p-1.5 text-[11px]"
 					>
 						<div class="flex items-center justify-between gap-1">
-							<label class="flex items-center gap-1.5 font-medium text-[var(--text-primary)] cursor-pointer min-w-0">
+							<label
+								class="flex min-w-0 cursor-pointer items-center gap-1.5 font-medium text-[var(--text-primary)]"
+							>
 								<input
 									type="checkbox"
 									bind:checked={sec.enabled}
@@ -588,8 +623,10 @@
 									title="Add custom petrophysicist note to this section"
 									onclick={() =>
 										(expandedNoteSecId =
-											expandedNoteSecId === sec.section_id ? null : sec.section_id)}
-									class="rounded-xs border px-1 py-0.2 text-[9px] font-semibold {sec.custom_notes.trim()
+											expandedNoteSecId === sec.section_id
+												? null
+												: sec.section_id)}
+									class="py-0.2 rounded-xs border px-1 text-[9px] font-semibold {sec.custom_notes.trim()
 										? 'border-amber-300 bg-amber-50 text-amber-800'
 										: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-muted)]'}"
 								>
@@ -627,7 +664,9 @@
 					</span>
 					<button
 						type="button"
-						disabled={isRunningPreCheck || workbench.isGeneratingReport || !workbench.projectId}
+						disabled={isRunningPreCheck ||
+							workbench.isGeneratingReport ||
+							!workbench.projectId}
 						onclick={runPreRenderAudit}
 						class="shrink-0 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-2 py-0.5 text-[10px] font-semibold text-[var(--text-primary)] hover:bg-slate-200 disabled:opacity-45"
 					>
@@ -639,12 +678,15 @@
 					<div
 						class="rounded-xs border border-dashed border-[var(--border-hairline)] bg-[var(--bg-app)] p-2 text-center text-[10.5px] text-[var(--text-muted)]"
 					>
-						Click <strong>Run Audit</strong> or generate a report to view pre-render gate checks and QA highlights.
+						Click <strong>Run Audit</strong> or generate a report to view pre-render gate
+						checks and QA highlights.
 					</div>
 				{:else}
 					{#if activeGateChecks.length > 0}
 						<div class="space-y-1">
-							<div class="text-[10px] font-semibold uppercase text-[var(--text-muted)]">
+							<div
+								class="text-[10px] font-semibold text-[var(--text-muted)] uppercase"
+							>
 								Gate-Check Rules ({activeGateChecks.length})
 							</div>
 							{#each activeGateChecks as chk (chk.id || chk.check_id || chk.rule)}
@@ -653,20 +695,24 @@
 								>
 									<div class="flex items-center justify-between gap-1">
 										<span class="font-semibold text-[var(--text-primary)]">
-											<code class="mr-1 rounded-xs bg-slate-100 px-1 py-0.2 text-[9.5px] font-bold text-slate-800">
+											<code
+												class="py-0.2 mr-1 rounded-xs bg-slate-100 px-1 text-[9.5px] font-bold text-slate-800"
+											>
 												{chk.id || chk.check_id}
 											</code>
 											{chk.rule}
 										</span>
 										<span
-											class="shrink-0 rounded-xs border px-1.5 py-0.2 text-[9.5px] font-bold {gateStatusBadgeClass(
+											class="py-0.2 shrink-0 rounded-xs border px-1.5 text-[9.5px] font-bold {gateStatusBadgeClass(
 												chk.status
 											)}"
 										>
 											{chk.status}
 										</span>
 									</div>
-									<div class="mt-0.5 text-[10px] leading-snug text-[var(--text-secondary)]">
+									<div
+										class="mt-0.5 text-[10px] leading-snug text-[var(--text-secondary)]"
+									>
 										{chk.detail}
 									</div>
 								</div>
@@ -675,7 +721,7 @@
 					{/if}
 
 					<div class="space-y-1 pt-1">
-						<div class="text-[10px] font-semibold uppercase text-[var(--text-muted)]">
+						<div class="text-[10px] font-semibold text-[var(--text-muted)] uppercase">
 							Audit & QA Highlights ({activeAnomalyFlags.length})
 						</div>
 						{#if activeAnomalyFlags.length === 0}
@@ -693,7 +739,7 @@
 										<div class="font-semibold text-amber-950">
 											{flag.category}
 											<code
-												class="ml-1 rounded-xs bg-white/80 px-1 py-0.2 text-[9.5px] font-bold text-amber-900"
+												class="py-0.2 ml-1 rounded-xs bg-white/80 px-1 text-[9.5px] font-bold text-amber-900"
 											>
 												{flag.target}
 											</code>
@@ -701,7 +747,7 @@
 										<div class="mt-0.5 leading-snug text-amber-900">
 											{flag.message}
 										</div>
-										<div class="mt-0.5 text-[10px] italic text-amber-800">
+										<div class="mt-0.5 text-[10px] text-amber-800 italic">
 											Mitigation: {flag.mitigation}
 										</div>
 									</div>

@@ -8,12 +8,12 @@ A total of **{{ wells|length }}** {{ (wells|length) | pluralize('well') }} were 
 
 ### 2.1 Multi-Well Wireline, Deviation Survey, Core & Pressure Inventory
 
-Curves are grouped by origin. **Raw** curves are measurements as loaded, shown with the percentage of the logged interval that holds valid data. **Edited** curves are conditioned versions of raw curves (for example `*_ORI`, `*_RECONSTRUCTED`, `*_DEN_CORR`). **Computed** curves are interpretation outputs (volumes, porosity, saturation, flags) and are counted rather than listed.
+Curves are grouped by origin. **Raw** curves are measurements as loaded, shown with the percentage of the logged interval that holds valid data. **Edited** curves are conditioned versions of raw curves (for example `*_ENV_CORR`, `*_ENH`, `*_ORI`, `*_RECONSTRUCTED`, `*_DEN_CORR`). **Computed** curves are interpretation and QC outputs (volumes, porosity, saturation, uncertainties `*_SIGMA`, confidences `*_QC_CONF`, flags) and are counted rather than listed.
 
-| Well Name | UWI | KB (m) | TVD Survey | Top–Bottom (m MD) | Logged (m) | Raw Logs (valid data %) | Edited / Computed Curves | Core (RCA / SCAL) | Pressure Data | Tops |
-| :--- | :--- | :---: | :---: | :---: | :---: | :--- | :---: | :---: | :---: | :---: |
+| Well Name | UWI | KB (m) | TVD Survey | Top–Bottom (m MD) | Logged (m) | Raw Logs (valid data %) | Edited / Computed Curves | Hole Sections | Core (RCA / SCAL) | Pressure Data | Tops |
+| :--- | :--- | :---: | :---: | :---: | :---: | :--- | :---: | :---: | :---: | :---: | :---: |
 {% for w in wells %}
-| **{{ w.name }}** | {{ w.uwi }} | {{ w.kb }} | {{ "✓" if w.has_tvd else "Missing" }} | `{{ "%.1f"|format(w.min_depth) }}–{{ "%.1f"|format(w.max_depth) }}` | {{ "%.1f"|format(w.td) }} | {% if w.raw_curves %}{% for c in w.raw_curves %}`{{ c }}` ({{ "%.0f"|format(w.raw_coverage[c]) if w.raw_coverage and c in w.raw_coverage else "—" }}%){{ ", " if not loop.last else "" }}{% endfor %}{% else %}`{{ w.curves|join(', ') }}`{% endif %} | {{ (w.edited_curves|length) if w.edited_curves is defined else 0 }} / {{ (w.computed_curves|length) if w.computed_curves is defined else 0 }} | {{ (w.core_status if w.core_status else w.has_core)|string|replace(" | ", " / ") }} | {{ w.has_pressure }} | {{ w.formation_top_count }} |
+| **{{ w.name }}** | {{ w.uwi }} | {{ w.kb }} | {{ "✓" if w.has_tvd else "Missing" }} | `{{ "%.1f"|format(w.min_depth) }}–{{ "%.1f"|format(w.max_depth) }}` | {{ "%.1f"|format(w.td) }} | {% if w.raw_curves %}{% for c in w.raw_curves %}`{{ c }}` ({{ "%.0f"|format(w.raw_coverage[c]) if w.raw_coverage and c in w.raw_coverage else "—" }}%){{ ", " if not loop.last else "" }}{% endfor %}{% else %}`{{ w.curves|join(', ') }}`{% endif %} | {{ (w.edited_curves|length) if w.edited_curves is defined else 0 }} / {{ (w.computed_curves|length) if w.computed_curves is defined else 0 }} | {{ w.hole_section_count if w.hole_section_count is defined else 0 }} | {{ (w.core_status if w.core_status else w.has_core)|string|replace(" | ", " / ") }} | {{ w.has_pressure }} | {{ w.formation_top_count }} |
 {% endfor %}
 
 {% set eval_union = [] %}

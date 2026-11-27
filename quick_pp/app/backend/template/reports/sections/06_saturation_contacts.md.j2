@@ -143,6 +143,6 @@ Formation Pressure Tester (RFT/MDT/XPT) data were gathered across the evaluated 
 
 {% if assets.fpt_pressure_plot %}
 
-![Figure {{ sec_num }}.2: Multi-Well Formation Pressure vs. TVDss & Fluid Gradient Regimes]({{ assets.fpt_pressure_plot }})
+![Figure {{ sec_num }}.2: {{ "Well" if is_single_well else "Multi-Well" }} Formation Pressure vs. TVDss & Fluid Gradient Regimes]({{ assets.fpt_pressure_plot }})
 {% endif %}
 {% endif %}

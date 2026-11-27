@@ -1,6 +1,7 @@
 {% set is_single_well = (report_type == 'SINGLE_WELL_CPI') %}
-{% if is_single_well %}
-# 2. Borehole Environment & Log Curve Quality Control
+{% set sec_num = '2' if is_single_well else '3' %}
+{% set sec_title = 'Borehole Environment & Log Curve Quality Control' if is_single_well else 'Data Quality Control (QA/QC) & Conditioning' %}
+# {{ sec_num }}. {{ sec_title }}
 
 {% if include_ai_commentary and ai_commentary.qaqc_narrative %}
 {{ ai_commentary.qaqc_narrative }}
@@ -10,54 +11,71 @@
 > **Petrophysicist Note:** {{ custom_notes }}
 {% endif %}
 
-### 2.1 Borehole Washout Flagging & Environmental Conditioning Criteria
+### {{ sec_num }}.1 Borehole Environment, Bad-Hole Flagging & Conditioning Criteria
 
-* **Bad-Hole Flagging Criteria (`BADHOLE`):** Caliper washout $> {{ qaqc_params.caliper_limit }}$ in (inches) above bit size (`{{ qaqc_params.bitsize_in }} in`), density pad-standoff correction $\Delta\rho > {{ qaqc_params.drho_limit }}$ g/cc, or rugose bulk density $\rho_b < {{ qaqc_params.rhob_min }}$ g/cc.
+* **Logging Environment & Mud System:** Tool profile `{{ qaqc_params.tool_type|default('WL') }}`, drilling fluid `{{ qaqc_params.mud_type|default('WBM') }}` (`{{ "%.1f"|format(qaqc_params.mud_weight_ppg|default(9.0)) }} ppg`), {% if qaqc_params.offshore %}offshore ($WD = {{ "%.0f"|format(qaqc_params.water_depth_m|default(0.0)) }}\text{ m}$, seabed anchor ${{ "%.1f"|format(qaqc_params.top_temp_c|default(4.0)) }}^\circ\text{C}$){% else %}onshore (surface anchor ${{ "%.1f"|format(qaqc_params.top_temp_c|default(15.0)) }}^\circ\text{C}$){% endif %}, geothermal gradient ${{ "%.1f"|format(qaqc_params.gradient_c_per_km|default(30.0)) }}^\circ\text{C/km}$, mud-program hole sections loaded: `{{ qaqc_params.hole_section_count|default(0) }}`.
+* **Bad-Hole Flagging Criteria (`BADHOLE`):** Caliper washout $> {{ qaqc_params.caliper_limit }}$ in (inches) above bit size (`{{ qaqc_params.bitsize_in }} in` fallback), density pad-standoff correction $\Delta\rho > {{ qaqc_params.drho_limit }}$ g/cc, or rugose bulk density $\rho_b < {{ qaqc_params.rhob_min }}$ g/cc.
 * **Borehole Conditioning Curves Evaluated:** {{ qaqc_params.badhole_criteria_used if qaqc_params.badhole_criteria_used else 'CALI, DRHO, RHOB multi-curve evaluation' }}.
 * **Bad-Hole Mitigation Mode:** `{{ qaqc_params.badhole_treatment }}` (automatic fallback in rugose washouts to prevent optimistic density-porosity spikes).
 * **Light-Hydrocarbon Invasion Correction:** Gaymard-Poupon neutron-density response correction applied where $\rho_{hc} = {{ qaqc_params.rho_hc }}$ g/cc and $HI_{hc} = {{ qaqc_params.hi_hc }}$.
-
-### 2.2 Well Curve Conditioning & Washout Audit Summary
-
-| Well Name | Evaluated Samples | Bad-Hole Samples | Bad-Hole (%) | HC-Corrected (%) | Tight / Coal Flags | GR P50 (gAPI) | RHOB P50 (g/cc) | ΔGR (gAPI) | ΔRHOB (g/cc) | ΔNPHI (v/v) | QC Status |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-{% for q in qaqc_table %}
-| **{{ q.well_name }}** | {{ q.samples }} | {{ q.badhole_count }} | {{ "%.1f"|format(q.badhole_pct) }}% | {{ "%.1f"|format(q.hc_pct) }}% | {{ q.tight_count }} / {{ q.coal_count }} | {{ "%.1f"|format(q.gr_p50) }} | {{ "%.3f"|format(q.rhob_p50) }} | {{ q.delta_gr if q.delta_gr is defined else "—" }} | {{ q.delta_rhob if q.delta_rhob is defined else "—" }} | {{ q.delta_nphi if q.delta_nphi is defined else "—" }} | **{{ q.status }}** |
-{% endfor %}
-
-{% if assets.norm_plot %}
-
-![Figure 2.1: Well Curve Distributions & Borehole Washout Quality Audit]({{ assets.norm_plot }})
-{% endif %}
-{% else %}
-# 3. Data Quality Control (QA/QC) & Conditioning
-
-{% if include_ai_commentary and ai_commentary.qaqc_narrative %}
-{{ ai_commentary.qaqc_narrative }}
-{% endif %}
-
-{% if custom_notes %}
-> **Petrophysicist Note:** {{ custom_notes }}
-{% endif %}
-
-### 3.1 Borehole Environment, Bad-Hole Flagging & Normalization Criteria
-
-* **Bad-Hole Criteria Applied:** Caliper washout $> {{ qaqc_params.caliper_limit }}$ in (inches) above bit size (`{{ qaqc_params.bitsize_in }} in`), Density correction $\Delta\rho > {{ qaqc_params.drho_limit }}$ g/cc, or density washout $\rho_b < {{ qaqc_params.rhob_min }}$ g/cc.
-* **Borehole Conditioning Curves Evaluated:** {{ qaqc_params.badhole_criteria_used if qaqc_params.badhole_criteria_used else 'CALI, DRHO, RHOB multi-curve evaluation' }}.
-* **Bad-Hole Mitigation Mode:** `{{ qaqc_params.badhole_treatment }}` (shale/porosity fallback in rugose washouts to prevent optimistic density porosity spikes).
-* **Hydrocarbon Light-Fluid Correction:** Gaymard-Poupon crossplot rotation applied where $\rho_{hc} = {{ qaqc_params.rho_hc }}$ g/cc and $HI_{hc} = {{ qaqc_params.hi_hc }}$.
+{% if not is_single_well %}
 * **Normalization Method:** {{ qaqc_params.norm_method }} across target reservoir zones.
+{% endif %}
 
-### 3.2 Well-by-Well QA/QC, Conditioning & Normalization Shift Audit
+{% if env_corr_summary is defined and env_corr_summary.hole_sections_table and env_corr_summary.hole_sections_table|length > 0 %}
+#### Borehole Mud-Program & Casing / Hole Sections
 
-| Well Name | Evaluated Samples | Bad-Hole Samples | Bad-Hole (%) | HC-Corrected (%) | Tight / Coal Flags | GR P50 (gAPI) | RHOB P50 (g/cc) | ΔGR (gAPI) | ΔRHOB (g/cc) | ΔNPHI (v/v) | QC Status |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| Well Name | Section | Interval (m MD) | Bit Size (in) | Mud System | Mud Weight (ppg) | Salinity (ppm) | $R_{mf}$ ($\Omega\cdot\text{m}$ @ $^\circ\text{C}$) |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+{% for hs in env_corr_summary.hole_sections_table %}
+| **{{ hs.well_name }}** | {{ hs.name }} | `{{ "%.1f"|format(hs.top) }}–{{ "%.1f"|format(hs.bottom) }}` | {{ "%.3g"|format(hs.bit_size) if hs.bit_size is not none else "—" }} | `{{ hs.mud_type }}` | {{ "%.2f"|format(hs.mud_weight) if hs.mud_weight is not none else "—" }} | {{ hs.mud_salinity if hs.mud_salinity is not none else "—" }} | {% if hs.rmf is not none %}{{ "%.3f"|format(hs.rmf) }}{% if hs.rmf_temp is not none %} @ {{ "%.0f"|format(hs.rmf_temp) }}°C{% endif %}{% else %}—{% endif %} |
+{% endfor %}
+{% endif %}
+
+### {{ sec_num }}.2 {{ "Well Curve Conditioning & Washout Audit Summary" if is_single_well else "Well-by-Well QA/QC, Conditioning & Normalization Shift Audit" }}
+
+| Well Name | Evaluated Samples | Bad-Hole (%) | Env-Corrected Curves | Mean QC Conf | HC-Corrected (%) | Tight / Coal Flags | GR P50 (gAPI) | RHOB P50 (g/cc) | ΔGR (gAPI) | ΔRHOB (g/cc) | ΔNPHI (v/v) | QC Status |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 {% for q in qaqc_table %}
-| **{{ q.well_name }}** | {{ q.samples }} | {{ q.badhole_count }} | {{ "%.1f"|format(q.badhole_pct) }}% | {{ "%.1f"|format(q.hc_pct) }}% | {{ q.tight_count }} / {{ q.coal_count }} | {{ "%.1f"|format(q.gr_p50) }} | {{ "%.3f"|format(q.rhob_p50) }} | {{ q.delta_gr if q.delta_gr is defined else "—" }} | {{ q.delta_rhob if q.delta_rhob is defined else "—" }} | {{ q.delta_nphi if q.delta_nphi is defined else "—" }} | **{{ q.status }}** |
+| **{{ q.well_name }}** | {{ q.samples }} | {{ "%.1f"|format(q.badhole_pct) }}% ({{ q.badhole_count }}) | {{ ("`" ~ q.env_curves ~ "`") if q.env_curves is defined and q.env_curves != "—" else "—" }} | {{ "%.2f"|format(q.mean_qc_conf) if q.mean_qc_conf is defined and q.mean_qc_conf is not none else "—" }} | {{ "%.1f"|format(q.hc_pct) }}% | {{ q.tight_count }} / {{ q.coal_count }} | {{ "%.1f"|format(q.gr_p50) }} | {{ "%.3f"|format(q.rhob_p50) }} | {{ q.delta_gr if q.delta_gr is defined else "—" }} | {{ q.delta_rhob if q.delta_rhob is defined else "—" }} | {{ q.delta_nphi if q.delta_nphi is defined else "—" }} | **{{ q.status }}** |
 {% endfor %}
 
 {% if assets.norm_plot %}
 
-![Figure 3.1: Curve Distribution Pre- and Post-Normalization & Bad-Hole Audit]({{ assets.norm_plot }})
+![Figure {{ sec_num }}.1: {{ "Well Curve Distributions & Borehole Washout Quality Audit" if is_single_well else "Curve Distribution Pre- and Post-Normalization & Bad-Hole Audit" }}]({{ assets.norm_plot }})
 {% endif %}
+
+{% if env_corr_summary is defined and env_corr_summary.any_applied %}
+### {{ sec_num }}.3 Borehole Environmental Correction, Uncertainty ($\sigma$) & Sensor Confidence Audit
+
+Generic borehole environmental corrections (`*_ENV_CORR`) and perturbation-propagated per-sample standard deviations (`*_SIGMA`) were evaluated across **{{ env_corr_summary.wells_applied }}/{{ env_corr_summary.total_wells }}** {{ (env_corr_summary.total_wells) | pluralize('well') }}:
+
+* **In-Situ Temperature & Fluid Resistivity Profile:** {% if env_corr_summary.temp_min_c is not none and env_corr_summary.temp_max_c is not none %}$T_{form} = {{ "%.1f"|format(env_corr_summary.temp_min_c) }}\text{–}{{ "%.1f"|format(env_corr_summary.temp_max_c) }}^\circ\text{C}$ (median ${{ "%.1f"|format(env_corr_summary.temp_median_c) }}^\circ\text{C}$){% else %}Geothermal gradient ${{ "%.1f"|format(env_corr_summary.gradient_c_per_km) }}^\circ\text{C/km}${% endif %}{% if env_corr_summary.median_rw is not none %}, median $R_w = {{ "%.4f"|format(env_corr_summary.median_rw) }}\text{ }\Omega\cdot\text{m}${% endif %}{% if env_corr_summary.median_rmf is not none %}, $R_{mf} = {{ "%.4f"|format(env_corr_summary.median_rmf) }}\text{ }\Omega\cdot\text{m}${% endif %}{% if env_corr_summary.median_rm is not none %}, $R_m = {{ "%.4f"|format(env_corr_summary.median_rm) }}\text{ }\Omega\cdot\text{m}${% endif %}.
+* **Composite Sensor Reliability:** Mean confidence $\overline{C} = {{ "%.2f"|format(env_corr_summary.mean_conf) if env_corr_summary.mean_conf is not none else "—" }}$, maximum unreliable interval $= {{ "%.1f"|format(env_corr_summary.max_unreliable_pct) }}\%$, sonic cycle-skip samples removed $= {{ env_corr_summary.cycle_skip_count }}${% if env_corr_summary.sigma_propagated %} (`*_SIGMA` propagated into Section {{ '5' if is_single_well else '8' }} Monte Carlo uncertainty){% endif %}.
+
+| Sensor | Corrected Curve | Samples | Good (%) | Corrected (%) | Unreliable (%) | Mean Conf (`*_QC_CONF`) | Mean $1\sigma$ (`*_SIGMA`) | Mean $|\Delta|$ | P95 $|\Delta|$ | Dominant QC Flag |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
+{% for r in env_corr_summary.curve_table %}
+| **{{ r.curve }}** | `{{ r.corr_curve }}` | {{ r.samples }} | {{ "%.1f"|format(r.good_pct) }}% | {{ "%.1f"|format(r.corrected_pct) }}% | {{ "%.1f"|format(r.unreliable_pct) }}% | {{ "%.3f"|format(r.mean_conf) if r.mean_conf is not none else "—" }} | {{ ("%.4f"|format(r.mean_sigma) ~ " " ~ r.unit) if r.mean_sigma is not none else "—" }} | {{ ("%.4f"|format(r.mean_abs_delta) ~ " " ~ r.unit) if r.mean_abs_delta is not none else "—" }} | {{ ("%.4f"|format(r.p95_abs_delta) ~ " " ~ r.unit) if r.p95_abs_delta is not none else "—" }} | {{ r.dominant_reason }} |
+{% endfor %}
+
+{% if env_corr_summary.assumptions and env_corr_summary.assumptions|length > 0 %}
+> [!NOTE]
+> **Documented Environmental Assumptions (Widening `*_SIGMA`):** {{ env_corr_summary.assumptions|join(' · ') }}
+{% endif %}
+
+{% if env_corr_summary.has_invasion and env_corr_summary.invasion_table %}
+### {{ sec_num }}.4 Step-Profile Radial Resistivity Invasion Interpretation ($R_{xo}/R_t$ vs. $R_{mf}/R_w$)
+
+| Well Name | Mud System | Samples | Invaded (%) | Movable HC-like (%) | Water-like (%) | Anomalous (%) | Tight / No Invasion (%) | Median $d_i$ (in) | P90 $d_i$ (in) |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+{% for inv in env_corr_summary.invasion_table %}
+| **{{ inv.well_name }}** | `{{ inv.mud_type }}` | {{ inv.samples }} | {{ "%.1f"|format(inv.invaded_pct) }}% | **{{ "%.1f"|format(inv.hc_like_pct) }}%** | {{ "%.1f"|format(inv.water_like_pct) }}% | {{ "%.1f"|format(inv.anomalous_pct) }}% | {{ "%.1f"|format(inv.tight_pct) }}% | {{ "%.1f"|format(inv.median_di_in) if inv.median_di_in is not none else "—" }} | {{ "%.1f"|format(inv.p90_di_in) if inv.p90_di_in is not none else "—" }} |
+{% endfor %}
+{% endif %}
+{% endif %}
+
+{% if assets.env_corr_plot %}
+
+![Figure {{ sec_num }}.2: Borehole Environment, Sensor Corrections (±1σ) & Radial Invasion QC]({{ assets.env_corr_plot }})
 {% endif %}

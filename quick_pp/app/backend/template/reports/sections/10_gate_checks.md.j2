@@ -1,8 +1,10 @@
-# 10. Petrophysical QA/QC Gate-Check & Peer-Review Audit Log
+{% set is_single_well = (report_type == 'SINGLE_WELL_CPI') %}
+{% set sec_num = '7' if is_single_well else '10' %}
+# {{ sec_num }}. Petrophysical QA/QC Gate-Check & Peer-Review Audit Log
 
-Automated subsurface verification rules (`CHK-01` through `CHK-{{ "%02d"|format(gate_checks|length) if gate_checks else "00" }}`) evaluate data conditioning integrity, depth matching, core porosity and permeability calibration, rock typing, saturation-height reconciliation, formation pressure and uncertainty propagation before static geomodel and dynamic simulation handover.{% if gate_summary %} Overall status: **{{ gate_summary.overall }}** ({{ gate_summary.n_blocking }} blocking, {{ gate_summary.n_review }} review).{% endif %}
+Automated subsurface verification rules (`CHK-01` through `CHK-{{ "%02d"|format(gate_checks|length) if gate_checks else "00" }}`) evaluate borehole environmental conditioning, sensor confidence, depth matching, core porosity and permeability calibration, saturation-height reconciliation, formation pressure and uncertainty propagation prior to {{ "well CPI sign-off and reservoir modeling handover" if is_single_well else "static geomodel and dynamic simulation handover" }}.{% if gate_summary %} Overall status: **{{ gate_summary.overall }}** ({{ gate_summary.n_blocking }} blocking, {{ gate_summary.n_review }} review).{% endif %}
 
-### 10.1 Automated Subsurface Gate-Check Matrix
+### {{ sec_num }}.1 Automated Subsurface Gate-Check Matrix
 
 | Gate ID | Check Category | Acceptance Criterion | Measured Value / Finding | Status | Action / Sign-off Note |
 | :---: | :--- | :--- | :--- | :---: | :--- |
@@ -10,7 +12,7 @@ Automated subsurface verification rules (`CHK-01` through `CHK-{{ "%02d"|format(
 | **{{ c.id }}** | {{ c.category }} | {{ c.criterion }} | {{ c.measured }} | **{{ c.status }}** | {{ c.action_note }} |
 {% endfor %}
 
-### 10.2 Detected Subsurface Anomalies & Handover Remediation
+### {{ sec_num }}.2 Detected Subsurface Anomalies & Handover Remediation
 
 {% if anomaly_flags and anomaly_flags|length > 0 %}
 | Anomaly Category | Target Well / Zone | Severity | Root-Cause Analysis | Required Remediation / Action Prior to Handover |

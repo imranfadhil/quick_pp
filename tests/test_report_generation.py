@@ -421,3 +421,255 @@ def test_end_to_end_report_service_and_mcp_tools(synthetic_well_df: pd.DataFrame
         )
         sw_print_html = render_report_print_html(sw_res.report_id)
         assert "Target Well:" in sw_print_html
+
+
+def test_borehole_env_correction_wired_to_fdp_and_single_well_reports(
+    synthetic_well_df: pd.DataFrame,
+):
+    from quick_pp.borehole_corrections import (
+        ENV_QC_REASON_BITS,
+        apply_environmental_corrections,
+    )
+    from quick_pp.environment import environment_from_config
+
+    df_in = synthetic_well_df.copy()
+    # Unclip synthetic RT ceiling so top-of-zone samples do not trigger stuck-tool FLATLINE flags
+    df_in["RT"] = np.clip(
+        1.5 / ((df_in["PHIT"] ** 2) * (df_in["SWT"] ** 2)), 0.5, 2000.0
+    )
+    # Add physically consistent shallow & medium step-profile resistivity curves (di = 28 in)
+    rxo_true = df_in["RT"] * 0.25
+    j_med = 1.0 - np.exp(-((28.0 / 30.0) ** 2))
+    j_sha = 1.0 - np.exp(-((28.0 / 10.0) ** 2))
+    df_in["RM"] = 1.0 / ((1.0 - j_med) / df_in["RT"] + j_med / rxo_true)
+    df_in["RXO"] = 1.0 / ((1.0 - j_sha) / df_in["RT"] + j_sha / rxo_true)
+    # Inject an isolated sonic cycle-skip excursion
+    df_in.loc[40, "DTC"] = df_in.loc[40, "DTC"] + 55.0
+
+    hole_sections = [
+        {
+            "name": '12-1/4" Intermediate',
+            "top": 1950.0,
+            "bottom": 2005.0,
+            "bit_size": 12.25,
+            "mud_type": "WBM",
+            "mud_weight": 9.8,
+            "mud_salinity": 25000,
+            "rmf": 0.18,
+            "rmf_temp": 25.0,
+        },
+        {
+            "name": '8-1/2" Production',
+            "top": 2005.0,
+            "bottom": 2100.0,
+            "bit_size": 8.5,
+            "mud_type": "WBM",
+            "mud_weight": 10.4,
+            "mud_salinity": 30000,
+            "rmf": 0.15,
+            "rmf_temp": 25.0,
+        },
+    ]
+    df_in.loc[df_in["DEPTH"] <= 2005.0, "CALI"] = 12.25
+    env = environment_from_config(
+        {
+            "water_depth": 120.0,
+            "seabed_temp_c": 4.5,
+            "bht_records": [{"depth_m": 2050.0, "temp_c": 78.0}],
+            "formation_salinity_ppm": 38000.0,
+            "mud_program": [
+                {
+                    "top": s["top"],
+                    "bottom": s["bottom"],
+                    "bit_size_in": s["bit_size"],
+                    "mud_type": s["mud_type"],
+                    "mud_weight_ppg": s["mud_weight"],
+                    "salinity_ppm": s["mud_salinity"],
+                    "rmf": s["rmf"],
+                    "rmf_temp_c": s["rmf_temp"],
+                }
+                for s in hole_sections
+            ],
+        },
+        depth_unit="m",
+    )
+    corr_df = apply_environmental_corrections(
+        df_in,
+        depth_unit="m",
+        tool_type="WL",
+        mud_type="WBM",
+        environment=env,
+    )
+
+    mock_summary = {
+        "project_id": 101,
+        "name": "Offshore Env-Corrected Field",
+        "wells": [
+            {
+                "name": "WELL-A",
+                "tops": [
+                    {"name": "UPPER_SAND", "depth": 2000.0},
+                    {"name": "LOWER_SAND", "depth": 2030.0},
+                ],
+                "contacts": [{"name": "OWC", "depth": 2046.0}],
+                "hole_section_count": len(hole_sections),
+                "hole_sections": hole_sections,
+            }
+        ],
+    }
+
+    env_corr_params = {
+        "useHoleSections": True,
+        "bitsizeDefault": 8.5,
+        "mudWeight": 10.4,
+        "surfaceTemp": 75.0,
+        "tempGrad": 1.8,
+        "salinityPpm": 30000.0,
+        "toolType": "WL",
+        "mudType": "WBM",
+        "resTool": "induction",
+        "depthUnit": "m",
+        "offshore": True,
+        "waterDepth": 120.0,
+        "seabedTempC": 4.5,
+        "rmf": 0.15,
+        "rmfTempC": 25.0,
+        "formationSalinityPpm": 38000.0,
+        "rhoMudcake": 1.5,
+        "washoutThold": 2.0,
+    }
+
+    with (
+        patch(
+            "quick_pp.app.backend.services.report.db_objects.Project.load",
+            side_effect=ValueError("Mocked project"),
+        ),
+        patch(
+            "quick_pp.app.backend.services.report.get_project_summary",
+            return_value=mock_summary,
+        ),
+        patch(
+            "quick_pp.app.backend.services.report._get_merged_dataframe_sync",
+            return_value=corr_df,
+        ),
+    ):
+        req = ReportGenerationRequest(
+            project_id="101",
+            report_type="FDP_FULL",
+            well_names=["WELL-A"],
+            include_ai_summary=True,
+            model_params={
+                "use_hole_sections": True,
+                "env_corr_params": env_corr_params,
+            },
+        )
+        res = generate_petrophysical_report_service(req)
+
+        # 1. Curve provenance: *_ENV_CORR in edited, zero QC/diagnostic columns leaked into raw_curves
+        w_inv = res.context_summary["wells"][0]
+        assert "GR_ENV_CORR" in w_inv["edited_curves"]
+        assert "NPHI_ENV_CORR" in w_inv["edited_curves"]
+        assert "RT_ENV_CORR" in w_inv["edited_curves"]
+        leaked_qc = [
+            c
+            for c in w_inv["raw_curves"]
+            if c.endswith(
+                ("_ENV_CORR", "_SIGMA", "_QC_CONF", "_QC_STATUS", "_CORR_DELTA")
+            )
+            or c.startswith(("ENV_", "INVASION_"))
+            or c in ("HOLE_SEVERITY", "RXO_EST", "DI_EST")
+        ]
+        assert leaked_qc == []
+
+        # 2. Context summary & downstream propagation
+        env_sum = res.context_summary["env_corr_summary"]
+        assert env_sum["any_applied"] is True
+        assert env_sum["wells_applied"] == 1
+        assert env_sum["hole_section_count"] == 2
+        assert env_sum["offshore"] is True
+        assert env_sum["has_invasion"] is True
+        assert env_sum["sigma_propagated"] is True
+        assert env_sum["cycle_skip_count"] >= 1
+        assert len(env_sum["curve_table"]) == 5
+        assert "ENV_TEMP_C" in res.context_summary["sw_params"]["temp_basis"]
+
+        # 3. Plot asset, Markdown sections, Gate Check CHK-12 & PDF export
+        assert "env_corr_plot" in res.asset_urls
+        env_plot_name = Path(res.asset_urls["env_corr_plot"]).name
+        assert env_plot_name == "fig_3_2_env_corr_qc_plot.png"
+        assert "Borehole Mud-Program & Casing / Hole Sections" in res.markdown_content
+        assert "3.3 Borehole Environmental Correction" in res.markdown_content
+        assert "3.4 Step-Profile Radial Resistivity Invasion" in res.markdown_content
+        assert "NPHI_ENV_CORR" in res.markdown_content
+
+        chk12 = next(
+            c for c in res.context_summary["gate_checks"] if c["id"] == "CHK-12"
+        )
+        assert chk12["status"] in ("PASS", "REVIEW")
+
+        pdf_path = compile_report_to_pdf(res.report_id)
+        assert pdf_path.exists() and pdf_path.stat().st_size > 500
+
+        # 4. Single-Well CPI Dossier numbering (2.3 / 2.4 / 7. Gate-Check + dynamic figure header helper)
+        sw_res = generate_petrophysical_report_service(
+            ReportGenerationRequest(
+                project_id="101",
+                report_type="SINGLE_WELL_CPI",
+                well_names=["WELL-A"],
+                include_ai_summary=True,
+                model_params={"env_corr_params": env_corr_params},
+            )
+        )
+        assert "2.3 Borehole Environmental Correction" in sw_res.markdown_content
+        assert "2.4 Step-Profile Radial Resistivity Invasion" in sw_res.markdown_content
+        assert (
+            "# 7. Petrophysical QA/QC Gate-Check & Peer-Review Audit Log"
+            in sw_res.markdown_content
+        )
+        assert "| **CHK-12** |" in sw_res.markdown_content
+        assert (
+            report_plots._resolve_figure_header(
+                "fig_3_2_env_corr_qc_plot.png", report_type="SINGLE_WELL_CPI"
+            )
+            == "Figure 2.2 · Borehole Environment, Sensor Corrections and Radial Invasion QC"
+        )
+        assert (
+            report_plots._resolve_figure_header(
+                "fig_6_1_pickett_shf_plot.png", report_type="SINGLE_WELL_CPI"
+            )
+            == "Figure 4.1 · Pickett Plot and Saturation Profile"
+        )
+        assert (
+            report_plots._resolve_figure_header(
+                "cpi_WELL-A.png", report_type="SINGLE_WELL_CPI"
+            )
+            == "Figure 6.1 · Composite Petrophysical Evaluation Log (CPI)"
+        )
+
+    # 5. Verify CHK-12 blocks with QA ALERT on laterolog + OBM mismatch
+    bad_df = corr_df.copy()
+    bad_df["ENV_QC_REASON"] = (
+        pd.to_numeric(bad_df["ENV_QC_REASON"], errors="coerce").fillna(0).astype(int)
+        | ENV_QC_REASON_BITS["RES_MUD_MISMATCH"]
+    )
+    with (
+        patch(
+            "quick_pp.app.backend.services.report.db_objects.Project.load",
+            side_effect=ValueError("Mocked project"),
+        ),
+        patch(
+            "quick_pp.app.backend.services.report.get_project_summary",
+            return_value=mock_summary,
+        ),
+        patch(
+            "quick_pp.app.backend.services.report._get_merged_dataframe_sync",
+            return_value=bad_df,
+        ),
+    ):
+        bad_ctx = get_compact_report_context("101", well_names=["WELL-A"])
+        chk12_bad = next(c for c in bad_ctx["gate_checks"] if c["id"] == "CHK-12")
+        assert chk12_bad["status"] == "QA ALERT"
+        assert any(
+            a["category"] == "Resistivity Tool / Mud-Type Mismatch"
+            for a in bad_ctx["anomaly_flags"]
+        )

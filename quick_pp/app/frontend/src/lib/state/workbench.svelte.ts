@@ -1364,8 +1364,16 @@ class WorkbenchState {
 				custom_notes: ''
 			},
 			{
+				section_id: 'gate_checks',
+				title: '10. Petrophysical QA/QC Gate-Check & Audit Log',
+				enabled: true,
+				include_plots: false,
+				include_tables: true,
+				custom_notes: ''
+			},
+			{
 				section_id: 'appendix_cpi',
-				title: '10. Appendices (Well CPI Plots & Audit Trail)',
+				title: 'Appendix A: Composite Petrophysical Evaluation Logs (CPI)',
 				enabled: true,
 				include_plots: true,
 				include_tables: true,
@@ -1374,7 +1382,7 @@ class WorkbenchState {
 		]
 	});
 
-	// Single-Well CPI Dossier Configuration (streamlined 6 chapters)
+	// Single-Well CPI Dossier Configuration (7 chapters including QA/QC Gate-Check Audit)
 	singleWellReportConfig = $state<ReportConfigParams>({
 		reportType: 'SINGLE_WELL_CPI',
 		reportTitle: 'Single-Well Petrophysical CPI & Evaluation Dossier',
@@ -1429,6 +1437,14 @@ class WorkbenchState {
 				title: '6. 6-Track Composite CPI Log',
 				enabled: true,
 				include_plots: true,
+				include_tables: true,
+				custom_notes: ''
+			},
+			{
+				section_id: 'gate_checks',
+				title: '7. QA/QC Gate-Check & Peer-Review Audit Log',
+				enabled: true,
+				include_plots: false,
 				include_tables: true,
 				custom_notes: ''
 			}

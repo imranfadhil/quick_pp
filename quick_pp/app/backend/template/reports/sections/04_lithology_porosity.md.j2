@@ -74,6 +74,9 @@ $$V_{sand} + V_{silt} + V_{clay} = 1, \quad \phi_D = \frac{\rho_{ma} - \rho_b}{\
 {% if poro_params.core_count > 0 %}
 | Core-to-Log Calibration | $R^2$ / $\text{RMSE}$ | {{ "%.2f"|format(poro_params.core_r2) }} / {{ "%.3f"|format(poro_params.core_rmse) }} | $\text{v/v}$ | Mean Bias ($\phi_{log} - \phi_{core}$) $= {{ "%+.3f"|format(poro_params.core_bias) }}\text{ v/v}$ |
 {% endif %}
+{% if is_single_well and poro_params.core_perm_count and poro_params.core_perm_count > 0 %}
+| Core Permeability Parity | $R^2$ / Factor Error | {{ "%.2f"|format(poro_params.core_perm_r2) }} / {{ "%.1f"|format(poro_params.core_perm_factor_err) }}$\times$ | $\text{log}_{10}\text{ mD}$ | Valid target-zone permeability plugs ($n = {{ poro_params.core_perm_count }}$) |
+{% endif %}
 
 {% if well_core_parity and (poro_params.core_r2 < 0.40 or poro_params.core_count == 0) and not is_single_well %}
 #### Well-by-Well Core-to-Log Porosity Parity & Depth Alignment Diagnostics

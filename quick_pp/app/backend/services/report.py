@@ -50,10 +50,17 @@ from quick_pp.app.backend.services.database import (
 from quick_pp.app.backend.services.workspace import (
     _ephemeral_well_configs,
     _select_nphi_rhob,
+    _synthesize_bitsize_series,
 )
 from quick_pp.app.backend.utils.db import get_db
+from quick_pp.borehole_corrections import (
+    ENV_QC_REASON_BITS,
+    confidence_weighted_curve,
+)
 from quick_pp.config import Config
 from quick_pp.database import objects as db_objects
+from quick_pp.environment import environment_from_config
+from quick_pp.las_handler import extract_las_metadata
 from quick_pp.permeability import choo_permeability
 from quick_pp.plotter import report_plots
 from quick_pp.ressum import calc_reservoir_summary
@@ -238,6 +245,102 @@ def _normalize_zone_name(
     return s
 
 
+_ENV_REASON_LABELS: List[Tuple[int, str]] = [
+    (ENV_QC_REASON_BITS["WASHOUT"], "Washout"),
+    (ENV_QC_REASON_BITS["DRHO_HIGH"], "High DRHO"),
+    (ENV_QC_REASON_BITS["BADHOLE"], "Badhole"),
+    (ENV_QC_REASON_BITS["INVASION"], "Invasion"),
+    (ENV_QC_REASON_BITS["NO_CALIPER"], "No Caliper"),
+    (ENV_QC_REASON_BITS["SPIKE"], "Spike"),
+    (ENV_QC_REASON_BITS["FLATLINE"], "Flatline"),
+    (ENV_QC_REASON_BITS["CYCLE_SKIP"], "Cycle Skip"),
+    (ENV_QC_REASON_BITS["BS_ASSUMED"], "Assumed BS"),
+    (ENV_QC_REASON_BITS["RES_MUD_MISMATCH"], "Res/Mud Mismatch"),
+]
+_ENV_CURVE_UNITS: Dict[str, str] = {
+    "GR": "gAPI",
+    "NPHI": "v/v",
+    "RHOB": "g/cc",
+    "RT": "dec",
+    "DT": "us/ft",
+}
+
+
+def _dominant_env_reason(reason_s: pd.Series, mask: Optional[pd.Series] = None) -> str:
+    """Return the top 1-2 decoded ENV_QC_REASON flags across `mask` (or `'Clean'`)."""
+    if reason_s is None or reason_s.empty:
+        return "Clean"
+    vals = pd.to_numeric(reason_s, errors="coerce").fillna(0).astype(int)
+    if mask is not None:
+        vals = vals[mask.reindex(vals.index, fill_value=False)]
+    if vals.empty:
+        return "Clean"
+    arr = vals.to_numpy(dtype=int)
+    counts: List[Tuple[int, str]] = []
+    for bit, label in _ENV_REASON_LABELS:
+        cnt = int(np.sum((arr & bit) != 0))
+        if cnt > 0:
+            counts.append((cnt, label))
+    if not counts:
+        return "Clean"
+    counts.sort(key=lambda item: item[0], reverse=True)
+    return ", ".join(lbl for _, lbl in counts[:2])
+
+
+def _select_conditioned_curve(
+    df: pd.DataFrame,
+    base_col: str,
+    prefer_hc: bool = False,
+    weight_by_conf: bool = True,
+) -> pd.Series:
+    """Select the best conditioned curve (`<COL>_HC` -> `<COL>_ENV_CORR` -> `<COL>`) with optional QC confidence weighting."""
+    idx = df.index
+    hc_col = f"{base_col}_HC"
+    if prefer_hc and hc_col in df.columns:
+        hc_s = pd.to_numeric(df[hc_col], errors="coerce")
+        if hc_s.notna().any():
+            return hc_s
+
+    qc_prefix = "DT" if base_col in ("DTC", "DT") else base_col
+    corr_col = f"{qc_prefix}_ENV_CORR"
+    conf_col = f"{qc_prefix}_QC_CONF"
+    raw_s = (
+        pd.to_numeric(df[base_col], errors="coerce")
+        if base_col in df.columns
+        else pd.Series(np.nan, index=idx, dtype=float)
+    )
+    base_s = raw_s
+    if corr_col in df.columns:
+        corr_s = pd.to_numeric(df[corr_col], errors="coerce")
+        if corr_s.notna().any():
+            base_s = corr_s.combine_first(raw_s)
+
+    if weight_by_conf and conf_col in df.columns and base_s.notna().any():
+        conf_s = pd.to_numeric(df[conf_col], errors="coerce")
+        if conf_s.notna().any():
+            depth_arr = (
+                pd.to_numeric(df["DEPTH"], errors="coerce").to_numpy(dtype=float)
+                if "DEPTH" in df.columns
+                else None
+            )
+            try:
+                if qc_prefix == "RT":
+                    lb = np.log10(base_s.clip(lower=1e-3))
+                    blended = confidence_weighted_curve(
+                        lb, conf_s.fillna(1.0), depth=depth_arr
+                    )
+                    out = pd.Series(10.0 ** blended.to_numpy(), index=idx)
+                    return out.where(base_s.notna())
+                blended = confidence_weighted_curve(
+                    base_s, conf_s.fillna(1.0), depth=depth_arr
+                )
+                blended.index = idx
+                return blended.where(base_s.notna())
+            except Exception:
+                return base_s
+    return base_s
+
+
 def _ensure_evaluated_curves(df: pd.DataFrame, well_name: str) -> pd.DataFrame:
     """Ensure baseline VCLAY, PHIT, PHIE, PERM, and SWT exist without synthetic scalar padding (Spec 1.1 & CHK-01)."""
     if df is None or df.empty:
@@ -259,8 +362,8 @@ def _ensure_evaluated_curves(df: pd.DataFrame, well_name: str) -> pd.DataFrame:
 
     # Vectorized log derivations strictly where input logs exist (np.nan outside evaluated intervals)
     if not has_vclay:
-        if "GR" in work.columns and work["GR"].notna().any():
-            gr_s = pd.to_numeric(work["GR"], errors="coerce")
+        gr_s = _select_conditioned_curve(work, "GR")
+        if gr_s.notna().any():
             p10 = float(np.nanpercentile(gr_s, 10)) if gr_s.notna().sum() > 5 else 15.0
             p90 = float(np.nanpercentile(gr_s, 90)) if gr_s.notna().sum() > 5 else 115.0
             denom = max(p90 - p10, 20.0)
@@ -269,11 +372,13 @@ def _ensure_evaluated_curves(df: pd.DataFrame, well_name: str) -> pd.DataFrame:
             work["VCLAY"] = np.nan
 
     if not has_phit:
-        try:
-            nphi, rhob = _select_nphi_rhob(work, use_hc_corrected=True)
-        except Exception:
-            nphi = _col_series(work, "NPHI", np.nan)
-            rhob = _col_series(work, "RHOB", np.nan)
+        nphi = _select_conditioned_curve(work, "NPHI", prefer_hc=True)
+        rhob = _select_conditioned_curve(work, "RHOB", prefer_hc=True)
+        if not (nphi.notna().any() or rhob.notna().any()):
+            try:
+                nphi, rhob = _select_nphi_rhob(work, use_hc_corrected=True)
+            except Exception:
+                pass
         if rhob.notna().any():
             phid = ((2.65 - rhob) / (2.65 - 1.0)).clip(0.005, 0.45)
             if nphi.notna().any():
@@ -309,12 +414,9 @@ def _ensure_evaluated_curves(df: pd.DataFrame, well_name: str) -> pd.DataFrame:
         )
 
     # CHK-01 enforcement: if PHIT/PHIE were not explicitly saved in DB, mask outside RT-logged interval
-    if (
-        not (orig_phit_present or orig_phie_present)
-        and "RT" in work.columns
-        and work["RT"].notna().any()
-    ):
-        rt_valid = pd.to_numeric(work["RT"], errors="coerce").notna()
+    rt_gate_s = _select_conditioned_curve(work, "RT", weight_by_conf=False)
+    if not (orig_phit_present or orig_phie_present) and rt_gate_s.notna().any():
+        rt_valid = rt_gate_s.notna()
         work.loc[~rt_valid, "PHIT"] = np.nan
         work.loc[~rt_valid, "PHIE"] = np.nan
 
@@ -348,11 +450,7 @@ def _ensure_evaluated_curves(df: pd.DataFrame, well_name: str) -> pd.DataFrame:
 
     if not has_swt:
         try:
-            rt_s = (
-                pd.to_numeric(work["RT"], errors="coerce")
-                if "RT" in work.columns
-                else pd.Series(np.nan, index=work.index)
-            )
+            rt_s = _select_conditioned_curve(work, "RT")
             phit_s = pd.to_numeric(work["PHIT"], errors="coerce")
             if rt_s.notna().any() and phit_s.notna().any():
                 rt_arr = rt_s.clip(lower=0.1).to_numpy(dtype=float)
@@ -399,6 +497,11 @@ def _load_project_wells_fast(
                     "formation_top_count": int(
                         w.get("formation_top_count") or len(w.get("tops") or [])
                     ),
+                    "hole_section_count": int(
+                        w.get("hole_section_count") or len(w.get("hole_sections") or [])
+                    ),
+                    "hole_sections": list(w.get("hole_sections") or []),
+                    "depth_uom": w.get("depth_uom"),
                     "well_config": w.get("well_config") or {},
                 }
                 for idx, w in enumerate(raw_wells)
@@ -471,6 +574,36 @@ def _load_project_wells_fast(
                 .group_by(db_objects.ORMFormationTop.well_id)
             ).all()
         )
+        hole_sections_by_well: Dict[int, List[Dict[str, Any]]] = {}
+        try:
+            hs_rows = (
+                session.execute(
+                    select(db_objects.ORMHoleSection)
+                    .where(db_objects.ORMHoleSection.well_id.in_(well_ids))
+                    .order_by(
+                        db_objects.ORMHoleSection.top,
+                        db_objects.ORMHoleSection.bottom,
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for hs in hs_rows:
+                hole_sections_by_well.setdefault(hs.well_id, []).append(
+                    {
+                        "name": str(hs.name or "Section"),
+                        "top": hs.top,
+                        "bottom": hs.bottom,
+                        "bit_size": hs.bit_size,
+                        "mud_type": hs.mud_type or "WBM",
+                        "mud_weight": hs.mud_weight,
+                        "mud_salinity": hs.mud_salinity,
+                        "rmf": hs.rmf,
+                        "rmf_temp": hs.rmf_temp,
+                    }
+                )
+        except Exception as exc:
+            logger.debug(f"Hole sections query skipped in report loader: {exc}")
 
         selected_wells_meta: List[Dict[str, Any]] = []
         for w in orm_wells:
@@ -480,14 +613,23 @@ def _load_project_wells_fast(
             eph_cfg = _ephemeral_well_configs.get((project_id, w.name))
             if eph_cfg:
                 w_cfg = {**w_cfg, **eph_cfg}
+            w_hs = (
+                list(eph_cfg["hole_sections"])
+                if isinstance(eph_cfg, dict)
+                and isinstance(eph_cfg.get("hole_sections"), list)
+                else hole_sections_by_well.get(w.well_id, [])
+            )
             selected_wells_meta.append(
                 {
                     "id": w.well_id,
                     "name": str(w.name),
                     "uwi": str(w.uwi or w.name),
+                    "depth_uom": getattr(w, "depth_uom", None),
                     "core_sample_count": int(core_counts.get(w.well_id, 0)),
                     "pressure_test_count": int(press_counts.get(w.well_id, 0)),
                     "formation_top_count": int(top_counts.get(w.well_id, 0)),
+                    "hole_section_count": len(w_hs),
+                    "hole_sections": w_hs,
                     "well_config": w_cfg,
                 }
             )
@@ -534,6 +676,8 @@ _EDITED_CURVE_SUFFIXES = (
     "_ORI",
     "_RECONSTRUCTED",
     "_DEN_CORR",
+    "_ENV_CORR",
+    "_ENH",
     "_UNSHIFTED",
     "_AMB",
     "_AIR",
@@ -549,6 +693,16 @@ _EDITED_CURVE_NAMES = {
     "PROJ_NPHI",
     "PROJ_RHOB",
 }
+_COMPUTED_CURVE_SUFFIXES = (
+    "_CORR_DELTA",
+    "_SIGMA",
+    "_QC_CONF",
+    "_QC_STATUS",
+    "_RECON",
+    "_P10",
+    "_P50",
+    "_P90",
+)
 _COMPUTED_CURVE_PREFIXES = (
     "SWT_",
     "SXO_",
@@ -559,6 +713,8 @@ _COMPUTED_CURVE_PREFIXES = (
     "TEMP_",
     "TOC_",
     "VCL_",
+    "ENV_",
+    "INVASION_",
 )
 _COMPUTED_CURVE_NAMES = {
     "VCLAY",
@@ -567,6 +723,8 @@ _COMPUTED_CURVE_NAMES = {
     "PHIT",
     "PHIE",
     "PHID",
+    "PHIN",
+    "PHIS",
     "PHIT_SH",
     "PHIT_CONSTRUCTED",
     "PERM",
@@ -583,6 +741,18 @@ _COMPUTED_CURVE_NAMES = {
     "R35",
     "RFN",
     "BADHOLE",
+    "BAD_HOLE",
+    "BAD_HOLE_FLAG",
+    "BS",
+    "DCALI",
+    "CALI_FLAG",
+    "DRHO_FLAG",
+    "RUGOSITY_FLAG",
+    "HOLE_SEVERITY",
+    "RXO_EST",
+    "DI_EST",
+    "SHC_INV",
+    "DECONV_WEIGHT",
     "HC_FLAG",
     "TIGHT_FLAG",
     "COAL_FLAG",
@@ -630,8 +800,8 @@ def _classify_curve_provenance(curve_names: Sequence[str]) -> Dict[str, List[str
 
     Rules are name-based because curves carry no provenance tag. Mineral/volume curves (`V*` such as
     VSAND, VCALC) are computed. A curve is edited when it has a conditioning suffix (`_ORI`,
-    `_RECONSTRUCTED`, `_DEN_CORR`...); `*_ORI` columns hold the unedited copy and are reported with the edited
-    group so the original is not mistaken for a new measurement.
+    `_RECONSTRUCTED`, `_DEN_CORR`, `_ENV_CORR`, `_ENH`...); `*_ORI` columns hold the unedited copy
+    and are reported with the edited group so the original is not mistaken for a new measurement.
     """
     raw: List[str] = []
     edited: List[str] = []
@@ -673,6 +843,7 @@ def _classify_curve_provenance(curve_names: Sequence[str]) -> Dict[str, List[str
             u in _COMPUTED_CURVE_NAMES
             or u in volume_like
             or u.startswith(_COMPUTED_CURVE_PREFIXES)
+            or u.endswith(_COMPUTED_CURVE_SUFFIXES)
         ):
             computed.append(str(c))
         else:
@@ -1133,6 +1304,11 @@ def build_report_context(
     upscaling_table: List[Dict[str, Any]] = []
     well_zonal_rows: List[Dict[str, Any]] = []
     anomaly_flags: List[Dict[str, str]] = []
+    hole_sections_rows: List[Dict[str, Any]] = []
+    env_well_rows: List[Dict[str, Any]] = []
+    invasion_well_rows: List[Dict[str, Any]] = []
+    env_assumptions_seen: List[str] = []
+    resolved_envs: List[Any] = []
 
     combined_dfs: List[pd.DataFrame] = []
     unfiltered_dfs: List[pd.DataFrame] = []
@@ -1414,6 +1590,50 @@ def build_report_context(
             core_status_str = "No Core Plugs"
 
         press_cnt = int(w_meta.get("pressure_test_count") or 0)
+        w_hole_sections = list(w_meta.get("hole_sections") or [])
+        w_hs_cnt = int(w_meta.get("hole_section_count") or len(w_hole_sections))
+        for hs_item in w_hole_sections:
+            if not isinstance(hs_item, dict):
+                continue
+            hole_sections_rows.append(
+                {
+                    "well_name": w_name,
+                    "name": str(hs_item.get("name") or "Section"),
+                    "top": _safe_float(hs_item.get("top"), 0.0),
+                    "bottom": _safe_float(hs_item.get("bottom"), 0.0),
+                    "bit_size": (
+                        round(float(hs_item["bit_size"]), 3)
+                        if hs_item.get("bit_size") is not None
+                        else None
+                    ),
+                    "mud_type": str(hs_item.get("mud_type") or "WBM").upper(),
+                    "mud_weight": (
+                        round(float(hs_item["mud_weight"]), 2)
+                        if hs_item.get("mud_weight") is not None
+                        else None
+                    ),
+                    "mud_salinity": (
+                        int(round(float(hs_item["mud_salinity"])))
+                        if hs_item.get("mud_salinity") is not None
+                        else None
+                    ),
+                    "rmf": (
+                        round(float(hs_item["rmf"]), 4)
+                        if hs_item.get("rmf") is not None
+                        else None
+                    ),
+                    "rmf_temp": (
+                        round(float(hs_item["rmf_temp"]), 1)
+                        if hs_item.get("rmf_temp") is not None
+                        else None
+                    ),
+                }
+            )
+        has_env_corr_well = any(
+            f"{lg}_ENV_CORR" in w_df.columns
+            and pd.to_numeric(w_df[f"{lg}_ENV_CORR"], errors="coerce").notna().any()
+            for lg in ("GR", "NPHI", "RHOB", "RT", "DT")
+        )
         wells_inventory.append(
             {
                 "name": w_name,
@@ -1435,6 +1655,11 @@ def build_report_context(
                 "has_core": f"Yes ({core_cnt} pts)" if core_cnt > 0 else "No",
                 "pressure_test_count": press_cnt,
                 "has_pressure": f"Yes ({press_cnt} pts)" if press_cnt > 0 else "No",
+                "hole_section_count": w_hs_cnt,
+                "has_hole_sections": (
+                    f"Yes ({w_hs_cnt} sec)" if w_hs_cnt > 0 else "No"
+                ),
+                "has_env_corr": has_env_corr_well,
                 "formation_top_count": int(
                     w_meta.get("formation_top_count")
                     or len(
@@ -1463,12 +1688,215 @@ def build_report_context(
 
         combined_dfs.append(w_df)
 
+        # Resolve per-well logging environment (LAS header + saved module_params['qaqc-env'] + request env_corr_params + hole sections)
+        req_env_p = (
+            requested_model.get("env_corr_params")
+            if isinstance(requested_model.get("env_corr_params"), dict)
+            else {}
+        )
+        saved_w_mp = (
+            w_cfg.get("module_params", {}).get("qaqc-env")
+            if isinstance(w_cfg.get("module_params"), dict)
+            else None
+        )
+        saved_env_p: Dict[str, Any] = {}
+        if isinstance(saved_w_mp, dict) and saved_w_mp:
+            first_env_entry = next(iter(saved_w_mp.values()))
+            if isinstance(first_env_entry, dict) and isinstance(
+                first_env_entry.get("params"), dict
+            ):
+                saved_env_p = dict(first_env_entry["params"])
+        env_src_cfg: Dict[str, Any] = {}
+        if isinstance(header_info, dict) and header_info:
+            try:
+                las_meta = extract_las_metadata(header_info, fallback_well_name=w_name)
+                env_src_cfg.update(
+                    {k: v for k, v in dict(las_meta).items() if v is not None}
+                )
+            except Exception:
+                pass
+            if isinstance(header_info.get("header_overrides"), dict):
+                env_src_cfg.update(
+                    {
+                        k: v
+                        for k, v in header_info["header_overrides"].items()
+                        if v is not None
+                    }
+                )
+        for k, v in w_cfg.items():
+            if not str(k).startswith("_") and v is not None:
+                env_src_cfg[k] = v
+
+        env_overrides: Dict[str, Any] = {}
+        for p_src in (saved_env_p, req_env_p):
+            if not p_src:
+                continue
+            if p_src.get("mudType") or p_src.get("mud_type"):
+                mt_cand = str(p_src.get("mudType") or p_src.get("mud_type")).upper()
+                if mt_cand in ("WBM", "OBM", "SBM"):
+                    env_overrides["mud_type"] = mt_cand
+            if (
+                p_src.get("mudWeight") is not None
+                or p_src.get("mud_weight") is not None
+            ):
+                env_overrides["mud_weight_ppg"] = p_src.get(
+                    "mudWeight", p_src.get("mud_weight")
+                )
+            if (
+                p_src.get("bitsizeDefault") is not None
+                or p_src.get("bitsize_default") is not None
+            ):
+                env_overrides["bit_size"] = p_src.get(
+                    "bitsizeDefault", p_src.get("bitsize_default")
+                )
+            if (
+                p_src.get("salinityPpm") is not None
+                or p_src.get("salinity_ppm") is not None
+            ):
+                env_overrides["mud_salinity_ppm"] = p_src.get(
+                    "salinityPpm", p_src.get("salinity_ppm")
+                )
+            if (
+                p_src.get("formationSalinityPpm") is not None
+                or p_src.get("formation_salinity_ppm") is not None
+            ):
+                env_overrides["formation_salinity_ppm"] = p_src.get(
+                    "formationSalinityPpm", p_src.get("formation_salinity_ppm")
+                )
+            if p_src.get("rmf") is not None and _safe_float(p_src.get("rmf"), 0.0) > 0:
+                env_overrides["rmf"] = float(p_src["rmf"])
+                if (
+                    p_src.get("rmfTempC") is not None
+                    or p_src.get("rmf_temp_c") is not None
+                ):
+                    env_overrides["rmf_temp"] = float(
+                        p_src.get("rmfTempC", p_src.get("rmf_temp_c"))
+                    )
+                    env_overrides["rmf_temp_unit"] = "degC"
+            if (
+                p_src.get("offshore")
+                and _safe_float(p_src.get("waterDepth", p_src.get("water_depth")), 0.0)
+                > 0
+            ):
+                env_overrides["water_depth"] = float(
+                    p_src.get("waterDepth", p_src.get("water_depth"))
+                )
+                if (
+                    p_src.get("seabedTempC") is not None
+                    or p_src.get("seabed_temp_c") is not None
+                ):
+                    env_overrides["seabed_temp_c"] = float(
+                        p_src.get("seabedTempC", p_src.get("seabed_temp_c"))
+                    )
+            if (
+                p_src.get("surfaceTemp") is not None
+                or p_src.get("surface_temp") is not None
+            ):
+                env_overrides["surface_temp"] = float(
+                    p_src.get("surfaceTemp", p_src.get("surface_temp"))
+                )
+                env_overrides["surface_temp_unit"] = "degF"
+            tg_f = p_src.get(
+                "tempGrad", p_src.get("tempGradient", p_src.get("temp_grad"))
+            )
+            if tg_f is not None:
+                env_overrides["temp_gradient_c_per_km"] = (
+                    float(tg_f) * (5.0 / 9.0) * (1000.0 / 30.48)
+                )
+
+        use_hs_well = bool(
+            req_env_p.get(
+                "useHoleSections",
+                req_env_p.get(
+                    "use_hole_sections",
+                    requested_model.get("use_hole_sections", True),
+                ),
+            )
+        )
+        if use_hs_well and w_hole_sections:
+            mp_list = []
+            for s_hs in w_hole_sections:
+                if (
+                    isinstance(s_hs, dict)
+                    and s_hs.get("top") is not None
+                    and s_hs.get("bottom") is not None
+                ):
+                    mp_list.append(
+                        {
+                            "top": float(s_hs["top"]),
+                            "bottom": float(s_hs["bottom"]),
+                            "bit_size_in": s_hs.get("bit_size"),
+                            "mud_type": str(s_hs.get("mud_type") or "WBM").upper(),
+                            "mud_weight_ppg": s_hs.get("mud_weight"),
+                            "salinity_ppm": s_hs.get("mud_salinity"),
+                            "rmf": s_hs.get("rmf"),
+                            "rmf_temp_c": s_hs.get("rmf_temp"),
+                        }
+                    )
+            if mp_list:
+                env_overrides["mud_program"] = mp_list
+
+        if env_src_cfg.get("mud_type") is not None and str(
+            env_src_cfg["mud_type"]
+        ).upper() not in ("WBM", "OBM", "SBM"):
+            env_src_cfg.pop("mud_type", None)
+
+        raw_duom = str(
+            req_env_p.get("depthUnit")
+            or req_env_p.get("depth_unit")
+            or w_meta.get("depth_uom")
+            or env_src_cfg.get("datum_unit")
+            or "m"
+        ).lower()
+        eff_duom = "ft" if raw_duom in ("ft", "f", "feet", "foot") else "m"
+        try:
+            well_env = environment_from_config(
+                env_src_cfg, env_overrides, depth_unit=eff_duom
+            )
+        except Exception:
+            well_env = environment_from_config({}, {}, depth_unit="m")
+        resolved_envs.append(well_env)
+        for a_msg in well_env.assumptions:
+            if a_msg not in env_assumptions_seen:
+                env_assumptions_seen.append(a_msg)
+
+        w_tool_type = str(
+            req_env_p.get("toolType")
+            or req_env_p.get("tool_type")
+            or saved_env_p.get("toolType")
+            or w_cfg.get("tool_type")
+            or "WL"
+        ).upper()
+        if w_tool_type not in ("WL", "LWD"):
+            w_tool_type = "WL"
+        w_mud_types = sorted(
+            {iv.mud_type for iv in well_env.mud_program if iv.mud_type}
+            or {well_env.default_mud_type}
+        )
+        w_mud_str = "/".join(w_mud_types)
+
         # QA/QC row
         n_samples = len(w_df)
         cali_s = _col_series(w_df, "CALI", np.nan)
-        bs_s = _col_series(
-            w_df, "BS", _safe_float(merged_configs.get("bitsize_default"), 8.5)
+        bs_default_val = _safe_float(
+            merged_configs.get("bitsize_default", well_env.default_bit_size_in), 8.5
         )
+        if (
+            "ENV_BS" in w_df.columns
+            and pd.to_numeric(w_df["ENV_BS"], errors="coerce").notna().any()
+        ):
+            bs_s = _col_series(w_df, "ENV_BS", bs_default_val)
+        elif (
+            "BS" in w_df.columns
+            and pd.to_numeric(w_df["BS"], errors="coerce").notna().any()
+        ):
+            bs_s = _col_series(w_df, "BS", bs_default_val)
+        elif use_hs_well and w_hole_sections and "DEPTH" in w_df.columns:
+            bs_hs = _synthesize_bitsize_series(w_df["DEPTH"], w_hole_sections)
+            bs_s = bs_hs.fillna(bs_default_val)
+            bs_s.index = w_df.index
+        else:
+            bs_s = pd.Series(bs_default_val, index=w_df.index, dtype=float)
         drho_s = _col_series(w_df, "DRHO", np.nan)
         rhob_s = _col_series(w_df, "RHOB", np.nan)
         nphi_s = _col_series(w_df, "NPHI", np.nan)
@@ -1506,13 +1934,237 @@ def build_report_context(
         tight_cnt = int((_col_series(w_df, "TIGHT_FLAG", 0.0) >= 1.0).sum())
         coal_cnt = int((_col_series(w_df, "COAL_FLAG", 0.0) >= 1.0).sum())
 
-        gr_clean = _col_series(w_df, "GR", np.nan).dropna()
-        rhob_clean = _col_series(w_df, "RHOB", np.nan).dropna()
+        gr_clean = _select_conditioned_curve(w_df, "GR", weight_by_conf=False).dropna()
+        rhob_clean = _select_conditioned_curve(
+            w_df, "RHOB", weight_by_conf=False
+        ).dropna()
         gr_p50 = float(np.percentile(gr_clean, 50)) if not gr_clean.empty else 55.0
         rhob_p50 = (
             float(np.percentile(rhob_clean, 50)) if not rhob_clean.empty else 2.42
         )
-        qc_status = "FLAGGED (>15% Washout)" if bh_pct > 15.0 else "PASS"
+
+        # Per-well Borehole Environmental Correction & Sensor Confidence Audit
+        env_curves_w: List[str] = []
+        conf_vals_w: List[float] = []
+        unrel_pcts_w: List[float] = []
+        env_deltas_w: Dict[str, str] = {
+            "GR": "—",
+            "NPHI": "—",
+            "RHOB": "—",
+            "RT": "—",
+        }
+        for lg_k in ("GR", "NPHI", "RHOB", "RT", "DT"):
+            c_col = f"{lg_k}_ENV_CORR"
+            st_col = f"{lg_k}_QC_STATUS"
+            cf_col = f"{lg_k}_QC_CONF"
+            dl_col = f"{lg_k}_CORR_DELTA"
+            if (
+                c_col in w_df.columns
+                and pd.to_numeric(w_df[c_col], errors="coerce").notna().any()
+            ):
+                env_curves_w.append(lg_k)
+            if st_col in w_df.columns:
+                st_s = pd.to_numeric(w_df[st_col], errors="coerce")
+                valid_st = st_s >= 0
+                n_st = int(valid_st.sum())
+                if n_st > 0:
+                    unrel_pcts_w.append(100.0 * float((st_s == 2).sum()) / n_st)
+            if cf_col in w_df.columns:
+                cf_s = pd.to_numeric(w_df[cf_col], errors="coerce").dropna()
+                if not cf_s.empty:
+                    conf_vals_w.append(float(cf_s.mean()))
+            if lg_k in env_deltas_w:
+                if dl_col in w_df.columns:
+                    dl_s = pd.to_numeric(w_df[dl_col], errors="coerce").dropna()
+                elif c_col in w_df.columns and lg_k in w_df.columns:
+                    if lg_k == "RT":
+                        dl_s = (
+                            np.log10(
+                                pd.to_numeric(w_df[c_col], errors="coerce").clip(
+                                    lower=1e-3
+                                )
+                            )
+                            - np.log10(
+                                pd.to_numeric(w_df[lg_k], errors="coerce").clip(
+                                    lower=1e-3
+                                )
+                            )
+                        ).dropna()
+                    else:
+                        dl_s = (
+                            pd.to_numeric(w_df[c_col], errors="coerce")
+                            - pd.to_numeric(w_df[lg_k], errors="coerce")
+                        ).dropna()
+                else:
+                    dl_s = pd.Series(dtype=float)
+                if not dl_s.empty:
+                    fmt_spec = "+.1f" if lg_k == "GR" else "+.3f"
+                    env_deltas_w[lg_k] = format(float(dl_s.median()), fmt_spec)
+
+        w_has_env = len(env_curves_w) > 0
+        w_mean_conf = round(float(np.mean(conf_vals_w)), 3) if conf_vals_w else None
+        w_max_unrel = round(max(unrel_pcts_w), 1) if unrel_pcts_w else 0.0
+        sev_s = (
+            pd.to_numeric(w_df["HOLE_SEVERITY"], errors="coerce")
+            if "HOLE_SEVERITY" in w_df.columns
+            else pd.Series(dtype=float)
+        )
+        w_severe_pct = (
+            round(100.0 * float((sev_s >= 2).mean()), 1)
+            if not sev_s.dropna().empty
+            else round(bh_pct, 1)
+        )
+        reason_w_s = (
+            pd.to_numeric(w_df["ENV_QC_REASON"], errors="coerce").fillna(0).astype(int)
+            if "ENV_QC_REASON" in w_df.columns
+            else pd.Series(dtype=int)
+        )
+        w_cycle_skips = (
+            int(
+                (
+                    (reason_w_s.to_numpy(dtype=int) & ENV_QC_REASON_BITS["CYCLE_SKIP"])
+                    != 0
+                ).sum()
+            )
+            if not reason_w_s.empty
+            else 0
+        )
+        w_res_mismatch = (
+            int(
+                (
+                    (
+                        reason_w_s.to_numpy(dtype=int)
+                        & ENV_QC_REASON_BITS["RES_MUD_MISMATCH"]
+                    )
+                    != 0
+                ).sum()
+            )
+            if not reason_w_s.empty
+            else 0
+        )
+        w_dom_reason = _dominant_env_reason(reason_w_s)
+
+        if w_has_env:
+            env_well_rows.append(
+                {
+                    "well_name": w_name,
+                    "tool_type": w_tool_type,
+                    "mud_type": w_mud_str,
+                    "hole_sections": w_hs_cnt,
+                    "curves": ", ".join(env_curves_w),
+                    "mean_conf": w_mean_conf,
+                    "unreliable_pct": w_max_unrel,
+                    "severe_hole_pct": w_severe_pct,
+                    "cycle_skips": w_cycle_skips,
+                    "delta_gr": env_deltas_w["GR"],
+                    "delta_nphi": env_deltas_w["NPHI"],
+                    "delta_rhob": env_deltas_w["RHOB"],
+                    "delta_rt": env_deltas_w["RT"],
+                    "dominant_reason": w_dom_reason,
+                }
+            )
+
+        # Radial Resistivity Invasion Profile summary per well
+        if "INVASION_PROFILE" in w_df.columns or "INVASION_FLAG" in w_df.columns:
+            inv_fl = (
+                pd.to_numeric(w_df["INVASION_FLAG"], errors="coerce").fillna(0)
+                if "INVASION_FLAG" in w_df.columns
+                else pd.Series(0, index=w_df.index)
+            )
+            inv_pr = (
+                pd.to_numeric(w_df["INVASION_PROFILE"], errors="coerce").fillna(0)
+                if "INVASION_PROFILE" in w_df.columns
+                else pd.Series(0, index=w_df.index)
+            )
+            di_s = (
+                pd.to_numeric(w_df["DI_EST"], errors="coerce").dropna()
+                if "DI_EST" in w_df.columns
+                else pd.Series(dtype=float)
+            )
+            rt_ref_s = _select_conditioned_curve(w_df, "RT", weight_by_conf=False)
+            n_rt_valid = max(int(rt_ref_s.notna().sum()), 1)
+            inv_cnt = int((inv_fl > 0).sum())
+            inv_pct_w = round(100.0 * inv_cnt / n_rt_valid, 1)
+            water_like_pct = round(100.0 * float((inv_pr == 1).sum()) / n_rt_valid, 1)
+            hc_like_pct = round(100.0 * float((inv_pr == 2).sum()) / n_rt_valid, 1)
+            anom_pct = round(100.0 * float((inv_pr == 3).sum()) / n_rt_valid, 1)
+            tight_inv_pct = round(100.0 * float((inv_pr == 4).sum()) / n_rt_valid, 1)
+            med_di = round(float(di_s.median()), 1) if not di_s.empty else None
+            p90_di = (
+                round(float(np.nanpercentile(di_s, 90)), 1)
+                if len(di_s) >= 3
+                else med_di
+            )
+            invasion_well_rows.append(
+                {
+                    "well_name": w_name,
+                    "mud_type": w_mud_str,
+                    "samples": n_rt_valid,
+                    "invaded_pct": inv_pct_w,
+                    "water_like_pct": water_like_pct,
+                    "hc_like_pct": hc_like_pct,
+                    "anomalous_pct": anom_pct,
+                    "tight_pct": tight_inv_pct,
+                    "median_di_in": med_di,
+                    "p90_di_in": p90_di,
+                }
+            )
+            if anom_pct > 15.0:
+                anomaly_flags.append(
+                    {
+                        "category": "Anomalous Resistivity Invasion Contrast",
+                        "target": w_name,
+                        "message": (
+                            f"{anom_pct:.1f}% of resistivity samples exhibit anomalous Rxo/Rt contrast "
+                            "(INVASION_PROFILE = 3, exceeding expected Rmf/Rw bounds)."
+                        ),
+                        "mitigation": "Verify depth alignment between shallow/medium/deep resistivity curves, Rmf @ Tmeas input, and thin-bed shoulder effects.",
+                    }
+                )
+
+        if w_res_mismatch > 0:
+            anomaly_flags.append(
+                {
+                    "category": "Resistivity Tool / Mud-Type Mismatch",
+                    "target": w_name,
+                    "message": (
+                        f"Laterolog resistivity flagged in non-conductive {w_mud_str} mud across {w_res_mismatch} samples (ENV_QC_REASON bit 512)."
+                    ),
+                    "mitigation": "Confirm induction/propagation resistivity tool type or switch mud system metadata before water saturation evaluation.",
+                }
+            )
+        if w_has_env and w_max_unrel > 20.0:
+            anomaly_flags.append(
+                {
+                    "category": "Low Borehole Sensor Confidence",
+                    "target": w_name,
+                    "message": (
+                        f"Up to {w_max_unrel:.1f}% of environmentally corrected samples are rated UNRELIABLE "
+                        f"(mean confidence = {w_mean_conf if w_mean_conf is not None else 0.0:.2f}; dominant cause: {w_dom_reason})."
+                    ),
+                    "mitigation": "Enable QC confidence weighting (`confidence_weighting=True`) or bad-hole fallback across low-confidence washouts.",
+                }
+            )
+        if n_samples > 0 and (100.0 * w_cycle_skips / n_samples) > 5.0:
+            anomaly_flags.append(
+                {
+                    "category": "Sonic Cycle-Skip Excursions",
+                    "target": w_name,
+                    "message": (
+                        f"Detected {w_cycle_skips} sonic cycle-skip samples ({100.0 * w_cycle_skips / n_samples:.1f}% of interval) removed in DT_ENV_CORR."
+                    ),
+                    "mitigation": "Use DT_ENV_CORR or density-neutron porosity across cycle-skipped intervals.",
+                }
+            )
+
+        if w_res_mismatch > 0:
+            qc_status = "FLAGGED (Res/Mud Mismatch)"
+        elif bh_pct > 15.0:
+            qc_status = "FLAGGED (>15% Washout)"
+        elif w_has_env and w_max_unrel > 20.0:
+            qc_status = "REVIEW (Low Conf)"
+        else:
+            qc_status = "PASS"
 
         delta_gr = "—"
         delta_rhob = "—"
@@ -1563,6 +2215,12 @@ def build_report_context(
                 "delta_gr": delta_gr,
                 "delta_rhob": delta_rhob,
                 "delta_nphi": delta_nphi,
+                "has_env_corr": w_has_env,
+                "env_curves": ", ".join(env_curves_w) if env_curves_w else "—",
+                "mean_qc_conf": w_mean_conf,
+                "unreliable_pct": w_max_unrel,
+                "hole_section_count": w_hs_cnt,
+                "mud_type": w_mud_str,
                 "status": qc_status,
             }
         )
@@ -2953,12 +3611,63 @@ def build_report_context(
         fwl_basis_str = "Inferred from Hydrocarbon-Water Transition Zone (TVDss)"
 
     # Spec 3.2, CHK-04, CHK-05: True Probabilistic Monte Carlo / Latin Hypercube Uncertainty Engine (N=1000)
+    # Incorporate borehole environmental correction 1-sigma (`NPHI_SIGMA`, `RHOB_SIGMA`, `RT_SIGMA`) when available.
     uncertainty_summary: List[Dict[str, Any]] = []
     rng_mc = np.random.default_rng(42)
     n_mc = 1000
-    d_phi_mc = rng_mc.normal(0.0, 0.018, size=(n_mc, 1))
+    phi_sigma_mc = 0.018
+    sw_sigma_mc = 0.11
+    env_sigma_used = False
+    if not full_df.empty:
+        tz_unc_df = (
+            full_df[
+                full_df["ZONES"]
+                .astype(str)
+                .str.strip()
+                .str.upper()
+                .isin(target_zones_upper)
+            ]
+            if "ZONES" in full_df.columns and target_zones_upper
+            else full_df
+        )
+        if tz_unc_df.empty:
+            tz_unc_df = full_df
+        nphi_sig_s = (
+            pd.to_numeric(tz_unc_df["NPHI_SIGMA"], errors="coerce").dropna()
+            if "NPHI_SIGMA" in tz_unc_df.columns
+            else pd.Series(dtype=float)
+        )
+        rhob_sig_s = (
+            pd.to_numeric(tz_unc_df["RHOB_SIGMA"], errors="coerce").dropna()
+            if "RHOB_SIGMA" in tz_unc_df.columns
+            else pd.Series(dtype=float)
+        )
+        rt_sig_s = (
+            pd.to_numeric(tz_unc_df["RT_SIGMA"], errors="coerce").dropna()
+            if "RT_SIGMA" in tz_unc_df.columns
+            else pd.Series(dtype=float)
+        )
+        if not nphi_sig_s.empty or not rhob_sig_s.empty:
+            sig_n = float(nphi_sig_s.median()) if not nphi_sig_s.empty else 0.015
+            sig_d = float(rhob_sig_s.median()) / 1.65 if not rhob_sig_s.empty else 0.015
+            phi_sigma_mc = float(
+                np.clip(math.sqrt(0.5 * (sig_n**2 + sig_d**2)), 0.012, 0.045)
+            )
+            env_sigma_used = True
+        if not rt_sig_s.empty:
+            sig_rt_dec = float(rt_sig_s.median())
+            # Propagate log10(Rt) sigma through Sw ~ Rt^(-1/n) combined with Archie/WS parameter uncertainty
+            sw_sigma_mc = float(
+                np.clip(
+                    math.sqrt(0.095**2 + (0.5 * math.log(10.0) * sig_rt_dec) ** 2),
+                    0.09,
+                    0.28,
+                )
+            )
+            env_sigma_used = True
+    d_phi_mc = rng_mc.normal(0.0, phi_sigma_mc, size=(n_mc, 1))
     d_vsh_mc = rng_mc.normal(0.0, 0.035, size=(n_mc, 1))
-    sw_mult_mc = rng_mc.lognormal(0.0, 0.11, size=(n_mc, 1))
+    sw_mult_mc = rng_mc.lognormal(0.0, sw_sigma_mc, size=(n_mc, 1))
 
     for z in zonal_summary:
         z_name = z["zone"]
@@ -3183,10 +3892,20 @@ def build_report_context(
             )
 
     uncertainty_drivers_text = (
-        f"Hydrocarbon pore thickness (HCPT) variance is primarily governed by: "
-        f"(1) Formation water resistivity ($R_w$) & saturation exponent ($n$), "
-        f"(2) Matrix density ($\\rho_{{ma}}$) & porosity calibration, and "
-        f"(3) Net pay cutoff thresholds ($\\Phi_e \\ge {phie_cut:.2f}$, $V_{{sh}} \\le {vsh_cut:.2f}$, $S_w \\le {sw_cut:.2f}$)."
+        "Hydrocarbon pore thickness (HCPT) variance is primarily governed by: "
+        "(1) Formation water resistivity ($R_w$) & saturation exponent ($n$)"
+        + (
+            f" coupled with borehole resistivity 1-sigma ($\\sigma_{{Sw}} = {sw_sigma_mc:.3f}$), "
+            if env_sigma_used
+            else ", "
+        )
+        + "(2) Matrix density ($\\rho_{ma}$) & porosity calibration"
+        + (
+            f" propagating environmental sensor uncertainty ($\\sigma_\\phi = {phi_sigma_mc:.3f}\\text{{ v/v}}$), and "
+            if env_sigma_used
+            else ", and "
+        )
+        + f"(3) Net pay cutoff thresholds ($\\Phi_e \\ge {phie_cut:.2f}$, $V_{{sh}} \\le {vsh_cut:.2f}$, $S_w \\le {sw_cut:.2f}$)."
     )
 
     # Task 1.2: Phase-aware fluid type and fluid densities detection (GAP-07)
@@ -3668,12 +4387,328 @@ def build_report_context(
         else bh_treat_raw
     )
 
-    cali_lim = _safe_float(merged_configs.get("cali_threshold"), 2.0)
+    # Aggregate Field/Well Borehole Environmental Correction, P&T & Invasion Summary
+    primary_env = resolved_envs[0] if resolved_envs else environment_from_config({}, {})
+    req_env_cfg = (
+        merged_configs.get("env_corr_params")
+        if isinstance(merged_configs.get("env_corr_params"), dict)
+        else {}
+    )
+    eff_tool_type = str(
+        req_env_cfg.get("toolType")
+        or req_env_cfg.get("tool_type")
+        or merged_configs.get("tool_type")
+        or "WL"
+    ).upper()
+    if eff_tool_type not in ("WL", "LWD"):
+        eff_tool_type = "WL"
+    eff_res_tool = str(
+        req_env_cfg.get("resTool")
+        or req_env_cfg.get("res_tool")
+        or ("propagation" if eff_tool_type == "LWD" else "induction")
+    ).lower()
+    if eff_res_tool == "auto":
+        eff_res_tool = "propagation" if eff_tool_type == "LWD" else "induction"
+
+    tz_env_df = (
+        full_df[
+            full_df["ZONES"]
+            .astype(str)
+            .str.strip()
+            .str.upper()
+            .isin(target_zones_upper)
+        ]
+        if not full_df.empty and "ZONES" in full_df.columns and target_zones_upper
+        else full_df
+    )
+    if tz_env_df.empty:
+        tz_env_df = full_df
+
+    env_corr_curve_table: List[Dict[str, Any]] = []
+    if not tz_env_df.empty:
+        reason_tz = (
+            pd.to_numeric(tz_env_df["ENV_QC_REASON"], errors="coerce")
+            .fillna(0)
+            .astype(int)
+            if "ENV_QC_REASON" in tz_env_df.columns
+            else pd.Series(dtype=int)
+        )
+        for lg_k in ("GR", "NPHI", "RHOB", "RT", "DT"):
+            c_col = f"{lg_k}_ENV_CORR"
+            st_col = f"{lg_k}_QC_STATUS"
+            cf_col = f"{lg_k}_QC_CONF"
+            sg_col = f"{lg_k}_SIGMA"
+            dl_col = f"{lg_k}_CORR_DELTA"
+            has_c = (
+                c_col in tz_env_df.columns
+                and pd.to_numeric(tz_env_df[c_col], errors="coerce").notna().any()
+            )
+            has_st = (
+                st_col in tz_env_df.columns
+                and pd.to_numeric(tz_env_df[st_col], errors="coerce").ge(0).any()
+            )
+            if not (has_c or has_st):
+                continue
+            if has_st:
+                st_s = pd.to_numeric(tz_env_df[st_col], errors="coerce")
+                valid_m = st_s >= 0
+                nv = int(valid_m.sum())
+                good_p = round(100.0 * float((st_s == 0).sum()) / max(nv, 1), 1)
+                corr_p = round(100.0 * float((st_s == 1).sum()) / max(nv, 1), 1)
+                unrel_p = round(100.0 * float((st_s == 2).sum()) / max(nv, 1), 1)
+            else:
+                corr_s = pd.to_numeric(tz_env_df[c_col], errors="coerce")
+                valid_m = corr_s.notna()
+                nv = int(valid_m.sum())
+                good_p, corr_p, unrel_p = 0.0, 100.0, 0.0
+            cf_mean = (
+                round(
+                    float(
+                        pd.to_numeric(tz_env_df[cf_col], errors="coerce")[
+                            valid_m
+                        ].mean()
+                    ),
+                    3,
+                )
+                if cf_col in tz_env_df.columns and nv > 0
+                else None
+            )
+            sg_mean = (
+                round(
+                    float(
+                        pd.to_numeric(tz_env_df[sg_col], errors="coerce")[
+                            valid_m
+                        ].mean()
+                    ),
+                    4,
+                )
+                if sg_col in tz_env_df.columns and nv > 0
+                else None
+            )
+            if dl_col in tz_env_df.columns:
+                dl_s = pd.to_numeric(tz_env_df[dl_col], errors="coerce")[
+                    valid_m
+                ].dropna()
+            elif has_c and lg_k in tz_env_df.columns:
+                if lg_k == "RT":
+                    dl_s = (
+                        np.log10(
+                            pd.to_numeric(tz_env_df[c_col], errors="coerce").clip(
+                                lower=1e-3
+                            )
+                        )
+                        - np.log10(
+                            pd.to_numeric(tz_env_df[lg_k], errors="coerce").clip(
+                                lower=1e-3
+                            )
+                        )
+                    )[valid_m].dropna()
+                else:
+                    dl_s = (
+                        pd.to_numeric(tz_env_df[c_col], errors="coerce")
+                        - pd.to_numeric(tz_env_df[lg_k], errors="coerce")
+                    )[valid_m].dropna()
+            else:
+                dl_s = pd.Series(dtype=float)
+            dom_r = (
+                _dominant_env_reason(reason_tz, valid_m)
+                if not reason_tz.empty
+                else "Clean"
+            )
+            env_corr_curve_table.append(
+                {
+                    "curve": lg_k,
+                    "corr_curve": c_col,
+                    "unit": _ENV_CURVE_UNITS.get(lg_k, ""),
+                    "samples": nv,
+                    "good_pct": good_p,
+                    "corrected_pct": corr_p,
+                    "unreliable_pct": unrel_p,
+                    "mean_conf": cf_mean,
+                    "mean_sigma": sg_mean,
+                    "mean_delta": (
+                        round(float(dl_s.mean()), 4) if not dl_s.empty else None
+                    ),
+                    "mean_abs_delta": (
+                        round(float(dl_s.abs().mean()), 4) if not dl_s.empty else None
+                    ),
+                    "p95_abs_delta": (
+                        round(float(dl_s.abs().quantile(0.95)), 4)
+                        if not dl_s.empty
+                        else None
+                    ),
+                    "dominant_reason": dom_r,
+                }
+            )
+
+    env_temp_s = (
+        pd.to_numeric(tz_env_df["ENV_TEMP_C"], errors="coerce").dropna()
+        if not tz_env_df.empty and "ENV_TEMP_C" in tz_env_df.columns
+        else pd.Series(dtype=float)
+    )
+    env_rm_s = (
+        pd.to_numeric(tz_env_df["ENV_RM"], errors="coerce").dropna()
+        if not tz_env_df.empty and "ENV_RM" in tz_env_df.columns
+        else pd.Series(dtype=float)
+    )
+    env_rmf_s = (
+        pd.to_numeric(tz_env_df["ENV_RMF"], errors="coerce").dropna()
+        if not tz_env_df.empty and "ENV_RMF" in tz_env_df.columns
+        else pd.Series(dtype=float)
+    )
+    env_rw_s = (
+        pd.to_numeric(tz_env_df["ENV_RW"], errors="coerce").dropna()
+        if not tz_env_df.empty and "ENV_RW" in tz_env_df.columns
+        else pd.Series(dtype=float)
+    )
+    reason_all = (
+        pd.to_numeric(tz_env_df["ENV_QC_REASON"], errors="coerce").fillna(0).astype(int)
+        if not tz_env_df.empty and "ENV_QC_REASON" in tz_env_df.columns
+        else pd.Series(dtype=int)
+    )
+    total_cycle_skips = (
+        int(
+            (
+                (reason_all.to_numpy(dtype=int) & ENV_QC_REASON_BITS["CYCLE_SKIP"]) != 0
+            ).sum()
+        )
+        if not reason_all.empty
+        else sum(int(r.get("cycle_skips", 0)) for r in env_well_rows)
+    )
+    total_res_mismatch = (
+        int(
+            (
+                (
+                    reason_all.to_numpy(dtype=int)
+                    & ENV_QC_REASON_BITS["RES_MUD_MISMATCH"]
+                )
+                != 0
+            ).sum()
+        )
+        if not reason_all.empty
+        else 0
+    )
+
+    invasion_rollup: Dict[str, Any] = {}
+    if invasion_well_rows:
+        tot_inv_s = max(sum(r["samples"] for r in invasion_well_rows), 1)
+        di_vals = [
+            r["median_di_in"]
+            for r in invasion_well_rows
+            if r.get("median_di_in") is not None
+        ]
+        p90_di_vals = [
+            r["p90_di_in"] for r in invasion_well_rows if r.get("p90_di_in") is not None
+        ]
+        invasion_rollup = {
+            "invaded_pct": round(
+                sum(r["invaded_pct"] * r["samples"] for r in invasion_well_rows)
+                / tot_inv_s,
+                1,
+            ),
+            "water_like_pct": round(
+                sum(r["water_like_pct"] * r["samples"] for r in invasion_well_rows)
+                / tot_inv_s,
+                1,
+            ),
+            "hc_like_pct": round(
+                sum(r["hc_like_pct"] * r["samples"] for r in invasion_well_rows)
+                / tot_inv_s,
+                1,
+            ),
+            "anomalous_pct": round(
+                sum(r["anomalous_pct"] * r["samples"] for r in invasion_well_rows)
+                / tot_inv_s,
+                1,
+            ),
+            "tight_pct": round(
+                sum(r["tight_pct"] * r["samples"] for r in invasion_well_rows)
+                / tot_inv_s,
+                1,
+            ),
+            "median_di_in": round(float(np.median(di_vals)), 1) if di_vals else None,
+            "p90_di_in": round(float(max(p90_di_vals)), 1) if p90_di_vals else None,
+        }
+
+    all_mud_types = sorted(
+        {r["mud_type"] for r in hole_sections_rows if r.get("mud_type")}
+        | {e.default_mud_type for e in resolved_envs}
+    )
+    any_env_applied = len(env_corr_curve_table) > 0 or any(
+        r.get("has_env_corr") for r in qaqc_table
+    )
+    curve_confs = [
+        float(r["mean_conf"])
+        for r in env_corr_curve_table
+        if r.get("mean_conf") is not None
+    ]
+    curve_unrels = [float(r["unreliable_pct"]) for r in env_corr_curve_table]
+    bht_calibrated = any(bool(e.bht_records) for e in resolved_envs)
+
+    env_corr_summary: Dict[str, Any] = {
+        "any_applied": any_env_applied,
+        "wells_applied": sum(1 for r in qaqc_table if r.get("has_env_corr")),
+        "total_wells": len(qaqc_table),
+        "tool_type": eff_tool_type,
+        "res_tool": eff_res_tool,
+        "mud_type": "/".join(all_mud_types)
+        if all_mud_types
+        else primary_env.default_mud_type,
+        "mud_weight_ppg": round(float(primary_env.default_mud_weight_ppg), 2),
+        "mud_salinity_ppm": int(round(float(primary_env.default_mud_salinity_ppm))),
+        "formation_salinity_ppm": int(round(float(primary_env.formation_salinity_ppm))),
+        "offshore": any(e.offshore for e in resolved_envs),
+        "water_depth_m": round(
+            max((e.water_depth_m for e in resolved_envs), default=0.0), 1
+        ),
+        "top_temp_c": round(float(primary_env.top_temp_c), 1),
+        "gradient_c_per_km": round(float(primary_env.gradient_c_per_km), 1),
+        "bht_calibrated": bht_calibrated,
+        "hole_section_count": len(hole_sections_rows),
+        "hole_sections_table": hole_sections_rows,
+        "temp_min_c": (
+            round(float(env_temp_s.min()), 1) if not env_temp_s.empty else None
+        ),
+        "temp_max_c": (
+            round(float(env_temp_s.max()), 1) if not env_temp_s.empty else None
+        ),
+        "temp_median_c": (
+            round(float(env_temp_s.median()), 1) if not env_temp_s.empty else None
+        ),
+        "median_rm": round(float(env_rm_s.median()), 4) if not env_rm_s.empty else None,
+        "median_rmf": (
+            round(float(env_rmf_s.median()), 4) if not env_rmf_s.empty else None
+        ),
+        "median_rw": round(float(env_rw_s.median()), 4) if not env_rw_s.empty else None,
+        "mean_conf": round(float(np.mean(curve_confs)), 3) if curve_confs else None,
+        "min_mean_conf": round(float(min(curve_confs)), 3) if curve_confs else None,
+        "max_unreliable_pct": round(max(curve_unrels), 1) if curve_unrels else 0.0,
+        "cycle_skip_count": total_cycle_skips,
+        "res_mud_mismatch_count": total_res_mismatch,
+        "corrected_curves": [r["corr_curve"] for r in env_corr_curve_table],
+        "curve_table": env_corr_curve_table,
+        "well_table": env_well_rows,
+        "has_invasion": len(invasion_well_rows) > 0,
+        "invasion_table": invasion_well_rows,
+        "invasion_rollup": invasion_rollup,
+        "sigma_propagated": env_sigma_used,
+        "assumptions": env_assumptions_seen[:8],
+    }
+
+    cali_lim = _safe_float(
+        req_env_cfg.get(
+            "washoutThold",
+            req_env_cfg.get("washout_thold", merged_configs.get("cali_threshold")),
+        ),
+        2.0,
+    )
     drho_lim = _safe_float(merged_configs.get("drho_threshold"), 0.15)
     rhob_m = _safe_float(merged_configs.get("rhob_min"), 1.95)
     qaqc_params = {
         "caliper_limit": cali_lim,
-        "bitsize_in": _safe_float(merged_configs.get("bitsize_default"), 8.5),
+        "bitsize_in": _safe_float(
+            merged_configs.get("bitsize_default", primary_env.default_bit_size_in), 8.5
+        ),
         "drho_limit": drho_lim,
         "rhob_min": rhob_m,
         "badhole_treatment": bh_treat_display,
@@ -3681,6 +4716,15 @@ def build_report_context(
         "rho_hc": _safe_float(merged_configs.get("rho_hc"), 0.80),
         "hi_hc": _safe_float(merged_configs.get("hi_hc"), 0.90),
         "norm_method": "Stratigraphic Zonal P10–P90 Quantile Alignment",
+        "env_corr_applied": any_env_applied,
+        "tool_type": eff_tool_type,
+        "mud_type": env_corr_summary["mud_type"],
+        "mud_weight_ppg": env_corr_summary["mud_weight_ppg"],
+        "hole_section_count": len(hole_sections_rows),
+        "offshore": env_corr_summary["offshore"],
+        "water_depth_m": env_corr_summary["water_depth_m"],
+        "top_temp_c": env_corr_summary["top_temp_c"],
+        "gradient_c_per_km": env_corr_summary["gradient_c_per_km"],
     }
     dry_sand_pt = merged_configs.get("dry_sand_point") or (-0.02, 2.65)
     dry_clay_pt = merged_configs.get("dry_clay_point") or (
@@ -3885,6 +4929,23 @@ def build_report_context(
     if raw_temp is not None:
         res_temp = round(float(raw_temp), 1)
         temp_basis = "Configured Formation Temperature"
+    elif env_corr_summary.get("temp_median_c") is not None:
+        res_temp = float(env_corr_summary["temp_median_c"])
+        temp_basis = (
+            f"Borehole Environment Profile (`ENV_TEMP_C`, {env_corr_summary['gradient_c_per_km']:.1f} °C/km"
+            + (
+                f", offshore WD={env_corr_summary['water_depth_m']:.0f} m"
+                if env_corr_summary["offshore"]
+                else ""
+            )
+            + (", BHT-calibrated)" if env_corr_summary["bht_calibrated"] else ")")
+        )
+    elif primary_env.offshore or primary_env.explicit.get("temperature"):
+        res_temp = round(float(primary_env.temperature_c(median_target_tvdss)), 1)
+        temp_basis = (
+            f"{'Offshore Seabed-Anchored' if primary_env.offshore else 'BHT-Calibrated'} "
+            f"Geothermal Profile ({primary_env.gradient_c_per_km:.1f} °C/km @ {median_target_tvdss:.0f} m TVDss)"
+        )
     else:
         surf_temp = _safe_float(merged_configs.get("surface_temp"), 15.0)
         temp_grad = _safe_float(
@@ -4317,6 +5378,7 @@ def build_report_context(
         "cutoffs": {"vsh": vsh_cut, "phie": phie_cut, "sw": sw_cut},
         "qaqc_params": qaqc_params,
         "qaqc_table": qaqc_table,
+        "env_corr_summary": env_corr_summary,
         "litho_params": litho_params,
         "poro_params": poro_params,
         "rock_types": rock_types,
@@ -4688,6 +5750,62 @@ def validate_fdp_report_payload(context: Dict[str, Any]) -> List[Dict[str, str]]
             }
         )
 
+    # CHK-12: Borehole Environmental Correction & Sensor Confidence Audit
+    env_s = context.get("env_corr_summary", {}) or {}
+    if env_s.get("any_applied"):
+        max_unrel = _safe_float(env_s.get("max_unreliable_pct"), 0.0)
+        mean_cf = env_s.get("mean_conf")
+        min_cf = env_s.get("min_mean_conf")
+        n_mismatch = int(env_s.get("res_mud_mismatch_count") or 0)
+        cf_txt = f"{mean_cf:.2f}" if isinstance(mean_cf, (int, float)) else "n/a"
+        if n_mismatch > 0 or max_unrel > 25.0:
+            chk12_status = "QA ALERT"
+            chk12_measured = (
+                f"Env corrections applied ({', '.join(env_s.get('corrected_curves', []))}); "
+                f"max unreliable = {max_unrel:.1f}%, mean conf = {cf_txt}"
+                + (
+                    f", res/mud mismatch = {n_mismatch} samples."
+                    if n_mismatch > 0
+                    else "."
+                )
+            )
+            chk12_note = "Inspect washout severity, resistivity/mud-type compatibility and enable confidence weighting."
+        elif max_unrel > 10.0 or (isinstance(min_cf, (int, float)) and min_cf < 0.65):
+            chk12_status = "REVIEW"
+            chk12_measured = (
+                f"Applied across {env_s.get('wells_applied', 0)}/{env_s.get('total_wells', 0)} well(s) "
+                f"({env_s.get('tool_type', 'WL')}/{env_s.get('mud_type', 'WBM')}); "
+                f"mean conf = {cf_txt}, max unreliable = {max_unrel:.1f}%."
+            )
+            chk12_note = "Propagate *_QC_CONF confidence weights and *_SIGMA uncertainties into downstream solvers."
+        else:
+            chk12_status = "PASS"
+            chk12_measured = (
+                f"Applied across {env_s.get('wells_applied', 0)}/{env_s.get('total_wells', 0)} well(s) "
+                f"({env_s.get('tool_type', 'WL')}/{env_s.get('mud_type', 'WBM')}); "
+                f"mean conf = {cf_txt}, max unreliable = {max_unrel:.1f}%."
+            )
+            chk12_note = (
+                "Borehole environmental corrections and sensor confidence verified."
+            )
+    else:
+        hs_n = int(env_s.get("hole_section_count") or 0)
+        chk12_status = "N/A (Raw Logs)"
+        chk12_measured = f"No *_ENV_CORR curves saved on project logs (hole sections loaded: {hs_n})."
+        chk12_note = "Run Borehole Environmental Corrections in Data & QA/QC to generate *_ENV_CORR and *_SIGMA."
+    checks.append(
+        {
+            "id": "CHK-12",
+            "rule": "Borehole Environmental Correction & Sensor Confidence",
+            "category": "Borehole Environment",
+            "criterion": "Max UNRELIABLE ≤ 10%, mean QC confidence ≥ 0.65, zero res/mud mismatch",
+            "measured": chk12_measured,
+            "status": chk12_status,
+            "action_note": chk12_note,
+            "detail": chk12_measured,
+        }
+    )
+
     return checks
 
 
@@ -4773,6 +5891,7 @@ def synthesize_domain_ai_commentary(
     well_names = context.get("well_names", [])
     zonal = context.get("zonal_summary", [])
     qaqc_tbl = context.get("qaqc_table", [])
+    env_s = context.get("env_corr_summary", {}) or {}
     poro_p = context.get("poro_params", {})
     sw_p = context.get("sw_params", {})
     shf_p = context.get("shf_params", {})
@@ -4809,6 +5928,53 @@ def synthesize_domain_ai_commentary(
     mean_zone_hcpt = field_sum["mean_zone_hcpt"]
     n_eval_zones = field_sum["n_zones"]
     max_bh = max((q.get("badhole_pct", 0.0) for q in qaqc_tbl), default=0.0)
+    if env_s.get("any_applied"):
+        env_curves_txt = ", ".join(f"`{c}`" for c in env_s.get("corrected_curves", []))
+        env_cf_val = env_s.get("mean_conf")
+        env_cf_txt = (
+            f"{env_cf_val:.2f}" if isinstance(env_cf_val, (int, float)) else "n/a"
+        )
+        env_regime_txt = (
+            f"offshore ($WD = {env_s.get('water_depth_m', 0.0):.0f}\\text{{ m}}$)"
+            if env_s.get("offshore")
+            else "onshore"
+        )
+        inv_roll = env_s.get("invasion_rollup") or {}
+        inv_clause = ""
+        if env_s.get("has_invasion") and inv_roll:
+            di_txt = (
+                f", median $d_i = {inv_roll['median_di_in']:.1f}\\text{{ in}}$"
+                if inv_roll.get("median_di_in") is not None
+                else ""
+            )
+            inv_clause = (
+                f" Step-profile radial resistivity inversion classifies **{inv_roll.get('hc_like_pct', 0.0):.1f}%** "
+                f"of samples as movable-hydrocarbon invasion ($R_{{xo}}/R_t < R_{{mf}}/R_w$) and "
+                f"**{inv_roll.get('water_like_pct', 0.0):.1f}%** as water-zone invasion{di_txt}."
+            )
+        env_narrative_suffix = (
+            f" Generic **{env_s.get('tool_type', 'WL')}** borehole environmental corrections ({env_curves_txt}) were applied "
+            f"for a **{env_s.get('mud_type', 'WBM')}** ({env_s.get('mud_weight_ppg', 9.0):.1f} ppg, {env_regime_txt}, "
+            f"${env_s.get('gradient_c_per_km', 30.0):.1f}^\\circ\\text{{C/km}}$ geothermal gradient"
+            + (
+                f", {env_s.get('hole_section_count', 0)} mud-program hole {_pluralize(env_s.get('hole_section_count', 0), 'section')}"
+                if env_s.get("hole_section_count")
+                else ""
+            )
+            + f") logging environment, yielding a mean sensor confidence of **{env_cf_txt}** and "
+            f"a maximum unreliable-sample rate of **{env_s.get('max_unreliable_pct', 0.0):.1f}%**."
+            + inv_clause
+        )
+    else:
+        hs_n = int(env_s.get("hole_section_count") or 0)
+        env_narrative_suffix = (
+            " Explicit `*_ENV_CORR` environmental corrections have not yet been saved on the project curves"
+            + (
+                f" ({hs_n} borehole mud-program {_pluralize(hs_n, 'section')} loaded in ancillary metadata)."
+                if hs_n > 0
+                else "."
+            )
+        )
 
     # Spec 4.1: Threshold-driven calibration parity prose (never claim "strong parity" when R² is low)
     c_r2 = _safe_float(poro_p.get("core_r2"), 0.0)
@@ -4907,6 +6073,7 @@ def synthesize_domain_ai_commentary(
                     if max_bh > 15.0
                     else f"Well **`{focal_well}`** exhibits good overall borehole stability (<15% washout flagging), providing reliable density-neutron porosity response across the target zones."
                 )
+                + env_narrative_suffix
             ),
             "litho_poro_narrative": (
                 f"In well **`{focal_well}`**, shale volume ($V_{{sh}}$) and mineral fractions were solved using the "
@@ -4991,6 +6158,7 @@ def synthesize_domain_ai_commentary(
                     if max_bh > 15.0
                     else "All evaluated reservoir intervals exhibit good borehole stability (<15% washout flagging), requiring minimal synthetic curve reconstruction."
                 )
+                + env_narrative_suffix
             ),
             "litho_poro_narrative": (
                 f"Shale volume ($V_{{sh}}$) and mineral fractions were resolved using the **{context['litho_params']['model_name']}** "
@@ -5061,6 +6229,9 @@ def synthesize_domain_ai_commentary(
             "cutoffs": cut,
             "zonal_summary": zonal,
             "qaqc_table": qaqc_tbl,
+            "env_corr_summary": {
+                k: v for k, v in env_s.items() if k not in ("hole_sections_table",)
+            },
             "poro_params": poro_p,
             "sw_params": sw_p,
             "shf_params": shf_p,
@@ -5171,8 +6342,13 @@ SINGLE_WELL_DEFAULT_SECTIONS: List[Dict[str, Any]] = [
         "include_ai_commentary": True,
     },
     {
-        "section_id": "10_appendix_cpi",
+        "section_id": "11_appendix_cpi",
         "title": "6. Composite CPI Log Plot",
+        "include_ai_commentary": False,
+    },
+    {
+        "section_id": "10_gate_checks",
+        "title": "7. QA/QC Gate-Check & Peer-Review Audit Log",
         "include_ai_commentary": False,
     },
 ]
@@ -5234,11 +6410,28 @@ def _generate_all_report_plots(
     report_id: str,
     context: Dict[str, Any],
     enabled_section_ids: set[str],
+    report_type: str = "FDP_FULL",
 ) -> Dict[str, Any]:
     """Generate high-DPI PNG assets for enabled sections and return URL dictionary."""
     out_dir = REPORTS_STATIC_ROOT / report_id
     out_dir.mkdir(parents=True, exist_ok=True)
     url_prefix = f"/static/reports/{report_id}"
+
+    with report_plots.report_type_scope(report_type):
+        return _generate_all_report_plots_scoped(
+            out_dir=out_dir,
+            url_prefix=url_prefix,
+            context=context,
+            enabled_section_ids=enabled_section_ids,
+        )
+
+
+def _generate_all_report_plots_scoped(
+    out_dir: Path,
+    url_prefix: str,
+    context: Dict[str, Any],
+    enabled_section_ids: set[str],
+) -> Dict[str, Any]:
 
     full_df: pd.DataFrame = context.get("_full_df", pd.DataFrame())
     well_names: List[str] = context.get("well_names", [])
@@ -5249,6 +6442,7 @@ def _generate_all_report_plots(
     assets: Dict[str, Any] = {
         "inventory_heatmap": None,
         "norm_plot": None,
+        "env_corr_plot": None,
         "litho_poro_crossplot": None,
         "core_calibration_plot": None,
         "perm_crossplot": None,
@@ -5261,6 +6455,8 @@ def _generate_all_report_plots(
 
     target_zones: Optional[List[str]] = context.get("target_zones")
     scal_p = context.get("scal_params", {})
+    poro_p = context.get("poro_params", {})
+    env_s = context.get("env_corr_summary", {}) or {}
     is_analogue_scal = bool(scal_p.get("is_analogue", True))
 
     if "02_data_inventory" in enabled_section_ids:
@@ -5271,6 +6467,22 @@ def _generate_all_report_plots(
         assets["norm_plot"] = report_plots.generate_qaqc_norm_plot(
             full_df, well_names, output_dir=out_dir, url_prefix=url_prefix
         )
+        has_env_cols = bool(env_s.get("any_applied")) or any(
+            c in full_df.columns
+            for c in ("ENV_TEMP_C", "HOLE_SEVERITY", "INVASION_PROFILE")
+        )
+        if has_env_cols and not full_df.empty:
+            try:
+                assets["env_corr_plot"] = report_plots.generate_env_corr_qc_plot(
+                    full_df,
+                    well_names=well_names,
+                    env_corr_summary=env_s,
+                    target_zones=target_zones,
+                    output_dir=out_dir,
+                    url_prefix=url_prefix,
+                )
+            except Exception as exc:
+                logger.debug(f"Failed generating borehole env QC plot: {exc}")
     litho_p = context.get("litho_params", {})
     if "04_lithology_porosity" in enabled_section_ids:
         assets["litho_poro_crossplot"] = report_plots.generate_nd_crossplot(
@@ -5284,6 +6496,7 @@ def _generate_all_report_plots(
             dry_clay_point=litho_p.get("dry_clay_point", (0.33, 2.70)),
             fluid_point=litho_p.get("fluid_point", (1.0, 1.0)),
             silt_line_angle=_safe_float(litho_p.get("silt_line_angle"), 119.0),
+            use_hc_corrected=bool(poro_p.get("use_hc_corrected", False)),
             output_dir=out_dir,
             url_prefix=url_prefix,
         )
@@ -5854,7 +7067,9 @@ def generate_petrophysical_report_service(
         focal_w = context["well_names"][0] if context["well_names"] else "Active Well"
         effective_title = f"Well {focal_w} — Petrophysical CPI & Evaluation Dossier"
 
-    assets = _generate_all_report_plots(report_id, context, enabled_ids)
+    assets = _generate_all_report_plots(
+        report_id, context, enabled_ids, report_type=req.report_type
+    )
     ai_commentary = (
         synthesize_domain_ai_commentary(
             context,

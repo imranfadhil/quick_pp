@@ -7,9 +7,11 @@ never conflict with interactive GUI backends.
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import math
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple, Union
 
 import matplotlib
 import matplotlib.lines
@@ -81,6 +83,7 @@ _FRONTEND_RC = {
 _FIGURE_TITLES = {
     "fig_2_1_inventory_heatmap.png": "Figure 2.1 · Multi-Well Data Inventory Matrix",
     "fig_3_1_qaqc_norm_plot.png": "Figure 3.1 · QA/QC and Normalization Audit",
+    "fig_3_2_env_corr_qc_plot.png": "Figure 3.2 · Borehole Environment, Sensor Corrections and Radial Invasion QC",
     "fig_4_1_nd_crossplot.png": "Figure 4.1 · Neutron-Density Crossplot and Core-to-Log Calibration",
     "fig_4_2_core_calibration.png": "Figure 4.2 · Core Overburden Calibration",
     "fig_5_1_perm_crossplot.png": "Figure 5.1 · Porosity-Permeability by Rock Type and Lorenz Plot",
@@ -91,6 +94,42 @@ _FIGURE_TITLES = {
     "fig_9_1_upscaling_plot.png": "Figure 9.1 · Fine-Scale vs Blocked Logs",
 }
 
+_SINGLE_WELL_FIGURE_TITLES = {
+    "fig_3_1_qaqc_norm_plot.png": "Figure 2.1 · Well Curve Distributions and Borehole Washout Audit",
+    "fig_3_2_env_corr_qc_plot.png": "Figure 2.2 · Borehole Environment, Sensor Corrections and Radial Invasion QC",
+    "fig_4_1_nd_crossplot.png": "Figure 3.1 · Neutron-Density Crossplot and Core-to-Log Calibration",
+    "fig_4_2_core_calibration.png": "Figure 3.2 · Core Overburden Calibration",
+    "fig_6_1_pickett_shf_plot.png": "Figure 4.1 · Pickett Plot and Saturation Profile",
+    "fig_6_2_fpt_pressure_plot.png": "Figure 4.2 · Formation Pressure and Fluid Gradients",
+    "fig_8_1_uncertainty_plot.png": "Figure 5.1 · Cut-off Sensitivity and HCPT Distribution",
+}
+
+_ACTIVE_REPORT_TYPE: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "_ACTIVE_REPORT_TYPE", default="FDP_FULL"
+)
+
+
+@contextlib.contextmanager
+def report_type_scope(report_type: str) -> Iterator[None]:
+    """Scope the active report preset (`FDP_FULL`, `SINGLE_WELL_CPI`, etc.) for figure header numbering."""
+    token = _ACTIVE_REPORT_TYPE.set(str(report_type or "FDP_FULL").strip().upper())
+    try:
+        yield
+    finally:
+        _ACTIVE_REPORT_TYPE.reset(token)
+
+
+def _resolve_figure_header(
+    filename: str, report_type: Optional[str] = None
+) -> Optional[str]:
+    eff_type = str(report_type or _ACTIVE_REPORT_TYPE.get() or "FDP_FULL").upper()
+    if eff_type == "SINGLE_WELL_CPI":
+        if filename in _SINGLE_WELL_FIGURE_TITLES:
+            return _SINGLE_WELL_FIGURE_TITLES[filename]
+        if filename.startswith("cpi_") and filename.endswith(".png"):
+            return "Figure 6.1 · Composite Petrophysical Evaluation Log (CPI)"
+    return _FIGURE_TITLES.get(filename)
+
 
 def _save_fig(
     fig: Figure,
@@ -98,10 +137,11 @@ def _save_fig(
     output_dir: Optional[Union[str, Path]] = None,
     url_prefix: Optional[str] = None,
     dpi: int = 140,
+    report_type: Optional[str] = None,
 ) -> str:
     out_dir = _resolve_output_dir(output_dir)
     out_path = out_dir / filename
-    header = _FIGURE_TITLES.get(filename)
+    header = _resolve_figure_header(filename, report_type=report_type)
     if header:
         # Standard header band shared by all report figures (same wording style as the plotly CPI header).
         fig.text(
@@ -319,6 +359,7 @@ def generate_inventory_heatmap(
         "RT",
         "NPHI",
         "RHOB",
+        "ENV CORR",
         "VCLAY",
         "PHIT",
         "PERM",
@@ -326,6 +367,7 @@ def generate_inventory_heatmap(
         "ROCK_FLAG",
         "PERM_TRANS",
         "SHF",
+        "HOLE SEC",
         "CORE",
         "MDT/PRESS",
         "TOPS",
@@ -337,8 +379,10 @@ def generate_inventory_heatmap(
 
     matrix = np.zeros((len(well_labels), len(target_curves)), dtype=float)
     for r_idx, w in enumerate(wells):
-        full_curve_list = list(w.get("available_curves") or []) + list(
-            w.get("curves") or []
+        full_curve_list = (
+            list(w.get("available_curves") or [])
+            + list(w.get("edited_curves") or [])
+            + list(w.get("curves") or [])
         )
         avail = {str(c).upper() for c in full_curve_list if c}
 
@@ -355,7 +399,28 @@ def generate_inventory_heatmap(
             avail.add("TVDSS")
 
         for c_idx, cname in enumerate(target_curves):
-            if cname == "CORE":
+            if cname == "ENV CORR":
+                has_env = bool(
+                    w.get("has_env_corr")
+                    or avail.intersection(
+                        {
+                            "GR_ENV_CORR",
+                            "NPHI_ENV_CORR",
+                            "RHOB_ENV_CORR",
+                            "RT_ENV_CORR",
+                            "DT_ENV_CORR",
+                        }
+                    )
+                )
+                matrix[r_idx, c_idx] = 1.0 if has_env else 0.0
+            elif cname == "HOLE SEC":
+                has_hs = bool(
+                    (w.get("hole_section_count") or 0) > 0
+                    or len(w.get("hole_sections") or []) > 0
+                    or "ENV_BS" in avail
+                )
+                matrix[r_idx, c_idx] = 1.0 if has_hs else 0.0
+            elif cname == "CORE":
                 has_core = bool(
                     (w.get("core_sample_count") or 0) > 0
                     or w.get("has_core") not in (None, False, "No", "0", 0)
@@ -489,26 +554,41 @@ def generate_qaqc_norm_plot(
                 med.set_linewidth(2.0)
             all_vals = np.concatenate(box_data)
             field_p50 = float(np.nanmedian(all_vals))
+            is_sw_mode = (
+                _ACTIVE_REPORT_TYPE.get() == "SINGLE_WELL_CPI" or len(valid_wells) == 1
+            )
             ax1.axhline(
                 field_p50,
                 color="#dc2626",
                 linestyle="--",
                 linewidth=1.4,
-                label=f"Field P50 Baseline ({field_p50:.2f})",
+                label=(
+                    f"Well P50 ({field_p50:.2f})"
+                    if is_sw_mode
+                    else f"Field P50 Baseline ({field_p50:.2f})"
+                ),
             )
             ax1.legend(loc="upper right", fontsize=8)
             ax1.tick_params(axis="x", rotation=22, labelsize=8.5)
             ax1.set_ylabel(f"{curve_col} Distribution", fontsize=9, fontweight="bold")
             ax1.set_title(
-                f"Multi-Well {curve_col} Distribution & Normalization Baseline",
+                (
+                    f"Well {curve_col} Distribution & Median Baseline"
+                    if is_sw_mode
+                    else f"Multi-Well {curve_col} Distribution & Normalization Baseline"
+                ),
                 fontsize=9.5,
                 fontweight="bold",
             )
             ax1.grid(True, linestyle=":", alpha=0.5)
 
-    # Panel 2: Bad-hole & HC Flag summary per well
+    # Panel 2: Bad-hole, HC Flag & Env-QC Unreliable summary per well
     bh_pcts = []
     hc_pcts = []
+    unrel_pcts = []
+    has_env_status = any(
+        f"{lg}_QC_STATUS" in sub.columns for lg in ("GR", "NPHI", "RHOB", "RT", "DT")
+    )
     for w in wells:
         wdf = sub[sub["WELL_NAME"].astype(str) == w]
         if "BADHOLE" in wdf.columns:
@@ -525,24 +605,62 @@ def generate_qaqc_norm_plot(
         else:
             hc_pcts.append(0.0)
 
+        w_unrel = 0.0
+        if has_env_status and len(wdf) > 0:
+            for lg in ("GR", "NPHI", "RHOB", "RT", "DT"):
+                st_c = f"{lg}_QC_STATUS"
+                if st_c in wdf.columns:
+                    st_v = pd.to_numeric(wdf[st_c], errors="coerce")
+                    nv = int((st_v >= 0).sum())
+                    if nv > 0:
+                        w_unrel = max(w_unrel, 100.0 * float((st_v == 2).sum()) / nv)
+        unrel_pcts.append(w_unrel)
+
     x_pos = np.arange(len(wells))
-    width = 0.36
-    ax2.bar(
-        x_pos - width / 2,
-        bh_pcts,
-        width=width,
-        color="#ef4444",
-        alpha=0.85,
-        label="Bad-Hole / Washout (%)",
-    )
-    ax2.bar(
-        x_pos + width / 2,
-        hc_pcts,
-        width=width,
-        color="#f59e0b",
-        alpha=0.85,
-        label="HC-Corrected (%)",
-    )
+    if has_env_status:
+        width = 0.26
+        ax2.bar(
+            x_pos - width,
+            bh_pcts,
+            width=width,
+            color="#ef4444",
+            alpha=0.85,
+            label="Bad-Hole / Washout (%)",
+        )
+        ax2.bar(
+            x_pos,
+            unrel_pcts,
+            width=width,
+            color="#7c3aed",
+            alpha=0.85,
+            label="Env QC Unreliable (%)",
+        )
+        ax2.bar(
+            x_pos + width,
+            hc_pcts,
+            width=width,
+            color="#f59e0b",
+            alpha=0.85,
+            label="HC-Corrected (%)",
+        )
+    else:
+        width = 0.36
+        ax2.bar(
+            x_pos - width / 2,
+            bh_pcts,
+            width=width,
+            color="#ef4444",
+            alpha=0.85,
+            label="Bad-Hole / Washout (%)",
+        )
+        ax2.bar(
+            x_pos + width / 2,
+            hc_pcts,
+            width=width,
+            color="#f59e0b",
+            alpha=0.85,
+            label="HC-Corrected (%)",
+        )
     ax2.axhline(
         15.0,
         color="#991b1b",
@@ -562,6 +680,360 @@ def generate_qaqc_norm_plot(
     return _save_fig(fig, "fig_3_1_qaqc_norm_plot.png", output_dir, url_prefix)
 
 
+def generate_env_corr_qc_plot(
+    df: pd.DataFrame,
+    well_names: Optional[List[str]] = None,
+    env_corr_summary: Optional[Dict[str, Any]] = None,
+    target_zones: Optional[Sequence[str]] = None,
+    output_dir: Optional[Union[str, Path]] = None,
+    url_prefix: Optional[str] = None,
+) -> str:
+    """Generate Figure 3.2: Borehole Environment, Raw vs. *_ENV_CORR + ±1σ Band, Radial Invasion & Sensor Confidence."""
+    sub_all = _ensure_df_well_filter(df, well_names)
+    fig = Figure(figsize=(13.5, 5.1))
+    gs = GridSpec(1, 4, figure=fig, width_ratios=[1.0, 1.05, 1.05, 1.15], wspace=0.28)
+    ax_bh = fig.add_subplot(gs[0, 0])
+    ax_nd = fig.add_subplot(gs[0, 1])
+    ax_rt = fig.add_subplot(gs[0, 2])
+    ax_cf = fig.add_subplot(gs[0, 3])
+
+    if sub_all.empty or "DEPTH" not in sub_all.columns:
+        ax_bh.text(
+            0.5,
+            0.5,
+            "No borehole environmental data available",
+            ha="center",
+            va="center",
+        )
+        for a in (ax_nd, ax_rt, ax_cf):
+            a.axis("off")
+        return _save_fig(fig, "fig_3_2_env_corr_qc_plot.png", output_dir, url_prefix)
+
+    if "WELL_NAME" not in sub_all.columns:
+        sub_all["WELL_NAME"] = well_names[0] if well_names else "Well-1"
+
+    # Pick representative focal well (preferring one that has *_ENV_CORR curves)
+    avail_wells = [str(w) for w in sub_all["WELL_NAME"].dropna().unique()]
+    focal_well = avail_wells[0] if avail_wells else "Well-1"
+    for cand_w in avail_wells:
+        w_chk = sub_all[sub_all["WELL_NAME"].astype(str) == cand_w]
+        if any(
+            f"{lg}_ENV_CORR" in w_chk.columns
+            and pd.to_numeric(w_chk[f"{lg}_ENV_CORR"], errors="coerce").notna().any()
+            for lg in ("GR", "NPHI", "RHOB", "RT")
+        ):
+            focal_well = cand_w
+            break
+
+    w_sub = (
+        sub_all[sub_all["WELL_NAME"].astype(str) == focal_well]
+        .dropna(subset=["DEPTH"])
+        .sort_values("DEPTH")
+        .reset_index(drop=True)
+    )
+    w_sub = _trim_to_logged_interval(w_sub)
+    d_min, d_max = _resolve_target_depth_window(
+        w_sub, target_zones=target_zones, max_span=480.0
+    )
+    d_col = pd.to_numeric(w_sub["DEPTH"], errors="coerce")
+    win = w_sub[(d_col >= d_min) & (d_col <= d_max)].copy()
+    if win.empty:
+        win = w_sub.copy()
+    if len(win) > 1500:
+        win = win.iloc[:: max(1, len(win) // 1500)].copy()
+
+    d = pd.to_numeric(win["DEPTH"], errors="coerce").to_numpy(dtype=float)
+
+    # Panel 1: Borehole Caliper vs Bit Size + Washout/Mudcake Shading + ENV_TEMP_C
+    bs = _get_numeric_series(win, "ENV_BS", "BS", default=8.5).to_numpy(dtype=float)
+    cali = _get_numeric_series(win, "CALI").to_numpy(dtype=float)
+    if not np.isfinite(cali).any():
+        cali = bs.copy()
+    ax_bh.plot(bs, d, color="#0f172a", linestyle="--", lw=1.2, label="Bit Size (in)")
+    ax_bh.plot(cali, d, color="#b45309", lw=1.2, label="CALI (in)")
+    ax_bh.fill_betweenx(
+        d,
+        bs,
+        cali,
+        where=(cali > bs),
+        color="#fca5a5",
+        alpha=0.65,
+        label="Washout",
+    )
+    ax_bh.fill_betweenx(
+        d,
+        cali,
+        bs,
+        where=(cali < bs),
+        color="#fde68a",
+        alpha=0.65,
+        label="Mudcake",
+    )
+    c_max = max(float(np.nanmax(cali)) + 1.5, float(np.nanmax(bs)) + 3.0, 14.0)
+    ax_bh.set_xlim(4.0, min(c_max, 24.0))
+    ax_bh.set_ylim(d_max, d_min)
+    ax_bh.set_ylabel(f"{focal_well} Depth (m MD)", fontsize=8.5, fontweight="bold")
+    ax_bh.set_xlabel("Hole / Bit Size (in)", fontsize=8.0, fontweight="bold")
+    ax_bh.set_title("Borehole & Temp", fontsize=9.0, fontweight="bold")
+    ax_bh.grid(True, linestyle=":", alpha=0.5)
+
+    temp_c = _get_numeric_series(win, "ENV_TEMP_C").to_numpy(dtype=float)
+    if np.isfinite(temp_c).any():
+        ax_t = ax_bh.twiny()
+        ax_t.plot(temp_c, d, color="#dc2626", linestyle=":", lw=1.3, label="Temp (°C)")
+        ax_t.set_xlabel("ENV_TEMP_C (°C)", fontsize=7.5, color="#dc2626")
+        ax_t.tick_params(axis="x", labelsize=7, colors="#dc2626")
+        ax_t.spines["top"].set_visible(True)
+        ax_t.spines["top"].set_edgecolor("#fca5a5")
+    ax_bh.legend(loc="lower right", fontsize=6.8)
+
+    # Panel 2: Nuclear Sensor Raw vs *_ENV_CORR + ±1σ Envelope
+    nphi_raw = _get_numeric_series(win, "NPHI").to_numpy(dtype=float)
+    nphi_corr = _get_numeric_series(win, "NPHI_ENV_CORR").to_numpy(dtype=float)
+    nphi_sig = _get_numeric_series(win, "NPHI_SIGMA").to_numpy(dtype=float)
+    gr_raw = _get_numeric_series(win, "GR").to_numpy(dtype=float)
+    gr_corr = _get_numeric_series(win, "GR_ENV_CORR").to_numpy(dtype=float)
+    gr_sig = _get_numeric_series(win, "GR_SIGMA").to_numpy(dtype=float)
+
+    if np.isfinite(nphi_corr).any() or np.isfinite(nphi_raw).any():
+        if np.isfinite(nphi_raw).any():
+            ax_nd.plot(
+                nphi_raw,
+                d,
+                color="#64748b",
+                linestyle="--",
+                lw=0.95,
+                alpha=0.85,
+                label="NPHI Raw",
+            )
+        if np.isfinite(nphi_corr).any():
+            if np.isfinite(nphi_sig).any():
+                ax_nd.fill_betweenx(
+                    d,
+                    nphi_corr - nphi_sig,
+                    nphi_corr + nphi_sig,
+                    color="#93c5fd",
+                    alpha=0.45,
+                    label="±1σ (NPHI_SIGMA)",
+                )
+            ax_nd.plot(
+                nphi_corr,
+                d,
+                color="#1d4ed8",
+                lw=1.3,
+                label="NPHI_ENV_CORR",
+            )
+        ax_nd.set_xlim(0.45, -0.05)
+        ax_nd.set_xlabel("NPHI (v/v)", fontsize=8.0, fontweight="bold")
+        ax_nd.set_title("Neutron Env Corr (±1σ)", fontsize=9.0, fontweight="bold")
+    elif np.isfinite(gr_corr).any() or np.isfinite(gr_raw).any():
+        if np.isfinite(gr_raw).any():
+            ax_nd.plot(
+                gr_raw,
+                d,
+                color="#64748b",
+                linestyle="--",
+                lw=0.95,
+                label="GR Raw",
+            )
+        if np.isfinite(gr_corr).any():
+            if np.isfinite(gr_sig).any():
+                ax_nd.fill_betweenx(
+                    d,
+                    np.maximum(0.0, gr_corr - gr_sig),
+                    gr_corr + gr_sig,
+                    color="#86efac",
+                    alpha=0.45,
+                    label="±1σ (GR_SIGMA)",
+                )
+            ax_nd.plot(gr_corr, d, color="#15803d", lw=1.3, label="GR_ENV_CORR")
+        ax_nd.set_xlim(0.0, 150.0)
+        ax_nd.set_xlabel("GR (gAPI)", fontsize=8.0, fontweight="bold")
+        ax_nd.set_title("GR Env Corr (±1σ)", fontsize=9.0, fontweight="bold")
+    else:
+        ax_nd.text(0.5, 0.5, "No NPHI/GR curves", ha="center", va="center")
+    ax_nd.set_ylim(d_max, d_min)
+    ax_nd.tick_params(labelleft=False)
+    ax_nd.grid(True, linestyle=":", alpha=0.5)
+    ax_nd.legend(loc="lower right", fontsize=6.8)
+
+    # Panel 3: Deep Resistivity Raw vs RT_ENV_CORR + RXO_EST & Fluid Resistivities
+    rt_raw = _get_numeric_series(win, "RT", "RD").clip(lower=0.05).to_numpy(dtype=float)
+    rt_corr = (
+        _get_numeric_series(win, "RT_ENV_CORR").clip(lower=0.05).to_numpy(dtype=float)
+    )
+    rt_sig = _get_numeric_series(win, "RT_SIGMA").to_numpy(dtype=float)
+    rxo_est = _get_numeric_series(win, "RXO_EST").clip(lower=0.05).to_numpy(dtype=float)
+    env_rw = _get_numeric_series(win, "ENV_RW").clip(lower=0.01).to_numpy(dtype=float)
+    env_rmf = _get_numeric_series(win, "ENV_RMF").clip(lower=0.01).to_numpy(dtype=float)
+
+    has_rt_any = False
+    if np.isfinite(rt_raw).any():
+        ax_rt.plot(
+            rt_raw,
+            d,
+            color="#64748b",
+            linestyle="--",
+            lw=0.9,
+            alpha=0.8,
+            label="RT Raw",
+        )
+        has_rt_any = True
+    if np.isfinite(rt_corr).any():
+        if np.isfinite(rt_sig).any():
+            lo_rt = 10.0 ** (np.log10(rt_corr) - np.clip(rt_sig, 0.0, 0.6))
+            hi_rt = 10.0 ** (np.log10(rt_corr) + np.clip(rt_sig, 0.0, 0.6))
+            ax_rt.fill_betweenx(
+                d, lo_rt, hi_rt, color="#fecaca", alpha=0.45, label="±1σ (RT_SIGMA)"
+            )
+        ax_rt.plot(rt_corr, d, color="#dc2626", lw=1.3, label="RT_ENV_CORR")
+        has_rt_any = True
+    if np.isfinite(rxo_est).any():
+        ax_rt.plot(
+            rxo_est,
+            d,
+            color="#0891b2",
+            linestyle="-.",
+            lw=1.05,
+            label="RXO_EST",
+        )
+        has_rt_any = True
+    if np.isfinite(env_rw).any():
+        ax_rt.plot(env_rw, d, color="#1d4ed8", linestyle=":", lw=1.0, label="ENV_RW")
+    if np.isfinite(env_rmf).any():
+        ax_rt.plot(env_rmf, d, color="#059669", linestyle=":", lw=1.0, label="ENV_RMF")
+    if has_rt_any:
+        ax_rt.set_xscale("log")
+        ax_rt.set_xlim(0.02, 500.0)
+        ax_rt.legend(loc="lower right", fontsize=6.5)
+    else:
+        ax_rt.text(
+            0.5, 0.5, "No Resistivity / Invasion curves", ha="center", va="center"
+        )
+    ax_rt.set_ylim(d_max, d_min)
+    ax_rt.tick_params(labelleft=False)
+    ax_rt.set_xlabel("Resistivity (Ω·m)", fontsize=8.0, fontweight="bold")
+    ax_rt.set_title("Rt / Rxo & Invasion", fontsize=9.0, fontweight="bold")
+    ax_rt.grid(True, which="both", linestyle=":", alpha=0.5)
+
+    # Panel 4: Per-Curve Sensor QC Status Breakdown & Mean Confidence + Invasion Box
+    curve_rows: List[Dict[str, Any]] = list(
+        (env_corr_summary or {}).get("curve_table") or []
+    )
+    if not curve_rows:
+        for lg in ("GR", "NPHI", "RHOB", "RT", "DT"):
+            st_c, cf_c = f"{lg}_QC_STATUS", f"{lg}_QC_CONF"
+            if st_c in sub_all.columns:
+                st_s = pd.to_numeric(sub_all[st_c], errors="coerce")
+                vm = st_s >= 0
+                nv = int(vm.sum())
+                if nv > 0:
+                    cf_v = (
+                        float(pd.to_numeric(sub_all[cf_c], errors="coerce")[vm].mean())
+                        if cf_c in sub_all.columns
+                        else None
+                    )
+                    curve_rows.append(
+                        {
+                            "curve": lg,
+                            "good_pct": 100.0 * float((st_s == 0).sum()) / nv,
+                            "corrected_pct": 100.0 * float((st_s == 1).sum()) / nv,
+                            "unreliable_pct": 100.0 * float((st_s == 2).sum()) / nv,
+                            "mean_conf": cf_v,
+                        }
+                    )
+
+    if curve_rows:
+        labels = [str(r["curve"]) for r in curve_rows]
+        good_v = np.array([float(r.get("good_pct", 0.0)) for r in curve_rows])
+        corr_v = np.array([float(r.get("corrected_pct", 0.0)) for r in curve_rows])
+        unrel_v = np.array([float(r.get("unreliable_pct", 0.0)) for r in curve_rows])
+        y_pos = np.arange(len(labels))
+
+        ax_cf.barh(
+            y_pos, good_v, height=0.52, color="#10b981", alpha=0.88, label="Good"
+        )
+        ax_cf.barh(
+            y_pos,
+            corr_v,
+            left=good_v,
+            height=0.52,
+            color="#3b82f6",
+            alpha=0.88,
+            label="Corrected",
+        )
+        ax_cf.barh(
+            y_pos,
+            unrel_v,
+            left=good_v + corr_v,
+            height=0.52,
+            color="#ef4444",
+            alpha=0.88,
+            label="Unreliable",
+        )
+        for idx_r, r in enumerate(curve_rows):
+            cf = r.get("mean_conf")
+            cf_lbl = f"C={cf:.2f}" if isinstance(cf, (int, float)) else ""
+            if cf_lbl:
+                ax_cf.text(
+                    102.0,
+                    idx_r,
+                    cf_lbl,
+                    va="center",
+                    ha="left",
+                    fontsize=7.5,
+                    fontweight="bold",
+                    color="#0f172a",
+                )
+        ax_cf.set_yticks(y_pos)
+        ax_cf.set_yticklabels(labels, fontsize=8.5, fontweight="bold")
+        ax_cf.invert_yaxis()
+        ax_cf.set_xlim(0.0, 126.0)
+        ax_cf.set_xlabel("Evaluated Samples (%)", fontsize=8.0, fontweight="bold")
+        ax_cf.set_title("Sensor Confidence & QC", fontsize=9.0, fontweight="bold")
+        ax_cf.legend(loc="lower right", fontsize=6.8)
+        ax_cf.grid(True, axis="x", linestyle=":", alpha=0.5)
+
+        inv_roll = (env_corr_summary or {}).get("invasion_rollup") or {}
+        if inv_roll:
+            di_str = (
+                f', med di={inv_roll["median_di_in"]:.0f}"'
+                if inv_roll.get("median_di_in") is not None
+                else ""
+            )
+            inv_note = (
+                f"Invasion: HC-like {inv_roll.get('hc_like_pct', 0.0):.0f}% · "
+                f"Water {inv_roll.get('water_like_pct', 0.0):.0f}%{di_str}"
+            )
+            ax_cf.text(
+                0.02,
+                0.03,
+                inv_note,
+                transform=ax_cf.transAxes,
+                fontsize=7.0,
+                fontweight="bold",
+                color="#1e293b",
+                bbox={
+                    "facecolor": "#f8fafc",
+                    "edgecolor": "#cbd5e1",
+                    "alpha": 0.92,
+                    "pad": 2.5,
+                },
+            )
+    else:
+        ax_cf.text(
+            0.5,
+            0.5,
+            "Sensor QC Status (*_QC_STATUS)\nnot yet computed",
+            ha="center",
+            va="center",
+            fontsize=8.5,
+        )
+        ax_cf.axis("off")
+
+    return _save_fig(fig, "fig_3_2_env_corr_qc_plot.png", output_dir, url_prefix)
+
+
 def generate_nd_crossplot(
     df: pd.DataFrame,
     well_names: Optional[List[str]] = None,
@@ -575,6 +1047,7 @@ def generate_nd_crossplot(
     dry_clay_point: Tuple[float, float] = (0.33, 2.70),
     fluid_point: Tuple[float, float] = (1.0, 1.0),
     silt_line_angle: float = 119.0,
+    use_hc_corrected: bool = False,
 ) -> str:
     """Generate Figure 4.1: Neutron-Density Crossplot, Core Porosity Calibration & Matrix Grain Density (RHOMA) QC.
 
@@ -610,9 +1083,24 @@ def generate_nd_crossplot(
         if not tz_df.empty:
             cal_sub = tz_df
 
-    nphi = _get_numeric_series(cal_sub, "NPHI")
-    rhob = _get_numeric_series(cal_sub, "RHOB")
-    c_series = _get_numeric_series(cal_sub, color_by, "VCLAY", "GR")
+    nphi_cands = (
+        ("NPHI_HC", "NPHI_ENV_CORR", "NPHI")
+        if use_hc_corrected
+        else ("NPHI_ENV_CORR", "NPHI")
+    )
+    rhob_cands = (
+        ("RHOB_HC", "RHOB_ENV_CORR", "RHOB")
+        if use_hc_corrected
+        else ("RHOB_ENV_CORR", "RHOB")
+    )
+    nphi = _get_numeric_series(cal_sub, *nphi_cands)
+    rhob = _get_numeric_series(cal_sub, *rhob_cands)
+    c_cands = (
+        ("GR_ENV_CORR", "GR", "VCLAY")
+        if color_by == "GR"
+        else (color_by, "VCLAY", "GR_ENV_CORR", "GR")
+    )
+    c_series = _get_numeric_series(cal_sub, *c_cands)
 
     valid = nphi.notna() & rhob.notna()
     if valid.any():
@@ -1224,9 +1712,9 @@ def generate_pickett_plot(
     ax1 = fig.add_subplot(gs[0, 0])
     ax2 = fig.add_subplot(gs[0, 1])
 
-    rt = _get_numeric_series(sub, "RT", "RD")
+    rt = _get_numeric_series(sub, "RT_ENV_CORR", "RT", "RD")
     phit = _get_numeric_series(sub, "PHIT", "PHIE")
-    vclay = _get_numeric_series(sub, "VCLAY", "GR")
+    vclay = _get_numeric_series(sub, "VCLAY", "GR_ENV_CORR", "GR")
 
     valid = rt.notna() & phit.notna() & (rt > 0.05) & (phit > 0.02) & (phit < 0.45)
 
@@ -1392,7 +1880,9 @@ def generate_shf_j_function_plot(
             continue
         n_sc = int(fr.get("n_scal") or 0)
         suffix = f", n={n_sc}" if n_sc else ", borrowed"
-        rt_fits.append((f"RT{fr.get('rock_flag')}{suffix}", a_p, b_p, PALETTE[i % len(PALETTE)]))
+        rt_fits.append(
+            (f"RT{fr.get('rock_flag')}{suffix}", a_p, b_p, PALETTE[i % len(PALETTE)])
+        )
     fits_are_saved = bool(rt_fits)
     if not rt_fits:
         # No saved fit: a single clearly labelled generic curve so the panel is never silently invented.
@@ -1929,7 +2419,23 @@ def _render_cpi_with_plotly(
     try:
         from quick_pp.plotter.well_log import plotly_log
 
-        fig = plotly_log(df, well_name=str(well_name), depth_uom="m")
+        plot_df = df.copy()
+        for base_c in ("GR", "RT", "NPHI", "RHOB"):
+            env_c = f"{base_c}_ENV_CORR"
+            if (
+                env_c in plot_df.columns
+                and pd.to_numeric(plot_df[env_c], errors="coerce").notna().any()
+            ):
+                raw_c = (
+                    pd.to_numeric(plot_df[base_c], errors="coerce")
+                    if base_c in plot_df.columns
+                    else pd.Series(np.nan, index=plot_df.index)
+                )
+                plot_df[base_c] = pd.to_numeric(
+                    plot_df[env_c], errors="coerce"
+                ).combine_first(raw_c)
+
+        fig = plotly_log(plot_df, well_name=str(well_name), depth_uom="m")
 
         cut = cutoffs or {}
         cut_txt = (
@@ -1961,7 +2467,9 @@ def _render_cpi_with_plotly(
         )
 
         out_path = _resolve_output_dir(output_dir) / filename
-        fig.write_image(str(out_path), format="png", width=width, height=height, scale=scale)
+        fig.write_image(
+            str(out_path), format="png", width=width, height=height, scale=scale
+        )
         if not out_path.exists():
             return None
         return _format_return_path(out_path, url_prefix=url_prefix)
@@ -2080,8 +2588,24 @@ def generate_well_cpi_plot(
 
     # Track 1: GR with Clean Sand (Yellow) & Shale (Green/Brown) Lithology Shading
     ax = axes[0]
-    gr = _get_numeric_series(sub, "GR").to_numpy(dtype=float)
+    gr_raw_s = _get_numeric_series(sub, "GR")
+    gr_env_s = _get_numeric_series(sub, "GR_ENV_CORR")
+    gr = (
+        gr_env_s.combine_first(gr_raw_s).to_numpy(dtype=float)
+        if gr_env_s.notna().any()
+        else gr_raw_s.to_numpy(dtype=float)
+    )
     if np.isfinite(gr).any():
+        if gr_env_s.notna().any() and gr_raw_s.notna().any():
+            ax.plot(
+                np.clip(gr_raw_s.to_numpy(dtype=float), 0.0, 150.0),
+                d,
+                color="#64748b",
+                lw=0.7,
+                linestyle="--",
+                alpha=0.5,
+                label="GR Raw",
+            )
         gr_clip = np.clip(gr, 0.0, 150.0)
         sand_baseline = 65.0
         ax.plot(gr_clip, d, color="#14532d", lw=1.1, label="GR")
@@ -2112,8 +2636,24 @@ def generate_well_cpi_plot(
 
     # Track 2: Deep Resistivity RT
     ax = axes[1]
-    rt = _get_numeric_series(sub, "RT", "RD").clip(lower=0.1).to_numpy(dtype=float)
+    rt_raw_s = _get_numeric_series(sub, "RT", "RD")
+    rt_env_s = _get_numeric_series(sub, "RT_ENV_CORR")
+    rt = (
+        rt_env_s.combine_first(rt_raw_s).clip(lower=0.1).to_numpy(dtype=float)
+        if rt_env_s.notna().any()
+        else rt_raw_s.clip(lower=0.1).to_numpy(dtype=float)
+    )
     if np.isfinite(rt).any():
+        if rt_env_s.notna().any() and rt_raw_s.notna().any():
+            ax.plot(
+                rt_raw_s.clip(lower=0.1).to_numpy(dtype=float),
+                d,
+                color="#64748b",
+                lw=0.7,
+                linestyle="--",
+                alpha=0.5,
+                label="RT Raw",
+            )
         ax.plot(rt, d, color="#dc2626", lw=1.1, label="RT")
     ax.set_xscale("log")
     ax.set_xlim(0.2, 200.0)
@@ -2122,8 +2662,8 @@ def generate_well_cpi_plot(
 
     # Track 3: RHOB & NPHI with Yellow Clean Sand / HC Crossover Fill
     ax = axes[2]
-    nphi = _get_numeric_series(sub, "NPHI").to_numpy(dtype=float)
-    rhob = _get_numeric_series(sub, "RHOB").to_numpy(dtype=float)
+    nphi = _get_numeric_series(sub, "NPHI_ENV_CORR", "NPHI").to_numpy(dtype=float)
+    rhob = _get_numeric_series(sub, "RHOB_ENV_CORR", "RHOB").to_numpy(dtype=float)
     if np.isfinite(nphi).any():
         ax.plot(nphi, d, color="#2563eb", lw=1.1, linestyle="--", label="NPHI")
     if np.isfinite(rhob).any():
