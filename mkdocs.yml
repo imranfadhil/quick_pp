@@ -121,13 +121,14 @@ nav:
           - "Thin-Bed Evaluation": tutorials/03_qpp_ts_single.ipynb
   - API Reference:
       - Package Overview: api/overview.md
-      - QA/QC & Normalization (qaqc): api/qaqc.md
+      - Environment, Borehole QC & Normalization (qaqc): api/qaqc.md
       - Raw Log Resolution Enhancement (conditioning): api/conditioning.md
       - Lithology Inversion (lithology): api/lithology.md
       - Porosity (porosity): api/porosity.md
       - Saturation & FWL Optimizer (saturation): api/saturation.md
       - Permeability (permeability): api/permeability.md
       - Rock & Fluid Typing (rock_type): api/rock_type.md
+      - Source Rock & TOC (source_rock): api/source_rock.md
       - Core Analysis (core_analysis): api/core_analysis.md
       - SCAL & Relative Permeability (scal): api/scal.md
       - Uncertainty & Monte Carlo (uncertainty): api/uncertainty.md

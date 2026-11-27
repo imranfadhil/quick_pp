@@ -1722,7 +1722,7 @@
 	<div
 		class="flex h-9 shrink-0 items-center justify-between border-t border-[var(--border-hairline)] bg-[var(--bg-subtle)] px-4 text-[10px] text-[var(--text-muted)]"
 	>
-		<span>quick_pp SSOT Technical Reference v0.3.7</span>
+		<span>quick_pp SSOT Technical Reference v0.3.8</span>
 		<div class="flex items-center gap-2">
 			<span>Press <strong>Esc</strong> to close</span>
 		</div>

@@ -1,20 +1,12 @@
-# Multi-Well QA/QC & Stratigraphic Normalization (`quick_pp.qaqc`)
+# Logging Environment, Borehole Corrections, QA/QC & Normalization (`quick_pp.environment`, `quick_pp.borehole_corrections`, `quick_pp.qaqc`)
 
-Borehole environmental corrections, neutron-density hydrocarbon corrections, bad-hole flagging, and multi-well zone-by-zone quantile/histogram normalization.
+Unified logging-environment physics, tool-profile (`WL` / `LWD`) borehole environmental corrections with per-sample uncertainty (`*_SIGMA`) and sensor confidence (`*_QC_CONF`), 2/3-curve radial resistivity invasion inversion, neutron-density hydrocarbon corrections, 4-criterion bad-hole flagging, and multi-well zone-by-zone quantile/histogram normalization.
 
-Environmental correction outputs use distinct `*_ENV_CORR` mnemonics. Density reconstruction
-has its own `RHOB_DEN_CORR` output.
-They remain preview/derived curves; downstream calculations do not select them automatically.
+Environmental correction outputs use distinct `*_ENV_CORR` mnemonics alongside `*_CORR_DELTA`, `*_SIGMA`, `*_QC_CONF`, `*_QC_STATUS`, `HOLE_SEVERITY`, `ENV_QC_REASON`, and radial invasion curves (`INVASION_FLAG`, `INVASION_PROFILE`, `DI_IN`). Density reconstruction has its own `RHOB_DEN_CORR` output. Downstream calculations use raw curves unless `use_env_corrected` / `confidence_weighting` (`confidence_weighted_curve`) is enabled.
 
-## Mud system metadata
+## Well Header & Hole Sections metadata
 
-The QAQC Well Header panel stores the run-level mud system used by the
-continuous fluid-density engine: `mud_type` (`WBM`/`OBM`/`SBM`) and
-`obm_base_density` (g/cc), alongside the existing `rmf`,
-`mud_filtrate_salinity`, and `mud_filtrate_density` fields. These are read from
-the LAS header where present and can be overridden per well. See
-[Porosity Evaluation](porosity.md#continuous-apparent-fluid-density-rho_fl) for
-how they feed the $\rho_{fl}$ solver.
+The **Well & Ancillary** step (`InspectorAncillary.svelte`, Step 1 in the Single-Well workflow) manages both the Well Header metadata (`mud_type` `WBM`/`OBM`/`SBM`, `obm_base_density`, `rm`, `rmf`, `rmc`, `mud_filtrate_salinity`, `mud_filtrate_density`, water depth, air gap, and BHT records) and depth-zoned **Hole Sections** (`top`, `bottom`, `bit_size`, `mud_type`, `mud_weight`, `mud_salinity`, `rmf`, `rmf_temp`). These synthesize nominal bit size (`BS`) and depth-specific mud properties for `badhole_flagging`, `apply_environmental_corrections`, and the continuous apparent fluid-density ($\rho_{fl}$) solver in [Porosity Evaluation](porosity.md#continuous-apparent-fluid-density-rho_fl).
 
 ## Hydrocarbon correction targets
 
@@ -42,16 +34,21 @@ hydrogen index, and lithology-scaled excavation term follow the supplied method
 equations. The selected saturation is returned as `SHC_INV`.
 
 The method requires well-header `mud_filtrate_density` (g/cc) and
-`mud_filtrate_salinity` (ppm), editable in the QAQC Well Header panel. Lithology
+`mud_filtrate_salinity` (ppm), editable in the Well Header panel in **Well & Ancillary**. Lithology
 coefficient `K` defaults to 1. Density porosity is estimated from the dry-sand
 density endpoint and mud-filtrate density; corrected `VSH_DN` is evaluated in the
-matrix/clay/mud-filtrate crossplot triangle. These are explicit implementation
-conventions where the supplied excerpts did not define `phi_D` or the exact
-`VSH_DN` calculation.
+matrix/clay/mud-filtrate crossplot triangle.
 
-This is an effective invaded-zone saturation correction, not a radial invasion
-simulator: separate neutron and density investigation radii and radial saturation
-profiles are not modeled. The separate “Default method” in the supplied screenshots
-is not implemented because its `NFAC` and `HCORR` equations were not provided.
+---
+
+## Unified Logging Environment (`quick_pp.environment`)
+
+::: quick_pp.environment
+
+## Borehole Corrections, Sensor Confidence & Radial Invasion (`quick_pp.borehole_corrections`)
+
+::: quick_pp.borehole_corrections
+
+## Bad-Hole Flagging, Normalization & Curve Reconstruction (`quick_pp.qaqc`)
 
 ::: quick_pp.qaqc

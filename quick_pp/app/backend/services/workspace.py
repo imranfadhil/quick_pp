@@ -12517,7 +12517,7 @@ def workspace_stick_plot(
                     )
                 elif isinstance(contacts_raw, list):
                     contacts_list = contacts_raw
-
+                else:
                     contacts_list = []
 
                 contact_items: List[Dict[str, Any]] = []
@@ -12634,10 +12634,6 @@ def workspace_stick_plot(
                 for item, (t_md, b_md) in zip(perf_items, perf_md_pairs, strict=False):
                     t_tvd = next(ancillary_tvd)
                     b_tvd = next(ancillary_tvd)
-                    t_tvd = float(t_tvd) if np.isfinite(t_tvd) else t_md
-                    b_tvd = float(b_tvd) if np.isfinite(b_tvd) else b_md
-                    if b_tvd < t_tvd:
-                        t_tvd, b_tvd = b_tvd, t_tvd
                     t_tvd = float(t_tvd) if np.isfinite(t_tvd) else t_md
                     b_tvd = float(b_tvd) if np.isfinite(b_tvd) else b_md
                     if b_tvd < t_tvd:

@@ -468,8 +468,11 @@ def enforce_report_storage_limits(
                 except OSError:
                     mtime = 0.0
                 mem_entry = report_svc._REPORTS_STORE.get(child.name)
-                if isinstance(mem_entry, dict) and mem_entry.get("_created_ts"):
-                    mtime = max(mtime, float(mem_entry["_created_ts"]))
+                if (
+                    isinstance(mem_entry, dict)
+                    and mem_entry.get("_created_ts") is not None
+                ):
+                    mtime = float(mem_entry["_created_ts"])
                 if force_all or (ts - mtime > ttl):
                     report_svc._REPORTS_STORE.pop(child.name, None)
                     if _safe_rmtree(child):
@@ -479,7 +482,7 @@ def enforce_report_storage_limits(
 
             # Ring-buffer cap: keep only newest `max_reports`
             if len(rpt_dirs) > max_reports:
-                rpt_dirs.sort(key=lambda item: item[0], reverse=True)
+                rpt_dirs.sort(key=lambda item: (item[0], item[1].name), reverse=True)
                 for _, old_dir in rpt_dirs[max_reports:]:
                     report_svc._REPORTS_STORE.pop(old_dir.name, None)
                     if _safe_rmtree(old_dir):
@@ -539,6 +542,16 @@ def enforce_upload_storage_limits(
                 if fpath and _safe_unlink(fpath):
                     deleted += 1
 
+        staged_created_by_path: Dict[str, float] = {}
+        for meta in las_svc._STAGED_FILES.values():
+            if meta.get("path") and meta.get("created_at") is not None:
+                try:
+                    staged_created_by_path[str(Path(meta["path"]).resolve())] = float(
+                        meta["created_at"]
+                    )
+                except OSError:
+                    pass
+
         upload_dirs = [
             las_svc.STAGING_DIR,
             Path("uploads/las_db"),
@@ -553,7 +566,9 @@ def enforce_upload_storage_limits(
                 if not item.is_file():
                     continue
                 try:
-                    mtime = item.stat().st_mtime
+                    mtime = staged_created_by_path.get(
+                        str(item.resolve()), item.stat().st_mtime
+                    )
                 except OSError:
                     continue
                 if force_all or (ts - mtime > ttl):
@@ -563,7 +578,9 @@ def enforce_upload_storage_limits(
                     surviving_staged.append((mtime, item))
 
         if len(surviving_staged) > max_files:
-            surviving_staged.sort(key=lambda pair: pair[0], reverse=True)
+            surviving_staged.sort(
+                key=lambda pair: (pair[0], pair[1].name), reverse=True
+            )
             keep_paths = {str(p.resolve()) for _, p in surviving_staged[:max_files]}
             for _, old_file in surviving_staged[max_files:]:
                 if _safe_unlink(old_file):
