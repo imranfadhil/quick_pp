@@ -1310,6 +1310,28 @@ def build_report_context(
     invasion_well_rows: List[Dict[str, Any]] = []
     env_assumptions_seen: List[str] = []
     resolved_envs: List[Any] = []
+    depth_align_well_rows: List[Dict[str, Any]] = []
+    depth_align_curve_rows: List[Dict[str, Any]] = []
+    depth_align_reports_by_well: Dict[str, Dict[str, Any]] = {}
+    requested_model = model_params or {}
+    req_da_cfg = (
+        requested_model.get("depth_align_params")
+        if isinstance(requested_model.get("depth_align_params"), dict)
+        else {}
+    )
+    da_ref_curve = str(
+        req_da_cfg.get("referenceCurve", req_da_cfg.get("reference_curve", "GR"))
+        or "GR"
+    ).upper()
+    da_max_shift_m = _safe_float(
+        req_da_cfg.get("maxShiftM", req_da_cfg.get("max_shift", 3.0)), 3.0
+    )
+    da_win_size_m = _safe_float(
+        req_da_cfg.get("windowSizeM", req_da_cfg.get("window_size", 40.0)), 40.0
+    )
+    da_excl_bh = bool(
+        req_da_cfg.get("excludeBadhole", req_da_cfg.get("exclude_badhole", True))
+    )
 
     combined_dfs: List[pd.DataFrame] = []
     unfiltered_dfs: List[pd.DataFrame] = []
@@ -2164,10 +2186,133 @@ def build_report_context(
                 }
             )
 
+        # Inter-Log Depth Alignment & Run Tie-In QC (bed-boundary |df/dz| cross-correlation)
+        w_da_off = 0
+        w_da_max_shift = 0.0
+        if "DEPTH" in w_df.columns and len(w_df) >= 30:
+            try:
+                from quick_pp.depth_alignment import evaluate_depth_alignment
+
+                da_bh_mask = None
+                if da_excl_bh and "BADHOLE" in w_df.columns:
+                    da_bh_mask = (
+                        pd.to_numeric(w_df["BADHOLE"], errors="coerce").fillna(0.0)
+                        > 0.5
+                    ).to_numpy()
+                da_rep = evaluate_depth_alignment(
+                    w_df,
+                    ref_curve=da_ref_curve,
+                    max_shift=da_max_shift_m,
+                    window_size=da_win_size_m,
+                    window_step=max(5.0, da_win_size_m / 4.0),
+                    badhole_mask=da_bh_mask,
+                    depth_unit="m",
+                )
+                da_curves = list(da_rep.get("curves") or [])
+                if da_curves:
+                    depth_align_reports_by_well[w_name] = da_rep
+                    eff_ref = str(da_rep.get("reference_curve") or da_ref_curve)
+                    w_ori_curves: List[str] = []
+                    w_off_details: List[str] = []
+                    w_da_aligned = 0
+                    w_da_minor = 0
+                    w_da_var = 0
+                    worst_c = da_curves[0]["curve"]
+                    for cr in da_curves:
+                        cname = str(cr["curve"])
+                        has_ori = f"{cname}_ORI" in w_df.columns
+                        if has_ori:
+                            w_ori_curves.append(cname)
+                        sh_m = float(cr.get("suggested_shift_m") or 0.0)
+                        cf_v = float(cr.get("confidence") or 0.0)
+                        st_v = str(cr.get("status") or "ALIGNED")
+                        var_d = bool(cr.get("variable_drift"))
+                        if abs(sh_m) >= w_da_max_shift:
+                            w_da_max_shift = abs(sh_m)
+                            worst_c = cname
+                        if st_v == "OFF_DEPTH":
+                            w_da_off += 1
+                            if cf_v >= 0.45:
+                                w_off_details.append(f"{cname} ({sh_m:+.2f} m)")
+                        elif st_v == "MINOR":
+                            w_da_minor += 1
+                        elif st_v == "ALIGNED":
+                            w_da_aligned += 1
+                        if var_d:
+                            w_da_var += 1
+                        depth_align_curve_rows.append(
+                            {
+                                "well_name": w_name,
+                                "curve": cname,
+                                "ref_curve": eff_ref,
+                                "samples": int(cr.get("valid_samples") or 0),
+                                "shift_m": round(sh_m, 3),
+                                "shift_samples": round(
+                                    float(cr.get("suggested_shift_samples") or 0.0), 2
+                                ),
+                                "p95_drift_m": round(
+                                    float(cr.get("p95_abs_drift_m") or 0.0), 3
+                                ),
+                                "variable_drift": var_d,
+                                "peak_corr": round(
+                                    float(cr.get("peak_corr") or 0.0), 3
+                                ),
+                                "zero_corr": round(
+                                    float(cr.get("zero_lag_corr") or 0.0), 3
+                                ),
+                                "confidence": round(cf_v, 2),
+                                "has_ori": has_ori,
+                                "status": st_v,
+                            }
+                        )
+                    w_da_status = (
+                        "OFF_DEPTH"
+                        if w_da_off > 0
+                        else ("MINOR_DRIFT" if w_da_minor > 0 else "ALIGNED")
+                    )
+                    depth_align_well_rows.append(
+                        {
+                            "well_name": w_name,
+                            "ref_curve": eff_ref,
+                            "evaluated_count": len(da_curves),
+                            "aligned_count": w_da_aligned,
+                            "minor_count": w_da_minor,
+                            "off_depth_count": w_da_off,
+                            "variable_drift_count": w_da_var,
+                            "max_abs_shift_m": round(w_da_max_shift, 3),
+                            "worst_curve": worst_c,
+                            "conditioned_curves": (
+                                ", ".join(sorted(set(w_ori_curves)))
+                                if w_ori_curves
+                                else "—"
+                            ),
+                            "status": w_da_status,
+                        }
+                    )
+                    if w_off_details:
+                        anomaly_flags.append(
+                            {
+                                "category": "Inter-Log Depth Mismatch",
+                                "target": w_name,
+                                "message": (
+                                    f"Bed-boundary cross-correlation vs {eff_ref} flagged off-depth curve(s): "
+                                    f"{', '.join(w_off_details)} (max |Δz| = {w_da_max_shift:.2f} m)."
+                                ),
+                                "mitigation": (
+                                    "Apply bulk or dynamic depth shift in Data & QA/QC -> Inter-Log Depth Alignment "
+                                    "(original curve preserved as *_ORI) prior to porosity/invasion evaluation."
+                                ),
+                            }
+                        )
+            except Exception as exc:
+                logger.debug(f"Depth alignment QC skipped for {w_name}: {exc}")
+
         if w_res_mismatch > 0:
             qc_status = "FLAGGED (Res/Mud Mismatch)"
         elif bh_pct > 15.0:
             qc_status = "FLAGGED (>15% Washout)"
+        elif w_da_off > 0 and w_da_max_shift > 0.50:
+            qc_status = "FLAGGED (Off-Depth Logs)"
         elif w_has_env and w_max_unrel > 20.0:
             qc_status = "REVIEW (Low Conf)"
         else:
@@ -4702,6 +4847,58 @@ def build_report_context(
         "assumptions": env_assumptions_seen[:8],
     }
 
+    focal_da_well = None
+    if depth_align_well_rows:
+        focal_da_well = max(
+            depth_align_well_rows,
+            key=lambda r: (
+                r["off_depth_count"],
+                r["minor_count"],
+                r["max_abs_shift_m"],
+            ),
+        )["well_name"]
+    da_conditioned = sorted(
+        {r["curve"] for r in depth_align_curve_rows if r.get("has_ori")}
+    )
+    depth_alignment_summary: Dict[str, Any] = {
+        "evaluated": len(depth_align_curve_rows) > 0,
+        "wells_evaluated": len(depth_align_well_rows),
+        "total_wells": len(qaqc_table),
+        "reference_curve": (
+            depth_align_well_rows[0]["ref_curve"]
+            if depth_align_well_rows
+            else da_ref_curve
+        ),
+        "max_shift_m": da_max_shift_m,
+        "window_size_m": da_win_size_m,
+        "exclude_badhole": da_excl_bh,
+        "total_curves": len(depth_align_curve_rows),
+        "aligned_count": sum(
+            1 for r in depth_align_curve_rows if r["status"] == "ALIGNED"
+        ),
+        "minor_count": sum(1 for r in depth_align_curve_rows if r["status"] == "MINOR"),
+        "off_depth_count": sum(
+            1 for r in depth_align_curve_rows if r["status"] == "OFF_DEPTH"
+        ),
+        "variable_drift_count": sum(
+            1 for r in depth_align_curve_rows if r.get("variable_drift")
+        ),
+        "max_abs_shift_m": round(
+            max(
+                (float(r["max_abs_shift_m"]) for r in depth_align_well_rows),
+                default=0.0,
+            ),
+            3,
+        ),
+        "conditioned_curves": da_conditioned,
+        "focal_well": focal_da_well,
+        "focal_report": (
+            depth_align_reports_by_well.get(focal_da_well) if focal_da_well else None
+        ),
+        "well_table": depth_align_well_rows,
+        "curve_table": depth_align_curve_rows,
+    }
+
     cali_lim = _safe_float(
         req_env_cfg.get(
             "washoutThold",
@@ -5386,6 +5583,7 @@ def build_report_context(
         "qaqc_params": qaqc_params,
         "qaqc_table": qaqc_table,
         "env_corr_summary": env_corr_summary,
+        "depth_alignment_summary": depth_alignment_summary,
         "litho_params": litho_params,
         "poro_params": poro_params,
         "rock_types": rock_types,
@@ -5819,7 +6017,44 @@ def validate_fdp_report_payload(context: Dict[str, Any]) -> List[Dict[str, str]]
         "Insufficient multi-curve overlap to audit inter-log depth alignment."
     )
     chk13_note = "Inter-log depth alignment verified across evaluated curve suite."
-    if not full_df.empty and "DEPTH" in full_df.columns:
+    da_ctx = context.get("depth_alignment_summary") or {}
+    if da_ctx.get("evaluated"):
+        eval_wells = int(da_ctx.get("wells_evaluated") or 1)
+        off_items_ctx: List[str] = []
+        minor_items_ctx: List[str] = []
+        max_shift_ctx = 0.0
+        for cr in da_ctx.get("curve_table") or []:
+            if float(cr.get("confidence") or 0.0) < 0.45:
+                continue
+            sh_m = float(cr.get("shift_m") or 0.0)
+            max_shift_ctx = max(max_shift_ctx, abs(sh_m))
+            lbl = f"{cr.get('well_name', 'WELL')}:{cr['curve']} ({sh_m:+.2f} m)"
+            if cr.get("status") == "OFF_DEPTH":
+                off_items_ctx.append(lbl)
+            elif cr.get("status") == "MINOR":
+                minor_items_ctx.append(lbl)
+        if off_items_ctx and max_shift_ctx > 0.50:
+            chk13_status = "QA ALERT"
+            chk13_measured = (
+                f"Off-depth run(s) detected across {eval_wells} well(s): "
+                f"{', '.join(off_items_ctx[:4])} (max |Δz| = {max_shift_ctx:.2f} m)."
+            )
+            chk13_note = "Run Inter-Log Depth Alignment QC in Data & QA/QC to shift off-depth logs before evaluation."
+        elif off_items_ctx or minor_items_ctx:
+            chk13_status = "REVIEW"
+            flagged_txt = ", ".join((off_items_ctx + minor_items_ctx)[:4])
+            chk13_measured = (
+                f"Minor depth drift detected across {eval_wells} well(s): "
+                f"{flagged_txt} (max |Δz| = {max_shift_ctx:.2f} m)."
+            )
+            chk13_note = "Inspect Depth Alignment QC plot; apply bulk or dynamic shift if using thin-bed deconvolution."
+        else:
+            chk13_status = "PASS"
+            chk13_measured = (
+                f"All primary curves aligned within tolerance across {eval_wells} well(s) "
+                f"(max |Δz| = {max_shift_ctx:.2f} m)."
+            )
+    elif not full_df.empty and "DEPTH" in full_df.columns:
         try:
             from quick_pp.depth_alignment import evaluate_depth_alignment
 
@@ -5970,6 +6205,7 @@ def synthesize_domain_ai_commentary(
     zonal = context.get("zonal_summary", [])
     qaqc_tbl = context.get("qaqc_table", [])
     env_s = context.get("env_corr_summary", {}) or {}
+    da_s = context.get("depth_alignment_summary", {}) or {}
     poro_p = context.get("poro_params", {})
     sw_p = context.get("sw_params", {})
     shf_p = context.get("shf_params", {})
@@ -6053,6 +6289,36 @@ def synthesize_domain_ai_commentary(
                 else "."
             )
         )
+
+    da_narrative_suffix = ""
+    if da_s.get("evaluated"):
+        da_ref = da_s.get("reference_curve", "GR")
+        da_off = int(da_s.get("off_depth_count") or 0)
+        da_min = int(da_s.get("minor_count") or 0)
+        da_max = float(da_s.get("max_abs_shift_m") or 0.0)
+        da_cond = da_s.get("conditioned_curves") or []
+        cond_clause = (
+            f" (previously depth-shifted curves with `*_ORI` lineage: {', '.join(f'`{c}`' for c in da_cond)})"
+            if da_cond
+            else ""
+        )
+        if da_off > 0:
+            da_narrative_suffix = (
+                f" Bed-boundary gradient (`|df/dz|`) cross-correlation against `{da_ref}` flags **{da_off} off-depth** "
+                f"and **{da_min} minor-drift** curve(s) (maximum lag $|\\Delta z| = {da_max:.2f}\\text{{ m}}$){cond_clause}, "
+                f"warranting run tie-in conditioning prior to thin-bed or invasion analysis."
+            )
+        elif da_min > 0:
+            da_narrative_suffix = (
+                f" Inter-log bed-boundary cross-correlation against `{da_ref}` confirms zero severe off-depth runs, "
+                f"with **{da_min} minor micro-drift** curve(s) ($|\\Delta z|_{{\\max}} = {da_max:.2f}\\text{{ m}}$){cond_clause}."
+            )
+        else:
+            da_narrative_suffix = (
+                f" Inter-log bed-boundary cross-correlation against `{da_ref}` confirms all **{da_s.get('total_curves', 0)}** "
+                f"evaluated curves are on-depth within sample tolerance ($|\\Delta z|_{{\\max}} = {da_max:.2f}\\text{{ m}}$){cond_clause}."
+            )
+    env_narrative_suffix = env_narrative_suffix + da_narrative_suffix
 
     # Spec 4.1: Threshold-driven calibration parity prose (never claim "strong parity" when R² is low)
     c_r2 = _safe_float(poro_p.get("core_r2"), 0.0)
@@ -6310,6 +6576,9 @@ def synthesize_domain_ai_commentary(
             "env_corr_summary": {
                 k: v for k, v in env_s.items() if k not in ("hole_sections_table",)
             },
+            "depth_alignment_summary": {
+                k: v for k, v in da_s.items() if k not in ("focal_report",)
+            },
             "poro_params": poro_p,
             "sw_params": sw_p,
             "shf_params": shf_p,
@@ -6521,6 +6790,7 @@ def _generate_all_report_plots_scoped(
         "inventory_heatmap": None,
         "norm_plot": None,
         "env_corr_plot": None,
+        "depth_alignment_plot": None,
         "litho_poro_crossplot": None,
         "core_calibration_plot": None,
         "perm_crossplot": None,
@@ -6561,6 +6831,27 @@ def _generate_all_report_plots_scoped(
                 )
             except Exception as exc:
                 logger.debug(f"Failed generating borehole env QC plot: {exc}")
+        da_s = context.get("depth_alignment_summary", {}) or {}
+        if da_s.get("evaluated") and not full_df.empty:
+            try:
+                da_fig_idx = (
+                    1
+                    + int(bool(assets.get("norm_plot")))
+                    + int(bool(assets.get("env_corr_plot")))
+                )
+                assets["depth_alignment_plot"] = (
+                    report_plots.generate_depth_alignment_qc_plot(
+                        full_df,
+                        well_names=well_names,
+                        depth_alignment_summary=da_s,
+                        target_zones=target_zones,
+                        output_dir=out_dir,
+                        url_prefix=url_prefix,
+                        fig_index=da_fig_idx,
+                    )
+                )
+            except Exception as exc:
+                logger.debug(f"Failed generating depth alignment QC plot: {exc}")
     litho_p = context.get("litho_params", {})
     if "04_lithology_porosity" in enabled_section_ids:
         assets["litho_poro_crossplot"] = report_plots.generate_nd_crossplot(

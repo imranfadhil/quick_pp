@@ -593,45 +593,81 @@ def test_borehole_env_correction_wired_to_fdp_and_single_well_reports(
         assert len(env_sum["curve_table"]) == 5
         assert "ENV_TEMP_C" in res.context_summary["sw_params"]["temp_basis"]
 
-        # 3. Plot asset, Markdown sections, Gate Check CHK-12 & PDF export
+        # 3. Plot asset, Markdown sections, Gate Check CHK-12 / CHK-13 & PDF export
         assert "env_corr_plot" in res.asset_urls
         env_plot_name = Path(res.asset_urls["env_corr_plot"]).name
         assert env_plot_name == "fig_3_2_env_corr_qc_plot.png"
+        assert "depth_alignment_plot" in res.asset_urls
+        da_plot_name = Path(res.asset_urls["depth_alignment_plot"]).name
+        assert da_plot_name == "fig_3_3_depth_alignment_qc_plot.png"
+
+        da_sum = res.context_summary["depth_alignment_summary"]
+        assert da_sum["evaluated"] is True
+        assert da_sum["wells_evaluated"] == 1
+        assert len(da_sum["curve_table"]) >= 3
+
         assert "Borehole Mud-Program & Casing / Hole Sections" in res.markdown_content
         assert "3.3 Borehole Environmental Correction" in res.markdown_content
         assert "3.4 Step-Profile Radial Resistivity Invasion" in res.markdown_content
+        assert (
+            "3.5 Inter-Log Depth Alignment & Run Tie-In Audit" in res.markdown_content
+        )
         assert "NPHI_ENV_CORR" in res.markdown_content
 
         chk12 = next(
             c for c in res.context_summary["gate_checks"] if c["id"] == "CHK-12"
         )
         assert chk12["status"] in ("PASS", "REVIEW")
+        chk13 = next(
+            c for c in res.context_summary["gate_checks"] if c["id"] == "CHK-13"
+        )
+        assert chk13["status"] in ("PASS", "REVIEW")
 
         pdf_path = compile_report_to_pdf(res.report_id)
         assert pdf_path.exists() and pdf_path.stat().st_size > 500
 
-        # 4. Single-Well CPI Dossier numbering (2.3 / 2.4 / 7. Gate-Check + dynamic figure header helper)
+        # 4. Single-Well CPI Dossier numbering (2.3 / 2.4 / 2.5 / 7. Gate-Check + dynamic figure header helper)
         sw_res = generate_petrophysical_report_service(
             ReportGenerationRequest(
                 project_id="101",
                 report_type="SINGLE_WELL_CPI",
                 well_names=["WELL-A"],
                 include_ai_summary=True,
-                model_params={"env_corr_params": env_corr_params},
+                model_params={
+                    "env_corr_params": env_corr_params,
+                    "depth_align_params": {
+                        "referenceCurve": "GR",
+                        "maxShiftM": 3.0,
+                        "windowSizeM": 30.0,
+                        "excludeBadhole": True,
+                    },
+                },
             )
         )
         assert "2.3 Borehole Environmental Correction" in sw_res.markdown_content
         assert "2.4 Step-Profile Radial Resistivity Invasion" in sw_res.markdown_content
         assert (
+            "2.5 Inter-Log Depth Alignment & Run Tie-In Audit"
+            in sw_res.markdown_content
+        )
+        assert "depth_alignment_plot" in sw_res.asset_urls
+        assert (
             "# 7. Petrophysical QA/QC Gate-Check & Peer-Review Audit Log"
             in sw_res.markdown_content
         )
         assert "| **CHK-12** |" in sw_res.markdown_content
+        assert "| **CHK-13** |" in sw_res.markdown_content
         assert (
             report_plots._resolve_figure_header(
                 "fig_3_2_env_corr_qc_plot.png", report_type="SINGLE_WELL_CPI"
             )
             == "Figure 2.2 · Borehole Environment, Sensor Corrections and Radial Invasion QC"
+        )
+        assert (
+            report_plots._resolve_figure_header(
+                "fig_3_3_depth_alignment_qc_plot.png", report_type="SINGLE_WELL_CPI"
+            )
+            == "Figure 2.3 · Inter-Log Depth Alignment, Correlogram and Run Tie-In QC"
         )
         assert (
             report_plots._resolve_figure_header(
@@ -672,4 +708,35 @@ def test_borehole_env_correction_wired_to_fdp_and_single_well_reports(
         assert any(
             a["category"] == "Resistivity Tool / Mud-Type Mismatch"
             for a in bad_ctx["anomaly_flags"]
+        )
+
+    # 6. Verify CHK-13 QA ALERT on off-depth log + *_ORI lineage tracking
+    off_df = corr_df.copy()
+    z_arr = off_df["DEPTH"].to_numpy(dtype=float)
+    # Shift NPHI down by +0.9 m (recorded 0.9 m too deep relative to GR) and mark RHOB_ORI backup
+    off_df["NPHI"] = np.interp(z_arr - 0.9, z_arr, off_df["NPHI"].to_numpy(dtype=float))
+    off_df["RHOB_ORI"] = off_df["RHOB"].copy()
+    with (
+        patch(
+            "quick_pp.app.backend.services.report.db_objects.Project.load",
+            side_effect=ValueError("Mocked project"),
+        ),
+        patch(
+            "quick_pp.app.backend.services.report.get_project_summary",
+            return_value=mock_summary,
+        ),
+        patch(
+            "quick_pp.app.backend.services.report._get_merged_dataframe_sync",
+            return_value=off_df,
+        ),
+    ):
+        off_ctx = get_compact_report_context("101", well_names=["WELL-A"])
+        chk13_bad = next(c for c in off_ctx["gate_checks"] if c["id"] == "CHK-13")
+        assert chk13_bad["status"] == "QA ALERT"
+        assert "RHOB" in off_ctx["depth_alignment_summary"]["conditioned_curves"]
+        assert "RHOB_ORI" in off_ctx["wells"][0]["edited_curves"]
+        assert "RHOB_ORI" not in off_ctx["wells"][0]["raw_curves"]
+        assert any(
+            a["category"] == "Inter-Log Depth Mismatch"
+            for a in off_ctx["anomaly_flags"]
         )

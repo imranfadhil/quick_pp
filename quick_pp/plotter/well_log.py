@@ -30,7 +30,9 @@ def _color_to_rgba(color_str: str, alpha: float = 0.20) -> str:
 
 
 # --- Helper to add traces from trace_defs ---
-def add_defined_traces(fig, df, index, no_of_track, trace_defs, **kwargs):
+def add_defined_traces(
+    fig, df, index, no_of_track, trace_defs, xaxis_defs=None, **kwargs
+):
     """Add predefined traces to a Plotly figure.
 
     Args:
@@ -39,12 +41,15 @@ def add_defined_traces(fig, df, index, no_of_track, trace_defs, **kwargs):
         index (pd.Series): The depth index for the y-axis.
         no_of_track (int): The total number of tracks in the plot.
         trace_defs (dict): A dictionary defining the traces and their styles.
+        xaxis_defs (dict, optional): Axis configuration dictionary used to distinguish primary vs overlay axes.
         **kwargs: Additional keyword arguments to pass to `go.Scatter`.
 
     Returns:
         plotly.graph_objects.Figure: The figure with the added traces.
     """
-    trace_ix = 0
+    eff_xdefs = xaxis_defs if xaxis_defs is not None else XAXIS_DEFS
+    primary_track_claimed = set()
+    next_overlay_ix = no_of_track + 1
     litho_count = 0
     for col, trace_def in trace_defs.items():
         # Skip special cases handled separately
@@ -77,15 +82,7 @@ def add_defined_traces(fig, df, index, no_of_track, trace_defs, **kwargs):
             ):
                 continue
 
-        # For optional spectral GR curves, only add to Track 1 if available with non-zero data
-        if col in ["POTA", "THOR", "URAN", "CGR"]:
-            if (
-                col not in df.columns
-                or not df[col].notna().any()
-                or not (df[col].dropna() > 1e-4).any()
-            ):
-                continue
-
+        track_num = int(trace_def["track"])
         trace_args = {
             "x": round(df[col], 3) if df[col].dtype == "float64" else df[col],
             "y": index,
@@ -96,13 +93,19 @@ def add_defined_traces(fig, df, index, no_of_track, trace_defs, **kwargs):
         fig.add_trace(
             go.Scatter(**trace_args),
             row=1,
-            col=trace_def["track"],
+            col=track_num,
             secondary_y=trace_def.get("secondary_y", False),
         )
-        # Required for xaxis visibility for overlapping traces
-        if not trace_def.get("hide_xaxis", True) and trace_ix >= no_of_track:
-            fig.data[trace_ix].update(xaxis=f"x{trace_ix + 1}")
-        trace_ix += 1
+        # Keep the first non-overlay trace per track on the subplot's primary x-axis (x, x2..xN);
+        # assign every subsequent visible-axis trace its own overlay x-axis (x{N+1}, x{N+2}, ...)
+        # so optional curves (e.g. CGR/POTA/THOR/URAN/DTS) never collide with or shift track base axes.
+        if not trace_def.get("hide_xaxis", True):
+            ax_cfg = eff_xdefs.get(col, {})
+            if track_num not in primary_track_claimed and "overlaying" not in ax_cfg:
+                primary_track_claimed.add(track_num)
+            else:
+                fig.data[-1].update(xaxis=f"x{next_overlay_ix}")
+                next_overlay_ix += 1
 
     return fig
 
@@ -124,7 +127,9 @@ def add_uncertainty_traces(fig, df, index, trace_defs):
         plotly.graph_objects.Figure: The figure with P10–P90 shaded uncertainty bands added.
     """
     for col, trace_def in trace_defs.items():
-        if col in ["COAL_FLAG", "ZONES"] or trace_def.get("style", {}).get("stackgroup"):
+        if col in ["COAL_FLAG", "ZONES"] or trace_def.get("style", {}).get(
+            "stackgroup"
+        ):
             continue
 
         p10_col = f"{col}_P10"
@@ -136,7 +141,9 @@ def add_uncertainty_traces(fig, df, index, trace_defs):
             continue
 
         parent_trace = next((t for t in fig.data if t.name == col), None)
-        parent_xaxis = getattr(parent_trace, "xaxis", None) if parent_trace is not None else None
+        parent_xaxis = (
+            getattr(parent_trace, "xaxis", None) if parent_trace is not None else None
+        )
         track = trace_def["track"]
         sec_y = trace_def.get("secondary_y", False)
 
@@ -183,14 +190,20 @@ def add_uncertainty_traces(fig, df, index, trace_defs):
             fig.data[-1].update(xaxis=parent_xaxis)
 
         if p50_col in df.columns and df[p50_col].notna().any():
-            x_p50 = round(df[p50_col], 3) if df[p50_col].dtype == "float64" else df[p50_col]
+            x_p50 = (
+                round(df[p50_col], 3) if df[p50_col].dtype == "float64" else df[p50_col]
+            )
             fig.add_trace(
                 go.Scatter(
                     x=x_p50,
                     y=index,
                     name=p50_col,
                     mode="lines",
-                    line={"width": 1, "dash": "dash", "color": COLOR_DICT.get(col, "#262626")},
+                    line={
+                        "width": 1,
+                        "dash": "dash",
+                        "color": COLOR_DICT.get(col, "#262626"),
+                    },
                     showlegend=False,
                     hovertemplate=f"<b>{p50_col}</b>: %{{x}}<extra></extra>",
                 ),
@@ -205,7 +218,11 @@ def add_uncertainty_traces(fig, df, index, trace_defs):
         if col == "SWT":
             for sw_pct in ("SW_P10", "SW_P50", "SW_P90"):
                 if sw_pct in df.columns and df[sw_pct].notna().any():
-                    x_sw = round(df[sw_pct], 3) if df[sw_pct].dtype == "float64" else df[sw_pct]
+                    x_sw = (
+                        round(df[sw_pct], 3)
+                        if df[sw_pct].dtype == "float64"
+                        else df[sw_pct]
+                    )
                     fig.add_trace(
                         go.Scatter(
                             x=x_sw,
@@ -305,9 +322,32 @@ def fix_missing_volumetrics(df):
         pd.DataFrame: The DataFrame with NaNs filled in volumetric columns.
     """
     volumetrics = [
-        "VCLAY", "VSILT", "VSAND", "VCALC", "VDOLO", "VGAS", "VOIL", "VHC",
-        "VFELD", "VKAOL", "VANHY", "VGYPS", "VHALI", "VPYRI", "VCOAL",
-        "VILLI", "VSMEC", "VCHLO", "VGLAUC", "VMUSC", "VBIOT", "VKFELD", "VALBI", "VSIDE", "VANKE", "VKERO",
+        "VCLAY",
+        "VSILT",
+        "VSAND",
+        "VCALC",
+        "VDOLO",
+        "VGAS",
+        "VOIL",
+        "VHC",
+        "VFELD",
+        "VKAOL",
+        "VANHY",
+        "VGYPS",
+        "VHALI",
+        "VPYRI",
+        "VCOAL",
+        "VILLI",
+        "VSMEC",
+        "VCHLO",
+        "VGLAUC",
+        "VMUSC",
+        "VBIOT",
+        "VKFELD",
+        "VALBI",
+        "VSIDE",
+        "VANKE",
+        "VKERO",
     ]
     for col in volumetrics:
         if col in df.columns:
@@ -417,7 +457,7 @@ def plotly_log(
     df = add_crossover_traces(df)
 
     # Alias SW -> SWT if SWT is absent so Track 6 displays saturation and its P10-P50-P90 band
-    if ("SWT" not in df.columns or df["SWT"].isna().all()):
+    if "SWT" not in df.columns or df["SWT"].isna().all():
         if "SW" in df.columns and df["SW"].notna().any():
             df["SWT"] = df["SW"]
         elif "SW_P50" in df.columns and df["SW_P50"].notna().any():
@@ -427,16 +467,25 @@ def plotly_log(
     for pct in ("P10", "P50", "P90"):
         sw_col = f"SW_{pct}"
         swt_col = f"SWT_{pct}"
-        if sw_col in df.columns and (swt_col not in df.columns or df[swt_col].isna().all()):
+        if sw_col in df.columns and (
+            swt_col not in df.columns or df[swt_col].isna().all()
+        ):
             df[swt_col] = df[sw_col]
-        elif swt_col in df.columns and (sw_col not in df.columns or df[sw_col].isna().all()):
+        elif swt_col in df.columns and (
+            sw_col not in df.columns or df[sw_col].isna().all()
+        ):
             df[sw_col] = df[swt_col]
 
     # Ensure all required columns exist (fill with NaN if missing),
     # but do NOT inject fake columns for optional lithology curves if absent from the data.
     for k in trace_defs.keys():
         if k not in df.columns:
-            if trace_defs[k].get("style", {}).get("stackgroup") == "litho" or k in ["POTA", "THOR", "URAN", "CGR"]:
+            if trace_defs[k].get("style", {}).get("stackgroup") == "litho" or k in [
+                "POTA",
+                "THOR",
+                "URAN",
+                "CGR",
+            ]:
                 continue
             df[k] = np.nan
 
@@ -454,7 +503,9 @@ def plotly_log(
         column_widths=column_widths,
         specs=[list([{"secondary_y": True}] * no_of_track)],
     )
-    fig = add_defined_traces(fig, df, index, no_of_track, trace_defs)
+    fig = add_defined_traces(
+        fig, df, index, no_of_track, trace_defs, xaxis_defs=xaxis_defs
+    )
     fig = add_uncertainty_traces(fig, df, index, trace_defs)
 
     # --- ROCK_FLAG_X traces (special style, always on track 7, secondary_y=False) ---
@@ -525,12 +576,19 @@ def plotly_log(
             )
 
     # Resolve TVDSS if not present but TVD and datum_elevation are provided
-    tvd_col = next((c for c in ("TVD", "tvd", "DEPT_TVD", "DEPTH_TVD") if c in df.columns), None)
-    tvdss_col = next((c for c in ("TVDSS", "tvdss", "DEPT_TVDSS", "DEPTH_TVDSS") if c in df.columns), None)
+    tvd_col = next(
+        (c for c in ("TVD", "tvd", "DEPT_TVD", "DEPTH_TVD") if c in df.columns), None
+    )
+    tvdss_col = next(
+        (c for c in ("TVDSS", "tvdss", "DEPT_TVDSS", "DEPTH_TVDSS") if c in df.columns),
+        None,
+    )
 
     if tvdss_col is None and tvd_col is not None and datum_elevation is not None:
         try:
-            df["TVDSS"] = pd.to_numeric(df[tvd_col], errors="coerce") - float(datum_elevation)
+            df["TVDSS"] = pd.to_numeric(df[tvd_col], errors="coerce") - float(
+                datum_elevation
+            )
             tvdss_col = "TVDSS"
         except Exception:
             pass
@@ -572,24 +630,62 @@ def plotly_log(
             )
 
     # Update xaxis and yaxis layout configurations
-    visible_xaxis = [
+    visible_xaxis = {
         col
         for col, trace_def in trace_defs.items()
         if not trace_def.get("hide_xaxis", True)
-    ]
-    layout_dict = {
-        f"xaxis{x.xaxis[1:]}": v
-        for k, v in xaxis_defs.items()
-        for x in fig.data
-        if k in visible_xaxis and x.name == k
     }
-    y_title_text = f"<b>DEPTH ({depth_uom.upper()}) MD</b>" if depth_uom else "<b>DEPTH MD</b>"
+    base_axis_ids = {"x", *(f"x{t}" for t in range(2, no_of_track + 1))}
+    layout_dict = {}
+
+    # Seed every track's primary x-axis (x, x2..xN) so tracks whose primary curve was skipped
+    # (e.g. VCLAY == 0 on Track 8) still get top-anchored ranges instead of bottom auto-ranges.
+    for col_k, tdef in trace_defs.items():
+        tr_num = int(tdef["track"])
+        base_layout_key = "xaxis" if tr_num == 1 else f"xaxis{tr_num}"
+        if (
+            base_layout_key not in layout_dict
+            and col_k in visible_xaxis
+            and col_k in xaxis_defs
+            and "overlaying" not in xaxis_defs[col_k]
+        ):
+            cfg = dict(xaxis_defs[col_k])
+            cfg.pop("overlaying", None)
+            layout_dict[base_layout_key] = cfg
+
+    for tr in fig.data:
+        tname = getattr(tr, "name", None)
+        if tname not in visible_xaxis or tname not in xaxis_defs:
+            continue
+        ax_id = getattr(tr, "xaxis", None) or "x"
+        if ax_id == "x1":
+            ax_id = "x"
+        layout_key = "xaxis" if ax_id == "x" else f"xaxis{ax_id[1:]}"
+        cfg = dict(xaxis_defs[tname])
+        if ax_id in base_axis_ids:
+            # Base subplot x-axes hold the track domain and must never overlay themselves.
+            cfg.pop("overlaying", None)
+        else:
+            ov = cfg.get("overlaying")
+            if ov == "x1" or not ov:
+                tr_num = int(trace_defs[tname]["track"])
+                cfg["overlaying"] = "x" if tr_num == 1 else f"x{tr_num}"
+        layout_dict[layout_key] = cfg
+    y_title_text = (
+        f"<b>DEPTH ({depth_uom.upper()}) MD</b>" if depth_uom else "<b>DEPTH MD</b>"
+    )
     if tvdss_col and tvd_col:
-        y_title_text += "<br><span style='font-size:9px;color:#64748B'>[Hover: TVD & TVDSS]</span>"
+        y_title_text += (
+            "<br><span style='font-size:9px;color:#64748B'>[Hover: TVD & TVDSS]</span>"
+        )
     elif tvdss_col:
-        y_title_text += "<br><span style='font-size:9px;color:#64748B'>[Hover: TVDSS]</span>"
+        y_title_text += (
+            "<br><span style='font-size:9px;color:#64748B'>[Hover: TVDSS]</span>"
+        )
     elif tvd_col:
-        y_title_text += "<br><span style='font-size:9px;color:#64748B'>[Hover: TVD]</span>"
+        y_title_text += (
+            "<br><span style='font-size:9px;color:#64748B'>[Hover: TVD]</span>"
+        )
 
     layout_dict["yaxis"] = {
         "domain": [0, 0.84],
@@ -690,6 +786,7 @@ def plotly_log(
         template="none",
         margin={"l": 70, "r": 0, "t": 20, "b": 10},
         paper_bgcolor="#dadada",
+        plot_bgcolor="rgba(0,0,0,0)",
     )
 
     return fig

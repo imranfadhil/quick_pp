@@ -84,6 +84,7 @@ _FIGURE_TITLES = {
     "fig_2_1_inventory_heatmap.png": "Figure 2.1 · Multi-Well Data Inventory Matrix",
     "fig_3_1_qaqc_norm_plot.png": "Figure 3.1 · QA/QC and Normalization Audit",
     "fig_3_2_env_corr_qc_plot.png": "Figure 3.2 · Borehole Environment, Sensor Corrections and Radial Invasion QC",
+    "fig_3_3_depth_alignment_qc_plot.png": "Figure 3.3 · Inter-Log Depth Alignment, Correlogram and Run Tie-In QC",
     "fig_4_1_nd_crossplot.png": "Figure 4.1 · Neutron-Density Crossplot and Core-to-Log Calibration",
     "fig_4_2_core_calibration.png": "Figure 4.2 · Core Overburden Calibration",
     "fig_5_1_perm_crossplot.png": "Figure 5.1 · Porosity-Permeability by Rock Type and Lorenz Plot",
@@ -97,6 +98,7 @@ _FIGURE_TITLES = {
 _SINGLE_WELL_FIGURE_TITLES = {
     "fig_3_1_qaqc_norm_plot.png": "Figure 2.1 · Well Curve Distributions and Borehole Washout Audit",
     "fig_3_2_env_corr_qc_plot.png": "Figure 2.2 · Borehole Environment, Sensor Corrections and Radial Invasion QC",
+    "fig_3_3_depth_alignment_qc_plot.png": "Figure 2.3 · Inter-Log Depth Alignment, Correlogram and Run Tie-In QC",
     "fig_4_1_nd_crossplot.png": "Figure 3.1 · Neutron-Density Crossplot and Core-to-Log Calibration",
     "fig_4_2_core_calibration.png": "Figure 3.2 · Core Overburden Calibration",
     "fig_6_1_pickett_shf_plot.png": "Figure 4.1 · Pickett Plot and Saturation Profile",
@@ -138,10 +140,13 @@ def _save_fig(
     url_prefix: Optional[str] = None,
     dpi: int = 140,
     report_type: Optional[str] = None,
+    header_override: Optional[str] = None,
 ) -> str:
     out_dir = _resolve_output_dir(output_dir)
     out_path = out_dir / filename
-    header = _resolve_figure_header(filename, report_type=report_type)
+    header = header_override or _resolve_figure_header(
+        filename, report_type=report_type
+    )
     if header:
         # Standard header band shared by all report figures (same wording style as the plotly CPI header).
         fig.text(
@@ -1032,6 +1037,367 @@ def generate_env_corr_qc_plot(
         ax_cf.axis("off")
 
     return _save_fig(fig, "fig_3_2_env_corr_qc_plot.png", output_dir, url_prefix)
+
+
+def generate_depth_alignment_qc_plot(
+    df: pd.DataFrame,
+    well_names: Optional[List[str]] = None,
+    depth_alignment_summary: Optional[Dict[str, Any]] = None,
+    target_zones: Optional[Sequence[str]] = None,
+    output_dir: Optional[Union[str, Path]] = None,
+    url_prefix: Optional[str] = None,
+    fig_index: Optional[int] = None,
+) -> Optional[str]:
+    """Generate a 3-panel Inter-Log Depth Alignment & Run Tie-In QC composite figure.
+
+    Left: Scaled Reference vs. Focal Curve overlay (with shifted preview when off-depth).
+    Center: Sliding-window local drift profile ``Δz(z)`` along depth with aligned tolerance band.
+    Right (top/bottom): Bed-boundary cross-correlograms ``NCC(Δz)`` and per-curve bulk shift bars.
+    """
+    if df is None or df.empty or "DEPTH" not in df.columns:
+        return None
+
+    sub_all = df.copy()
+    if well_names and "WELL_NAME" in sub_all.columns:
+        allowed_w = {str(w) for w in well_names}
+        sub_all = sub_all[sub_all["WELL_NAME"].astype(str).isin(allowed_w)]
+    if target_zones and "ZONES" in sub_all.columns:
+        tz_up = {str(z).strip().upper() for z in target_zones if str(z).strip()}
+        if tz_up:
+            z_filt = sub_all[
+                sub_all["ZONES"].astype(str).str.strip().str.upper().isin(tz_up)
+            ]
+            if len(z_filt) >= 30:
+                sub_all = z_filt
+
+    if sub_all.empty:
+        return None
+
+    # Pick focal well (well with worst shift from summary, else first well)
+    focal_well = None
+    da_sum = depth_alignment_summary or {}
+    focal_rep = da_sum.get("focal_report")
+    if "WELL_NAME" in sub_all.columns:
+        avail_wells = [str(w) for w in sub_all["WELL_NAME"].dropna().unique()]
+        focal_well = str(
+            da_sum.get("focal_well") or (avail_wells[0] if avail_wells else "WELL")
+        )
+        w_sub = sub_all[sub_all["WELL_NAME"].astype(str) == focal_well].copy()
+        if w_sub.empty and avail_wells:
+            focal_well = avail_wells[0]
+            w_sub = sub_all[sub_all["WELL_NAME"].astype(str) == focal_well].copy()
+    else:
+        focal_well = well_names[0] if well_names else "WELL"
+        w_sub = sub_all.copy()
+
+    w_sub["DEPTH"] = pd.to_numeric(w_sub["DEPTH"], errors="coerce")
+    w_sub = w_sub.dropna(subset=["DEPTH"]).sort_values("DEPTH").reset_index(drop=True)
+    if len(w_sub) < 20:
+        return None
+
+    if not focal_rep or not focal_rep.get("curves"):
+        from quick_pp.depth_alignment import evaluate_depth_alignment
+
+        ref_c = str(da_sum.get("reference_curve") or "GR")
+        max_sh = float(da_sum.get("max_shift_m") or 3.0)
+        win_sz = float(da_sum.get("window_size_m") or 40.0)
+        focal_rep = evaluate_depth_alignment(
+            w_sub,
+            ref_curve=ref_c,
+            max_shift=max_sh,
+            window_size=win_sz,
+            window_step=max(5.0, win_sz / 4.0),
+            depth_unit="m",
+        )
+
+    curves_diag: List[Dict[str, Any]] = list(focal_rep.get("curves") or [])
+    if not curves_diag:
+        return None
+
+    ref_curve = str(focal_rep.get("reference_curve") or "GR")
+    step_m = float(focal_rep.get("step_m") or 0.1524)
+    tol_m = max(0.55 * step_m, 0.08)
+    off_m = max(1.50 * step_m, 0.23)
+
+    # Pick focal curve to highlight on depth tracks (worst off-depth -> minor -> first)
+    off_rows = [r for r in curves_diag if r.get("status") == "OFF_DEPTH"]
+    min_rows = [r for r in curves_diag if r.get("status") == "MINOR"]
+    if off_rows:
+        focus_diag = max(
+            off_rows, key=lambda r: abs(float(r.get("suggested_shift_m") or 0.0))
+        )
+    elif min_rows:
+        focus_diag = max(
+            min_rows, key=lambda r: abs(float(r.get("suggested_shift_m") or 0.0))
+        )
+    else:
+        focus_diag = curves_diag[0]
+    focus_curve = str(focus_diag["curve"])
+    focus_shift_m = float(focus_diag.get("suggested_shift_m") or 0.0)
+
+    curve_palette = {
+        "GR": "#15803d",
+        "RHOB": "#dc2626",
+        "NPHI": "#2563eb",
+        "PEF": "#9333ea",
+        "RT": "#b91c1c",
+        "RM": "#ea580c",
+        "RXO": "#0d9488",
+        "DTC": "#0284c7",
+        "DT": "#0284c7",
+        "DTS": "#4f46e5",
+    }
+
+    def _norm01(s: pd.Series, cname: str) -> np.ndarray:
+        arr = pd.to_numeric(s, errors="coerce").to_numpy(dtype=float)
+        if cname.upper() in ("RT", "RD", "RDEP", "LLD", "RM", "RXO", "MSFL", "RS"):
+            arr = np.where(arr > 0, np.log10(np.clip(arr, 1e-3, 1e5)), np.nan)
+        fin = arr[np.isfinite(arr)]
+        if fin.size < 4:
+            return np.full_like(arr, np.nan)
+        lo, hi = np.percentile(fin, [2.0, 98.0])
+        span = max(float(hi - lo), 1e-9)
+        return np.clip((arr - lo) / span, -0.08, 1.08)
+
+    with matplotlib.rc_context(_FRONTEND_RC):
+        fig = Figure(figsize=(12.2, 6.2))
+        gs = fig.add_gridspec(
+            2,
+            3,
+            width_ratios=[1.05, 1.05, 1.35],
+            height_ratios=[1.05, 0.95],
+            wspace=0.26,
+            hspace=0.34,
+            left=0.065,
+            right=0.98,
+            top=0.89,
+            bottom=0.09,
+        )
+        ax_ov = fig.add_subplot(gs[:, 0])
+        ax_dr = fig.add_subplot(gs[:, 1], sharey=ax_ov)
+        ax_cc = fig.add_subplot(gs[0, 2])
+        ax_bar = fig.add_subplot(gs[1, 2])
+
+        z = w_sub["DEPTH"].to_numpy(dtype=float)
+        z_min, z_max = float(z.min()), float(z.max())
+        ref_col_c = curve_palette.get(ref_curve, "#15803d")
+        foc_col_c = curve_palette.get(focus_curve, "#2563eb")
+
+        # Panel 1: Scaled Curve Overlay (+ Shifted Preview)
+        if ref_curve in w_sub.columns:
+            ax_ov.plot(
+                _norm01(w_sub[ref_curve], ref_curve),
+                z,
+                color=ref_col_c,
+                lw=1.3,
+                label=f"{ref_curve} (Ref)",
+            )
+        if focus_curve in w_sub.columns:
+            foc_n = _norm01(w_sub[focus_curve], focus_curve)
+            ax_ov.plot(
+                foc_n,
+                z,
+                color=foc_col_c,
+                lw=1.15,
+                alpha=0.55 if abs(focus_shift_m) > 0.05 else 0.9,
+                label=f"{focus_curve} (Raw)",
+            )
+            if abs(focus_shift_m) > 0.05:
+                ax_ov.plot(
+                    foc_n,
+                    z + focus_shift_m,
+                    color=foc_col_c,
+                    lw=1.4,
+                    ls="--",
+                    label=f"{focus_curve} ({focus_shift_m:+.2f} m)",
+                )
+        ax_ov.set_ylim(z_max, z_min)
+        ax_ov.set_xlim(-0.10, 1.10)
+        ax_ov.set_ylabel("Measured Depth (m)", fontsize=8.5, fontweight="bold")
+        ax_ov.set_xlabel(
+            "Normalized Response (P2–P98)", fontsize=8.0, fontweight="bold"
+        )
+        ax_ov.set_title(
+            f"{focal_well}: {ref_curve} vs {focus_curve}",
+            fontsize=9.0,
+            fontweight="bold",
+        )
+        ax_ov.legend(loc="lower right", fontsize=6.8)
+        ax_ov.grid(True, linestyle=":", alpha=0.5)
+
+        # Panel 2: Sliding-Window Local Drift Profile Δz(z)
+        wins = focus_diag.get("windows") or []
+        max_bound = max(
+            abs(focus_shift_m) * 1.45,
+            float(focus_diag.get("p95_abs_drift_m") or 0.0) * 1.45,
+            off_m * 1.8,
+            0.6,
+        )
+        ax_dr.axvspan(
+            -tol_m,
+            tol_m,
+            color="#10b981",
+            alpha=0.12,
+            label=f"Aligned (±{tol_m:.2f} m)",
+        )
+        ax_dr.axvline(0.0, color="#0f172a", lw=0.9, alpha=0.7)
+        ax_dr.axvline(
+            focus_shift_m,
+            color=foc_col_c,
+            lw=1.4,
+            ls="--",
+            label=f"Bulk Δz = {focus_shift_m:+.2f} m",
+        )
+        if wins:
+            w_z = np.array([float(w["depth_m"]) for w in wins], dtype=float)
+            w_s = np.array([float(w["shift_m"]) for w in wins], dtype=float)
+            w_c = [
+                "#94a3b8"
+                if float(w.get("confidence", 0.0)) < 0.35
+                else (
+                    "#dc2626"
+                    if abs(float(w["shift_m"])) > off_m
+                    else ("#d97706" if abs(float(w["shift_m"])) > tol_m else "#059669")
+                )
+                for w in wins
+            ]
+            ax_dr.plot(w_s, w_z, color="#475569", lw=1.0, alpha=0.75)
+            ax_dr.scatter(
+                w_s, w_z, c=w_c, s=22, zorder=4, edgecolors="#ffffff", linewidths=0.5
+            )
+        ax_dr.set_xlim(-max_bound, max_bound)
+        ax_dr.set_xlabel("Local Shift Δz (m, +Down)", fontsize=8.0, fontweight="bold")
+        ax_dr.set_title(
+            f"{focus_curve} Sliding-Window Drift Δz(z)", fontsize=9.0, fontweight="bold"
+        )
+        ax_dr.tick_params(labelleft=False)
+        ax_dr.legend(loc="lower right", fontsize=6.8)
+        ax_dr.grid(True, linestyle=":", alpha=0.5)
+
+        # Panel 3a (Top Right): Bed-Boundary Cross-Correlograms NCC(Δz)
+        ax_cc.axvspan(-tol_m, tol_m, color="#10b981", alpha=0.10)
+        ax_cc.axvline(0.0, color="#0f172a", lw=0.8, alpha=0.6)
+        for c_row in curves_diag:
+            cg = c_row.get("correlogram") or {}
+            lags_m = cg.get("lags_m") or []
+            corrs = cg.get("corrs") or []
+            if not lags_m or not corrs:
+                continue
+            cname = str(c_row["curve"])
+            ccol = curve_palette.get(cname, "#334155")
+            is_foc = cname == focus_curve
+            sh_m = float(c_row.get("suggested_shift_m") or 0.0)
+            pk_c = float(c_row.get("peak_corr") or 0.0)
+            ax_cc.plot(
+                lags_m,
+                corrs,
+                color=ccol,
+                lw=1.9 if is_foc else 1.1,
+                alpha=0.95 if is_foc else 0.68,
+                label=f"{cname} ({sh_m:+.2f} m)",
+            )
+            ax_cc.scatter(
+                [sh_m],
+                [pk_c],
+                color=ccol,
+                s=32 if is_foc else 18,
+                zorder=5,
+                edgecolors="#ffffff",
+                linewidths=0.6,
+            )
+        ax_cc.set_xlabel(
+            "Candidate Depth Shift Δz (m)", fontsize=8.0, fontweight="bold"
+        )
+        ax_cc.set_ylabel("Boundary NCC", fontsize=8.0, fontweight="bold")
+        ax_cc.set_title(
+            f"Bed-Boundary Cross-Correlogram vs {ref_curve}",
+            fontsize=9.0,
+            fontweight="bold",
+        )
+        ax_cc.legend(loc="upper right", fontsize=6.4, ncol=2)
+        ax_cc.grid(True, linestyle=":", alpha=0.5)
+
+        # Panel 3b (Bottom Right): Per-Curve Bulk Shift Summary Bars
+        bar_rows = list(da_sum.get("curve_table") or [])
+        if not bar_rows:
+            bar_rows = [
+                {
+                    "curve": r["curve"],
+                    "shift_m": r["suggested_shift_m"],
+                    "confidence": r["confidence"],
+                    "status": r["status"],
+                }
+                for r in curves_diag
+            ]
+        # Deduplicate by curve keeping worst shift across multi-well reports
+        by_curve: Dict[str, Dict[str, Any]] = {}
+        for br in bar_rows:
+            ck = str(br["curve"])
+            if ck not in by_curve or abs(float(br.get("shift_m") or 0.0)) > abs(
+                float(by_curve[ck].get("shift_m") or 0.0)
+            ):
+                by_curve[ck] = br
+        plot_bars = list(by_curve.values())
+        y_idx = np.arange(len(plot_bars))
+        sh_vals = np.array(
+            [float(r.get("shift_m") or 0.0) for r in plot_bars], dtype=float
+        )
+        b_colors = [
+            "#ef4444"
+            if r.get("status") == "OFF_DEPTH"
+            else (
+                "#f59e0b"
+                if r.get("status") == "MINOR"
+                else ("#94a3b8" if r.get("status") == "LOW_SIGNAL" else "#10b981")
+            )
+            for r in plot_bars
+        ]
+        ax_bar.axvspan(-tol_m, tol_m, color="#10b981", alpha=0.10)
+        ax_bar.axvline(0.0, color="#0f172a", lw=0.9)
+        ax_bar.barh(y_idx, sh_vals, height=0.52, color=b_colors, alpha=0.88)
+        bar_lim = max(
+            float(np.max(np.abs(sh_vals))) * 1.45 if len(sh_vals) else 0.5,
+            off_m * 1.6,
+            0.45,
+        )
+        ax_bar.set_xlim(-bar_lim, bar_lim)
+        ax_bar.set_yticks(y_idx)
+        ax_bar.set_yticklabels(
+            [str(r["curve"]) for r in plot_bars], fontsize=8.0, fontweight="bold"
+        )
+        ax_bar.invert_yaxis()
+        for i_b, br in enumerate(plot_bars):
+            sv = float(br.get("shift_m") or 0.0)
+            cf = float(br.get("confidence") or 0.0)
+            offset = 0.03 * bar_lim if sv >= 0 else -0.03 * bar_lim
+            ax_bar.text(
+                sv + offset,
+                i_b,
+                f"{sv:+.2f}m (C={cf:.2f})",
+                va="center",
+                ha="left" if sv >= 0 else "right",
+                fontsize=6.8,
+                fontweight="bold",
+                color="#0f172a",
+            )
+        ax_bar.set_xlabel(
+            "Suggested Bulk Shift Δz (m, +Down)", fontsize=8.0, fontweight="bold"
+        )
+        ax_bar.set_title("Sensor Run Tie-In Summary", fontsize=9.0, fontweight="bold")
+        ax_bar.grid(True, axis="x", linestyle=":", alpha=0.5)
+
+    header_override = None
+    if fig_index is not None:
+        eff_rt = str(_ACTIVE_REPORT_TYPE.get() or "FDP_FULL").upper()
+        sec_p = "2" if eff_rt == "SINGLE_WELL_CPI" else "3"
+        header_override = f"Figure {sec_p}.{int(fig_index)} · Inter-Log Depth Alignment, Correlogram and Run Tie-In QC"
+    return _save_fig(
+        fig,
+        "fig_3_3_depth_alignment_qc_plot.png",
+        output_dir,
+        url_prefix,
+        header_override=header_override,
+    )
 
 
 def generate_nd_crossplot(
@@ -2420,8 +2786,13 @@ def _render_cpi_with_plotly(
         from quick_pp.plotter.well_log import plotly_log
 
         plot_df = df.copy()
-        for base_c in ("GR", "RT", "NPHI", "RHOB"):
-            env_c = f"{base_c}_ENV_CORR"
+        for base_c, env_c in (
+            ("GR", "GR_ENV_CORR"),
+            ("RT", "RT_ENV_CORR"),
+            ("NPHI", "NPHI_ENV_CORR"),
+            ("RHOB", "RHOB_ENV_CORR"),
+            ("DTC", "DT_ENV_CORR"),
+        ):
             if (
                 env_c in plot_df.columns
                 and pd.to_numeric(plot_df[env_c], errors="coerce").notna().any()
@@ -2434,6 +2805,12 @@ def _render_cpi_with_plotly(
                 plot_df[base_c] = pd.to_numeric(
                     plot_df[env_c], errors="coerce"
                 ).combine_first(raw_c)
+        if (
+            ("BS" not in plot_df.columns or plot_df["BS"].isna().all())
+            and "ENV_BS" in plot_df.columns
+            and pd.to_numeric(plot_df["ENV_BS"], errors="coerce").notna().any()
+        ):
+            plot_df["BS"] = pd.to_numeric(plot_df["ENV_BS"], errors="coerce")
 
         fig = plotly_log(plot_df, well_name=str(well_name), depth_uom="m")
 
@@ -2445,8 +2822,13 @@ def _render_cpi_with_plotly(
         )
         d = pd.to_numeric(df["DEPTH"], errors="coerce").dropna()
         zone_txt = f" | Target zones: {', '.join(zones)}" if zones else ""
+        fig_prefix = (
+            "Figure 6.1 \u00b7 "
+            if str(_ACTIVE_REPORT_TYPE.get() or "").upper() == "SINGLE_WELL_CPI"
+            else ""
+        )
         header = (
-            f"<b>{well_name} \u2014 Composite Petrophysical Evaluation (CPI)</b><br>"
+            f"<b>{fig_prefix}{well_name} \u2014 Composite Petrophysical Evaluation (CPI)</b><br>"
             f"<span style='font-size:11px'>{d.min():.1f}\u2013{d.max():.1f} m MD"
             f"{zone_txt} | {cut_txt}</span>"
         )
@@ -2464,6 +2846,7 @@ def _render_cpi_with_plotly(
             },
             margin={"l": 70, "r": 10, "t": 70, "b": 20},
             paper_bgcolor="white",
+            plot_bgcolor="rgba(0,0,0,0)",
         )
 
         out_path = _resolve_output_dir(output_dir) / filename

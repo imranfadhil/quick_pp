@@ -136,7 +136,12 @@ def test_physical_constraints_and_postprocess():
             "PHIE": [0.28, 0.05, 0.22, 0.01],  # row 0 violates PHIE > PHIT
             "PHIE_P10": [0.22, 0.01, 0.18, -0.01],
             "PHIE_P90": [0.32, 0.08, 0.27, 0.05],
-            "SWT": [0.35, 0.25, 0.40, 1.20],  # row 1 has unphysical Sw spike in tight rock
+            "SWT": [
+                0.35,
+                0.25,
+                0.40,
+                1.20,
+            ],  # row 1 has unphysical Sw spike in tight rock
             "SWT_P10": [0.25, 0.15, 0.30, 0.95],
             "SWT_P90": [0.45, 0.35, 0.50, 1.30],
             "LOG_PERM": [2.0, 1.5, 2.5, -4.0],
@@ -152,9 +157,15 @@ def test_physical_constraints_and_postprocess():
         }
     )
 
-    loss_before = physics_informed_loss(raw_pred_df[["PHIT", "PHIE", "SWT", "VSAND", "VSILT", "VCLAY"]], raw_pred_df[["PHIT", "PHIE", "SWT", "VSAND", "VSILT", "VCLAY"]])
+    loss_before = physics_informed_loss(
+        raw_pred_df[["PHIT", "PHIE", "SWT", "VSAND", "VSILT", "VCLAY"]],
+        raw_pred_df[["PHIT", "PHIE", "SWT", "VSAND", "VSILT", "VCLAY"]],
+    )
     post_df = postprocess_data(raw_pred_df)
-    loss_after = physics_informed_loss(post_df[["PHIT", "PHIE", "SWT", "VSAND", "VSILT", "VCLAY"]], post_df[["PHIT", "PHIE", "SWT", "VSAND", "VSILT", "VCLAY"]])
+    loss_after = physics_informed_loss(
+        post_df[["PHIT", "PHIE", "SWT", "VSAND", "VSILT", "VCLAY"]],
+        post_df[["PHIT", "PHIE", "SWT", "VSAND", "VSILT", "VCLAY"]],
+    )
     assert loss_after < loss_before
 
     # 1. Porosity hierarchy & non-negativity: 0 <= PHIE <= PHIT
@@ -208,6 +219,56 @@ def test_plotly_log_uncertainty_bands():
         assert trace_map[f"{curve}_P90"].xaxis == trace_map[curve].xaxis
 
 
+def test_plotly_log_spectral_gr_and_mineral_axis_isolation():
+    """Verify spectral GR (CGR/POTA/THOR/URAN), DTS, VMUSC, and COAL_FLAG never overwrite base track axes or create unbound [0, 1] subplot overlays."""
+    df = _make_synthetic_well_df(40)
+    df["CGR"] = 50.0
+    df["POTA"] = 2.1
+    df["THOR"] = 8.5
+    df["URAN"] = 1.8
+    df["DTS"] = 135.0
+    df["VMUSC"] = 0.05
+    df["COAL_FLAG"] = np.where(df.index % 10 == 0, 1, 0)
+    df = postprocess_data(df)
+
+    fig = plotly_log(df, well_name="44-22-6Z", depth_uom="m")
+    fd = fig.to_dict()
+    layout = fd["layout"]
+    trace_map = {t["name"]: t for t in fd["data"] if t.get("name")}
+
+    # Base track axes must keep their subplot domains, top side, and never overlay themselves
+    expected_base = {
+        "GR": ("x", "xaxis"),
+        "RT": ("x2", "xaxis2"),
+        "PHIT": ("x4", "xaxis4"),
+        "PERM": ("x5", "xaxis5"),
+        "SWT": ("x6", "xaxis6"),
+        "VCLAY": ("x8", "xaxis8"),
+        "DTC": ("x9", "xaxis9"),
+    }
+    for cname, (ax_id, layout_key) in expected_base.items():
+        assert trace_map[cname].get("xaxis", "x") == ax_id
+        ax_cfg = layout[layout_key]
+        assert ax_cfg.get("overlaying") is None
+        assert ax_cfg.get("domain") is not None
+        assert ax_cfg.get("range") is not None
+
+    # Every overlay axis must point to a valid base axis (never None and never self-referential)
+    base_ids = {"x", *(f"x{i}" for i in range(2, 10))}
+    for k, v in layout.items():
+        if not k.startswith("xaxis"):
+            continue
+        ax_id = "x" if k == "xaxis" else f"x{k[5:]}"
+        if ax_id in base_ids:
+            assert v.get("overlaying") is None, f"{k} must not have overlaying"
+            assert v.get("domain") is not None, f"{k} lost its track domain"
+        else:
+            assert v.get("overlaying") in base_ids, (
+                f"Overlay {k} has invalid overlaying={v.get('overlaying')} (would span [0,1] and blank CPI tracks)"
+            )
+    assert layout.get("plot_bgcolor") == "rgba(0,0,0,0)"
+
+
 def test_group_split_data():
     """Verify split_data prevents well leakage using GroupShuffleSplit and GroupKFold."""
     from quick_pp.machine_learning.train_pipeline import split_data
@@ -229,14 +290,18 @@ def test_group_split_data():
     train_wells = set(multi_df.loc[X_train.index, "WELL_NAME"])
     test_wells = set(multi_df.loc[X_test.index, "WELL_NAME"])
     assert len(train_wells) >= 1 and len(test_wells) >= 1
-    assert train_wells.isdisjoint(test_wells), "Well leakage detected in GroupShuffleSplit!"
+    assert train_wells.isdisjoint(test_wells), (
+        "Well leakage detected in GroupShuffleSplit!"
+    )
 
     X_train_kf, X_test_kf, _, _ = split_data(
         multi_df, targets, features, splitter="group_kfold", n_splits=5
     )
     train_wells_kf = set(multi_df.loc[X_train_kf.index, "WELL_NAME"])
     test_wells_kf = set(multi_df.loc[X_test_kf.index, "WELL_NAME"])
-    assert train_wells_kf.isdisjoint(test_wells_kf), "Well leakage detected in GroupKFold!"
+    assert train_wells_kf.isdisjoint(test_wells_kf), (
+        "Well leakage detected in GroupKFold!"
+    )
 
     # 2. Single-well dataset fallback: splits by contiguous depth blocks without error
     single_df = _make_synthetic_well_df(50)
@@ -284,7 +349,9 @@ def test_conformal_regressor_small_ncal_monotonicity_and_local_weighting():
 
     width_90 = high_90 - low_90
     width_80 = high_80 - low_80
-    assert np.all(width_90 > width_80), "P90 interval must be strictly wider than P80 interval"
+    assert np.all(width_90 > width_80), (
+        "P90 interval must be strictly wider than P80 interval"
+    )
 
     # Locally weighted check: washout/tight samples must have wider uncertainty bands than clean sands
     mean_clean_width = float(np.mean(width_80[:10]))
@@ -298,7 +365,9 @@ def test_enforce_mineral_sum_zero_division_and_porosity_coupling():
     """
     from quick_pp.machine_learning.utils import EnforceMineralSum
 
-    enforcer = EnforceMineralSum(mineral_cols=["VCLAY", "VSAND", "VSILT"], porosity_col="PHIT")
+    enforcer = EnforceMineralSum(
+        mineral_cols=["VCLAY", "VSAND", "VSILT"], porosity_col="PHIT"
+    )
 
     # 1. 1D Series passed (e.g. single-column call) -> clips safely without error
     s_in = pd.Series([-0.2, 0.4, 1.5, 0.0], name="VCLAY")
@@ -328,9 +397,3 @@ def test_enforce_mineral_sum_zero_division_and_porosity_coupling():
         np.ones(3),
         atol=1e-6,
     )
-
-
-
-
-
-

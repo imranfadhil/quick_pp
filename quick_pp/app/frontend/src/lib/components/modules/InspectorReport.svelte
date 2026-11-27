@@ -211,6 +211,7 @@
 					drho_threshold: workbench.badholeParams.drhoThreshold,
 					rhob_min: workbench.badholeParams.rhobMin,
 					env_corr_params: { ...workbench.envCorrParams },
+					depth_align_params: { ...workbench.depthAlignParams },
 					sw_model_key: workbench.saturationParams.method,
 					sw_a: workbench.saturationParams.a,
 					sw_m: workbench.saturationParams.m,

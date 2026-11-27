@@ -18,6 +18,9 @@
 * **Borehole Conditioning Curves Evaluated:** {{ qaqc_params.badhole_criteria_used if qaqc_params.badhole_criteria_used else 'CALI, DRHO, RHOB multi-curve evaluation' }}.
 * **Bad-Hole Mitigation Mode:** `{{ qaqc_params.badhole_treatment }}` (automatic fallback in rugose washouts to prevent optimistic density-porosity spikes).
 * **Light-Hydrocarbon Invasion Correction:** Gaymard-Poupon neutron-density response correction applied where $\rho_{hc} = {{ qaqc_params.rho_hc }}$ g/cc and $HI_{hc} = {{ qaqc_params.hi_hc }}$.
+{% if depth_alignment_summary is defined and depth_alignment_summary.evaluated %}
+* **Inter-Log Depth Alignment & Run Tie-In QC:** Gap-masked bed-boundary gradient (`|df/dz|`) normalized cross-correlation against `{{ depth_alignment_summary.reference_curve }}` (search window $\pm {{ "%.1f"|format(depth_alignment_summary.max_shift_m|default(3.0)) }}\text{ m}$, sliding drift window ${{ "%.0f"|format(depth_alignment_summary.window_size_m|default(40.0)) }}\text{ m}$).
+{% endif %}
 {% if not is_single_well %}
 * **Normalization Method:** {{ qaqc_params.norm_method }} across target reservoir zones.
 {% endif %}
@@ -45,8 +48,10 @@
 ![Figure {{ sec_num }}.1: {{ "Well Curve Distributions & Borehole Washout Quality Audit" if is_single_well else "Curve Distribution Pre- and Post-Normalization & Bad-Hole Audit" }}]({{ assets.norm_plot }})
 {% endif %}
 
+{% set ns = namespace(sub=2, fig=1) %}
 {% if env_corr_summary is defined and env_corr_summary.any_applied %}
-### {{ sec_num }}.3 Borehole Environmental Correction, Uncertainty ($\sigma$) & Sensor Confidence Audit
+{% set ns.sub = ns.sub + 1 %}
+### {{ sec_num }}.{{ ns.sub }} Borehole Environmental Correction, Uncertainty ($\sigma$) & Sensor Confidence Audit
 
 Generic borehole environmental corrections (`*_ENV_CORR`) and perturbation-propagated per-sample standard deviations (`*_SIGMA`) were evaluated across **{{ env_corr_summary.wells_applied }}/{{ env_corr_summary.total_wells }}** {{ (env_corr_summary.total_wells) | pluralize('well') }}:
 
@@ -65,7 +70,8 @@ Generic borehole environmental corrections (`*_ENV_CORR`) and perturbation-propa
 {% endif %}
 
 {% if env_corr_summary.has_invasion and env_corr_summary.invasion_table %}
-### {{ sec_num }}.4 Step-Profile Radial Resistivity Invasion Interpretation ($R_{xo}/R_t$ vs. $R_{mf}/R_w$)
+{% set ns.sub = ns.sub + 1 %}
+### {{ sec_num }}.{{ ns.sub }} Step-Profile Radial Resistivity Invasion Interpretation ($R_{xo}/R_t$ vs. $R_{mf}/R_w$)
 
 | Well Name | Mud System | Samples | Invaded (%) | Movable HC-like (%) | Water-like (%) | Anomalous (%) | Tight / No Invasion (%) | Median $d_i$ (in) | P90 $d_i$ (in) |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
@@ -76,6 +82,34 @@ Generic borehole environmental corrections (`*_ENV_CORR`) and perturbation-propa
 {% endif %}
 
 {% if assets.env_corr_plot %}
+{% set ns.fig = ns.fig + 1 %}
 
-![Figure {{ sec_num }}.2: Borehole Environment, Sensor Corrections (±1σ) & Radial Invasion QC]({{ assets.env_corr_plot }})
+![Figure {{ sec_num }}.{{ ns.fig }}: Borehole Environment, Sensor Corrections (±1σ) & Radial Invasion QC]({{ assets.env_corr_plot }})
+{% endif %}
+
+{% if depth_alignment_summary is defined and depth_alignment_summary.evaluated %}
+{% set ns.sub = ns.sub + 1 %}
+### {{ sec_num }}.{{ ns.sub }} Inter-Log Depth Alignment & Run Tie-In Audit (`|∂f/∂z|` Cross-Correlation)
+
+Raw curve depth tie-in against **`{{ depth_alignment_summary.reference_curve }}`** evaluated **{{ depth_alignment_summary.total_curves }}** curve {{ (depth_alignment_summary.total_curves) | pluralize('pair') }} across **{{ depth_alignment_summary.wells_evaluated }}** {{ (depth_alignment_summary.wells_evaluated) | pluralize('well') }}: **{{ depth_alignment_summary.aligned_count }}** aligned, **{{ depth_alignment_summary.minor_count }}** minor drift, and **{{ depth_alignment_summary.off_depth_count }}** off-depth (maximum $|\Delta z| = {{ "%.2f"|format(depth_alignment_summary.max_abs_shift_m) }}\text{ m}$){% if depth_alignment_summary.conditioned_curves and depth_alignment_summary.conditioned_curves|length > 0 %}; previously depth-shifted curves with preserved `*_ORI` backups: `{{ depth_alignment_summary.conditioned_curves|join('`, `') }}`{% endif %}.
+
+{% if not is_single_well and depth_alignment_summary.well_table|length > 1 %}
+| Well Name | Ref Curve | Evaluated Curves | Aligned | Minor Drift | Off-Depth | Variable Stretch | Max $|\Delta z|$ (m) | Worst Curve | Conditioned (`*_ORI`) | Tie-In Status |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+{% for dw in depth_alignment_summary.well_table %}
+| **{{ dw.well_name }}** | `{{ dw.ref_curve }}` | {{ dw.evaluated_count }} | {{ dw.aligned_count }} | {{ dw.minor_count }} | {{ dw.off_depth_count }} | {{ dw.variable_drift_count }} | {{ "%.2f"|format(dw.max_abs_shift_m) }} | `{{ dw.worst_curve }}` | {{ ("`" ~ dw.conditioned_curves ~ "`") if dw.conditioned_curves != "—" else "—" }} | **{{ dw.status }}** |
+{% endfor %}
+
+{% endif %}
+| {% if not is_single_well %}Well | {% endif %}Target Curve | Ref | Overlap Samples | Suggested Shift $\Delta z$ (m) | Shift (samples) | Sliding P95 $|\text{Drift}|$ (m) | Peak NCC | Zero-Lag NCC | Conf | Lineage | Status |
+| :--- | {% if not is_single_well %}:--- | {% endif %}:---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+{% for dc in depth_alignment_summary.curve_table %}
+| {% if not is_single_well %}**{{ dc.well_name }}** | {% endif %}**`{{ dc.curve }}`** | `{{ dc.ref_curve }}` | {{ dc.samples }} | {{ "%+.3f"|format(dc.shift_m) }} | {{ "%+.2f"|format(dc.shift_samples) }} | {{ "%.3f"|format(dc.p95_drift_m) }}{{ " (↕)" if dc.variable_drift else "" }} | {{ "%.3f"|format(dc.peak_corr) }} | {{ "%.3f"|format(dc.zero_corr) }} | {{ "%.2f"|format(dc.confidence) }} | {{ "`" ~ dc.curve ~ "_ORI`" if dc.has_ori else "Raw" }} | **{{ dc.status }}** |
+{% endfor %}
+
+{% if assets.depth_alignment_plot %}
+{% set ns.fig = ns.fig + 1 %}
+
+![Figure {{ sec_num }}.{{ ns.fig }}: Inter-Log Depth Alignment, Bed-Boundary Correlogram & Sliding-Window Drift QC]({{ assets.depth_alignment_plot }})
+{% endif %}
 {% endif %}
