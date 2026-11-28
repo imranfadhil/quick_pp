@@ -2753,8 +2753,14 @@ def _resolve_scal_fluid_system(
     ift_res: float = 30.0,
     theta_res: float = 30.0,
     fluid_override: Optional[str] = None,
+    lab_overrides: Optional[Dict[str, Dict[str, float]]] = None,
 ) -> Tuple[str, float, float, float, float]:
     """Resolve SCAL plug fluid system and lab/reservoir IFT*|cos(theta)| factors.
+
+    Args:
+        lab_overrides: Per-system IFT/theta overrides keyed by system name
+            (``micp``, ``air_brine``, ``lab_oil_brine``, ``reservoir``).
+            Each entry is a dict with optional ``ift_lab`` and ``theta_lab`` keys.
 
     Returns:
         Tuple of (fluid_system, ift_lab, theta_lab, lab_ift_cos, res_ift_cos)
@@ -2804,6 +2810,7 @@ def _resolve_scal_fluid_system(
         else:
             sys_key = "air_brine"
 
+    # Default lab constants per system
     if sys_key == "micp":
         ift_lab, theta_lab = 485.0, 140.0
     elif sys_key == "air_brine":
@@ -2812,6 +2819,24 @@ def _resolve_scal_fluid_system(
         ift_lab, theta_lab = 48.0, 30.0
     else:
         ift_lab, theta_lab = res_ift, res_theta
+
+    # Apply per-system lab overrides if provided
+    if lab_overrides and sys_key in lab_overrides:
+        sys_ov = lab_overrides[sys_key]
+        if isinstance(sys_ov, dict):
+            if "ift_lab" in sys_ov and sys_ov["ift_lab"] is not None:
+                ift_lab = max(float(sys_ov["ift_lab"]), 1e-4)
+            if "theta_lab" in sys_ov and sys_ov["theta_lab"] is not None:
+                theta_lab = float(sys_ov["theta_lab"])
+    # Apply reservoir-row overrides to res_ift_cos as well
+    if lab_overrides and "reservoir" in lab_overrides:
+        res_ov = lab_overrides["reservoir"]
+        if isinstance(res_ov, dict):
+            ov_ift = res_ov.get("ift_lab")
+            ov_theta = res_ov.get("theta_lab")
+            ov_ift_v = max(float(ov_ift), 1e-4) if ov_ift is not None else res_ift
+            ov_theta_v = float(ov_theta) if ov_theta is not None else res_theta
+            res_ift_cos = max(ov_ift_v * abs(math.cos(math.radians(ov_theta_v))), 1e-4)
 
     lab_ift_cos = max(ift_lab * abs(math.cos(math.radians(theta_lab))), 1e-4)
     return sys_key, ift_lab, theta_lab, lab_ift_cos, res_ift_cos
@@ -11052,11 +11077,25 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                     ind_val_plug, hib_plug, _ = _eval_drt_indicator_scalar_or_array(
                         cpore, cperm, req.drt_method
                     )
-                    rf_val = int(
-                        rock_typing(
-                            ind_val_plug, req.cutoffs, higher_is_better=hib_plug
-                        ).item()
+                    _rt_raw2 = rock_typing(
+                        ind_val_plug, req.cutoffs, higher_is_better=hib_plug
                     )
+                    _rt_scalar2 = (
+                        _rt_raw2.item() if hasattr(_rt_raw2, "item") else _rt_raw2
+                    )
+                    if not (
+                        isinstance(_rt_scalar2, (int, float))
+                        and math.isfinite(float(_rt_scalar2))
+                    ):
+                        rf_val = (
+                            int(near_rock_flag) if near_rock_flag is not None else 1
+                        )
+                    else:
+                        rf_val = int(_rt_scalar2)
+                    if rf_val < 1:
+                        rf_val = (
+                            int(near_rock_flag) if near_rock_flag is not None else 1
+                        )
                     if (
                         not np.isfinite(rf_val) or rf_val < 1
                     ) and near_rock_flag is not None:
@@ -12003,20 +12042,18 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                     fit_p = fits[rf_key]
                     a = float(fit_p.get("a", 0.2))
                     b = abs(float(fit_p.get("b", 0.3)))
-                    eff_fwl = fwl_zone_map.get(str(zn).strip(), req.fwl)
-                    tvd_f = float(tvd_v)
                     if model == "skelt_harrison":
                         c = float(fit_p.get("c", 1.5))
                         d_param = float(fit_p.get("d", 1.5))
                         shf_v = float(
-                            sw_skelt_harrison(tvd_f, eff_fwl, a, b, c, d_param)
+                            sw_skelt_harrison(float(tvd_v), req.fwl, a, b, c, d_param)
                         )
                     elif model == "cuddy":
                         shf_v = float(
                             sw_shf_cuddy(
-                                float(p),
-                                tvd_f,
-                                eff_fwl,
+                                float(p) if p is not None else 0.0,
+                                float(tvd_v),
+                                req.fwl,
                                 req.gw,
                                 req.ghc,
                                 a,
@@ -12027,10 +12064,10 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                     else:
                         shf_v = float(
                             sw_shf_leverett_j(
-                                float(k),
-                                float(p),
-                                tvd_f,
-                                eff_fwl,
+                                float(k) if k is not None else 10.0,
+                                float(p) if p is not None else 0.0,
+                                float(tvd_v),
+                                req.fwl,
                                 req.ift,
                                 req.theta,
                                 req.gw,
@@ -17816,6 +17853,12 @@ class WorkspaceSwirrFitRequest(BaseModel):
     plugRtOverrides: Optional[Dict[str, int]] = Field(None)
     plug_fluid_overrides: Optional[Dict[str, str]] = Field(None)
     plugFluidOverrides: Optional[Dict[str, str]] = Field(None)
+    fluid_lab_overrides: Optional[Dict[str, Dict[str, float]]] = Field(
+        None,
+        description="Per-system IFT/theta lab overrides. Keys: micp, air_brine, lab_oil_brine, reservoir. "
+        "Each value is a dict with optional ift_lab and theta_lab keys.",
+    )
+    fluidLabOverrides: Optional[Dict[str, Dict[str, float]]] = Field(None)
     rules: Optional[Dict[str, Dict[str, Any]]] = Field(None)
     auto_fit: bool = Field(True)
     drt_method: str = Field("fzi")
@@ -17893,6 +17936,7 @@ def _extract_project_scal_plugs_for_swirr(
     pc_domain: str = "lab",
     plug_rt_overrides: Optional[Dict[str, int]] = None,
     plug_fluid_overrides: Optional[Dict[str, str]] = None,
+    fluid_lab_overrides: Optional[Dict[str, Dict[str, float]]] = None,
 ) -> List[Dict[str, Any]]:
     """Extract plug-level SCAL drainage curves and matched CPORE/CPERM/ROCK_FLAG across project wells."""
     cutoffs_list = sorted(float(c) for c in (cutoffs or [0.5, 1.2, 2.5, 5.0]))
@@ -17928,6 +17972,38 @@ def _extract_project_scal_plugs_for_swirr(
     reservoir_flags = [
         rf for rf in valid_flags if highest_flag is None or rf < highest_flag
     ] or ([1, 2, 3] if not valid_flags else valid_flags)
+
+    # Vshale DRT: pre-compute per-RT poro-perm trendlines from log background.
+    # Fit log10(k) = m*phi + c for each RT using the well-log background points.
+    # Used to classify SCAL plugs by proximity when VSH is unavailable on plugs.
+    _vsh_rt_trends: Dict[int, Tuple[float, float]] = {}
+    _is_vshale_drt = str(drt_method or "fzi").strip().lower() == "vshale"
+    if _is_vshale_drt and len(phit_arr) > 0:
+        valid_bg = (
+            (phit_arr > 0.001)
+            & (phit_arr < 1.0)
+            & (perm_arr > 1e-4)
+            & np.isfinite(phit_arr)
+            & np.isfinite(perm_arr)
+        )
+        phi_bg = phit_arr[valid_bg]
+        logk_bg = np.log10(np.maximum(perm_arr[valid_bg], 1e-4))
+        rf_bg = np.array(
+            [int(rf) if rf is not None else -1 for rf in rock_flags], dtype=float
+        )[valid_bg]
+        for _rt in sorted({int(r) for r in rf_bg if r >= 1}):
+            _mask = rf_bg == _rt
+            if _mask.sum() < 2:
+                _vsh_rt_trends[_rt] = (
+                    0.0,
+                    float(np.median(logk_bg[_mask])) if _mask.any() else 0.0,
+                )
+                continue
+            try:
+                _m, _c = np.polyfit(phi_bg[_mask], logk_bg[_mask], 1)
+                _vsh_rt_trends[_rt] = (float(_m), float(_c))
+            except Exception:
+                _vsh_rt_trends[_rt] = (0.0, float(np.median(logk_bg[_mask])))
 
     allowed_zones_set = (
         {str(z).strip() for z in zones if str(z).strip()} if zones else None
@@ -18175,18 +18251,35 @@ def _extract_project_scal_plugs_for_swirr(
                 if not (0 < cpore < 1 and cperm > 0):
                     continue
 
-                ind_val_plug, hib_plug, _ = _eval_drt_indicator_scalar_or_array(
-                    cpore, cperm, drt_method
-                )
-                rf_val = int(
-                    rock_typing(
+                if _is_vshale_drt and _vsh_rt_trends:
+                    # Vshale DRT: classify plug by nearest poro-perm trendline.
+                    # VSH not available on SCAL plugs; use log10(k) proximity.
+                    _plug_logk = math.log10(max(cperm, 1e-4))
+                    _best_rt, _best_dist = 1, float("inf")
+                    for _rt_key, (_m_t, _c_t) in _vsh_rt_trends.items():
+                        _pred_logk = _m_t * cpore + _c_t
+                        _dist = abs(_plug_logk - _pred_logk)
+                        if _dist < _best_dist:
+                            _best_dist = _dist
+                            _best_rt = _rt_key
+                    rf_val = _best_rt
+                else:
+                    ind_val_plug, hib_plug, _ = _eval_drt_indicator_scalar_or_array(
+                        cpore, cperm, drt_method
+                    )
+                    _rt_raw = rock_typing(
                         ind_val_plug, cutoffs_list, higher_is_better=hib_plug
-                    ).item()
-                )
-                if (
-                    not np.isfinite(rf_val) or rf_val < 1
-                ) and near_rock_flag is not None:
-                    rf_val = near_rock_flag
+                    )
+                    _rt_scalar = _rt_raw.item() if hasattr(_rt_raw, "item") else _rt_raw
+                    if not (
+                        isinstance(_rt_scalar, (int, float))
+                        and math.isfinite(float(_rt_scalar))
+                    ):
+                        rf_val = near_rock_flag if near_rock_flag is not None else 1
+                    else:
+                        rf_val = int(_rt_scalar)
+                    if rf_val < 1:
+                        rf_val = near_rock_flag if near_rock_flag is not None else 1
 
                 pc_col = next(
                     (
@@ -18261,6 +18354,7 @@ def _extract_project_scal_plugs_for_swirr(
                     ift,
                     theta,
                     (plug_fluid_overrides or {}).get(plug_id_norm),
+                    lab_overrides=fluid_lab_overrides,
                 )
                 pc_lab_vals = pc_vals.copy()
                 pc_res_vals = pc_lab_vals * (res_num / lab_den)
@@ -18292,6 +18386,9 @@ def _extract_project_scal_plugs_for_swirr(
                         "fluid_system": fluid_sys,
                         "ift_lab": round(float(ift_lab), 2),
                         "theta_lab": round(float(theta_lab), 2),
+                        "ift_cos_lab": round(float(lab_den), 4),
+                        "ift_cos_res": round(float(res_num), 4),
+                        "scale_factor": round(float(res_num / lab_den), 4),
                         "pc_domain": pc_dom,
                         "pc_curve": pc_sorted,
                         "pc_lab_curve": pc_lab_sorted,
@@ -18468,6 +18565,31 @@ def workspace_swirr_fit(
             if nk and sv in ("micp", "air_brine", "lab_oil_brine", "reservoir"):
                 norm_fl_ov[nk] = sv
 
+        # Normalise per-system lab IFT/theta overrides
+        raw_lab_ov = (
+            req.fluid_lab_overrides
+            if req.fluid_lab_overrides is not None
+            else (req.fluidLabOverrides or {})
+        )
+        _valid_sys = {"micp", "air_brine", "lab_oil_brine", "reservoir"}
+        norm_lab_ov: Dict[str, Dict[str, float]] = {}
+        for sys_k, sys_v in (raw_lab_ov or {}).items():
+            sk = str(sys_k or "").strip().lower()
+            if sk in _valid_sys and isinstance(sys_v, dict):
+                entry: Dict[str, float] = {}
+                if "ift_lab" in sys_v and sys_v["ift_lab"] is not None:
+                    try:
+                        entry["ift_lab"] = float(sys_v["ift_lab"])
+                    except (TypeError, ValueError):
+                        pass
+                if "theta_lab" in sys_v and sys_v["theta_lab"] is not None:
+                    try:
+                        entry["theta_lab"] = float(sys_v["theta_lab"])
+                    except (TypeError, ValueError):
+                        pass
+                if entry:
+                    norm_lab_ov[sk] = entry
+
         cutoffs_list = sorted(
             float(c) for c in (req.cutoffs or [0.5, 1.2, 2.5, 5.0]) if c is not None
         )
@@ -18484,6 +18606,7 @@ def workspace_swirr_fit(
             pc_domain=pc_domain,
             plug_rt_overrides=norm_rt_ov,
             plug_fluid_overrides=norm_fl_ov,
+            fluid_lab_overrides=norm_lab_ov or None,
         )
 
         plug_rows: List[Dict[str, Any]] = []

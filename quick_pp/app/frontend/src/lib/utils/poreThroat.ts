@@ -11,6 +11,21 @@ export const SCAL_FLUID_SYSTEM_OPTIONS: Array<{
 	{ key: 'reservoir', label: 'Reservoir Fluid (IFT, θ)', shortLabel: 'Res Fluid' }
 ];
 
+/** Default lab IFT and contact angle for each SCAL fluid system.
+ * These match the backend constants in `_resolve_scal_fluid_system`.
+ * The 'reservoir' row holds the default values; at runtime they are
+ * overridden by shfParams.ift / shfParams.theta.
+ */
+export const SCAL_FLUID_DEFAULT_PARAMS: Record<
+	ScalFluidSystem,
+	{ iftLab: number; thetaLab: number }
+> = {
+	micp: { iftLab: 485.0, thetaLab: 140.0 },
+	air_brine: { iftLab: 72.0, thetaLab: 0.0 },
+	lab_oil_brine: { iftLab: 48.0, thetaLab: 30.0 },
+	reservoir: { iftLab: 30.0, thetaLab: 30.0 } // placeholder; actual values come from shfParams
+};
+
 export interface ResolvedScalFluidProps {
 	system: ScalFluidSystem;
 	shortLabel: string;
@@ -24,19 +39,29 @@ export interface ResolvedScalFluidProps {
  * Resolve laboratory fluid system and IFT*|cos(theta)| factors for a SCAL sample.
  * Ensures MICP (Hg-Air), Porous Plate / Centrifuge (Air-Brine or Lab Oil-Brine),
  * and Reservoir-fluid curves map onto a consistent Leverett-J and Washburn radius scale.
+ *
+ * @param labOverrides  Per-system lab IFT/theta overrides. If the resolved system
+ *   has an entry here its iftLab/thetaLab replace the hard-coded defaults.
+ *   The 'reservoir' entry also overrides resIftCos.
  */
 export function resolveScalFluidSystem(
 	expTypeRaw?: string | null,
 	maxPcRaw: number = 0,
 	iftRes: number = 30.0,
 	thetaRes: number = 30.0,
-	fluidOverride?: string | null
+	fluidOverride?: string | null,
+	labOverrides?: Partial<Record<string, { iftLab: number; thetaLab: number }>> | null
 ): ResolvedScalFluidProps {
 	const safeResIft = Math.max(1e-4, Number.isFinite(iftRes) && iftRes > 0 ? iftRes : 30.0);
 	const safeResTheta = Number.isFinite(thetaRes) ? thetaRes : 30.0;
+
+	// Compute res-side IFT·cosθ, allowing the reservoir row override
+	const resOv = labOverrides?.['reservoir'];
+	const resIftEff = resOv?.iftLab != null ? Math.max(1e-4, resOv.iftLab) : safeResIft;
+	const resThetaEff = resOv?.thetaLab != null ? resOv.thetaLab : safeResTheta;
 	const resIftCos = Math.max(
 		1e-4,
-		safeResIft * Math.abs(Math.cos((safeResTheta * Math.PI) / 180.0))
+		resIftEff * Math.abs(Math.cos((resThetaEff * Math.PI) / 180.0))
 	);
 
 	const ov = String(fluidOverride || '')
@@ -104,9 +129,16 @@ export function resolveScalFluidSystem(
 		thetaLab = 30.0;
 		shortLabel = 'Lab Oil';
 	} else {
-		iftLab = safeResIft;
-		thetaLab = safeResTheta;
+		iftLab = resIftEff;
+		thetaLab = resThetaEff;
 		shortLabel = 'Res Fluid';
+	}
+
+	// Apply per-system lab overrides
+	const sysOv = labOverrides?.[system];
+	if (sysOv && system !== 'reservoir') {
+		if (sysOv.iftLab != null && Number.isFinite(sysOv.iftLab)) iftLab = Math.max(1e-4, sysOv.iftLab);
+		if (sysOv.thetaLab != null && Number.isFinite(sysOv.thetaLab)) thetaLab = sysOv.thetaLab;
 	}
 
 	const labIftCos = Math.max(1e-4, iftLab * Math.abs(Math.cos((thetaLab * Math.PI) / 180.0)));
@@ -127,7 +159,8 @@ export function resolvePlugLabAndResPc(
 	},
 	iftRes: number = 30.0,
 	thetaRes: number = 30.0,
-	fluidOverride?: string | null
+	fluidOverride?: string | null,
+	labOverrides?: Partial<Record<string, { iftLab: number; thetaLab: number }>> | null
 ): { fluid: ResolvedScalFluidProps; pcLabCurve: number[]; pcResCurve: number[] } {
 	const rawPc = Array.isArray(plug.pc_curve) ? plug.pc_curve : [];
 	const hasExplicitLab =
@@ -141,7 +174,8 @@ export function resolvePlugLabAndResPc(
 			maxLab,
 			iftRes,
 			thetaRes,
-			fluidOverride
+			fluidOverride,
+			labOverrides
 		);
 		const scale = fluid.resIftCos / fluid.labIftCos;
 		const pcRes = pcLab.map((v) => v * scale);
@@ -156,7 +190,8 @@ export function resolvePlugLabAndResPc(
 			0,
 			iftRes,
 			thetaRes,
-			fluidOverride
+			fluidOverride,
+			labOverrides
 		);
 		const invScale = fluid.labIftCos / fluid.resIftCos;
 		const pcLab = pcRes.map((v) => v * invScale);
@@ -170,7 +205,8 @@ export function resolvePlugLabAndResPc(
 		maxLab,
 		iftRes,
 		thetaRes,
-		fluidOverride
+		fluidOverride,
+		labOverrides
 	);
 	const scale = fluid.resIftCos / fluid.labIftCos;
 	const pcRes = pcLab.map((v) => v * scale);

@@ -16,7 +16,7 @@
 	import { workbench } from '$lib/state/workbench.svelte';
 	import { fmtNum } from '$lib/utils/formatters';
 	import { getRockTypeColor } from '$lib/utils/petrophysicsColors';
-	import { SCAL_FLUID_SYSTEM_OPTIONS, type ScalFluidSystem } from '$lib/utils/poreThroat';
+	import { SCAL_FLUID_SYSTEM_OPTIONS, SCAL_FLUID_DEFAULT_PARAMS, type ScalFluidSystem } from '$lib/utils/poreThroat';
 
 	let isApplying = $state(false);
 	let copiedSwof = $state(false);
@@ -1016,31 +1016,162 @@
 						</div>
 					</div>
 
-					<div class="mt-2 grid grid-cols-2 gap-2">
-						<NumericScrubber
-							label="Res IFT (σ_res)"
-							bind:value={projectData.shfParams.ift}
-							unit="dyn/cm"
-							min={1.0}
-							max={80.0}
-							step={0.5}
-							onchange={() => {
-								projectData.shfManualFitOverride = false;
-								projectData.recomputeScalFitsFromPlugs(true);
-							}}
-						/>
-						<NumericScrubber
-							label="Res Angle (θ_res)"
-							bind:value={projectData.shfParams.theta}
-							unit="deg"
-							min={0}
-							max={90}
-							step={1.0}
-							onchange={() => {
-								projectData.shfManualFitOverride = false;
-								projectData.recomputeScalFitsFromPlugs(true);
-							}}
-						/>
+										<!--– Per-fluid-system IFT / θ table –-->
+					{@const detectedSystems = [
+						...new Set(
+							(projectData.swirrResult?.plugs ?? []).map((p) => p.fluid_system ?? 'air_brine')
+						)
+					] as ScalFluidSystem[]}
+					{@const shownSystems = [
+						...detectedSystems.filter((s) => s !== 'reservoir'),
+						'reservoir' as ScalFluidSystem
+					]}
+					{@const fluidOverridesMap = projectData.scalFluidLabOverrides ?? {}}
+					<div class="mt-2 overflow-hidden rounded-sm border border-[var(--border-hairline)]">
+						<div class="bg-[var(--bg-subtle)] px-1.5 py-0.5 text-[9.5px] font-semibold text-[var(--text-primary)] flex items-center justify-between">
+							<span>IFT / Contact Angle (per Fluid System)</span>
+							{#if Object.keys(fluidOverridesMap).length > 0}
+								<button
+									type="button"
+									onclick={() => {
+										projectData.scalFluidLabOverrides = {};
+										projectData.shfManualFitOverride = false;
+										projectData.recomputeScalFitsFromPlugs(true);
+									}}
+									class="text-[9px] font-medium text-blue-600 hover:underline"
+									title="Reset all fluid system overrides to defaults"
+								>Reset All</button>
+							{/if}
+						</div>
+						<table class="w-full border-collapse text-left text-[9px]">
+							<thead class="bg-[var(--bg-subtle)] text-[var(--text-secondary)]">
+								<tr class="border-b border-[var(--border-hairline)]">
+									<th class="px-1 py-0.5 font-semibold">System</th>
+									<th class="px-1 py-0.5 text-right font-semibold" title="Lab interfacial tension (dyn/cm)">σ (dyn/cm)</th>
+									<th class="px-1 py-0.5 text-right font-semibold" title="Lab contact angle (degrees)">θ (°)</th>
+									<th class="px-1 py-0.5 text-right font-semibold" title="σ·|cosθ| (dyn/cm)">σ·cosθ</th>
+									<th class="w-5 px-0.5 py-0.5 text-center font-semibold" title="N plugs with this fluid system">N</th>
+									<th class="w-5 px-0.5"></th>
+								</tr>
+							</thead>
+							<tbody class="divide-y divide-[var(--border-hairline)]">
+								{#each shownSystems as sys (sys)}
+									{@const isRes = sys === 'reservoir'}
+									{@const defaults = isRes
+										? { iftLab: projectData.shfParams.ift, thetaLab: projectData.shfParams.theta }
+										: SCAL_FLUID_DEFAULT_PARAMS[sys]}
+									{@const override = isRes ? null : fluidOverridesMap[sys]}
+									{@const iftVal = override?.iftLab ?? defaults.iftLab}
+									{@const thetaVal = override?.thetaLab ?? defaults.thetaLab}
+									{@const iftCos = Math.max(1e-4, iftVal * Math.abs(Math.cos((thetaVal * Math.PI) / 180)))}
+									{@const nPlugs = isRes ? 0 : (projectData.swirrResult?.plugs ?? []).filter((p) => (p.fluid_system ?? 'air_brine') === sys).length}
+									{@const hasOverride = !isRes && override != null}
+									{@const sysLabel = isRes ? 'σ_res / θ_res (Reservoir)' : (SCAL_FLUID_SYSTEM_OPTIONS.find((o) => o.key === sys)?.shortLabel ?? sys)}
+									<tr class="h-6 {isRes ? 'bg-blue-50/60' : ''}">
+										<td class="px-1 py-0 text-[9px] {isRes ? 'font-semibold text-blue-800' : 'text-[var(--text-primary)]'}">
+											{sysLabel}
+										</td>
+										<td class="px-0.5 py-0 text-right">
+											{#if isRes}
+												<input
+													type="number"
+													value={projectData.shfParams.ift}
+													min="1"
+													max="80"
+													step="0.5"
+													onchange={(e) => {
+														const v = parseFloat(e.currentTarget.value);
+														if (Number.isFinite(v) && v > 0) {
+															projectData.shfParams.ift = v;
+															projectData.shfManualFitOverride = false;
+															projectData.recomputeScalFitsFromPlugs(true);
+														}
+													}}
+													class="mono-num h-5 w-14 rounded-xs border border-blue-300 bg-blue-50 px-0.5 text-right text-[9px] font-semibold text-blue-900 focus:outline-none"
+												/>
+											{:else}
+												<input
+													type="number"
+													value={iftVal}
+													min="1"
+													max="600"
+													step="0.5"
+													onchange={(e) => {
+														const v = parseFloat(e.currentTarget.value);
+														if (Number.isFinite(v) && v > 0) {
+															projectData.scalFluidLabOverrides = {
+																...projectData.scalFluidLabOverrides,
+																[sys]: { iftLab: v, thetaLab: fluidOverridesMap[sys]?.thetaLab ?? defaults.thetaLab }
+															};
+															projectData.shfManualFitOverride = false;
+															projectData.recomputeScalFitsFromPlugs(true);
+														}
+													}}
+													class="mono-num h-5 w-14 rounded-xs border px-0.5 text-right text-[9px] focus:outline-none {hasOverride ? 'border-amber-400 bg-amber-50 font-semibold text-amber-900' : 'border-transparent bg-transparent text-[var(--text-primary)] hover:border-slate-300'}"
+												/>
+											{/if}
+										</td>
+										<td class="px-0.5 py-0 text-right">
+											{#if isRes}
+												<input
+													type="number"
+													value={projectData.shfParams.theta}
+													min="0"
+													max="90"
+													step="1"
+													onchange={(e) => {
+														const v = parseFloat(e.currentTarget.value);
+														if (Number.isFinite(v)) {
+															projectData.shfParams.theta = v;
+															projectData.shfManualFitOverride = false;
+															projectData.recomputeScalFitsFromPlugs(true);
+														}
+													}}
+													class="mono-num h-5 w-12 rounded-xs border border-blue-300 bg-blue-50 px-0.5 text-right text-[9px] font-semibold text-blue-900 focus:outline-none"
+												/>
+											{:else}
+												<input
+													type="number"
+													value={thetaVal}
+													min="0"
+													max="180"
+													step="1"
+													onchange={(e) => {
+														const v = parseFloat(e.currentTarget.value);
+														if (Number.isFinite(v)) {
+															projectData.scalFluidLabOverrides = {
+																...projectData.scalFluidLabOverrides,
+																[sys]: { iftLab: fluidOverridesMap[sys]?.iftLab ?? defaults.iftLab, thetaLab: v }
+															};
+															projectData.shfManualFitOverride = false;
+															projectData.recomputeScalFitsFromPlugs(true);
+														}
+													}}
+													class="mono-num h-5 w-12 rounded-xs border px-0.5 text-right text-[9px] focus:outline-none {hasOverride ? 'border-amber-400 bg-amber-50 font-semibold text-amber-900' : 'border-transparent bg-transparent text-[var(--text-primary)] hover:border-slate-300'}"
+												/>
+											{/if}
+										</td>
+										<td class="mono-num px-1 py-0 text-right text-[8.5px] text-[var(--text-muted)]">{iftCos.toFixed(1)}</td>
+										<td class="mono-num px-0.5 py-0 text-center text-[8.5px] text-[var(--text-muted)]">{isRes ? '–' : nPlugs}</td>
+										<td class="px-0.5 py-0 text-center">
+											{#if hasOverride}
+												<button
+													type="button"
+													onclick={() => {
+														const { [sys]: _, ...rest } = projectData.scalFluidLabOverrides;
+														projectData.scalFluidLabOverrides = rest;
+														projectData.shfManualFitOverride = false;
+														projectData.recomputeScalFitsFromPlugs(true);
+													}}
+													title="Reset {sys} to default"
+													class="text-[10px] text-amber-600 hover:text-amber-800"
+												>↺</button>
+											{/if}
+										</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
 					</div>
 					<p class="mt-0.5 text-[9.5px] leading-snug text-[var(--text-muted)]">
 						{#if activeShfModel === 'leverett_j'}
@@ -1435,6 +1566,10 @@
 												<th class="px-1 text-right font-semibold">φ</th>
 												<th class="px-1 text-right font-semibold">k</th>
 												<th class="px-1 text-right font-semibold">Pts</th>
+												<th class="px-1 text-right font-semibold" title="Lab interfacial tension (dyn/cm)">σ</th>
+												<th class="px-1 text-right font-semibold" title="Lab contact angle (deg)">θ</th>
+												<th class="px-1 text-right font-semibold" title="σ·|cosθ| (dyn/cm)">σcosθ</th>
+												<th class="px-1 text-right font-semibold" title="Pc_lab to Pc_res scale factor = (σcosθ)_res / (σcosθ)_lab">Scale×</th>
 											</tr>
 										</thead>
 										<tbody class="divide-y divide-[var(--border-hairline)]">
@@ -1590,6 +1725,10 @@
 													<td class="mono-num px-1 text-right"
 														>{plug.pc_curve?.length ?? 0}</td
 													>
+												<td class="mono-num px-1 text-right text-[8.5px] text-[var(--text-muted)]">{(plug.ift_lab ?? 72).toFixed(0)}</td>
+												<td class="mono-num px-1 text-right text-[8.5px] text-[var(--text-muted)]">{(plug.theta_lab ?? 0).toFixed(0)}°</td>
+												<td class="mono-num px-1 text-right text-[8.5px] text-[var(--text-muted)]">{Math.max(1e-4, (plug.ift_lab ?? 72) * Math.abs(Math.cos(((plug.theta_lab ?? 0) * Math.PI) / 180))).toFixed(1)}</td>
+												<td class="mono-num px-1 text-right text-[8.5px] text-[var(--text-muted)]" title="Pc_lab → Pc_res factor">×{(plug.scale_factor ?? (Math.max(1e-4, (shfParams.ift ?? 30) * Math.abs(Math.cos(((shfParams.theta ?? 30) * Math.PI) / 180))) / Math.max(1e-4, (plug.ift_lab ?? 72) * Math.abs(Math.cos(((plug.theta_lab ?? 0) * Math.PI) / 180))))).toFixed(3)}</td>
 												</tr>
 											{/each}
 										</tbody>

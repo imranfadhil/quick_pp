@@ -188,6 +188,9 @@ export interface SwirrPlugRow {
 	fluid_system?: ScalFluidSystem;
 	ift_lab?: number;
 	theta_lab?: number;
+	ift_cos_lab?: number;
+	ift_cos_res?: number;
+	scale_factor?: number;
 	pc_domain?: string;
 	sw_at_max_pc: number;
 	extracted_swirr: number;
@@ -563,6 +566,14 @@ class ProjectDataState {
 
 	swirrResult = $state.raw<SwirrFitResult | null>(null);
 	swirrApplyResult = $state.raw<SwirrApplyResult | null>(null);
+
+	/** Per-system lab IFT/theta overrides. Keys are ScalFluidSystem values.
+	 * Each entry overrides the hard-coded lab constants for that fluid system.
+	 * The 'reservoir' entry also overrides the res-side Pc conversion scale.
+	 */
+	scalFluidLabOverrides = $state<
+		Partial<Record<string, { iftLab: number; thetaLab: number }>>
+	>({});
 
 	// Manual-override flags live in shared state so they persist with saved project parameters
 	swirrManualRuleOverride = $state<boolean>(false);
@@ -1023,7 +1034,8 @@ class ProjectDataState {
 					swirrConfig: clone(this.swirrConfig),
 					swirrInputCols: clone(this.swirrInputCols),
 					swirrManualRuleOverride: this.swirrManualRuleOverride,
-					shfManualFitOverride: this.shfManualFitOverride
+					shfManualFitOverride: this.shfManualFitOverride,
+					scalFluidLabOverrides: clone(this.scalFluidLabOverrides)
 				};
 			case 'shf': {
 				const sr = this.shfResult;
@@ -1079,6 +1091,9 @@ class ProjectDataState {
 				}
 				if (typeof p.shfManualFitOverride === 'boolean') {
 					this.shfManualFitOverride = p.shfManualFitOverride;
+				}
+				if (p.scalFluidLabOverrides && typeof p.scalFluidLabOverrides === 'object') {
+					Object.assign(this.scalFluidLabOverrides, p.scalFluidLabOverrides);
 				}
 				break;
 			case 'shf':
@@ -2126,7 +2141,8 @@ class ProjectDataState {
 				p,
 				this.shfParams.ift || 30.0,
 				this.shfParams.theta ?? 30.0,
-				flOv
+				flOv,
+				this.scalFluidLabOverrides
 			);
 			const pcArr = pcDom === 'reservoir' ? pcResCurve : pcLabCurve;
 			const swArr = p.sw_curve || [];
@@ -2409,7 +2425,15 @@ class ProjectDataState {
 					drt_method: this.drtMethod,
 					cutoffs: this.activeDrtCutoffs,
 					ift: this.shfParams.ift,
-					theta: this.shfParams.theta
+					theta: this.shfParams.theta,
+					fluid_lab_overrides: Object.keys(this.scalFluidLabOverrides).length > 0
+						? Object.fromEntries(
+								Object.entries(this.scalFluidLabOverrides).map(([k, v]) => [
+									k,
+									{ ift_lab: v!.iftLab, theta_lab: v!.thetaLab }
+								])
+						  )
+					: null
 				}
 			);
 			if (res && Array.isArray(res.plugs) && res.plugs.length > 0) {
@@ -2498,7 +2522,8 @@ class ProjectDataState {
 				p,
 				resIft,
 				resTheta,
-				flOv
+				flOv,
+				this.scalFluidLabOverrides
 			);
 
 			const isPlugExcluded =
