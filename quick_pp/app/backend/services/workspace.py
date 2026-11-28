@@ -11176,6 +11176,7 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                         plug_fluid_overrides.get(plug_id_norm),
                     )
                     pc_lab_vals = pc_vals.copy()
+                    # Convert to reservoir Pc:  Pc_res = Pc_lab * (sigma_res*|cos(theta_res)|) / (sigma_lab*|cos(theta_lab)|)
                     pc_vals = pc_lab_vals * (res_num / lab_den)
                     swirr_src_mode = (
                         "poro_perm"
@@ -11194,7 +11195,11 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                         swn_vals = np.clip(raw_swn, 0.005, 0.99)
                     else:
                         # Per-plug Lab Terminal Sw normalization: each sample is normalized by its own
-                        # minimum/terminal lab Sw (with a 0.96 asymptote factor so the terminal point remains > 0 on log-log J fits)
+                        # minimum/terminal lab Sw (with a 0.96 asymptote factor so the terminal point
+                        # remains > 0 on log-log J fits).
+                        # NOTE: This underestimates true Swirr when the lab test did not reach
+                        # irreducible saturation (e.g. porous-plate limited to Pc < 100 psi).
+                        # Prefer swirr_source='poro_perm' for a physically consistent Swirr.
                         sw_min_plug = float(np.nanmin(sw_vals))
                         eff_swirr = float(np.clip(sw_min_plug * 0.96, 0.01, 0.85))
                         raw_swn = (sw_vals - eff_swirr) / max(1.0 - eff_swirr, 0.05)
@@ -11219,13 +11224,20 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
                         )
                         if not (0.004 <= swn_v <= 0.995 and pc_v > 0):
                             continue
-                        # Compute Leverett-J directly from lab Pc and method-specific lab IFT & theta
-                        # (mathematically invariant to reservoir IFT/theta conversion)
-                        j_v = float(
-                            leverett_j(
-                                pc_lab_v, ift_lab_plug, theta_lab_plug, cperm, cpore
-                            )
-                        )
+                        # Compute Leverett-J from reservoir-converted Pc with the reservoir IFT/θ.
+                        #
+                        # J is dimensionless and fluid-system invariant:
+                        #   J = 0.21665 * Pc_res / (sigma_res * |cos(theta_res)|) * sqrt(k/phi)
+                        #     = 0.21665 * Pc_lab / (sigma_lab * |cos(theta_lab)|) * sqrt(k/phi)
+                        #
+                        # Using the reservoir-converted Pc (pc_v) with req.ift / req.theta ensures
+                        # the SCAL calibration basis is identical to the SHF evaluation basis used
+                        # in sw_shf_leverett_j(), regardless of the lab experiment type (air-brine,
+                        # MICP, lab-oil/brine).  sw_shf_leverett_j() computes:
+                        #   J_shf = 0.21665 * Pc_reservoir / (req.ift * |cos(req.theta)|) * sqrt(k/phi)
+                        # so using the same req.ift/theta here makes the two J spaces identical and
+                        # Swn = (a / J_shf)^(1/b) gives physically consistent Sw predictions.
+                        j_v = float(leverett_j(pc_v, req.ift, req.theta, cperm, cpore))
                         h_v = float(pc_v / grad_psi)
                         bvw_v = float(cpore * sw_v)
                         if not (
