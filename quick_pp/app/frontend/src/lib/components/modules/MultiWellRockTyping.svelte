@@ -12,7 +12,9 @@
 		type DrtFeatureKey,
 		type DrtMethod,
 		type DrtPropagationMode,
+		type DrtVshCurve,
 		type PhiKDataSource,
+		type RockTypingColorBy,
 		type RockTypingPlotView
 	} from '$lib/state/projectData.svelte';
 	import { wellData } from '$lib/state/wellData.svelte';
@@ -116,6 +118,23 @@
 			description:
 				'Carbonate Rock Fabric Number (RFN 0.5–4.0): Class 1 Grainstone (0.5–1.5), Class 2 Packstone (1.5–2.5), Class 3 Mud-Dominated (2.5–4.0) (DRT 1 = lowest RFN).',
 			higherIsBetter: false
+		},
+		vshale: {
+			label: 'Vshale DRT',
+			shortName: 'Vsh',
+			badge: 'Clastic Sand–Shale',
+			cutoffTitle: 'Vshale / Vclay Boundary Cutoffs',
+			cutoffLabel: 'Vsh Cutoff',
+			addLabel: '+ Add Vshale Boundary',
+			computeLabel: 'Compute Vshale DRT (⌘+Enter)',
+			unit: 'v/v',
+			min: 0.01,
+			max: 0.95,
+			step: 0.01,
+			formula: 'DRT 1 (Clean Sand): Vsh < c₁  ···  DRT k: Vsh ≥ cₖ₋₁',
+			description:
+				'Clastic shale/clay volume rock typing (clean sand → silty sand → shaly sand). Lower Vshale indicates better reservoir quality (DRT 1 = lowest Vshale). Supports GMM & Modified Lorenz cutoff detection.',
+			higherIsBetter: false
 		}
 	};
 
@@ -124,6 +143,7 @@
 	let carbonateDiag = $derived(diagnostics?.carbonate ?? null);
 	let lorenzDiag = $derived(diagnostics?.lorenz ?? null);
 	let gmmDiag = $derived(diagnostics?.gmm ?? null);
+	let phiKSepDiag = $derived(diagnostics?.phi_k_separation ?? null);
 	let classifierDiag = $derived(diagnostics?.classifier ?? null);
 	let activeKScores = $derived<Array<Record<string, any>>>(
 		projectData.drtCutoffMethod === 'lorenz'
@@ -151,9 +171,31 @@
 	);
 
 	function selectDrtMethod(m: DrtMethod) {
+		if (m === 'vshale') {
+			const cleanVsh = projectData.vshaleCutoffs.filter(
+				(c) => Number.isFinite(c) && c >= 0.02 && c <= 0.98
+			);
+			if (cleanVsh.length === 0 || cleanVsh.length !== projectData.vshaleCutoffs.length) {
+				projectData.vshaleCutoffs =
+					cleanVsh.length > 0 ? cleanVsh : [0.12, 0.25, 0.4];
+			}
+		}
 		if (projectData.drtMethod === m && projectData.rockTypingResult?.method === m) return;
+		const methodChanged = projectData.drtMethod !== m;
 		projectData.drtMethod = m;
 		projectData.drtClassifierPropagated = false;
+		if (methodChanged) {
+			projectData.drtPropagationMode = 'cutoff_only';
+			const selModel = savedModelsList.find(
+				(sm) => sm.model_key === projectData.drtSelectedSavedModelKey
+			);
+			if (selModel?.drt_method && selModel.drt_method !== m) {
+				projectData.drtSelectedSavedModelKey = '';
+			}
+		}
+		if (projectData.rockTypingResult && !projectData.isComputingMultiWell) {
+			void executeRockTyping(false, false, false, null);
+		}
 	}
 
 	function selectDrtDataSource(src: PhiKDataSource) {
@@ -177,8 +219,14 @@
 		const targetCutoffsCount = k - 1;
 		const cur = [...projectData.activeDrtCutoffs];
 		while (cur.length < targetCutoffsCount) {
-			const last = cur[cur.length - 1] ?? 1.0;
-			cur.push(Number((last * 1.5).toFixed(2)));
+			const last = cur[cur.length - 1] ?? (projectData.drtMethod === 'vshale' ? 0.15 : 1.0);
+			const nextStep =
+				projectData.drtMethod === 'vshale'
+					? Math.min(0.95, Number((last + 0.12).toFixed(2)))
+					: projectData.drtMethod === 'lucia'
+						? Math.min(4.0, Number((last + 0.5).toFixed(2)))
+						: Number((last * 1.5).toFixed(2));
+			cur.push(nextStep);
 		}
 		if (cur.length > targetCutoffsCount) {
 			cur.length = targetCutoffsCount;
@@ -188,11 +236,13 @@
 
 	function addCutoff() {
 		const cur = projectData.activeDrtCutoffs;
-		const last = cur[cur.length - 1] ?? 1.0;
+		const last = cur[cur.length - 1] ?? (projectData.drtMethod === 'vshale' ? 0.15 : 1.0);
 		const nextVal =
-			projectData.drtMethod === 'lucia'
-				? Math.min(4.0, Number((last + 0.5).toFixed(2)))
-				: Number((last * 1.8).toFixed(2));
+			projectData.drtMethod === 'vshale'
+				? Math.min(0.95, Number((last + 0.12).toFixed(2)))
+				: projectData.drtMethod === 'lucia'
+					? Math.min(4.0, Number((last + 0.5).toFixed(2)))
+					: Number((last * 1.8).toFixed(2));
 		projectData.activeDrtCutoffs = [...cur, nextVal];
 	}
 
@@ -501,6 +551,18 @@
 		try {
 			const method = projectData.drtMethod;
 			const meta = DRT_METHOD_META[method];
+			if (method === 'vshale') {
+				const validVshCuts = projectData.vshaleCutoffs.filter(
+					(c) => Number.isFinite(c) && c > 0 && c < 1
+				);
+				if (
+					validVshCuts.length === 0 ||
+					validVshCuts.length !== projectData.vshaleCutoffs.length
+				) {
+					projectData.vshaleCutoffs =
+						validVshCuts.length > 0 ? validVshCuts : [0.12, 0.25, 0.4];
+				}
+			}
 			const sortedCutoffs = [...projectData.activeDrtCutoffs].sort((a, b) => a - b);
 			const activeMinDepth =
 				workbench.depthFilter?.min != null ? workbench.depthFilter.min : null;
@@ -519,6 +581,9 @@
 								? projectData.selectedWellNames
 								: null,
 						method,
+						vsh_curve: projectData.drtVshCurve,
+						propagate_vsh_cutoff_to_logs:
+							method === 'vshale' && projectData.drtPropagateVshToLogs,
 						data_source: projectData.drtDataSource,
 						cutoffs: sortedCutoffs,
 						higher_is_better: meta.higherIsBetter,
@@ -558,7 +623,11 @@
 			if (error || !data) {
 				throw new Error(String((error as any)?.detail ?? 'Rock typing calculation failed'));
 			}
-			if (autoFindCutoffs && Array.isArray(data.cutoffs) && data.cutoffs.length > 0) {
+			if (
+				Array.isArray(data.cutoffs) &&
+				data.cutoffs.length > 0 &&
+				(autoFindCutoffs || method === 'vshale')
+			) {
 				projectData.activeDrtCutoffs = data.cutoffs.map((c: number) =>
 					Number(Number(c).toFixed(3))
 				);
@@ -583,6 +652,7 @@
 					((data as any).data_source === 'log' || projectData.drtDataSource === 'log'
 						? 'PERM'
 						: 'CPERM'),
+				vsh_label: (data as any).vsh_label ?? 'VSHALE',
 				optimal_k: (data as any).optimal_k,
 				selected_k: (data as any).selected_k,
 				cutoff_method: (data as any).cutoff_method ?? projectData.drtCutoffMethod,
@@ -818,8 +888,8 @@
 				</div>
 			</div>
 
-			<div class="grid grid-cols-3 gap-1">
-				{#each [['fzi', 'FZI / RQI'], ['winland', 'Winland R35'], ['lucia', 'Lucia RFN']] as [m, lbl]}
+			<div class="grid grid-cols-4 gap-1">
+				{#each [['fzi', 'FZI / RQI'], ['winland', 'Winland R35'], ['lucia', 'Lucia RFN'], ['vshale', 'Vshale']] as [m, lbl]}
 					<button
 						type="button"
 						onclick={() => selectDrtMethod(m as DrtMethod)}
@@ -844,20 +914,92 @@
 				</p>
 			</div>
 
-			<!-- Quick Crossplot View Switcher -->
-			<div class="mt-1.5 grid grid-cols-5 gap-1">
-				{#each [['phi-k', 'Φ–K'], ['lorenz', 'Lorenz'], ['gmm', 'GMM'], ['carbonate', 'Φ_sec'], ['classifier', 'ML Matrix']] as [vKey, vLbl]}
-					<button
-						type="button"
-						onclick={() => setPlotView(vKey as RockTypingPlotView)}
-						class="h-5 rounded-xs border text-[9.5px] font-medium transition-colors {projectData.rockTypingPlotView ===
-						vKey
-							? 'border-slate-800 bg-slate-800 text-white'
-							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]'}"
+			{#if projectData.drtMethod === 'vshale'}
+				<div
+					class="mt-1.5 space-y-1.5 rounded-xs border border-blue-200/80 bg-blue-50/40 p-1.5 text-[10px]"
+				>
+					<div class="flex items-center justify-between gap-2">
+						<span class="font-semibold text-[var(--text-primary)]">
+							Shale / Clay Curve Input:
+						</span>
+						<select
+							bind:value={projectData.drtVshCurve}
+							class="h-5 rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-surface)] px-1.5 text-[10px] font-medium text-[var(--text-primary)]"
+						>
+							<option value="auto">Auto (VSHALE → VCLAY)</option>
+							<option value="VSHALE">VSHALE (Total Shale)</option>
+							<option value="VCLAY">VCLAY (Clay Volume)</option>
+							<option value="VSH_GR">VSH_GR (Gamma Ray Vsh)</option>
+							<option value="VSH_DN">VSH_DN (Neu-Den Vsh)</option>
+						</select>
+					</div>
+					<label
+						class="flex cursor-pointer items-center justify-between gap-2 text-[10px] font-medium text-[var(--text-primary)]"
 					>
-						{vLbl}
-					</button>
-				{/each}
+						<span>Apply Vshale Cutoffs Directly Across Full Well Logs</span>
+						<input
+							type="checkbox"
+							bind:checked={projectData.drtPropagateVshToLogs}
+							class="h-3.5 w-3.5 rounded-xs border-[var(--border-hairline)] accent-[var(--accent-primary)]"
+						/>
+					</label>
+					<div class="text-[9px] leading-snug text-[var(--text-secondary)]">
+						{#if projectData.drtPropagateVshToLogs}
+							Deterministically populates <span class="mono-num font-semibold"
+								>ROCK_FLAG_CUTOFF</span
+							> across all wells' continuous Vshale logs without requiring ML.
+						{:else}
+							Classifies strictly at the selected <span class="mono-num font-semibold"
+								>{projectData.drtDataSource === 'core'
+									? 'Core (CPORE & CPERM)'
+									: 'Log (PHIT & PERM)'}</span
+							> depths (toggle above to apply directly across all log depths).
+						{/if}
+					</div>
+				</div>
+			{/if}
+
+			<!-- Quick Crossplot View Switcher & Shading Mode -->
+			<div class="mt-1.5 space-y-1">
+				<div class="grid grid-cols-7 gap-0.5">
+					{#each [['phi-k', 'Φ–K'], ['vsh-k', 'Vsh–K'], ['neuden-vsh', 'ΦN–ρb'], ['lorenz', 'Lorenz'], ['gmm', 'GMM'], ['carbonate', 'Φ_sec'], ['classifier', 'ML']] as [vKey, vLbl]}
+						<button
+							type="button"
+							onclick={() => setPlotView(vKey as RockTypingPlotView)}
+							class="h-5 rounded-xs border text-[9px] font-medium transition-colors {projectData.rockTypingPlotView ===
+							vKey
+								? 'border-slate-800 bg-slate-800 text-white'
+								: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]'}"
+						>
+							{vLbl}
+						</button>
+					{/each}
+				</div>
+				{#if projectData.rockTypingPlotView === 'phi-k' || projectData.rockTypingPlotView === 'neuden-vsh'}
+					<div class="flex items-center justify-between gap-1.5 pt-0.5 text-[9.5px]">
+						<span class="font-medium text-[var(--text-secondary)]">Point Shading:</span>
+						<div class="grid grid-cols-2 gap-1">
+							{#each [['drt', 'DRT Groups'], ['vshale', 'Vshale Gradient']] as [cKey, cLbl]}
+								<button
+									type="button"
+									onclick={() =>
+										(projectData.rockTypingColorBy = cKey as RockTypingColorBy)}
+									class="h-5 rounded-xs border px-2 text-[9px] font-medium transition-colors {projectData.rockTypingColorBy ===
+									cKey
+										? 'border-[var(--accent-primary)] bg-blue-50 font-semibold text-[var(--accent-primary)]'
+										: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)]'}"
+								>
+									{cLbl}
+								</button>
+							{/each}
+						</div>
+					</div>
+				{/if}
+				{#if projectData.rockTypingPlotView === 'neuden-vsh'}
+					<div class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1 text-[9px] leading-snug text-[var(--text-secondary)]">
+						Sand–Shale line &amp; cutoff rays are for visual reference only — optimal groups (<span class="mono-num font-semibold">k</span>) and cutoffs are computed directly from the selected Vshale curve.
+					</div>
+				{/if}
 			</div>
 		</ParameterSection>
 
@@ -972,10 +1114,11 @@
 			</div>
 		</ParameterSection>
 
-		<ParameterSection
-			title="Carbonate Interparticle vs. Vuggy (Lucia RFN)"
-			badge={hasSonicCurvesInProject ? 'Φ_sec = Φ_T − Φ_sonic' : 'Optional Sonic'}
-		>
+		{#if projectData.drtMethod !== 'vshale'}
+			<ParameterSection
+				title="Carbonate Interparticle vs. Vuggy (Lucia RFN)"
+				badge={hasSonicCurvesInProject ? 'Φ_sec = Φ_T − Φ_sonic' : 'Optional Sonic'}
+			>
 			<div class="space-y-1.5">
 				<div
 					class="rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1 text-[10px] text-[var(--text-secondary)]"
@@ -1065,6 +1208,7 @@
 				{/if}
 			</div>
 		</ParameterSection>
+		{/if}
 
 		<ParameterSection
 			title={activeMeta.cutoffTitle}
@@ -1087,6 +1231,15 @@
 								<NumericScrubber
 									label={`${activeMeta.cutoffLabel} ${i + 1}`}
 									bind:value={projectData.luciaCutoffs[i]}
+									unit={activeMeta.unit}
+									min={activeMeta.min}
+									max={activeMeta.max}
+									step={activeMeta.step}
+								/>
+							{:else if projectData.drtMethod === 'vshale'}
+								<NumericScrubber
+									label={`${activeMeta.cutoffLabel} ${i + 1}`}
+									bind:value={projectData.vshaleCutoffs[i]}
 									unit={activeMeta.unit}
 									min={activeMeta.min}
 									max={activeMeta.max}
@@ -1654,8 +1807,28 @@
 						: `${activeMeta.shortName} + ML Fill`
 					: projectData.luciaVuggyOverride && projectData.drtMethod !== 'lucia'
 						? `${activeMeta.shortName} + RFN Override`
-						: `${activeMeta.shortName} Cutoffs Only`}"
+						: diagnostics?.direct_vsh_log_propagated
+							? `${activeMeta.shortName} Direct Log Cutoffs`
+							: `${activeMeta.shortName} Cutoffs Only`}"
 			>
+				{#if phiKSepDiag && phiKSepDiag.grouped_r2 !== null && phiKSepDiag.grouped_r2 !== undefined}
+					<div
+						class="mb-1.5 flex items-center justify-between rounded-xs border border-[var(--border-hairline)] bg-[var(--bg-app)] px-2 py-1 text-[10px]"
+					>
+						<span class="text-[var(--text-secondary)]">Φ–log₁₀(K) Separation R²:</span>
+						<span class="mono-num font-semibold text-[var(--text-primary)]">
+							Global {Number(phiKSepDiag.global_r2 ?? 0).toFixed(2)} → Grouped
+							<strong class="text-emerald-700"
+								>{Number(phiKSepDiag.grouped_r2).toFixed(2)}</strong
+							>
+							{#if Number(phiKSepDiag.r2_gain ?? 0) > 0}
+								<span class="text-[9.5px] text-emerald-700">
+									(+{Number(phiKSepDiag.r2_gain).toFixed(2)})
+								</span>
+							{/if}
+						</span>
+					</div>
+				{/if}
 				<div class="space-y-1">
 					{#each Object.entries(projectData.rockTypingResult.rock_type_counts) as [drt, count]}
 						{@const rangeLbl = formatDrtRange(drt)}
@@ -1700,13 +1873,25 @@
 		<button
 			type="button"
 			disabled={projectData.isComputingMultiWell || projectData.isSavingMultiWell}
-			onclick={() =>
-				executeRockTyping(
+			onclick={() => {
+				const activeSm = savedModelsList.find(
+					(sm) => sm.model_key === projectData.drtSelectedSavedModelKey
+				);
+				const canUseSaved =
+					projectData.drtClassifierPropagated &&
+					projectData.drtSelectedSavedModelKey &&
+					(!activeSm?.drt_method || activeSm.drt_method === projectData.drtMethod);
+				void executeRockTyping(
 					false,
-					Boolean(classifierDiag?.trained && !projectData.drtSelectedSavedModelKey),
-					projectData.drtClassifierPropagated,
-					projectData.drtSelectedSavedModelKey || null
-				)}
+					Boolean(
+						projectData.drtClassifierPropagated &&
+						classifierDiag?.trained &&
+						!canUseSaved
+					),
+					Boolean(canUseSaved || (projectData.drtClassifierPropagated && classifierDiag?.trained)),
+					canUseSaved ? projectData.drtSelectedSavedModelKey : null
+				);
+			}}
 			class="h-7 w-full rounded-sm bg-[var(--accent-primary)] text-xs font-medium text-white transition-opacity hover:opacity-95 disabled:opacity-50"
 		>
 			{projectData.isComputingMultiWell ? 'Computing...' : activeMeta.computeLabel}

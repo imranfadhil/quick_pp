@@ -811,13 +811,28 @@ def rock_typing(curve, cut_offs=None, higher_is_better=True):
     """
     if cut_offs is None:
         cut_offs = [0.1, 0.2, 0.3, 0.4]
+    clean_cuts = sorted({float(c) for c in cut_offs if np.isfinite(c)})
+    arr = np.asarray(curve, dtype=float)
+    if not clean_cuts:
+        out = np.where(np.isnan(arr), np.nan, 1.0)
+        return out.item() if np.ndim(curve) == 0 else out
     # Set number of rock types
-    rock_type = np.arange(1, len(cut_offs) + 2)
+    rock_type = np.arange(1, len(clean_cuts) + 2)
     rock_type = rock_type[::-1] if higher_is_better else rock_type
-    # Rock typing based on cutoffs
-    conditions = [curve < cut_off for cut_off in cut_offs] + [curve >= cut_offs[-1]]
+    # Rock typing based on cutoffs (guarding <= 0 first cutoff so 0.0 maps to first bin)
+    first_cond = (
+        (arr <= clean_cuts[0])
+        if (not higher_is_better and clean_cuts[0] <= 0.0)
+        else (arr < clean_cuts[0])
+    )
+    conditions = (
+        [first_cond]
+        + [arr < cut_off for cut_off in clean_cuts[1:]]
+        + [arr >= clean_cuts[-1]]
+    )
     choices = rock_type[-len(conditions) :]
-    return np.where(np.isnan(curve), np.nan, np.select(conditions, choices))
+    out = np.where(np.isnan(arr), np.nan, np.select(conditions, choices))
+    return out.item() if np.ndim(curve) == 0 else out
 
 
 def find_cutoffs(curve, no_of_cutoffs=3):
@@ -1239,7 +1254,14 @@ def find_cutoffs_gmm(
         x = valid.copy()
 
     if x.size < 4 or np.nanstd(x) < 1e-9:
-        fallback_c = [0.5, 1.0, 2.5] if log_scale else [1.5, 2.5, 3.5]
+        if log_scale:
+            fallback_c = [0.5, 1.0, 2.5]
+        elif (
+            x.size > 0 and float(np.nanmax(x)) <= 1.05 and float(np.nanmin(x)) >= -0.05
+        ):
+            fallback_c = [0.15, 0.30, 0.45]
+        else:
+            fallback_c = [1.5, 2.5, 3.5]
         return {
             "cutoffs": fallback_c,
             "optimal_k": len(fallback_c) + 1,
@@ -1379,8 +1401,20 @@ def find_cutoffs_gmm(
             c_x = float(0.5 * (m1 + m2))
         cutoffs_x.append(c_x)
 
+    x_raw_min = float(np.nanmin(valid))
+    x_raw_max = float(np.nanmax(valid))
     cutoffs_raw = [
-        round(float(10.0**c if log_scale else c), 4) for c in sorted(cutoffs_x)
+        round(
+            float(
+                np.clip(
+                    10.0**c if log_scale else c,
+                    x_raw_min,
+                    x_raw_max,
+                )
+            ),
+            4,
+        )
+        for c in sorted(cutoffs_x)
     ]
 
     x_min, x_max = float(np.percentile(x, 0.5)), float(np.percentile(x, 99.5))
@@ -1472,13 +1506,25 @@ def find_cutoffs_lorenz(
     phit_arr = np.asarray(phit, dtype=float).ravel()
     perm_arr = np.asarray(perm, dtype=float).ravel()
     m_norm = str(method or "fzi").strip().lower()
-    higher_is_better = m_norm != "lucia"
+    is_vsh_method = m_norm in ("vshale", "vsh", "vclay", "vsh_gr", "vsh_dn")
+    higher_is_better = m_norm not in (
+        "lucia",
+        "rfn",
+        "vshale",
+        "vsh",
+        "vclay",
+        "vsh_gr",
+        "vsh_dn",
+    )
+    use_log_indicator = not is_vsh_method
 
     if indicator is None:
         if m_norm in ("winland", "r35"):
             ind_arr = np.asarray(calc_r35(phit_arr, perm_arr), dtype=float)
         elif m_norm in ("lucia", "rfn"):
             ind_arr = np.asarray(calc_rfn(phit_arr, perm_arr), dtype=float)
+        elif is_vsh_method:
+            ind_arr = np.full_like(phit_arr, np.nan, dtype=float)
         else:
             ind_arr = np.asarray(calc_fzi(phit_arr, perm_arr), dtype=float)
     else:
@@ -1490,16 +1536,20 @@ def find_cutoffs_lorenz(
         & np.isfinite(ind_arr)
         & (phit_arr > 0)
         & (perm_arr > 0)
-        & (ind_arr > 0)
+        & ((ind_arr >= 0) if is_vsh_method else (ind_arr > 0))
     )
-    if valid_mask.sum() < 6:
-        fallback_c = [1.5, 2.5, 3.5] if not higher_is_better else [0.5, 1.0, 2.5]
+    if valid_mask.sum() < 4:
+        fallback_c = (
+            [0.15, 0.30, 0.45]
+            if is_vsh_method
+            else ([1.5, 2.5, 3.5] if not higher_is_better else [0.5, 1.0, 2.5])
+        )
         return {
             "cutoffs": fallback_c,
             "optimal_k": len(fallback_c) + 1,
             "selected_k": len(fallback_c) + 1,
             "lorenz_coeff": 0.0,
-            "lorenz_curve": {},
+            "lorenz_curve": {"indicator_is_log": bool(use_log_indicator)},
             "inflection_points": [],
             "k_scores": [],
         }
@@ -1512,7 +1562,7 @@ def find_cutoffs_lorenz(
     phi_ord = phi_v[order_best]
     k_ord = k_v[order_best]
     ind_ord = ind_v[order_best]
-    log_ind_ord = np.log10(ind_ord)
+    log_ind_ord = np.log10(ind_ord) if use_log_indicator else ind_ord.copy()
 
     storage_cdf = np.concatenate(([0.0], np.cumsum(phi_ord) / np.sum(phi_ord)))
     flow_cdf = np.concatenate(([0.0], np.cumsum(k_ord) / np.sum(k_ord)))
@@ -1533,7 +1583,7 @@ def find_cutoffs_lorenz(
     log_norm = (log_grid - log_min) / log_span
 
     cost = np.full((M, M), np.inf, dtype=float)
-    min_seg_len = max(2, M // 16)
+    min_seg_len = 1 if M < 6 else max(2, M // 16)
     for a in range(M):
         cost[a, a] = 0.0
         for b in range(a + min_seg_len, M):
@@ -1616,7 +1666,7 @@ def find_cutoffs_lorenz(
             "optimal_k": fallback_k,
             "selected_k": fallback_k,
             "lorenz_coeff": round(lorenz_coeff, 4),
-            "lorenz_curve": {},
+            "lorenz_curve": {"indicator_is_log": bool(use_log_indicator)},
             "inflection_points": [],
             "k_scores": [],
         }
@@ -1698,9 +1748,119 @@ def find_cutoffs_lorenz(
             "cum_prob": [round(float(v), 4) for v in prob_grid],
             "log_indicator": [round(float(v), 4) for v in log_grid],
             "indicator": [round(float(v), 4) for v in ind_grid],
+            "indicator_is_log": bool(use_log_indicator),
         },
         "inflection_points": inflection_points,
         "k_scores": k_scores,
+    }
+
+
+def compute_phi_k_separation_metrics(phit, perm, rock_flags):
+    """Compute global vs. per-DRT semi-log porosity-permeability regression metrics
+    (`log10(K) = a * phi + b`) to quantify rock typing separation quality and provide
+    per-DRT trend lines for crossplot visualization.
+
+    Args:
+        phit (array-like): Porosity in fraction (v/v).
+        perm (array-like): Permeability in mD.
+        rock_flags (array-like): Discrete rock type assignments (DRT >= 1 are reservoir groups; DRT 0 excluded).
+
+    Returns:
+        dict: `{'global_r2', 'grouped_r2', 'r2_gain', 'reservoir_samples', 'per_drt': [...]}`.
+    """
+    phi_arr = np.asarray(phit, dtype=float).ravel()
+    k_arr = np.asarray(perm, dtype=float).ravel()
+    rf_arr = np.asarray(
+        [np.nan if v is None else float(v) for v in rock_flags], dtype=float
+    ).ravel()
+
+    valid = (
+        np.isfinite(phi_arr)
+        & np.isfinite(k_arr)
+        & np.isfinite(rf_arr)
+        & (phi_arr > 0.0)
+        & (phi_arr < 1.0)
+        & (k_arr > 0.0)
+        & (rf_arr >= 1.0)
+    )
+    n_res = int(valid.sum())
+    if n_res < 4:
+        return {
+            "global_r2": None,
+            "grouped_r2": None,
+            "r2_gain": None,
+            "reservoir_samples": n_res,
+            "per_drt": [],
+        }
+
+    phi_v = phi_arr[valid]
+    logk_v = np.log10(k_arr[valid])
+    rf_v = np.round(rf_arr[valid]).astype(int)
+
+    ss_tot_global = float(np.sum((logk_v - np.mean(logk_v)) ** 2))
+    if ss_tot_global > 1e-12 and np.std(phi_v) > 1e-9:
+        g_slope, g_inter = np.polyfit(phi_v, logk_v, 1)
+        g_pred = g_slope * phi_v + g_inter
+        ss_res_global = float(np.sum((logk_v - g_pred) ** 2))
+        global_r2 = float(np.clip(1.0 - ss_res_global / ss_tot_global, 0.0, 1.0))
+    else:
+        global_r2 = 0.0
+
+    ss_res_grouped = 0.0
+    per_drt = []
+    for drt_id in sorted(np.unique(rf_v)):
+        m = rf_v == drt_id
+        cnt = int(m.sum())
+        p_sub = phi_v[m]
+        lk_sub = logk_v[m]
+        if cnt >= 2 and float(np.std(p_sub)) > 1e-6:
+            slope, intercept = np.polyfit(p_sub, lk_sub, 1)
+            pred_sub = slope * p_sub + intercept
+            ss_res_sub = float(np.sum((lk_sub - pred_sub) ** 2))
+            ss_tot_sub = float(np.sum((lk_sub - np.mean(lk_sub)) ** 2))
+            r2_sub = (
+                float(np.clip(1.0 - ss_res_sub / ss_tot_sub, 0.0, 1.0))
+                if ss_tot_sub > 1e-12
+                else 0.0
+            )
+            ss_res_grouped += ss_res_sub
+            per_drt.append(
+                {
+                    "drt": int(drt_id),
+                    "count": cnt,
+                    "slope": round(float(slope), 4),
+                    "intercept": round(float(intercept), 4),
+                    "r2": round(r2_sub, 4),
+                    "phi_min": round(float(np.percentile(p_sub, 2)), 4),
+                    "phi_max": round(float(np.percentile(p_sub, 98)), 4),
+                }
+            )
+        else:
+            mean_lk = float(np.mean(lk_sub))
+            ss_res_grouped += float(np.sum((lk_sub - mean_lk) ** 2))
+            per_drt.append(
+                {
+                    "drt": int(drt_id),
+                    "count": cnt,
+                    "slope": 0.0,
+                    "intercept": round(mean_lk, 4),
+                    "r2": None,
+                    "phi_min": round(float(np.min(p_sub)), 4),
+                    "phi_max": round(float(np.max(p_sub)), 4),
+                }
+            )
+
+    grouped_r2 = (
+        float(np.clip(1.0 - ss_res_grouped / ss_tot_global, 0.0, 1.0))
+        if ss_tot_global > 1e-12
+        else global_r2
+    )
+    return {
+        "global_r2": round(global_r2, 4),
+        "grouped_r2": round(grouped_r2, 4),
+        "r2_gain": round(grouped_r2 - global_r2, 4),
+        "reservoir_samples": n_res,
+        "per_drt": per_drt,
     }
 
 

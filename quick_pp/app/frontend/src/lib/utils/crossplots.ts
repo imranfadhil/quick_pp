@@ -242,7 +242,13 @@ export function resolveCrossplot(
 export function crossplotLabel(id: CrossplotId, drtMethod: string): string {
 	if (id === 'phi-k') {
 		const method =
-			drtMethod === 'winland' ? 'Winland R35' : drtMethod === 'lucia' ? 'Lucia RFN' : 'FZI';
+			drtMethod === 'winland'
+				? 'Winland R35'
+				: drtMethod === 'lucia'
+					? 'Lucia RFN'
+					: drtMethod === 'vshale'
+						? 'Vshale DRT'
+						: 'FZI';
 		return `Porosity vs. Perm (${method})`;
 	}
 	return CROSSPLOTS.find((plot) => plot.id === id)!.label;

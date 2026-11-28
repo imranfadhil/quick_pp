@@ -153,7 +153,23 @@ class SandSiltClay:
         res_ratio = res_len / rock_len
 
         var_pt = line_intersection((A, C), (D, (nphi_arr, rhob_arr)))
-        proj_len = np.where(var_pt[1] > C[1], -1.0, 1.0) * length_a_b(var_pt, C)
+        dx_ca = float(A[0]) - float(C[0])
+        dy_ca = float(A[1]) - float(C[1])
+        # Parametric ray check from Fluid D -> Data P -> Intersection var_pt:
+        # if var_pt lies behind D (ray parameter s < 0, e.g. extreme gas/coal/washout near fluid density),
+        # project P orthogonally onto the rock line C -> A to avoid sign inversion across +/- infinity.
+        ray_dot = (nphi_arr - float(D[0])) * (var_pt[0] - float(D[0])) + (
+            rhob_arr - float(D[1])
+        ) * (var_pt[1] - float(D[1]))
+        proj_ray = (
+            (var_pt[0] - float(C[0])) * dx_ca + (var_pt[1] - float(C[1])) * dy_ca
+        ) / rock_len
+        proj_ortho = (
+            (nphi_arr - float(C[0])) * dx_ca + (rhob_arr - float(C[1])) * dy_ca
+        ) / rock_len
+        proj_len = np.where(
+            np.isfinite(proj_ray) & (ray_dot >= 0.0), proj_ray, proj_ortho
+        )
         vsand, vsilt, vcld = self.lithology_chart(proj_len, rock_len, res_ratio)
 
         logger.debug(f"Kuttan modified calculation completed for {len(vsand)} points")

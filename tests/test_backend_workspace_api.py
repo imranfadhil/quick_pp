@@ -1450,6 +1450,88 @@ def test_end_to_end_workspace_compute_workflow(client_and_project):
     assert r_rt_lucia.json()["higher_is_better"] is False
     assert "rfn" in r_rt_lucia.json()["data"]
 
+    r_rt_vsh_gmm = client.post(
+        f"/quick_pp/workspace/projects/{pid}/rock_typing/compute",
+        json={
+            "method": "vshale",
+            "vsh_curve": "auto",
+            "auto_find_cutoffs": True,
+            "cutoff_method": "gmm",
+            "auto_k": True,
+            "include_non_reservoir": True,
+            "non_res_vsh_cutoff": 0.65,
+            "propagate_vsh_cutoff_to_logs": True,
+            "save": False,
+        },
+    )
+    assert r_rt_vsh_gmm.status_code == 200
+    vsh_gmm_body = r_rt_vsh_gmm.json()
+    assert vsh_gmm_body["method"] == "vshale"
+    assert vsh_gmm_body["higher_is_better"] is False
+    assert "vsh" in vsh_gmm_body["data"]
+    assert "nphi" in vsh_gmm_body["data"]
+    assert "rhob" in vsh_gmm_body["data"]
+    assert "phi_k_separation" in vsh_gmm_body["diagnostics"]
+    assert vsh_gmm_body["diagnostics"]["direct_vsh_log_propagated"] is True
+    assert all(0.0 <= c <= 0.65 for c in vsh_gmm_body["cutoffs"])
+
+    r_rt_vsh_lorenz = client.post(
+        f"/quick_pp/workspace/projects/{pid}/rock_typing/compute",
+        json={
+            "method": "vshale",
+            "data_source": "log",
+            "vsh_curve": "VCLAY",
+            "auto_find_cutoffs": True,
+            "cutoff_method": "lorenz",
+            "auto_k": True,
+            "propagate_vsh_cutoff_to_logs": False,
+            "save": False,
+        },
+    )
+    assert r_rt_vsh_lorenz.status_code == 200
+    vsh_lor_body = r_rt_vsh_lorenz.json()
+    assert vsh_lor_body["method"] == "vshale"
+    assert vsh_lor_body["vsh_label"] == "VCLAY"
+    assert vsh_lor_body["diagnostics"]["direct_vsh_log_propagated"] is False
+    assert (
+        vsh_lor_body["diagnostics"]["lorenz"]["lorenz_curve"].get("indicator_is_log")
+        is False
+    )
+    assert len(vsh_lor_body["diagnostics"]["lorenz"]["lorenz_curve"]["storage_cdf"]) > 2
+
+    # Verify DRT 1 is cleanest rock (lowest Vshale) and out-of-range cutoffs (>1) are sanitized
+    r_rt_vsh_order = client.post(
+        f"/quick_pp/workspace/projects/{pid}/rock_typing/compute",
+        json={
+            "method": "vshale",
+            "data_source": "log",
+            "cutoffs": [0.204, 1.413],
+            "higher_is_better": True,  # Even if True is passed, Vshale must enforce DRT 1 = lowest Vsh
+            "include_non_reservoir": False,
+            "save": False,
+        },
+    )
+    assert r_rt_vsh_order.status_code == 200
+    ord_body = r_rt_vsh_order.json()
+    assert ord_body["higher_is_better"] is False
+    assert ord_body["cutoffs"] == [0.204]
+    drt1_vsh = [
+        v
+        for v, rf in zip(
+            ord_body["data"]["vsh"], ord_body["data"]["rock_flags"], strict=True
+        )
+        if rf == 1 and v is not None
+    ]
+    drt2_vsh = [
+        v
+        for v, rf in zip(
+            ord_body["data"]["vsh"], ord_body["data"]["rock_flags"], strict=True
+        )
+        if rf == 2 and v is not None
+    ]
+    if drt1_vsh and drt2_vsh:
+        assert max(drt1_vsh) < min(drt2_vsh)
+
     r_rt_gmm = client.post(
         f"/quick_pp/workspace/projects/{pid}/rock_typing/compute",
         json={
@@ -2628,3 +2710,105 @@ def test_workspace_perm_transform_global_and_semilog(client_and_project):
     assert b_rt_semi["equation_type"] == "semilog_exp"
     assert b_rt_semi["global_fit"]["count"] >= 4
     assert b_rt_semi["saved_wells"] == 1
+
+
+def test_rock_typing_vshale_edge_cases_and_perm_trans_exclusion(client_and_project):
+    """Verify Vshale DRT excludes PERM_TRANS, handles 0/1 spikes & coal, and returns litho_endpoints."""
+    client, pid = client_and_project
+
+    # Save lithology (SSC) + porosity + PERM (with NaN on shaly/coal rows) + PERM_TRANS leak candidate
+    r_lith = client.post(
+        f"/quick_pp/workspace/projects/{pid}/wells/Well-A/lithology",
+        json={
+            "model": "ssc",
+            "dry_sand_point": [-0.03, 2.65],
+            "dry_silt_point": [0.25, 2.66],
+            "dry_clay_point": [0.45, 2.55],
+            "fluid_point": [1.0, 1.0],
+            "save": True,
+        },
+    )
+    assert r_lith.status_code == 200, r_lith.text
+
+    depths = np.linspace(1000.0, 1009.0, 10)
+    # Construct boundary spikes at VSHALE=0.0 and VSHALE=1.0, plus a coal row (VSHALE=0.0, COAL_FLAG=1),
+    # and a row where PERM is NaN while PERM_TRANS is 999.0 (must NOT leak into rock typing!).
+    custom_df = pd.DataFrame(
+        {
+            "DEPTH": depths,
+            "PHIT": [0.24, 0.23, 0.21, 0.19, 0.17, 0.15, 0.13, 0.11, 0.25, 0.18],
+            "PERM": [350.0, 280.0, 90.0, 45.0, 12.0, 3.0, 0.4, 0.05, 100.0, np.nan],
+            "PERM_TRANS": [
+                350.0,
+                280.0,
+                90.0,
+                45.0,
+                12.0,
+                3.0,
+                0.4,
+                0.05,
+                100.0,
+                999.0,
+            ],
+            "VSHALE": [0.0, 0.0, 0.12, 0.22, 0.38, 0.55, 0.78, 1.0, 0.0, 0.65],
+            "COAL_FLAG": [0, 0, 0, 0, 0, 0, 0, 0, 1, 0],
+            "NPHI_HC": [0.19, 0.20, 0.22, 0.24, 0.26, 0.29, 0.33, 0.42, 0.35, 0.31],
+            "RHOB_HC": [2.25, 2.27, 2.31, 2.35, 2.40, 2.45, 2.50, 2.54, 1.45, 2.48],
+        }
+    )
+    ws_service._save_curves_to_well(pid, "Well-A", custom_df)
+    db_service.invalidate_well_cache()
+
+    r_rt = client.post(
+        f"/quick_pp/workspace/projects/{pid}/rock_typing/compute",
+        json={
+            "method": "vshale",
+            "cutoff_method": "gmm",
+            "auto_find_cutoffs": True,
+            "auto_k": False,
+            "no_of_cutoffs": 2,
+            "data_source": "log",
+            "vsh_curve": "VSHALE",
+            "include_non_reservoir": True,
+            "non_res_vsh_cutoff": 0.70,
+            "lucia_vuggy_override": True,  # Must be ignored for vshale method
+            "propagate_vsh_cutoff_to_logs": True,
+            "save": True,
+        },
+    )
+    assert r_rt.status_code == 200, r_rt.text
+    body = r_rt.json()
+    assert body["method"] == "vshale"
+    cutoffs = body["cutoffs"]
+    assert len(cutoffs) == 2
+    assert all(0.02 <= c <= 0.69 for c in cutoffs), cutoffs
+
+    data = body["data"]
+    # Depth 1009.0 had PERM=NaN and PERM_TRANS=999.0 -> must be excluded (only 9 valid PERM rows)
+    assert len(data["depths"]) == 9
+    assert 1009.0 not in data["depths"]
+    assert 999.0 not in data["perm"]
+
+    # Check litho_endpoints and HC-corrected NPHI/RHOB preference
+    assert data["litho_endpoints"] is not None
+    assert data["litho_endpoints"]["model"] == "ssc"
+    assert data["litho_endpoints"]["dry_sand_point"] == [-0.03, 2.65]
+    assert np.isclose(data["nphi"][0], 0.19)
+    assert np.isclose(data["rhob"][0], 2.25)
+
+    depth_to_rf = dict(zip(data["depths"], data["rock_flags"], strict=False))
+    # Boundary VSHALE = 0.0 (non-coal) -> strictly DRT 1
+    assert depth_to_rf[1000.0] == 1
+    assert depth_to_rf[1001.0] == 1
+    # Boundary VSHALE = 1.0 (>= 0.70 non-reservoir cutoff) -> DRT 0 (never DRT 1)
+    assert depth_to_rf[1007.0] == 0
+    # Coal row (depth 1008.0, VSHALE = 0.0, COAL_FLAG = 1) -> DRT 0 (never DRT 1)
+    assert depth_to_rf[1008.0] == 0
+
+    # Direct full-log propagation also guards coal and classifies depth 1009.0 (VSHALE=0.65)
+    db_service.invalidate_well_cache()
+    saved_df = db_service._get_merged_dataframe_sync(pid, "Well-A").set_index("DEPTH")
+    assert int(saved_df.loc[1000.0, "ROCK_FLAG"]) == 1
+    assert int(saved_df.loc[1007.0, "ROCK_FLAG"]) == 0
+    assert int(saved_df.loc[1008.0, "ROCK_FLAG"]) == 0
+    assert int(saved_df.loc[1009.0, "ROCK_FLAG"]) in (2, 3)

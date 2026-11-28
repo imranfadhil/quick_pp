@@ -136,4 +136,5 @@ test('current-step plots are promoted and other plots retain workflow and standa
 		['swirr-fit', 'relperm']
 	);
 	assert.equal(crossplotLabel('phi-k', 'winland'), 'Porosity vs. Perm (Winland R35)');
+	assert.equal(crossplotLabel('phi-k', 'vshale'), 'Porosity vs. Perm (Vshale DRT)');
 });

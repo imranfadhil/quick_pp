@@ -61,9 +61,7 @@ def test_reservoir_length_uses_fluid_silt_intersection_with_rock_line(monkeypatc
         return np.zeros(2), np.zeros(2), np.zeros(2)
 
     monkeypatch.setattr(model, "lithology_chart", capture_lithology_chart)
-    model.lithology_fraction_kuttan_modified(
-        np.array([0.1, 0.2]), np.array([2.4, 2.5])
-    )
+    model.lithology_fraction_kuttan_modified(np.array([0.1, 0.2]), np.array([2.4, 2.5]))
 
     intersection = line_intersection(
         (model.dry_sand_point, model.dry_clay_point),
@@ -77,3 +75,29 @@ def test_reservoir_length_uses_fluid_silt_intersection_with_rock_line(monkeypatc
         captured["res_ratio"],
         length_a_b(model.dry_sand_point, model.dry_silt_point) / expected_rock_len,
     )
+
+
+def test_ssc_projection_when_clay_rhob_less_than_sand_rhob():
+    """Verify Vshale/Vsand do not invert when dry_clay RHOB <= dry_sand RHOB."""
+    model = SandSiltClay(
+        dry_sand_point=(-0.03, 2.65),
+        dry_silt_point=(0.25, 2.60),
+        dry_clay_point=(0.45, 2.55),
+        fluid_point=(1.0, 1.0),
+    )
+    # Clean sand at 20% porosity: interpolate between dry sand and fluid
+    clean_nphi = -0.03 + 0.20 * (1.0 - (-0.03))
+    clean_rhob = 2.65 + 0.20 * (1.0 - 2.65)
+    # Shaly point near dry clay at 15% porosity
+    shale_nphi = 0.45 + 0.15 * (1.0 - 0.45)
+    shale_rhob = 2.55 + 0.15 * (1.0 - 2.55)
+
+    vsand, vsilt, vcld, _ = model.estimate_lithology(
+        np.array([clean_nphi, shale_nphi]),
+        np.array([clean_rhob, shale_rhob]),
+    )
+    vsh = vsilt + vcld
+    assert np.isclose(vsand[0], 1.0, atol=1e-2)
+    assert np.isclose(vsh[0], 0.0, atol=1e-2)
+    assert np.isclose(vsand[1], 0.0, atol=1e-2)
+    assert np.isclose(vsh[1], 1.0, atol=1e-2)

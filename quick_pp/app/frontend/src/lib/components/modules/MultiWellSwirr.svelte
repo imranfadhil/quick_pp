@@ -728,7 +728,7 @@
 								(a, b) => a - b
 							)}
 							Cutoffs: [{sortedCutoffs.join(', ')}]
-							{#if projectData.drtMethod === 'lucia'}
+							{#if projectData.drtMethod === 'lucia' || projectData.drtMethod === 'vshale'}
 								· RT 1: &lt;{sortedCutoffs[0]} | RT {sortedCutoffs.length + 1} (Non-Res):
 								≥{sortedCutoffs[sortedCutoffs.length - 1]}
 							{:else}

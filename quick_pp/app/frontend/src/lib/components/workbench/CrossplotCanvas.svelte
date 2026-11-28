@@ -1862,23 +1862,622 @@
 		}
 
 		if (effectiveMode === 'phi-k') {
-			// Check if multi-well rock typing or perm transform data is present when in multi-well scope
+			// Check if multi-well rock typing specialized sub-views are active
 			if (
 				workbench.scope === 'multi-well' &&
 				(workbench.multiWellStep === 'rock-typing' ||
 					workbench.multiWellStep === 'rt-classifier') &&
-				projectData.rockTypingResult &&
+				(projectData.rockTypingResult ||
+					projectData.rockTypingPlotView === 'vsh-k' ||
+					projectData.rockTypingPlotView === 'neuden-vsh') &&
 				(projectData.rockTypingPlotView !== 'phi-k' ||
 					workbench.multiWellStep === 'rt-classifier')
 			) {
 				const rt = projectData.rockTypingResult;
-				const diag = rt.diagnostics ?? {};
+				const diag = rt?.diagnostics ?? {};
 				const methodLbl =
 					projectData.drtMethod === 'winland'
 						? 'R35'
 						: projectData.drtMethod === 'lucia'
 							? 'RFN'
-							: 'FZI';
+							: projectData.drtMethod === 'vshale'
+								? (rt?.vsh_label ?? 'Vshale')
+								: 'FZI';
+
+				if (projectData.rockTypingPlotView === 'vsh-k') {
+					const allowedWellsVk =
+						projectData.wells.length > 0 &&
+						projectData.selectedWellNames.length < projectData.wells.length
+							? new Set(projectData.selectedWellNames)
+							: null;
+					const allowedZonesVk =
+						workbench.selectedZones.length > 0 ? new Set(workbench.selectedZones) : null;
+					const minDVk = workbench.depthFilter?.min ?? -Infinity;
+					const maxDVk = workbench.depthFilter?.max ?? Infinity;
+					const vshLbl = rt?.vsh_label ?? 'VSHALE';
+					const mwIsCoreVk = (rt?.data_source ?? projectData.drtDataSource) !== 'log';
+					const poroLblVk = rt?.poro_label ?? (mwIsCoreVk ? 'CPORE' : 'PHIT');
+					const permLblVk = rt?.perm_label ?? (mwIsCoreVk ? 'CPERM' : 'PERM');
+
+					const groupedVk = new Map<
+						number,
+						{ vsh: number[]; perm: number[]; phit: number[]; wells: string[] }
+					>();
+
+					const activeWellVshByDepth = new Map<number, number>();
+					const prefVshKey =
+						projectData.drtVshCurve !== 'auto'
+							? projectData.drtVshCurve
+							: (rt?.vsh_label ?? 'VSHALE');
+					const localVshCurve =
+						wellData.curves[prefVshKey] ??
+						wellData.curves['VSHALE'] ??
+						wellData.curves['VCLAY'] ??
+						wellData.curves['VSH_GR'] ??
+						wellData.curves['VSH_DN'] ??
+						wellData.curves['VSH'] ??
+						[];
+					for (let wi = 0; wi < deptAll.length; wi++) {
+						const wd = deptAll[wi];
+						const wv = localVshCurve[wi];
+						if (Number.isFinite(wd) && Number.isFinite(wv)) {
+							activeWellVshByDepth.set(Math.round(wd * 100), wv);
+						}
+					}
+
+					const hasRtVsh = Boolean(
+						rt &&
+						Array.isArray(rt.vsh) &&
+						rt.vsh.some((v) => v !== null && v !== undefined && Number.isFinite(v))
+					);
+
+					if (rt && Array.isArray(rt.phit) && rt.phit.length > 0 && hasRtVsh) {
+						const rtZonesVk = (rt as any).zones as (string | null)[] | undefined;
+						for (let i = 0; i < rt.phit.length; i++) {
+							const wn = rt.well_names?.[i] ?? '';
+							if (allowedWellsVk && !allowedWellsVk.has(wn)) continue;
+							const d = rt.depths?.[i];
+							if (typeof d === 'number' && (d < minDVk || d > maxDVk)) continue;
+							if (
+								allowedZonesVk &&
+								rtZonesVk &&
+								(!rtZonesVk[i] || !allowedZonesVk.has(String(rtZonesVk[i])))
+							)
+								continue;
+							let vshV = rt.vsh?.[i];
+							if (
+								(vshV === null || vshV === undefined || !Number.isFinite(vshV)) &&
+								wn === workbench.wellId &&
+								typeof d === 'number'
+							) {
+								vshV = activeWellVshByDepth.get(Math.round(d * 100)) ?? null;
+							}
+							const pV = rt.phit?.[i];
+							const kV = rt.perm?.[i];
+							if (
+								vshV === null ||
+								vshV === undefined ||
+								!Number.isFinite(vshV) ||
+								!Number.isFinite(pV)
+							)
+								continue;
+							const rf =
+								rt.method === projectData.drtMethod &&
+								rt.rock_flags?.[i] !== null &&
+								rt.rock_flags?.[i] !== undefined &&
+								Number.isFinite(Number(rt.rock_flags[i]))
+									? Number(rt.rock_flags[i])
+									: (projectData.classifyRockType(pV, kV, vshV) ?? 1);
+							if (!groupedVk.has(rf))
+								groupedVk.set(rf, { vsh: [], perm: [], phit: [], wells: [] });
+							const g = groupedVk.get(rf)!;
+							g.vsh.push(Number(vshV));
+							g.perm.push(Number.isFinite(kV) && (kV as number) > 0 ? Number(kV) : NaN);
+							g.phit.push(Number(pV));
+							g.wells.push(wn);
+						}
+					}
+
+					if (groupedVk.size === 0) {
+						const pArr =
+							(mwIsCoreVk ? wellData.curves['CPORE'] : wellData.curves['PHIT']) ??
+							wellData.curves['PHIT'] ??
+							wellData.curves['CPORE'] ??
+							[];
+						const kArr =
+							(mwIsCoreVk ? wellData.curves['CPERM'] : wellData.curves['PERM']) ??
+							wellData.curves['PERM'] ??
+							wellData.curves['CPERM'] ??
+							[];
+						for (const idx of indices) {
+							const vv = localVshCurve[idx];
+							const pv = pArr[idx];
+							const kv = kArr[idx];
+							if (!Number.isFinite(vv) || !Number.isFinite(pv)) continue;
+							const rf = projectData.classifyRockType(pv, kv, vv) ?? 1;
+							if (!groupedVk.has(rf))
+								groupedVk.set(rf, { vsh: [], perm: [], phit: [], wells: [] });
+							const g = groupedVk.get(rf)!;
+							g.vsh.push(vv);
+							g.perm.push(Number.isFinite(kv) && kv > 0 ? kv : NaN);
+							g.phit.push(pv);
+							g.wells.push(workbench.wellId ?? '');
+						}
+					}
+
+					const sortedVk = [...groupedVk.entries()].sort(([a], [b]) => {
+						if (a === 0 && b !== 0) return 1;
+						if (b === 0 && a !== 0) return -1;
+						return a - b;
+					});
+
+					let minKSeen = 1e-2;
+					let maxKSeen = 1e4;
+					let maxPhiSeen = 0.38;
+					for (const [rf, g] of sortedVk) {
+						const kValidIdx: number[] = [];
+						for (let j = 0; j < g.vsh.length; j++) {
+							if (Number.isFinite(g.perm[j]) && g.perm[j] > 0) {
+								kValidIdx.push(j);
+								minKSeen = Math.min(minKSeen, g.perm[j]);
+								maxKSeen = Math.max(maxKSeen, g.perm[j]);
+							}
+							if (Number.isFinite(g.phit[j])) {
+								maxPhiSeen = Math.max(maxPhiSeen, g.phit[j]);
+							}
+						}
+						const nameLbl = Number(rf) === 0 ? 'DRT 0 (Non-Res)' : `DRT ${rf}`;
+						if (kValidIdx.length > 0) {
+							traces.push({
+								type: 'scatter',
+								mode: 'markers',
+								name: nameLbl,
+								legendgroup: `drt_${rf}`,
+								x: kValidIdx.map((j) => g.vsh[j]),
+								y: kValidIdx.map((j) => g.perm[j]),
+								text: kValidIdx.map((j) => g.wells[j]),
+								xaxis: 'x',
+								yaxis: 'y',
+								marker: { size: 6, color: getRockTypeColor(rf), opacity: 0.82 },
+								hovertemplate: `Well: %{text}<br>${vshLbl}: %{x:.3f}<br>${permLblVk}: %{y:.2f} mD<extra>${nameLbl}</extra>`
+							});
+						}
+						traces.push({
+							type: 'scatter',
+							mode: 'markers',
+							name: `${nameLbl} (${poroLblVk})`,
+							legendgroup: `drt_${rf}`,
+							showlegend: kValidIdx.length === 0,
+							x: g.vsh,
+							y: g.phit,
+							text: g.wells,
+							xaxis: 'x2',
+							yaxis: 'y2',
+							marker: { size: 5.5, color: getRockTypeColor(rf), opacity: 0.78 },
+							hovertemplate: `Well: %{text}<br>${vshLbl}: %{x:.3f}<br>${poroLblVk}: %{y:.3f}<extra>${nameLbl}</extra>`
+						});
+					}
+
+					const vshCutoffsToDraw =
+						projectData.drtMethod === 'vshale'
+							? [...projectData.vshaleCutoffs]
+									.filter((c) => Number.isFinite(c) && c > 0 && c < 1)
+									.sort((a, b) => a - b)
+							: [];
+					const yLogLow = Math.pow(10, Math.floor(Math.log10(Math.max(1e-3, minKSeen))));
+					const yLogHigh = Math.pow(10, Math.ceil(Math.log10(Math.max(10, maxKSeen))));
+					for (let ci = 0; ci < vshCutoffsToDraw.length; ci++) {
+						const cVal = vshCutoffsToDraw[ci];
+						if (!Number.isFinite(cVal)) continue;
+						traces.push({
+							type: 'scatter',
+							mode: 'lines',
+							name: `Vsh Cutoff ${ci + 1} (${cVal})`,
+							x: [cVal, cVal],
+							y: [yLogLow, yLogHigh],
+							xaxis: 'x',
+							yaxis: 'y',
+							line: { color: '#DC2626', width: 1.5, dash: 'dash' }
+						});
+						traces.push({
+							type: 'scatter',
+							mode: 'lines',
+							name: `Vsh Cutoff ${ci + 1}`,
+							showlegend: false,
+							x: [cVal, cVal],
+							y: [0, Math.min(0.5, maxPhiSeen * 1.1)],
+							xaxis: 'x2',
+							yaxis: 'y2',
+							line: { color: '#DC2626', width: 1.5, dash: 'dash' }
+						});
+					}
+
+					if (projectData.drtIncludeNonReservoir) {
+						const nrVsh = projectData.drtNonResVshCutoff;
+						traces.push({
+							type: 'scatter',
+							mode: 'lines',
+							name: `Non-Res Vsh (${nrVsh})`,
+							x: [nrVsh, nrVsh],
+							y: [yLogLow, yLogHigh],
+							xaxis: 'x',
+							yaxis: 'y',
+							line: { color: '#475569', width: 1.4, dash: 'dot' }
+						});
+						traces.push({
+							type: 'scatter',
+							mode: 'lines',
+							name: 'Non-Res Vsh',
+							showlegend: false,
+							x: [nrVsh, nrVsh],
+							y: [0, Math.min(0.5, maxPhiSeen * 1.1)],
+							xaxis: 'x2',
+							yaxis: 'y2',
+							line: { color: '#475569', width: 1.4, dash: 'dot' }
+						});
+					}
+
+					const vshKLayout: Record<string, any> = {
+						...baseLayout,
+						xaxis: {
+							...baseLayout.xaxis,
+							domain: [0, 0.46],
+							title: { text: `${vshLbl} (v/v)` },
+							range: [-0.02, 1.02]
+						},
+						yaxis: {
+							...baseLayout.yaxis,
+							title: { text: `${permLblVk} (mD)` },
+							type: 'log'
+						},
+						xaxis2: {
+							...baseLayout.xaxis,
+							domain: [0.56, 1.0],
+							anchor: 'y2',
+							title: { text: `${vshLbl} (v/v)` },
+							range: [-0.02, 1.02]
+						},
+						yaxis2: {
+							...baseLayout.yaxis,
+							anchor: 'x2',
+							title: { text: `${poroLblVk} (v/v)` },
+							range: [0, Math.min(0.5, Math.max(0.35, maxPhiSeen * 1.1))]
+						}
+					};
+					return { traces, layout: vshKLayout };
+				}
+
+				if (projectData.rockTypingPlotView === 'neuden-vsh') {
+					const allowedWellsNd =
+						projectData.wells.length > 0 &&
+						projectData.selectedWellNames.length < projectData.wells.length
+							? new Set(projectData.selectedWellNames)
+							: null;
+					const allowedZonesNd =
+						workbench.selectedZones.length > 0 ? new Set(workbench.selectedZones) : null;
+					const minDNd = workbench.depthFilter?.min ?? -Infinity;
+					const maxDNd = workbench.depthFilter?.max ?? Infinity;
+					const vshLblNd = rt?.vsh_label ?? 'VSHALE';
+					const colorByVshNd = projectData.rockTypingColorBy === 'vshale';
+
+					const ptsNphi: number[] = [];
+					const ptsRhob: number[] = [];
+					const ptsVsh: number[] = [];
+					const ptsRf: number[] = [];
+					const ptsWell: string[] = [];
+
+					if (rt && Array.isArray(rt.nphi) && Array.isArray(rt.rhob) && rt.nphi.length > 0) {
+						const rtZonesNd = (rt as any).zones as (string | null)[] | undefined;
+						for (let i = 0; i < rt.nphi.length; i++) {
+							const wn = rt.well_names?.[i] ?? '';
+							if (allowedWellsNd && !allowedWellsNd.has(wn)) continue;
+							const d = rt.depths?.[i];
+							if (typeof d === 'number' && (d < minDNd || d > maxDNd)) continue;
+							if (
+								allowedZonesNd &&
+								rtZonesNd &&
+								(!rtZonesNd[i] || !allowedZonesNd.has(String(rtZonesNd[i])))
+							)
+								continue;
+							const nv = rt.nphi[i];
+							const rv = rt.rhob[i];
+							if (
+								nv === null ||
+								nv === undefined ||
+								rv === null ||
+								rv === undefined ||
+								!Number.isFinite(nv) ||
+								!Number.isFinite(rv)
+							)
+								continue;
+							const vv = rt.vsh?.[i];
+							const rfVal =
+								rt.method === projectData.drtMethod &&
+								rt.rock_flags?.[i] !== null &&
+								rt.rock_flags?.[i] !== undefined &&
+								Number.isFinite(Number(rt.rock_flags[i]))
+									? Number(rt.rock_flags[i])
+									: (projectData.classifyRockType(rt.phit?.[i], rt.perm?.[i], vv) ??
+										1);
+							ptsNphi.push(Number(nv));
+							ptsRhob.push(Number(rv));
+							ptsVsh.push(
+								vv !== null && vv !== undefined && Number.isFinite(vv) ? Number(vv) : NaN
+							);
+							ptsRf.push(rfVal);
+							ptsWell.push(wn);
+						}
+					} else {
+						const nArr =
+							wellData.curves['NPHI_HC'] ??
+							wellData.curves['NPHI'] ??
+							wellData.curves['TNPH'] ??
+							[];
+						const rArr =
+							wellData.curves['RHOB_HC'] ??
+							wellData.curves['RHOB'] ??
+							wellData.curves['RHOZ'] ??
+							[];
+						const prefNdVsh =
+							projectData.drtVshCurve !== 'auto' ? projectData.drtVshCurve : 'VSHALE';
+						const vArr =
+							wellData.curves[prefNdVsh] ??
+							wellData.curves['VSHALE'] ??
+							wellData.curves['VCLAY'] ??
+							wellData.curves['VSH_GR'] ??
+							[];
+						const rfArr = wellData.curves['ROCK_FLAG'] ?? [];
+						const pArrNd = wellData.curves['PHIT'] ?? wellData.curves['CPORE'] ?? [];
+						const kArrNd = wellData.curves['PERM'] ?? wellData.curves['CPERM'] ?? [];
+						for (const idx of indices) {
+							const nv = nArr[idx];
+							const rv = rArr[idx];
+							if (!Number.isFinite(nv) || !Number.isFinite(rv)) continue;
+							const vv = Number.isFinite(vArr[idx]) ? vArr[idx] : NaN;
+							ptsNphi.push(nv);
+							ptsRhob.push(rv);
+							ptsVsh.push(vv);
+							const fallbackRf =
+								projectData.drtMethod === 'vshale'
+									? (projectData.classifyRockType(pArrNd[idx], kArrNd[idx], vv) ?? 1)
+									: Number.isFinite(rfArr[idx])
+										? Math.round(rfArr[idx])
+										: 1;
+							ptsRf.push(fallbackRf);
+							ptsWell.push(workbench.wellId ?? '');
+						}
+					}
+
+					const hasNdVsh = ptsVsh.some((v) => Number.isFinite(v));
+					if (colorByVshNd && hasNdVsh) {
+						traces.push({
+							type: 'scatter',
+							mode: 'markers',
+							name: `${vshLblNd} Shading`,
+							showlegend: false,
+							x: ptsNphi,
+							y: ptsRhob,
+							text: ptsWell.map(
+								(w, idx) =>
+									`${w} · DRT ${ptsRf[idx]} · ${vshLblNd}=${Number.isFinite(ptsVsh[idx]) ? ptsVsh[idx].toFixed(3) : '—'}`
+							),
+							marker: {
+								size: 5.5,
+								color: ptsVsh.map((v) => (Number.isFinite(v) ? v : 0.5)),
+								cmin: 0,
+								cmax: 1,
+								colorscale: [
+									[0.0, '#F59E0B'],
+									[0.25, '#10B981'],
+									[0.5, '#0EA5E9'],
+									[0.75, '#6366F1'],
+									[1.0, '#334155']
+								],
+								showscale: true,
+								colorbar: {
+									title: {
+										text: 'Vsh',
+										side: 'top',
+										font: { family: 'Inter', size: 9.5, color: '#475569' }
+									},
+									thickness: 8,
+									len: 0.52,
+									x: 1.015,
+									xanchor: 'left',
+									y: 0.38,
+									yanchor: 'middle',
+									nticks: 5,
+									outlinewidth: 0,
+									tickfont: { family: 'JetBrains Mono', size: 8.5, color: '#64748B' }
+								},
+								opacity: 0.85
+							},
+							hovertemplate:
+								'%{text}<br>NPHI: %{x:.3f}<br>RHOB: %{y:.3f} g/cc<extra></extra>'
+						});
+					} else {
+						const byRfNd = new Map<
+							number,
+							{ x: number[]; y: number[]; txt: string[] }
+						>();
+						for (let i = 0; i < ptsNphi.length; i++) {
+							const rf = ptsRf[i];
+							if (!byRfNd.has(rf)) byRfNd.set(rf, { x: [], y: [], txt: [] });
+							const b = byRfNd.get(rf)!;
+							b.x.push(ptsNphi[i]);
+							b.y.push(ptsRhob[i]);
+							b.txt.push(
+								`${ptsWell[i]}${Number.isFinite(ptsVsh[i]) ? ` · ${vshLblNd}=${ptsVsh[i].toFixed(3)}` : ''}`
+							);
+						}
+						const sortedNd = [...byRfNd.entries()].sort(([a], [b]) => {
+							if (a === 0 && b !== 0) return 1;
+							if (b === 0 && a !== 0) return -1;
+							return a - b;
+						});
+						for (const [rf, b] of sortedNd) {
+							traces.push({
+								type: 'scatter',
+								mode: 'markers',
+								name: Number(rf) === 0 ? 'DRT 0 (Non-Res)' : `DRT ${rf}`,
+								x: b.x,
+								y: b.y,
+								text: b.txt,
+								marker: { size: 6, color: getRockTypeColor(rf), opacity: 0.82 },
+								hovertemplate:
+									'Well: %{text}<br>NPHI: %{x:.3f}<br>RHOB: %{y:.3f} g/cc<extra></extra>'
+							});
+						}
+					}
+
+					// Sand–Shale visual reference triangle (Dry Sand, Dry Shale/Clay, Fluid) — purely visual; DRT k & cutoffs come from the 1D Vshale curve
+					const lp = workbench.lithoParams;
+					const savedEp = rt?.litho_endpoints ?? null;
+					const sandPt: [number, number] = [
+						Number.isFinite(Number(savedEp?.dry_sand_point?.[0]))
+							? Number(savedEp!.dry_sand_point[0])
+							: lp.drySandNphi,
+						Number.isFinite(Number(savedEp?.dry_sand_point?.[1]))
+							? Number(savedEp!.dry_sand_point[1])
+							: lp.drySandRhob
+					];
+					const clayPt: [number, number] = [
+						Number.isFinite(Number(savedEp?.dry_clay_point?.[0]))
+							? Number(savedEp!.dry_clay_point[0])
+							: lp.dryClayNphi,
+						Number.isFinite(Number(savedEp?.dry_clay_point?.[1]))
+							? Number(savedEp!.dry_clay_point[1])
+							: lp.dryClayRhob
+					];
+					const fluidPt: [number, number] = [
+						Number.isFinite(Number(savedEp?.fluid_point?.[0]))
+							? Number(savedEp!.fluid_point[0])
+							: lp.fluidNphi,
+						Number.isFinite(Number(savedEp?.fluid_point?.[1]))
+							? Number(savedEp!.fluid_point[1])
+							: lp.fluidRhob
+					];
+
+					traces.push({
+						type: 'scatter',
+						mode: 'lines+markers+text',
+						name: 'Sand–Shale Line',
+						x: [sandPt[0], clayPt[0], fluidPt[0], sandPt[0]],
+						y: [sandPt[1], clayPt[1], fluidPt[1], sandPt[1]],
+						text: ['Sand', 'Shale', 'Fluid', ''],
+						textposition: 'top center',
+						textfont: { family: 'Inter', size: 10, color: '#0F172A' },
+						line: { color: '#2563EB', width: 1.5, dash: 'dot' },
+						marker: {
+							size: 9,
+							color: ['#CA8A04', '#475569', '#2563EB', '#CA8A04'],
+							symbol: 'diamond',
+							line: { color: '#FFFFFF', width: 1.5 }
+						},
+						hovertemplate:
+							'<b>%{text}</b><br>NPHI: %{x:.3f} · RHOB: %{y:.3f} g/cc<extra>Visual Reference</extra>'
+					});
+
+					const activeVshCutoffsNd =
+						projectData.drtMethod === 'vshale'
+							? [...projectData.vshaleCutoffs]
+									.filter((c) => Number.isFinite(c) && c > 0 && c < 1)
+									.sort((a, b) => a - b)
+							: [0.25, 0.5, 0.75];
+
+					// Data-calibrated cutoff rays: each point is projected from Fluid onto the Sand–Shale
+					// baseline (apparent fraction fSS). For every optimal Vsh cutoff c, the ray position is the
+					// fSS split that best separates samples with Vsh ≤ c from Vsh > c, so the rays line up with
+					// the actual DRT clusters regardless of the Vshale model (SSC, GR, HC-corrected logs, ...).
+					const ssDx = clayPt[0] - sandPt[0];
+					const ssDy = clayPt[1] - sandPt[1];
+					const fssVals: number[] = [];
+					const fssVsh: number[] = [];
+					for (let i = 0; i < ptsNphi.length; i++) {
+						const vv = ptsVsh[i];
+						if (!Number.isFinite(vv)) continue;
+						const dX = ptsNphi[i] - fluidPt[0];
+						const dY = ptsRhob[i] - fluidPt[1];
+						const den = dX * ssDy - dY * ssDx;
+						if (Math.abs(den) < 1e-9) continue;
+						const tSS = (dX * (fluidPt[1] - sandPt[1]) - dY * (fluidPt[0] - sandPt[0])) / den;
+						if (!Number.isFinite(tSS) || tSS < -0.5 || tSS > 1.5) continue;
+						fssVals.push(tSS);
+						fssVsh.push(vv);
+					}
+					const orderFss = fssVals.map((_, i) => i).sort((a, b) => fssVals[a] - fssVals[b]);
+					const calibrateFss = (cut: number): number | null => {
+						const n = orderFss.length;
+						if (n < 10) return null;
+						const totalAbove = orderFss.reduce((acc, i) => acc + (fssVsh[i] > cut ? 1 : 0), 0);
+						if (totalAbove === 0 || totalAbove === n) return null;
+						// errors(split k) = (#above among first k) + (#below among remaining)
+						let aboveLeft = 0;
+						let bestErr = n - totalAbove; // k = 0: all predicted "above"
+						let bestK = 0;
+						for (let k = 1; k <= n; k++) {
+							if (fssVsh[orderFss[k - 1]] > cut) aboveLeft++;
+							const belowRight = n - k - (totalAbove - aboveLeft);
+							const err = aboveLeft + belowRight;
+							if (err < bestErr) {
+								bestErr = err;
+								bestK = k;
+							}
+						}
+						if (bestK <= 0 || bestK >= n) return null;
+						return 0.5 * (fssVals[orderFss[bestK - 1]] + fssVals[orderFss[bestK]]);
+					};
+
+					let prevFss = -Infinity;
+					for (const vFrac of activeVshCutoffsNd) {
+						const isCutoffLine = projectData.drtMethod === 'vshale';
+						const calFss = isCutoffLine ? calibrateFss(vFrac) : null;
+						let fPos = calFss ?? vFrac;
+						if (fPos <= prevFss) fPos = prevFss + 0.01;
+						prevFss = fPos;
+						const nx0 = sandPt[0] + ssDx * fPos;
+						const ry0 = sandPt[1] + ssDy * fPos;
+						const lineName = isCutoffLine
+							? `Vsh Cutoff ${vFrac.toFixed(3)}`
+							: `Vsh ${(vFrac * 100).toFixed(0)}%`;
+						traces.push({
+							type: 'scatter',
+							mode: 'lines',
+							name: lineName,
+							x: [nx0, fluidPt[0]],
+							y: [ry0, fluidPt[1]],
+							line: {
+								color: isCutoffLine ? '#DC2626' : '#64748B',
+								width: isCutoffLine ? 1.5 : 1.1,
+								dash: 'dash'
+							},
+							hovertemplate: `${lineName}<extra>Visual Sand–Shale Reference</extra>`
+						});
+					}
+
+					const xMaxNd = Math.max(0.58, clayPt[0] + 0.14);
+					const yMaxNd = Math.max(2.92, sandPt[1] + 0.2, clayPt[1] + 0.2);
+
+					const ndLayout: Record<string, any> = {
+						...baseLayout,
+						margin: {
+							...baseLayout.margin,
+							t: 44,
+							r: colorByVshNd && hasNdVsh ? 52 : baseLayout.margin.r
+						},
+						xaxis: {
+							...baseLayout.xaxis,
+							title: { text: 'Neutron Porosity NPHI (v/v)' },
+							range: [-0.08, xMaxNd]
+						},
+						yaxis: {
+							...baseLayout.yaxis,
+							title: { text: 'Bulk Density RHOB (g/cc)' },
+							range: [yMaxNd, 1.85]
+						}
+					};
+					return { traces, layout: ndLayout };
+				}
 
 				if (
 					projectData.rockTypingPlotView === 'lorenz' &&
@@ -1929,14 +2528,27 @@
 					});
 
 					if (infPts.length > 0) {
+						const fmtCut = (v: unknown) => {
+							const n = Number(v);
+							return Number.isFinite(n) ? (Math.abs(n) >= 10 ? n.toFixed(1) : n.toFixed(3)) : String(v);
+						};
 						traces.push({
 							type: 'scatter',
 							mode: 'markers+text',
 							name: 'Inflection Cutoffs',
 							x: infPts.map((p) => Number(p.storage_cdf)),
 							y: infPts.map((p) => Number(p.flow_cdf)),
-							text: infPts.map((p) => `${methodLbl}=${p.cutoff}`),
-							textposition: 'bottom right',
+							text: infPts.map((p) => `${methodLbl}=${fmtCut(p.cutoff)}`),
+							// Points close to the top/right edge get their label placed inside the plot area
+							textposition: infPts.map((p) =>
+								Number(p.flow_cdf) > 0.82
+									? Number(p.storage_cdf) > 0.55
+										? 'bottom left'
+										: 'bottom right'
+									: 'middle right'
+							),
+							textfont: { family: 'Inter', size: 10, color: '#0F172A' },
+							cliponaxis: false,
 							xaxis: 'x',
 							yaxis: 'y',
 							marker: {
@@ -1948,12 +2560,14 @@
 						});
 					}
 
-					// Right subplot: Cumulative Probability vs log10(Indicator)
+					// Right subplot: Cumulative Probability vs log10(Indicator) (or linear Indicator for Vshale)
+					const isLogIndLorenz = lc.indicator_is_log !== false;
+					const indAxisTitle = isLogIndLorenz ? `log₁₀(${methodLbl})` : `${methodLbl} (v/v)`;
 					if (Array.isArray(lc.log_indicator) && Array.isArray(lc.cum_prob)) {
 						traces.push({
 							type: 'scatter',
 							mode: 'markers',
-							name: `Cum. Prob log₁₀(${methodLbl})`,
+							name: `Cum. Prob ${indAxisTitle}`,
 							x: lc.log_indicator,
 							y: lc.cum_prob,
 							xaxis: 'x2',
@@ -1977,28 +2591,29 @@
 
 					const dualLayout: Record<string, any> = {
 						...baseLayout,
+						margin: { ...baseLayout.margin, t: Math.max(64, Number(baseLayout.margin?.t ?? 0)) },
 						xaxis: {
 							...baseLayout.xaxis,
 							domain: [0, 0.45],
 							title: { text: 'Cum. Storage Capacity (ΣΦh)' },
-							range: [0, 1]
+							range: [-0.02, 1.04]
 						},
 						yaxis: {
 							...baseLayout.yaxis,
 							title: { text: 'Cum. Flow Capacity (ΣKh)' },
-							range: [0, 1]
+							range: [-0.02, 1.06]
 						},
 						xaxis2: {
 							...baseLayout.xaxis,
 							domain: [0.55, 1.0],
 							anchor: 'y2',
-							title: { text: `log₁₀(${methodLbl})` }
+							title: { text: indAxisTitle }
 						},
 						yaxis2: {
 							...baseLayout.yaxis,
 							anchor: 'x2',
 							title: { text: 'Cumulative Probability' },
-							range: [0, 1]
+							range: [-0.02, 1.06]
 						}
 					};
 					return { traces, layout: dualLayout };
@@ -2127,7 +2742,7 @@
 					return { traces, layout: gmmLayout };
 				}
 
-				if (projectData.rockTypingPlotView === 'carbonate') {
+				if (projectData.rockTypingPlotView === 'carbonate' && rt) {
 					const phitArr = rt.phit ?? [];
 					const permArr = rt.perm ?? [];
 					const phiIpArr = rt.phi_ip ?? rt.phit ?? [];
@@ -2483,8 +3098,44 @@
 				const minD = workbench.depthFilter?.min ?? -Infinity;
 				const maxD = workbench.depthFilter?.max ?? Infinity;
 				const rtZones = (rt as any).zones as (string | null)[] | undefined;
+				const rtVshArr = (rt as any).vsh as (number | null)[] | undefined;
+				const vshColLbl = (rt as any).vsh_label ?? 'VSHALE';
+				const wellVshFallback = new Map<number, number>();
+				if (
+					workbench.multiWellStep === 'rock-typing' &&
+					projectData.rockTypingColorBy === 'vshale'
+				) {
+					const wVshCurve =
+						wellData.curves['VSHALE'] ??
+						wellData.curves['VCLAY'] ??
+						wellData.curves['VSH_GR'] ??
+						wellData.curves['VSH_DN'] ??
+						wellData.curves['VSH'] ??
+						[];
+					for (let wi = 0; wi < deptAll.length; wi++) {
+						const wd = deptAll[wi];
+						const wv = wVshCurve[wi];
+						if (Number.isFinite(wd) && Number.isFinite(wv)) {
+							wellVshFallback.set(Math.round(wd * 100), wv);
+						}
+					}
+				}
+				const shadeByVshale =
+					workbench.multiWellStep === 'rock-typing' &&
+					projectData.rockTypingColorBy === 'vshale' &&
+					((Array.isArray(rtVshArr) &&
+						rtVshArr.some((v) => v !== null && v !== undefined && Number.isFinite(v))) ||
+						wellVshFallback.size > 0);
 
-				const grouped = new Map<number, { x: number[]; y: number[]; wells: string[] }>();
+				const grouped = new Map<
+					number,
+					{ x: number[]; y: number[]; wells: string[]; vsh: (number | null)[] }
+				>();
+				const vshShadeX: number[] = [];
+				const vshShadeY: number[] = [];
+				const vshShadeC: number[] = [];
+				const vshShadeMeta: string[] = [];
+
 				rt.phit.forEach((p, i) => {
 					const wn = rt.well_names[i];
 					if (allowedWells && !allowedWells.has(wn)) return;
@@ -2497,16 +3148,39 @@
 					)
 						return;
 					const k = rt.perm[i];
-					const rfRaw = rt.rock_flags[i];
+					let vv = rtVshArr?.[i] ?? null;
+					if (
+						(vv === null || !Number.isFinite(vv)) &&
+						wn === workbench.wellId &&
+						typeof d === 'number'
+					) {
+						vv = wellVshFallback.get(Math.round(d * 100)) ?? null;
+					}
+					const rfRaw =
+						(rt as any).method &&
+						workbench.multiWellStep === 'rock-typing' &&
+						(rt as any).method !== projectData.drtMethod
+							? projectData.classifyRockType(p, k, vv)
+							: rt.rock_flags[i];
 					if (rfRaw === null || rfRaw === undefined || !Number.isFinite(Number(rfRaw)))
 						return;
 					const rf = Number(rfRaw);
 					if (Number.isFinite(p) && Number.isFinite(k) && k > 0) {
-						if (!grouped.has(rf)) grouped.set(rf, { x: [], y: [], wells: [] });
+						if (!grouped.has(rf))
+							grouped.set(rf, { x: [], y: [], wells: [], vsh: [] });
 						const g = grouped.get(rf)!;
 						g.x.push(p);
 						g.y.push(k);
 						g.wells.push(wn);
+						g.vsh.push(vv);
+						if (shadeByVshale && vv !== null && Number.isFinite(vv)) {
+							vshShadeX.push(p);
+							vshShadeY.push(k);
+							vshShadeC.push(Number(vv));
+							vshShadeMeta.push(
+								`${wn} · DRT ${rf} · ${vshColLbl}: ${Number(vv).toFixed(3)}`
+							);
+						}
 					}
 				});
 
@@ -2518,29 +3192,79 @@
 							: projectData.drtDataSource)) !== 'log';
 				const poroLbl = (mwSource as any)?.poro_label ?? (mwIsCore ? 'CPORE' : 'PHIT');
 				const permLbl = (mwSource as any)?.perm_label ?? (mwIsCore ? 'CPERM' : 'PERM');
-				const sortedGrouped = [...grouped.entries()].sort(([a], [b]) => {
-					if (a === 0 && b !== 0) return 1;
-					if (b === 0 && a !== 0) return -1;
-					return a - b;
-				});
-				for (const [rf, g] of sortedGrouped) {
+
+				if (shadeByVshale && vshShadeX.length > 0) {
+					baseLayout.margin = { ...baseLayout.margin, t: 42, r: 52 };
 					traces.push({
 						type: 'scatter',
 						mode: 'markers',
-						name:
-							Number(rf) === 0
-								? `DRT 0 Non-Res (${poroLbl}/${permLbl})`
-								: `DRT ${rf} (${poroLbl}/${permLbl})`,
-						x: g.x,
-						y: g.y,
-						text: g.wells,
+						name: `${poroLbl}–${permLbl} (${vshColLbl})`,
+						showlegend: false,
+						x: vshShadeX,
+						y: vshShadeY,
+						text: vshShadeMeta,
 						marker: {
 							size: hasPermFits ? 5 : 6,
-							color: getRockTypeColor(rf),
-							opacity: hasPermFits ? 0.38 : 0.82
+							color: vshShadeC,
+							cmin: 0,
+							cmax: 1,
+							colorscale: [
+								[0.0, '#F59E0B'],
+								[0.25, '#10B981'],
+								[0.5, '#0EA5E9'],
+								[0.75, '#6366F1'],
+								[1.0, '#334155']
+							],
+							showscale: true,
+							colorbar: {
+								title: {
+									text: 'Vsh',
+									side: 'top',
+									font: { family: 'Inter', size: 9.5, color: '#475569' }
+								},
+								thickness: 8,
+								len: 0.52,
+								x: 1.015,
+								xanchor: 'left',
+								y: 0.38,
+								yanchor: 'middle',
+								nticks: 5,
+								outlinewidth: 0,
+								tickfont: { family: 'JetBrains Mono', size: 8.5, color: '#64748B' }
+							},
+							opacity: hasPermFits ? 0.55 : 0.86
 						},
-						hovertemplate: `Well: %{text}<br>${poroLbl}: %{x:.3f}<br>${permLbl}: %{y:.2f} mD<extra></extra>`
+						hovertemplate: `%{text}<br>${poroLbl}: %{x:.3f}<br>${permLbl}: %{y:.2f} mD<extra></extra>`
 					});
+				} else {
+					const sortedGrouped = [...grouped.entries()].sort(([a], [b]) => {
+						if (a === 0 && b !== 0) return 1;
+						if (b === 0 && a !== 0) return -1;
+						return a - b;
+					});
+					for (const [rf, g] of sortedGrouped) {
+						traces.push({
+							type: 'scatter',
+							mode: 'markers',
+							name:
+								Number(rf) === 0
+									? `DRT 0 Non-Res (${poroLbl}/${permLbl})`
+									: `DRT ${rf} (${poroLbl}/${permLbl})`,
+							x: g.x,
+							y: g.y,
+							text: g.wells.map((w, idx) =>
+								g.vsh[idx] !== null && Number.isFinite(g.vsh[idx])
+									? `${w} (${vshColLbl}=${Number(g.vsh[idx]).toFixed(2)})`
+									: w
+							),
+							marker: {
+								size: hasPermFits ? 5 : 6,
+								color: getRockTypeColor(rf),
+								opacity: hasPermFits ? 0.38 : 0.82
+							},
+							hovertemplate: `Well: %{text}<br>${poroLbl}: %{x:.3f}<br>${permLbl}: %{y:.2f} mD<extra></extra>`
+						});
+					}
 				}
 			} else {
 				const phitArr = wellData.curves['PHIT'] ?? [];
@@ -2651,6 +3375,59 @@
 						line: { color: '#94A3B8', width: 1, dash: 'dash' },
 						hoverinfo: 'skip'
 					});
+				}
+			} else if (activeDrtMethod === 'vshale') {
+				const sepRows = (projectData.rockTypingResult?.diagnostics?.phi_k_separation
+					?.per_drt ?? []) as Array<Record<string, any>>;
+				if (!projectData.permTransformResult?.fits && sepRows.length > 0) {
+					for (const row of sepRows) {
+						const drtNum = Number(row.drt);
+						const slp = Number(row.slope);
+						const icp = Number(row.intercept);
+						if (!Number.isFinite(drtNum) || !Number.isFinite(slp) || !Number.isFinite(icp))
+							continue;
+						const p0 = Math.max(0.02, Number(row.phi_min ?? 0.04));
+						const p1 = Math.min(0.42, Number(row.phi_max ?? 0.32));
+						if (p1 <= p0) continue;
+						const subGrid = Array.from({ length: 12 }, (_, gi) => p0 + ((p1 - p0) * gi) / 11);
+						const kTrend = subGrid.map((p) =>
+							Math.pow(10, Math.max(-4, Math.min(6, slp * p + icp)))
+						);
+						const trendLbl = `DRT ${drtNum} Trend${row.r2 != null ? ` (R²=${Number(row.r2).toFixed(2)})` : ''}`;
+						// White halo underneath so the trend stays readable over same-coloured or Vsh-shaded points
+						traces.push({
+							type: 'scatter',
+							mode: 'lines',
+							name: `${trendLbl} halo`,
+							legendgroup: `drt_trend_${drtNum}`,
+							showlegend: false,
+							x: subGrid,
+							y: kTrend,
+							line: { color: '#FFFFFF', width: 6.5 },
+							hoverinfo: 'skip'
+						});
+						traces.push({
+							type: 'scatter',
+							mode: 'lines',
+							name: trendLbl,
+							legendgroup: `drt_trend_${drtNum}`,
+							x: subGrid,
+							y: kTrend,
+							line: { color: '#0F172A', width: 4.2 },
+							showlegend: false,
+							hoverinfo: 'skip'
+						});
+						traces.push({
+							type: 'scatter',
+							mode: 'lines',
+							name: trendLbl,
+							legendgroup: `drt_trend_${drtNum}`,
+							x: subGrid,
+							y: kTrend,
+							line: { color: getRockTypeColor(drtNum), width: 2.6 },
+							hovertemplate: `${trendLbl}<br>log₁₀K = ${slp.toFixed(2)}·Φ ${icp >= 0 ? '+' : '−'} ${Math.abs(icp).toFixed(2)}<br>Φ=%{x:.3f} · K=%{y:.2f} mD<extra></extra>`
+						});
+					}
 				}
 			} else {
 				for (const fziVal of activeCutoffs) {
@@ -6481,6 +7258,33 @@
 							hovertemplate: `RFN Cutoff: ${rfn}<extra></extra>`
 						});
 					}
+				} else if (activeDrt === 'vshale') {
+					const sepRowsScal = (rtRes?.diagnostics?.phi_k_separation?.per_drt ?? []) as Array<
+						Record<string, any>
+					>;
+					for (const row of sepRowsScal) {
+						const drtNum = Number(row.drt);
+						const slp = Number(row.slope);
+						const icp = Number(row.intercept);
+						if (!Number.isFinite(drtNum) || !Number.isFinite(slp) || !Number.isFinite(icp))
+							continue;
+						const p0 = Math.max(0.02, Number(row.phi_min ?? 0.04) - 0.015);
+						const p1 = Math.min(0.42, Number(row.phi_max ?? 0.32) + 0.015);
+						if (p1 <= p0) continue;
+						const subGrid = [p0, 0.5 * (p0 + p1), p1];
+						const kTrend = subGrid.map((p) =>
+							Math.pow(10, Math.max(-4, Math.min(6, slp * p + icp)))
+						);
+						traces.push({
+							type: 'scatter',
+							mode: 'lines',
+							name: `Vsh RT ${drtNum} Trend`,
+							x: subGrid,
+							y: kTrend,
+							line: { color: getRockTypeColor(drtNum), width: 1.5, dash: 'dash' },
+							hoverinfo: 'skip'
+						});
+					}
 				} else {
 					// FZI: k = 1014.2 * FZI^2 * phi^3 / (1 - phi)^2
 					for (let i = 0; i < cutoffs.length; i++) {
@@ -7316,6 +8120,7 @@
 			void projectData.fziCutoffs;
 			void projectData.winlandCutoffs;
 			void projectData.luciaCutoffs;
+			void projectData.vshaleCutoffs;
 		} else {
 			void wellData.curves;
 			void projectData.selectedWellNames;
@@ -7325,7 +8130,21 @@
 			void projectData.fziCutoffs;
 			void projectData.winlandCutoffs;
 			void projectData.luciaCutoffs;
+			void projectData.vshaleCutoffs;
 			void projectData.rockTypingPlotView;
+			void projectData.rockTypingColorBy;
+			void projectData.drtVshCurve;
+			void workbench.lithoParams.model;
+			void workbench.lithoParams.drySandNphi;
+			void workbench.lithoParams.drySandRhob;
+			void workbench.lithoParams.drySiltNphi;
+			void workbench.lithoParams.drySiltRhob;
+			void workbench.lithoParams.dryClayNphi;
+			void workbench.lithoParams.dryClayRhob;
+			void workbench.lithoParams.fluidNphi;
+			void workbench.lithoParams.fluidRhob;
+			void projectData.drtIncludeNonReservoir;
+			void projectData.drtNonResVshCutoff;
 			void projectData.drtCutoffMethod;
 			void projectData.useInterparticlePorosity;
 			void projectData.luciaVuggyOverride;
@@ -7389,8 +8208,12 @@
 			const visibleLegendTraces = traces.filter(
 				(t: any) => t.showlegend !== false && t.name
 			).length;
+			const hasTraceColorbar = traces.some(
+				(t: any) => Boolean(t?.marker?.showscale || t?.marker?.colorbar)
+			);
 			if (
 				visibleLegendTraces > 5 &&
+				!hasTraceColorbar &&
 				mode !== 'depth-alignment-qc' &&
 				mode !== 'env-corr-qc' &&
 				mode !== 'temp-pressure'
@@ -8037,7 +8860,7 @@
 			</div>
 		{:else if effectiveMode === 'phi-k' && workbench.scope === 'multi-well' && (workbench.multiWellStep === 'rock-typing' || workbench.multiWellStep === 'rt-classifier')}
 			<div class="flex items-center gap-1">
-				{#each [['phi-k', 'Φ–K'], ['lorenz', 'Lorenz'], ['gmm', 'GMM / BIC'], ['carbonate', 'Φ_sec Vug'], ['classifier', 'ML Matrix']] as [rvKey, rvLbl]}
+				{#each [['phi-k', 'Φ–K'], ['vsh-k', 'Vsh–K'], ['neuden-vsh', 'ΦN–ρb'], ['lorenz', 'Lorenz'], ['gmm', 'GMM / BIC'], ['carbonate', 'Φ_sec Vug'], ['classifier', 'ML Matrix']] as [rvKey, rvLbl]}
 					<button
 						type="button"
 						onclick={() => (projectData.rockTypingPlotView = rvKey as any)}
@@ -8049,6 +8872,21 @@
 						{rvLbl}
 					</button>
 				{/each}
+				{#if projectData.rockTypingPlotView === 'phi-k' || projectData.rockTypingPlotView === 'neuden-vsh'}
+					<button
+						type="button"
+						title="Toggle point shading between Discrete Rock Types and continuous Vshale gradient"
+						onclick={() =>
+							(projectData.rockTypingColorBy =
+								projectData.rockTypingColorBy === 'vshale' ? 'drt' : 'vshale')}
+						class="ml-0.5 h-5 rounded-xs border px-1.5 text-[10px] font-semibold transition-colors {projectData.rockTypingColorBy ===
+						'vshale'
+							? 'border-amber-500 bg-amber-50 text-amber-900'
+							: 'border-[var(--border-hairline)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:bg-slate-100'}"
+					>
+						{projectData.rockTypingColorBy === 'vshale' ? 'Shade: Vsh' : 'Shade: DRT'}
+					</button>
+				{/if}
 			</div>
 		{:else if effectiveMode === 'phi-k' && workbench.scope === 'single-well'}
 			<div class="flex items-center gap-1">

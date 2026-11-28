@@ -772,11 +772,21 @@
 		hasMl: boolean;
 	} {
 		const method = projectData.drtMethod;
-		const indicatorLabel = method === 'winland' ? 'R35' : method === 'lucia' ? 'RFN' : 'FZI';
+		const indicatorLabel =
+			method === 'winland'
+				? 'R35'
+				: method === 'lucia'
+					? 'RFN'
+					: method === 'vshale'
+						? (projectData.rockTypingResult?.vsh_label ?? 'VSHALE')
+						: 'FZI';
 		const rawRf = wellData.curves['ROCK_FLAG'] ?? wellData.curves['DRT'];
 		const rawMl = wellData.curves['ROCK_FLAG_ML'];
 		const rawInd =
 			wellData.curves[indicatorLabel] ??
+			(method === 'vshale'
+				? (wellData.curves['VSHALE'] ?? wellData.curves['VCLAY'] ?? wellData.curves['VSH_GR'])
+				: undefined) ??
 			wellData.curves['FZI'] ??
 			wellData.curves['R35'] ??
 			wellData.curves['RFN'];
@@ -803,7 +813,13 @@
 			const depthToMl = new Map<number, number>();
 			const depthToInd = new Map<number, number>();
 			const indArr =
-				method === 'winland' ? rtRes.r35 : method === 'lucia' ? rtRes.rfn : rtRes.fzi;
+				method === 'winland'
+					? rtRes.r35
+					: method === 'lucia'
+						? rtRes.rfn
+						: method === 'vshale'
+							? rtRes.vsh
+							: rtRes.fzi;
 
 			if (Array.isArray(rtRes.well_names)) {
 				for (let j = 0; j < rtRes.well_names.length; j++) {

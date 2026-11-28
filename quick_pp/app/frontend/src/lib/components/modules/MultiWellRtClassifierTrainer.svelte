@@ -57,7 +57,8 @@
 	> = {
 		fzi: { label: 'FZI / RQI', shortName: 'FZI', higherIsBetter: true, unit: '' },
 		winland: { label: 'Winland R35', shortName: 'R35', higherIsBetter: true, unit: 'μm' },
-		lucia: { label: 'Lucia RFN', shortName: 'RFN', higherIsBetter: false, unit: 'RFN' }
+		lucia: { label: 'Lucia RFN', shortName: 'RFN', higherIsBetter: false, unit: 'RFN' },
+		vshale: { label: 'Vshale DRT', shortName: 'Vsh', higherIsBetter: false, unit: 'v/v' }
 	};
 
 	let customModelName = $state<string>('');
@@ -149,6 +150,9 @@
 								? projectData.selectedWellNames
 								: null,
 						method,
+						vsh_curve: projectData.drtVshCurve,
+						propagate_vsh_cutoff_to_logs:
+							method === 'vshale' && projectData.drtPropagateVshToLogs,
 						data_source: projectData.drtDataSource,
 						cutoffs: sortedCutoffs,
 						higher_is_better: meta.higherIsBetter,

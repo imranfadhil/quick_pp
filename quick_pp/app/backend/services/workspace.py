@@ -106,6 +106,7 @@ from quick_pp.rock_type import (
     calc_fzi,
     calc_r35,
     calc_rfn,
+    compute_phi_k_separation_metrics,
     compute_rock_flag_comparison,
     delete_saved_rt_classifier,
     find_cutoffs,
@@ -2538,7 +2539,15 @@ class WorkspaceRockTypingRequest(BaseModel):
     )
     method: str = Field(
         "fzi",
-        description="Rock typing method: 'fzi' (Kozeny-Carman FZI), 'winland' (Winland R35), or 'lucia' (Lucia RFN)",
+        description="Rock typing method: 'fzi' (Kozeny-Carman FZI), 'winland' (Winland R35), 'lucia' (Lucia RFN), or 'vshale' (Shale/Clay Volume Vshale)",
+    )
+    vsh_curve: str = Field(
+        "auto",
+        description="Preferred shale/clay volume curve for Vshale DRT and shading: 'auto', 'VSHALE', 'VCLAY', 'VSH_GR', or 'VSH_DN'",
+    )
+    propagate_vsh_cutoff_to_logs: bool = Field(
+        False,
+        description="When method=='vshale', optionally apply Vshale cutoffs directly across full well logs (ROCK_FLAG_CUTOFF) without requiring ML",
     )
     cutoffs: List[float] = Field(default_factory=lambda: [0.5, 1.0, 2.5])
     higher_is_better: Optional[bool] = Field(
@@ -5763,13 +5772,31 @@ def workspace_lithology(
                 }
                 if model in ("vsh_gr", "ssc", "sand_shale", "vsh_nd")
                 else None,
-                "dry_sand_point": list(req.dry_sand_point)
-                if req.dry_sand_point
-                else None,
-                "dry_clay_point": list(req.dry_clay_point)
-                if req.dry_clay_point
-                else None,
-                "fluid_point": list(req.fluid_point) if req.fluid_point else None,
+                "dry_sand_point": (
+                    crossplot_meta.get("dry_sand_point")
+                    if isinstance(crossplot_meta, dict)
+                    and crossplot_meta.get("dry_sand_point")
+                    else (list(req.dry_sand_point) if req.dry_sand_point else None)
+                ),
+                "dry_silt_point": (
+                    crossplot_meta.get("dry_silt_point")
+                    if isinstance(crossplot_meta, dict)
+                    and crossplot_meta.get("dry_silt_point")
+                    else (list(req.dry_silt_point) if req.dry_silt_point else None)
+                ),
+                "dry_clay_point": (
+                    crossplot_meta.get("dry_clay_point")
+                    if isinstance(crossplot_meta, dict)
+                    and crossplot_meta.get("dry_clay_point")
+                    else (list(req.dry_clay_point) if req.dry_clay_point else None)
+                ),
+                "fluid_point": (
+                    crossplot_meta.get("fluid_point")
+                    if isinstance(crossplot_meta, dict)
+                    and crossplot_meta.get("fluid_point")
+                    else (list(req.fluid_point) if req.fluid_point else None)
+                ),
+                "silt_line_angle": req.silt_line_angle,
                 "badhole_treatment": bh_mode,
             },
             persist_db=bool(req.save),
@@ -6848,13 +6875,19 @@ def workspace_porosity(
                 "use_hc_corrected": req.use_hc_corrected,
                 "gr_clean": req.gr_clean,
                 "gr_clay": req.gr_clay,
-                "dry_sand_point": list(req.dry_sand_point)
-                if req.dry_sand_point
-                else None,
-                "dry_clay_point": list(req.dry_clay_point)
-                if req.dry_clay_point
-                else None,
+                "dry_sand_point": (
+                    list(req.dry_sand_point) if req.dry_sand_point else None
+                ),
+                "dry_silt_point": (
+                    list(req.dry_silt_point)
+                    if getattr(req, "dry_silt_point", None)
+                    else None
+                ),
+                "dry_clay_point": (
+                    list(req.dry_clay_point) if req.dry_clay_point else None
+                ),
                 "fluid_point": list(req.fluid_point) if req.fluid_point else None,
+                "silt_line_angle": getattr(req, "silt_line_angle", None),
                 "badhole_treatment": bh_mode,
                 "fluid_density_mode": fd_cfg.mode if fd_cfg else "static",
                 "fluid_density_mud_type": fd_cfg.mud_type if fd_cfg else None,
@@ -8499,22 +8532,31 @@ def workspace_well_cutoffs_sensitivity(
 
 
 def _normalize_drt_method(method: Optional[str]) -> str:
-    """Normalize DRT method string to 'fzi', 'winland', or 'lucia'."""
+    """Normalize DRT method string to 'fzi', 'winland', 'lucia', or 'vshale'."""
     m = str(method or "fzi").strip().lower()
     if m in ("winland", "r35", "winland_r35"):
         return "winland"
     if m in ("lucia", "rfn", "lucia_rfn"):
         return "lucia"
+    if m in ("vshale", "vsh", "vclay", "vcl", "vsh_gr", "vsh_dn"):
+        return "vshale"
     return "fzi"
 
 
-def _eval_drt_indicator_scalar_or_array(phit, perm, method: str = "fzi"):
-    """Compute FZI, Winland R35, or Lucia RFN and return (indicator, default_higher_is_better, canonical_method)."""
+def _eval_drt_indicator_scalar_or_array(phit, perm, method: str = "fzi", vsh=None):
+    """Compute FZI, Winland R35, Lucia RFN, or Vshale and return (indicator, default_higher_is_better, canonical_method)."""
     m = _normalize_drt_method(method)
     if m == "winland":
         return calc_r35(phit, perm), True, "winland"
     if m == "lucia":
         return calc_rfn(phit, perm), False, "lucia"
+    if m == "vshale":
+        if vsh is not None:
+            return np.asarray(vsh, dtype=float), False, "vshale"
+        arr_shape = np.asarray(phit, dtype=float)
+        if arr_shape.ndim == 0:
+            return float("nan"), False, "vshale"
+        return np.full_like(arr_shape, np.nan, dtype=float), False, "vshale"
     return calc_fzi(phit, perm), True, "fzi"
 
 
@@ -8774,7 +8816,9 @@ def _execute_workspace_rock_typing(
         dt_matrix=req.dt_matrix,
         dt_fluid=req.dt_fluid,
         data_source=data_source,
+        vsh_curve=req.vsh_curve,
     )
+    vsh_label = str(raw_fzi_data.get("vsh_label") or "VSHALE")
     has_sonic = bool(raw_fzi_data.get("has_sonic", False))
     sonic_wells = list(raw_fzi_data.get("sonic_wells") or [])
     fzi_data = _filter_fzi_data_by_wells(raw_fzi_data, req.well_names)
@@ -8825,6 +8869,24 @@ def _execute_workspace_rock_typing(
 
     phit_arr = np.asarray(fzi_data["phit"], dtype=float)
     perm_arr = np.asarray(fzi_data["perm"], dtype=float)
+    vsh_raw = fzi_data.get("vsh")
+    vsh_arr = (
+        np.asarray([v if v is not None else np.nan for v in vsh_raw], dtype=float)
+        if vsh_raw and len(vsh_raw) == len(phit_arr)
+        else np.full_like(phit_arr, np.nan, dtype=float)
+    )
+    nphi_raw = fzi_data.get("nphi")
+    nphi_arr = (
+        np.asarray([v if v is not None else np.nan for v in nphi_raw], dtype=float)
+        if nphi_raw and len(nphi_raw) == len(phit_arr)
+        else np.full_like(phit_arr, np.nan, dtype=float)
+    )
+    rhob_raw = fzi_data.get("rhob")
+    rhob_arr = (
+        np.asarray([v if v is not None else np.nan for v in rhob_raw], dtype=float)
+        if rhob_raw and len(rhob_raw) == len(phit_arr)
+        else np.full_like(phit_arr, np.nan, dtype=float)
+    )
     phis_raw = fzi_data.get("phis")
     phis_arr = (
         np.asarray([v if v is not None else np.nan for v in phis_raw], dtype=float)
@@ -8871,15 +8933,57 @@ def _execute_workspace_rock_typing(
         active_arr = rfn_arr
         default_higher_is_better = False
         indicator_col = "RFN"
+    elif method == "vshale":
+        if not np.isfinite(vsh_arr).any():
+            raise ValueError(
+                f"No {vsh_label} / VSHALE / VCLAY curve values found at the selected {poro_label}/{perm_label} depths. "
+                "Compute Vshale in Lithology & Porosity first, or select another DRT method."
+            )
+        active_arr = vsh_arr
+        default_higher_is_better = False
+        indicator_col = ""
     else:
         active_arr = fzi_arr
         default_higher_is_better = True
         indicator_col = "FZI"
 
+    if method == "vshale":
+        vsh_valid_mask = (
+            valid_mask
+            & np.isfinite(vsh_arr)
+            & (vsh_arr >= 0.0)
+            & (vsh_arr <= 1.0)
+            & (coal_arr < 1)
+        )
+        vsh_upper_cap = (
+            min(0.98, max(0.08, float(req.non_res_vsh_cutoff) - 0.01))
+            if req.include_non_reservoir
+            else 0.98
+        )
+        if req.include_non_reservoir:
+            res_vsh_cand = vsh_valid_mask & (vsh_arr <= float(req.non_res_vsh_cutoff))
+            fit_valid_mask = (
+                res_vsh_cand if int(res_vsh_cand.sum()) >= 6 else vsh_valid_mask
+            )
+        else:
+            fit_valid_mask = vsh_valid_mask
+        # De-spike boundary-clamped piles at 0.0 and 1.0 for GMM so components don't collapse at 0 or 1
+        gmm_interior_mask = fit_valid_mask & (vsh_arr > 0.005) & (vsh_arr < 0.995)
+        gmm_fit_mask = (
+            gmm_interior_mask if int(gmm_interior_mask.sum()) >= 8 else fit_valid_mask
+        )
+    else:
+        vsh_upper_cap = 0.98
+        gmm_fit_mask = fit_valid_mask
+
     higher_is_better = (
-        req.higher_is_better
-        if req.higher_is_better is not None
-        else default_higher_is_better
+        False
+        if method == "vshale"
+        else (
+            req.higher_is_better
+            if req.higher_is_better is not None
+            else default_higher_is_better
+        )
     )
 
     cutoff_method = str(req.cutoff_method or "gmm").strip().lower()
@@ -8888,11 +8992,11 @@ def _execute_workspace_rock_typing(
 
     target_no_cutoffs = None if req.auto_k else max(1, int(req.no_of_cutoffs))
     gmm_res = find_cutoffs_gmm(
-        active_arr[fit_valid_mask],
+        active_arr[gmm_fit_mask],
         no_of_cutoffs=target_no_cutoffs,
         max_clusters=req.max_clusters,
         criterion=req.gmm_criterion,
-        log_scale=(method != "lucia"),
+        log_scale=(method not in ("lucia", "vshale")),
     )
     lorenz_res = find_cutoffs_lorenz(
         phit_arr[fit_valid_mask],
@@ -8902,6 +9006,29 @@ def _execute_workspace_rock_typing(
         no_of_cutoffs=target_no_cutoffs,
         max_clusters=req.max_clusters,
     )
+
+    def _clean_vsh_cutoffs(raw_c: List[float], cap: float) -> List[float]:
+        """Ensure Vshale cutoffs lie strictly inside [0.02, cap] with >=0.02 spacing so Vsh=0 is always RT1 and Vsh=1 is never RT1."""
+        deduped: List[float] = []
+        for val in sorted(raw_c):
+            if not np.isfinite(val):
+                continue
+            clamped = round(float(np.clip(val, 0.02, cap)), 4)
+            if not deduped or (clamped - deduped[-1]) >= 0.02:
+                deduped.append(clamped)
+        if not deduped:
+            mid = round(min(0.25, cap * 0.5), 4)
+            deduped = [max(0.02, mid)]
+        return deduped
+
+    if method == "vshale":
+        if gmm_res.get("cutoffs"):
+            gmm_c = _clean_vsh_cutoffs(gmm_res["cutoffs"], vsh_upper_cap)
+            gmm_res["cutoffs"] = gmm_c
+            gmm_res["cutoffs_log"] = gmm_c
+        if lorenz_res.get("cutoffs"):
+            lor_c = _clean_vsh_cutoffs(lorenz_res["cutoffs"], vsh_upper_cap)
+            lorenz_res["cutoffs"] = lor_c
 
     if req.auto_find_cutoffs and fit_valid_mask.sum() >= 4:
         if cutoff_method == "lorenz" and lorenz_res.get("cutoffs"):
@@ -8914,18 +9041,33 @@ def _execute_workspace_rock_typing(
                 if req.auto_k
                 else (int(req.no_of_cutoffs) + 1)
             )
-            n_c = max(1, min(k_use - 1, int(fit_valid_mask.sum()) - 1))
+            fit_arr_km = active_arr[gmm_fit_mask]
+            n_c = max(1, min(k_use - 1, int(fit_arr_km.size) - 1))
             cutoffs = sorted(
-                float(round(c, 4))
-                for c in find_cutoffs(active_arr[fit_valid_mask], no_of_cutoffs=n_c)
+                float(round(c, 4)) for c in find_cutoffs(fit_arr_km, no_of_cutoffs=n_c)
             )
+        if method == "vshale":
+            cutoffs = _clean_vsh_cutoffs(cutoffs, vsh_upper_cap)
     else:
         cutoffs = sorted(float(c) for c in req.cutoffs)
+        if method == "vshale":
+            valid_in_range = [c for c in cutoffs if 0.005 <= c <= 0.995]
+            cutoffs = _clean_vsh_cutoffs(
+                valid_in_range if valid_in_range else [0.12, 0.25, 0.4],
+                0.98,
+            )
 
     rf_arr = np.asarray(
         rock_typing(active_arr, cut_offs=cutoffs, higher_is_better=higher_is_better),
         dtype=float,
     )
+    if method == "vshale" and (coal_arr >= 1).any():
+        # Coal intervals have VCOAL=1 and VCLAY=VSILT=0 (so VSHALE=0), which must never be classified as clean sand RT 1
+        rf_arr = np.where(
+            (coal_arr >= 1) & np.isfinite(rf_arr),
+            0.0 if req.include_non_reservoir else float(len(cutoffs) + 1),
+            rf_arr,
+        )
 
     carb_res = apply_lucia_rfn_override(
         phit_arr,
@@ -8937,16 +9079,23 @@ def _execute_workspace_rock_typing(
         phi_sec_cutoff=req.phi_sec_cutoff,
         use_interparticle_porosity=req.use_interparticle_porosity,
     )
-    override_active = bool(req.lucia_vuggy_override and has_valid_phi_sec)
+    override_active = bool(
+        req.lucia_vuggy_override and has_valid_phi_sec and method != "vshale"
+    )
     if override_active:
         rf_arr = np.asarray(carb_res["overridden_rock_flags"], dtype=float)
 
     if req.include_non_reservoir:
         worst_bin = float(len(cutoffs) + 1)
+        high_vsh_sample = np.isfinite(vsh_arr) & (
+            vsh_arr > float(req.non_res_vsh_cutoff)
+        )
+        worst_bin_gate = (rf_arr >= worst_bin) if method != "vshale" else False
         non_res_sample_mask = valid_mask & (
-            (rf_arr >= worst_bin)
+            worst_bin_gate
             | (phit_arr <= float(req.non_res_phit_cutoff))
             | (perm_arr <= float(req.non_res_perm_cutoff))
+            | high_vsh_sample
             | (coal_arr >= 1)
         )
         if non_res_sample_mask.any():
@@ -8970,10 +9119,21 @@ def _execute_workspace_rock_typing(
     phi_ip_list = [
         round(float(val), 5) if not np.isnan(val) else None for val in phi_ip_arr
     ]
+    vsh_list = [round(float(val), 5) if not np.isnan(val) else None for val in vsh_arr]
+    nphi_list = [
+        round(float(val), 5) if not np.isnan(val) else None for val in nphi_arr
+    ]
+    rhob_list = [
+        round(float(val), 5) if not np.isnan(val) else None for val in rhob_arr
+    ]
     active_list = (
         r35_list
         if method == "winland"
-        else (rfn_list if method == "lucia" else fzi_list)
+        else (
+            rfn_list
+            if method == "lucia"
+            else (vsh_list if method == "vshale" else fzi_list)
+        )
     )
 
     rock_flags_binned = list(rock_flags)
@@ -8999,9 +9159,10 @@ def _execute_workspace_rock_typing(
         or (req.saved_model_key and str(req.saved_model_key).strip())
     )
 
+    direct_vsh_log_prop = bool(method == "vshale" and req.propagate_vsh_cutoff_to_logs)
     well_full_updates: Dict[str, pd.DataFrame] = {}
 
-    if run_ml or req.include_non_reservoir:
+    if run_ml or req.include_non_reservoir or direct_vsh_log_prop:
         try:
             with get_db() as session:
                 proj_tmp = db_objects.Project.load(session, project_id=project_id)
@@ -9064,6 +9225,51 @@ def _execute_workspace_rock_typing(
                 round(float(dv), 4) if pd.notna(dv) else -999999.0
                 for dv in pd.to_numeric(w_copy["DEPTH"], errors="coerce")
             ]
+            if direct_vsh_log_prop:
+                from .rock_typing import _resolve_vsh_series
+
+                w_vsh_s, _ = _resolve_vsh_series(
+                    w_copy, w_copy.index, vsh_curve=req.vsh_curve
+                )
+                w_vsh_rf = rock_typing(
+                    w_vsh_s.to_numpy(dtype=float),
+                    cut_offs=cutoffs,
+                    higher_is_better=higher_is_better,
+                )
+                w_foc_arr = w_copy["_FOCUSED_MASK"].to_numpy(dtype=bool)
+                w_nr_arr = w_copy["_NON_RES_MASK"].to_numpy(dtype=bool)
+                w_coal_s = pd.Series(False, index=w_copy.index, dtype=bool)
+                for ccol_w in ("COAL_FLAG", "VCOAL"):
+                    if ccol_w in w_copy.columns:
+                        w_coal_s |= (
+                            pd.to_numeric(w_copy[ccol_w], errors="coerce").fillna(0.0)
+                            >= 0.5
+                        )
+                w_coal_arr = w_coal_s.to_numpy(dtype=bool)
+                worst_vsh_bin = len(cutoffs) + 1
+                for dk_i, is_f_i, is_nr_i, is_coal_i, rf_vsh_i in zip(
+                    d_keys, w_foc_arr, w_nr_arr, w_coal_arr, w_vsh_rf, strict=False
+                ):
+                    if dk_i <= -999998.0:
+                        continue
+                    if req.propagate_focused_only and not is_f_i:
+                        continue
+                    if (str(wn), dk_i) not in binned_lookup and not np.isnan(rf_vsh_i):
+                        if req.include_non_reservoir and (is_nr_i or is_coal_i):
+                            v_bin = 0
+                        elif is_coal_i:
+                            v_bin = worst_vsh_bin
+                        else:
+                            v_bin = int(rf_vsh_i)
+                        binned_lookup[(str(wn), dk_i)] = v_bin
+                        extra_propagated_by_well.setdefault(str(wn), []).append(
+                            {
+                                "DEPTH": float(dk_i),
+                                "ROCK_FLAG": v_bin,
+                                "ROCK_FLAG_CUTOFF": v_bin,
+                                "ROCK_FLAG_ML": np.nan,
+                            }
+                        )
             w_copy["ROCK_FLAG"] = [
                 binned_lookup.get((str(wn), dk), np.nan) for dk in d_keys
             ]
@@ -9414,7 +9620,7 @@ def _execute_workspace_rock_typing(
                             float(rf_b_r) if rf_b_r is not None else np.nan
                         ),
                     }
-                    if ind_val is not None:
+                    if ind_val is not None and indicator_col:
                         r_entry[indicator_col] = float(ind_val)
                     if rfn_list[idx_row] is not None and (
                         method == "lucia" or override_active
@@ -9455,7 +9661,12 @@ def _execute_workspace_rock_typing(
                     dk = round(float(dv), 4)
                     c_hit = core_row_lookup.get((wn_str, dk))
                     m_hit = ml_lookup.get((wn_str, dk))
-                    cb_v = c_hit["ROCK_FLAG_CUTOFF"] if c_hit else np.nan
+                    b_hit = binned_lookup.get((wn_str, dk))
+                    cb_v = (
+                        c_hit["ROCK_FLAG_CUTOFF"]
+                        if c_hit
+                        else (float(b_hit) if b_hit is not None else np.nan)
+                    )
                     if (
                         req.include_non_reservoir
                         and is_nr_row
@@ -9483,19 +9694,21 @@ def _execute_workspace_rock_typing(
                     rf_ml_vals.append(ml_v)
                     vdl_col_vals.append(vdl_v)
                     ind_col_vals.append(
-                        c_hit.get(indicator_col, np.nan) if c_hit else np.nan
+                        c_hit.get(indicator_col, np.nan)
+                        if (c_hit and indicator_col)
+                        else np.nan
                     )
 
-                upd_w_df = pd.DataFrame(
-                    {
-                        "DEPTH": w_df_item["DEPTH"].to_numpy(),
-                        "ROCK_FLAG": rf_col_vals,
-                        "ROCK_FLAG_CUTOFF": rf_cut_vals,
-                        "ROCK_FLAG_ML": rf_ml_vals,
-                        "VDL": vdl_col_vals,
-                        indicator_col: ind_col_vals,
-                    }
-                )
+                upd_cols: Dict[str, Any] = {
+                    "DEPTH": w_df_item["DEPTH"].to_numpy(),
+                    "ROCK_FLAG": rf_col_vals,
+                    "ROCK_FLAG_CUTOFF": rf_cut_vals,
+                    "ROCK_FLAG_ML": rf_ml_vals,
+                    "VDL": vdl_col_vals,
+                }
+                if indicator_col:
+                    upd_cols[indicator_col] = ind_col_vals
+                upd_w_df = pd.DataFrame(upd_cols)
                 well_full_updates[wn_str] = upd_w_df
 
     by_well: Dict[str, List[Dict[str, Any]]] = {}
@@ -9510,7 +9723,7 @@ def _execute_workspace_rock_typing(
                 "ROCK_FLAG": rf if rf is not None else np.nan,
                 "ROCK_FLAG_CUTOFF": rf_b if rf_b is not None else np.nan,
             }
-            if ind_val is not None:
+            if ind_val is not None and indicator_col:
                 row_dict[indicator_col] = ind_val
             if rfn_list[idx_row] is not None and (method == "lucia" or override_active):
                 row_dict["RFN"] = rfn_list[idx_row]
@@ -9548,7 +9761,9 @@ def _execute_workspace_rock_typing(
         if rf is not None:
             key = str(rf)
             flag_counts[key] = flag_counts.get(key, 0) + 1
-    if req.apply_classifier_propagation and prop_mode != "cutoff_only":
+    if (
+        req.apply_classifier_propagation and prop_mode != "cutoff_only"
+    ) or direct_vsh_log_prop:
         for ext_rows in extra_propagated_by_well.values():
             for r_ext in ext_rows:
                 rf_e = r_ext.get("ROCK_FLAG")
@@ -9558,12 +9773,40 @@ def _execute_workspace_rock_typing(
 
     active_diag = lorenz_res if cutoff_method == "lorenz" else gmm_res
     optimal_k = int(active_diag.get("optimal_k", len(cutoffs) + 1))
+    phi_k_sep = compute_phi_k_separation_metrics(phit_arr, perm_arr, rock_flags)
+
+    litho_endpoints_out = (
+        dict(raw_fzi_data["litho_endpoints"])
+        if isinstance(raw_fzi_data.get("litho_endpoints"), dict)
+        else None
+    )
+    for wn_chk in dict.fromkeys(well_names):
+        eph_cfg = _ephemeral_well_configs.get((project_id, str(wn_chk)))
+        if isinstance(eph_cfg, dict) and (
+            eph_cfg.get("dry_sand_point") or eph_cfg.get("dry_clay_point")
+        ):
+            base_ep = dict(litho_endpoints_out or {})
+            if eph_cfg.get("litho_model_key"):
+                base_ep["model"] = str(eph_cfg["litho_model_key"]).lower()
+            for ep_k in (
+                "dry_sand_point",
+                "dry_silt_point",
+                "dry_clay_point",
+                "fluid_point",
+                "silt_line_angle",
+                "use_hc_corrected",
+            ):
+                if eph_cfg.get(ep_k) is not None:
+                    base_ep[ep_k] = eph_cfg[ep_k]
+            litho_endpoints_out = base_ep
+            break
 
     return {
         "project_id": project_id,
         "data_source": data_source,
         "poro_label": poro_label,
         "perm_label": perm_label,
+        "vsh_label": vsh_label,
         "method": method,
         "cutoffs": cutoffs,
         "cutoff_method": cutoff_method,
@@ -9628,6 +9871,9 @@ def _execute_workspace_rock_typing(
                 "perm_cutoff": float(req.non_res_perm_cutoff),
                 "sample_count": int(non_res_sample_mask.sum()),
             },
+            "phi_k_separation": phi_k_sep,
+            "vsh_label": vsh_label,
+            "direct_vsh_log_propagated": direct_vsh_log_prop,
             "classifier": classifier_diag,
             "models_status": get_saved_rt_classifiers_status(),
         },
@@ -9635,11 +9881,16 @@ def _execute_workspace_rock_typing(
             "data_source": data_source,
             "poro_label": poro_label,
             "perm_label": perm_label,
+            "vsh_label": vsh_label,
+            "litho_endpoints": litho_endpoints_out,
             "well_names": well_names,
             "depths": depths,
             "zones": zones,
             "phit": fzi_data["phit"],
             "perm": fzi_data["perm"],
+            "vsh": vsh_list,
+            "nphi": nphi_list,
+            "rhob": rhob_list,
             "phis": phis_list,
             "phi_sec": phi_sec_list,
             "phi_ip": phi_ip_list,
@@ -9731,9 +9982,20 @@ def workspace_perm_transform_compute(
 
         if not all(rf is not None for rf in rock_flags) and len(phit_arr) > 0:
             valid_mask = (phit_arr > 0) & (phit_arr < 1.0) & (perm_arr > 0)
+            vsh_raw_pt = fzi_data.get("vsh")
+            vsh_arr_pt = (
+                np.asarray(
+                    [v if v is not None else np.nan for v in vsh_raw_pt], dtype=float
+                )
+                if vsh_raw_pt and len(vsh_raw_pt) == len(phit_arr)
+                else np.full_like(phit_arr, np.nan, dtype=float)
+            )
             ind_arr = np.full_like(phit_arr, np.nan, dtype=float)
             ind_vals, hib, _ = _eval_drt_indicator_scalar_or_array(
-                phit_arr[valid_mask], perm_arr[valid_mask], req.method
+                phit_arr[valid_mask],
+                perm_arr[valid_mask],
+                req.method,
+                vsh=vsh_arr_pt[valid_mask],
             )
             ind_arr[valid_mask] = ind_vals
             rf_arr = np.asarray(
@@ -10382,9 +10644,20 @@ def workspace_shf_compute(project_id: int, req: WorkspaceShfRequest) -> Dict[str
         # If ROCK_FLAG not yet saved in wells, compute on the fly from req.cutoffs
         if not any(rf is not None for rf in rock_flags):
             valid_mask = (phit_arr > 0) & (phit_arr < 1.0) & (perm_arr > 0)
+            vsh_raw_shf = fzi_data.get("vsh")
+            vsh_arr_shf = (
+                np.asarray(
+                    [v if v is not None else np.nan for v in vsh_raw_shf], dtype=float
+                )
+                if vsh_raw_shf and len(vsh_raw_shf) == len(phit_arr)
+                else np.full_like(phit_arr, np.nan, dtype=float)
+            )
             ind_arr = np.full_like(phit_arr, np.nan, dtype=float)
             ind_vals, hib, _ = _eval_drt_indicator_scalar_or_array(
-                phit_arr[valid_mask], perm_arr[valid_mask], req.drt_method
+                phit_arr[valid_mask],
+                perm_arr[valid_mask],
+                req.drt_method,
+                vsh=vsh_arr_shf[valid_mask],
             )
             ind_arr[valid_mask] = ind_vals
             rf_arr = rock_typing(ind_arr, cut_offs=req.cutoffs, higher_is_better=hib)
@@ -17631,9 +17904,20 @@ def _extract_project_scal_plugs_for_swirr(
 
     if not any(rf is not None for rf in rock_flags) and len(phit_arr) > 0:
         valid_mask = (phit_arr > 0) & (phit_arr < 1.0) & (perm_arr > 0)
+        vsh_raw_sw = fzi_data.get("vsh")
+        vsh_arr_sw = (
+            np.asarray(
+                [v if v is not None else np.nan for v in vsh_raw_sw], dtype=float
+            )
+            if vsh_raw_sw and len(vsh_raw_sw) == len(phit_arr)
+            else np.full_like(phit_arr, np.nan, dtype=float)
+        )
         ind_arr = np.full_like(phit_arr, np.nan, dtype=float)
         ind_vals, hib, _ = _eval_drt_indicator_scalar_or_array(
-            phit_arr[valid_mask], perm_arr[valid_mask], drt_method
+            phit_arr[valid_mask],
+            perm_arr[valid_mask],
+            drt_method,
+            vsh=vsh_arr_sw[valid_mask],
         )
         ind_arr[valid_mask] = ind_vals
         rf_arr = rock_typing(ind_arr, cut_offs=cutoffs_list, higher_is_better=hib)

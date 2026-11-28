@@ -89,6 +89,14 @@ const ROCK_TYPING_PARAM_KEYS = [
 	'fziCutoffs',
 	'winlandCutoffs',
 	'luciaCutoffs',
+	'vshaleCutoffs',
+	'drtVshCurve',
+	'drtPropagateVshToLogs',
+	'rockTypingColorBy',
+	'neudenSandNphi',
+	'neudenSandRhob',
+	'neudenShaleNphi',
+	'neudenShaleRhob',
 	'drtCutoffMethod',
 	'drtAutoK',
 	'drtGmmCriterion',
@@ -237,10 +245,19 @@ export interface PermTransformFitEntry {
 	rmse?: number | null;
 	count: number;
 }
-export type DrtMethod = 'fzi' | 'winland' | 'lucia';
+export type DrtMethod = 'fzi' | 'winland' | 'lucia' | 'vshale';
+export type DrtVshCurve = 'auto' | 'VSHALE' | 'VCLAY' | 'VSH_GR' | 'VSH_DN';
+export type RockTypingColorBy = 'drt' | 'vshale';
 export type DrtCutoffMethod = 'gmm' | 'lorenz' | 'kmeans';
 export type GmmCriterion = 'combined' | 'bic' | 'silhouette';
-export type RockTypingPlotView = 'phi-k' | 'lorenz' | 'gmm' | 'carbonate' | 'classifier';
+export type RockTypingPlotView =
+	| 'phi-k'
+	| 'vsh-k'
+	| 'neuden-vsh'
+	| 'lorenz'
+	| 'gmm'
+	| 'carbonate'
+	| 'classifier';
 export type DrtClassifierModel = 'random_forest' | 'extra_trees' | 'gradient_boosting';
 export type DrtPropagationMode = 'cutoff_only' | 'fill_missing' | 'full_ml';
 export type DrtFeatureKey =
@@ -277,6 +294,14 @@ class ProjectDataState {
 	fziCutoffs = $state<number[]>([0.5, 1.2, 2.5, 5.0]);
 	winlandCutoffs = $state<number[]>([0.5, 2.0, 5.0, 10.0]);
 	luciaCutoffs = $state<number[]>([1.5, 2.5, 3.5]);
+	vshaleCutoffs = $state<number[]>([0.12, 0.25, 0.4]);
+	drtVshCurve = $state<DrtVshCurve>('auto');
+	drtPropagateVshToLogs = $state<boolean>(false);
+	rockTypingColorBy = $state<RockTypingColorBy>('drt');
+	neudenSandNphi = $state<number>(-0.035);
+	neudenSandRhob = $state<number>(2.65);
+	neudenShaleNphi = $state<number>(0.45);
+	neudenShaleRhob = $state<number>(2.55);
 	drtCutoffMethod = $state<DrtCutoffMethod>('gmm');
 	drtAutoK = $state<boolean>(true);
 	drtGmmCriterion = $state<GmmCriterion>('combined');
@@ -326,6 +351,7 @@ class ProjectDataState {
 	get activeDrtCutoffs(): number[] {
 		if (this.drtMethod === 'winland') return this.winlandCutoffs;
 		if (this.drtMethod === 'lucia') return this.luciaCutoffs;
+		if (this.drtMethod === 'vshale') return this.vshaleCutoffs;
 		return this.fziCutoffs;
 	}
 
@@ -334,6 +360,8 @@ class ProjectDataState {
 			this.winlandCutoffs = vals;
 		} else if (this.drtMethod === 'lucia') {
 			this.luciaCutoffs = vals;
+		} else if (this.drtMethod === 'vshale') {
+			this.vshaleCutoffs = vals;
 		} else {
 			this.fziCutoffs = vals;
 		}
@@ -419,10 +447,15 @@ class ProjectDataState {
 		data_source?: PhiKDataSource;
 		poro_label?: string;
 		perm_label?: string;
+		vsh_label?: string;
+		litho_endpoints?: Record<string, any> | null;
 		well_names: string[];
 		depths: number[];
 		phit: number[];
 		perm: number[];
+		vsh?: (number | null)[];
+		nphi?: (number | null)[];
+		rhob?: (number | null)[];
 		fzi: (number | null)[];
 		r35?: (number | null)[];
 		rfn?: (number | null)[];
@@ -879,8 +912,7 @@ class ProjectDataState {
 		const hasPerm =
 			curves.includes('PERM') ||
 			curves.includes('KLOGH') ||
-			curves.includes('PERMEABILITY') ||
-			curves.includes('PERM_TRANS');
+			curves.includes('PERMEABILITY');
 		return hasPhi && hasPerm;
 	}
 
@@ -1881,10 +1913,35 @@ class ProjectDataState {
 
 	classifyRockType(
 		cpore: number | null | undefined,
-		cperm: number | null | undefined
+		cperm: number | null | undefined,
+		vsh?: number | null | undefined
 	): number | null {
 		const phi = Number(cpore);
 		const k = Number(cperm);
+		if (this.drtMethod === 'vshale') {
+			const vshVal = Number(vsh);
+			if (!Number.isFinite(vshVal) || vshVal < 0 || vshVal > 1) {
+				return null;
+			}
+			const rawCutoffs = this.activeDrtCutoffs || [0.12, 0.25, 0.4];
+			const cutoffs = Array.from(
+				new Set(
+					[...rawCutoffs]
+						.map(Number)
+						.filter((c) => Number.isFinite(c) && c >= 0.01 && c <= 0.99)
+				)
+			).sort((a, b) => a - b);
+			const nCut = cutoffs.length;
+			if (nCut === 0) return 1;
+			let rt = nCut + 1;
+			for (let i = 0; i < nCut; i++) {
+				if (vshVal < cutoffs[i]) {
+					rt = i + 1;
+					break;
+				}
+			}
+			return rt;
+		}
 		if (!Number.isFinite(phi) || !Number.isFinite(k) || phi <= 0 || phi >= 1 || k <= 0) {
 			return null;
 		}
@@ -3154,8 +3211,15 @@ class ProjectDataState {
 					);
 				}
 			}
-			const indName = m === 'winland' ? 'R35' : m === 'lucia' ? 'RFN' : 'FZI';
-			curveLabel = `ROCK_FLAG & ${indName}`;
+			const indName =
+				m === 'winland'
+					? 'R35'
+					: m === 'lucia'
+						? 'RFN'
+						: m === 'vshale'
+							? (rt.vsh_label ?? 'VSHALE')
+							: 'FZI';
+			curveLabel = m === 'vshale' ? 'ROCK_FLAG' : `ROCK_FLAG & ${indName}`;
 		} else if (moduleKey === 'perm-transform' && this.permTransformResult) {
 			wellNames = this.permTransformResult.well_names;
 			depths = this.permTransformResult.depths;

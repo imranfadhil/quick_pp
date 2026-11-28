@@ -17,11 +17,50 @@ from quick_pp.app.backend.utils.utils import sanitize_list
 router = APIRouter(prefix="/database/projects/{project_id}", tags=["Rock Typing"])
 
 
+def _resolve_vsh_series(
+    df: pd.DataFrame, index: pd.Index, vsh_curve: str = "auto"
+) -> Tuple[pd.Series, str]:
+    """Resolve shale/clay volume fraction series in [0, 1] and report resolved curve name."""
+    pref = str(vsh_curve or "auto").strip().upper()
+    default_order = ("VSHALE", "VSH", "VSH_GR", "VSH_DN", "VSH_TS", "VCLAY", "VCL")
+    if pref in ("VCLAY", "VCL"):
+        cand_order = ("VCLAY", "VCL", "VSHALE", "VSH", "VSH_GR", "VSH_DN", "VSH_TS")
+    elif pref == "VSH_GR":
+        cand_order = ("VSH_GR", "VSHALE", "VSH", "VSH_DN", "VSH_TS", "VCLAY", "VCL")
+    elif pref == "VSH_DN":
+        cand_order = ("VSH_DN", "VSHALE", "VSH", "VSH_GR", "VSH_TS", "VCLAY", "VCL")
+    elif pref in ("VSHALE", "VSH"):
+        cand_order = ("VSHALE", "VSH", "VSH_GR", "VSH_DN", "VSH_TS", "VCLAY", "VCL")
+    else:
+        cand_order = default_order
+
+    vsh_s = pd.Series(np.nan, index=index, dtype=float)
+    primary_lbl = "VSHALE" if pref == "AUTO" else pref
+    for vcol in cand_order:
+        if vcol in df.columns:
+            vs_cand = pd.to_numeric(df.loc[index, vcol], errors="coerce")
+            valid_vs = vs_cand.dropna()
+            if not valid_vs.empty:
+                if float(valid_vs.quantile(0.98)) > 1.5:
+                    vs_cand = vs_cand / 100.0
+                primary_lbl = vcol
+                vsh_s = vs_cand.clip(0.0, 1.0)
+                break
+    if vsh_s.isna().all() and "VCLAY" in df.columns and "VSILT" in df.columns:
+        vcl_c = pd.to_numeric(df.loc[index, "VCLAY"], errors="coerce")
+        vsl_c = pd.to_numeric(df.loc[index, "VSILT"], errors="coerce")
+        vsh_s = (vcl_c.fillna(0.0) + vsl_c.fillna(0.0)).clip(0.0, 1.0)
+        vsh_s.loc[vcl_c.isna() & vsl_c.isna()] = np.nan
+        primary_lbl = "VCLAY+VSILT"
+    return vsh_s, primary_lbl
+
+
 def _compute_fzi_data_sync(
     project_id: int,
     dt_matrix: float = 47.6,
     dt_fluid: float = 189.0,
     data_source: str = "auto",
+    vsh_curve: str = "auto",
 ) -> dict:
     """Helper to compute FZI / rock typing data (including sonic & secondary porosity if available) synchronously.
 
@@ -49,6 +88,9 @@ def _compute_fzi_data_sync(
     phis_list = []
     phi_sec_list = []
     vsh_list = []
+    nphi_list = []
+    rhob_list = []
+    vsh_labels_seen = []
     coal_flags_list = []
     zones_list = []
     rock_flags_list = []
@@ -64,12 +106,11 @@ def _compute_fzi_data_sync(
         perm_candidates = ("CPERM", "CORE_PERM")
     elif src_norm == "log":
         poro_candidates = ("PHIT", "PHIE", "POROSITY", "POR")
-        perm_candidates = ("PERM", "KLOGH", "PERMEABILITY", "K", "PERM_TRANS")
+        perm_candidates = ("PERM", "KLOGH", "PERMEABILITY", "K")
     else:
         poro_candidates = ("PHIT", "PHIE", "CPORE", "POROSITY", "POR", "CORE_POR")
         perm_candidates = (
             "PERM",
-            "PERM_TRANS",
             "KLOGH",
             "PERMEABILITY",
             "K",
@@ -83,15 +124,53 @@ def _compute_fzi_data_sync(
             continue
         any_non_empty_well = True
         available_cols.update(df.columns)
-        if any(
-            col in df.columns and df[col].notna().any() for col in perm_candidates
-        ):
+        if any(col in df.columns and df[col].notna().any() for col in perm_candidates):
             any_real_perm = True
         loaded_wells.append((well_name, df))
 
+    litho_endpoints_found: Optional[dict] = None
     with get_db() as session:
         proj = db_objects.Project.load(session, project_id=project_id)
         for well_name, df in loaded_wells:
+            if litho_endpoints_found is None:
+                try:
+                    w_obj = proj.get_well(well_name)
+                    orm_w = getattr(w_obj, "_orm_well", w_obj)
+                    cfg = dict(getattr(orm_w, "config_data", None) or {})
+                    if not cfg and hasattr(w_obj, "config"):
+                        cfg = dict(getattr(w_obj.config, "__dict__", None) or {})
+                    if isinstance(cfg, dict) and (
+                        cfg.get("dry_sand_point") or cfg.get("dry_clay_point")
+                    ):
+                        litho_endpoints_found = {
+                            "model": str(cfg.get("litho_model_key") or "ssc").lower(),
+                            "dry_sand_point": (
+                                list(cfg["dry_sand_point"])
+                                if cfg.get("dry_sand_point") is not None
+                                else None
+                            ),
+                            "dry_silt_point": (
+                                list(cfg["dry_silt_point"])
+                                if cfg.get("dry_silt_point") is not None
+                                else None
+                            ),
+                            "dry_clay_point": (
+                                list(cfg["dry_clay_point"])
+                                if cfg.get("dry_clay_point") is not None
+                                else None
+                            ),
+                            "fluid_point": (
+                                list(cfg["fluid_point"])
+                                if cfg.get("fluid_point") is not None
+                                else None
+                            ),
+                            "silt_line_angle": cfg.get("silt_line_angle"),
+                            "use_hc_corrected": bool(
+                                cfg.get("use_hc_corrected", False)
+                            ),
+                        }
+                except Exception:
+                    pass
 
             # Load ancillary data (formation tops)
             try:
@@ -174,15 +253,19 @@ def _compute_fzi_data_sync(
                         phit_col = "_EST_PHIT"
                     elif "NPHI" in df.columns and df["NPHI"].notna().any():
                         df = df.copy()
-                        df["_EST_PHIT"] = pd.to_numeric(df["NPHI"], errors="coerce").clip(
-                            0.001, 0.45
-                        )
+                        df["_EST_PHIT"] = pd.to_numeric(
+                            df["NPHI"], errors="coerce"
+                        ).clip(0.001, 0.45)
                         phit_col = "_EST_PHIT"
 
                 if phit_col and not perm_col and not any_real_perm:
-                    phit_s = pd.to_numeric(df[phit_col], errors="coerce").clip(0.001, 0.45)
+                    phit_s = pd.to_numeric(df[phit_col], errors="coerce").clip(
+                        0.001, 0.45
+                    )
                     df = df.copy()
-                    df["_EST_PERM"] = (10.0 ** (14.0 * phit_s - 1.5)).clip(0.001, 10000.0)
+                    df["_EST_PERM"] = (10.0 ** (14.0 * phit_s - 1.5)).clip(
+                        0.001, 10000.0
+                    )
                     perm_col = "_EST_PERM"
 
             if not phit_col or not perm_col:
@@ -298,7 +381,8 @@ def _compute_fzi_data_sync(
                         "DEPT_TVD",
                         "DEPTH_TVD",
                     )
-                    if c in df.columns and pd.to_numeric(df[c], errors="coerce").notna().sum() >= 2
+                    if c in df.columns
+                    and pd.to_numeric(df[c], errors="coerce").notna().sum() >= 2
                 ),
                 None,
             )
@@ -317,27 +401,56 @@ def _compute_fzi_data_sync(
             else:
                 zones = ["Unknown"] * len(cpore)
 
-            # Resolve Vshale/Vclay and Coal/Non-Reservoir flags at common_index
-            vsh_s = pd.Series(np.nan, index=common_index, dtype=float)
-            for vcol in ("VSHALE", "VSH", "VSH_GR", "VSH_DN", "VSH_TS", "VCLAY", "VCL"):
-                if vcol in df.columns:
-                    vs_cand = pd.to_numeric(df.loc[common_index, vcol], errors="coerce")
-                    if vs_cand.notna().any():
-                        vsh_s = vsh_s.combine_first(vs_cand.clip(0.0, 1.0))
-            if (
-                vsh_s.isna().all()
-                and "VCLAY" in df.columns
-                and "VSILT" in df.columns
+            # Resolve Vshale/Vclay, NPHI/RHOB, and Coal/Non-Reservoir flags at common_index
+            vsh_s, vsh_lbl_w = _resolve_vsh_series(
+                df, common_index, vsh_curve=vsh_curve
+            )
+            if vsh_s.notna().any() and vsh_lbl_w not in vsh_labels_seen:
+                vsh_labels_seen.append(vsh_lbl_w)
+
+            nphi_s = pd.Series(np.nan, index=common_index, dtype=float)
+            for ncol in (
+                "NPHI_HC",
+                "NPHI_ENV_CORR",
+                "NPHI_NORM",
+                "NPHI",
+                "TNPH",
+                "NPOR",
+                "PHIN",
+                "CNCF",
             ):
-                vcl_c = pd.to_numeric(df.loc[common_index, "VCLAY"], errors="coerce")
-                vsl_c = pd.to_numeric(df.loc[common_index, "VSILT"], errors="coerce")
-                vsh_s = (vcl_c.fillna(0.0) + vsl_c.fillna(0.0)).clip(0.0, 1.0)
-                vsh_s.loc[vcl_c.isna() & vsl_c.isna()] = np.nan
+                if ncol in df.columns:
+                    nc_s = pd.to_numeric(df.loc[common_index, ncol], errors="coerce")
+                    valid_nc = nc_s.dropna()
+                    if not valid_nc.empty:
+                        if float(valid_nc.quantile(0.98)) > 1.5:
+                            nc_s = nc_s / 100.0
+                        nphi_s = nc_s
+                        break
+
+            rhob_s = pd.Series(np.nan, index=common_index, dtype=float)
+            for rcol in (
+                "RHOB_HC",
+                "RHOB_DEN_CORR",
+                "RHOB_ENV_CORR",
+                "RHOB_NORM",
+                "RHOB",
+                "RHOZ",
+                "DEN",
+                "ZDEN",
+            ):
+                if rcol in df.columns:
+                    rc_s = pd.to_numeric(df.loc[common_index, rcol], errors="coerce")
+                    if rc_s.notna().any():
+                        rhob_s = rc_s
+                        break
 
             coal_s = pd.Series(0, index=common_index, dtype=int)
             for ccol in ("COAL_FLAG", "VCOAL"):
                 if ccol in df.columns:
-                    cs = pd.to_numeric(df.loc[common_index, ccol], errors="coerce").fillna(0.0)
+                    cs = pd.to_numeric(
+                        df.loc[common_index, ccol], errors="coerce"
+                    ).fillna(0.0)
                     coal_s = np.maximum(coal_s, (cs >= 0.5).astype(int))
             if "RES_FLAG" in df.columns:
                 res_s = pd.to_numeric(df.loc[common_index, "RES_FLAG"], errors="coerce")
@@ -372,6 +485,8 @@ def _compute_fzi_data_sync(
             phis_list.append(phis_s)
             phi_sec_list.append(phi_sec_s)
             vsh_list.append(vsh_s)
+            nphi_list.append(nphi_s)
+            rhob_list.append(rhob_s)
             coal_flags_list.extend(coal_s.tolist())
             zones_list.extend(zones)
             rock_flags_list.extend(rock_flags)
@@ -399,6 +514,8 @@ def _compute_fzi_data_sync(
         phis_all = pd.concat(phis_list).tolist() if phis_list else []
         phi_sec_all = pd.concat(phi_sec_list).tolist() if phi_sec_list else []
         vsh_all = pd.concat(vsh_list).tolist() if vsh_list else []
+        nphi_all = pd.concat(nphi_list).tolist() if nphi_list else []
+        rhob_all = pd.concat(rhob_list).tolist() if rhob_list else []
         tvd_all = pd.concat(tvd_list).tolist() if tvd_list else []
 
         phit_all = sanitize_list(phit_all)
@@ -406,6 +523,8 @@ def _compute_fzi_data_sync(
         phis_all = sanitize_list(phis_all)
         phi_sec_all = sanitize_list(phi_sec_all)
         vsh_all = sanitize_list(vsh_all)
+        nphi_all = sanitize_list(nphi_all)
+        rhob_all = sanitize_list(rhob_all)
         tvd_all = sanitize_list(tvd_all)
         depths_list = sanitize_list(depths_list)
         rock_flags_list = [
@@ -419,13 +538,27 @@ def _compute_fzi_data_sync(
             for x in rock_flags_list
         ]
 
+        resolved_vsh_lbl = (
+            vsh_labels_seen[0]
+            if vsh_labels_seen
+            else (
+                "VSHALE"
+                if str(vsh_curve or "auto").strip().lower() == "auto"
+                else str(vsh_curve).strip().upper()
+            )
+        )
+
         return {
             "data_source": src_norm,
             "poro_label": "CPORE" if src_norm == "core" else "PHIT",
             "perm_label": "CPERM" if src_norm == "core" else "PERM",
+            "vsh_label": resolved_vsh_lbl,
+            "litho_endpoints": litho_endpoints_found,
             "phit": phit_all,
             "perm": perm_all,
             "vsh": vsh_all,
+            "nphi": nphi_all,
+            "rhob": rhob_all,
             "coal_flags": coal_flags_list,
             "phis": phis_all,
             "phi_sec": phi_sec_all,

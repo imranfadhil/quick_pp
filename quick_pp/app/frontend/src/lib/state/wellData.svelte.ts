@@ -1216,8 +1216,12 @@ class WellDataState {
 			const d1 = D[0] * rhob - D[1] * nphi;
 			const varX = (d0 * xdiff1 - d1 * xdiff0) / div;
 			const varY = (d0 * ydiff1 - d1 * ydiff0) / div;
-			const sign = varY > C[1] ? -1.0 : 1.0;
-			const projLen = sign * Math.hypot(varX - C[0], varY - C[1]);
+			const dxCa = A[0] - C[0];
+			const dyCa = A[1] - C[1];
+			const rayDot = (nphi - D[0]) * (varX - D[0]) + (rhob - D[1]) * (varY - D[1]);
+			const projRay = ((varX - C[0]) * dxCa + (varY - C[1]) * dyCa) / rockLen;
+			const projOrtho = ((nphi - C[0]) * dxCa + (rhob - C[1]) * dyCa) / rockLen;
+			const projLen = Number.isFinite(projRay) && rayDot >= 0 ? projRay : projOrtho;
 			const projClamped = Math.max(0.0, Math.min(rockLen, projLen));
 			const ptRatio = projClamped / rockLen;
 
